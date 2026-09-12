@@ -784,7 +784,7 @@ async function run() {
       }
     });
     await page.goto(`${frontend}/decision-performance?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`, { waitUntil: "networkidle" });
-    await page.getByRole("heading", { name: "Formal Decision Outcome" }).waitFor();
+    await page.getByRole("heading", { name: "正式决策结果" }).waitFor();
     await page.getByTestId(`formal-outcome-${historyFillerIds[0]}`).getByText("待评估 · 尚未到期", { exact: true }).waitFor();
     await page.getByTestId(`formal-decision-context-${firstRun.decisionId}`).getByText(identityTitle({
       security_code: firstBefore.security_code,
@@ -803,6 +803,8 @@ async function run() {
     assert.equal(await page.getByText("个股收盘到收盘路径", { exact: true }).count(), 2);
     assert.equal(await page.getByTestId(`counterfactual-detail-${firstRun.decisionId}`).count(), 1);
     assert.equal(await page.getByTestId(`counterfactual-detail-${secondRun.decisionId}`).count(), 1);
+    await page.getByRole("heading", { name: "待复核工作清单" }).waitFor();
+    await page.getByText("仅历史决策事实，不是评估结论。", { exact: true }).first().waitFor();
     await page.getByTestId("review-worklist-group-due").waitFor();
     await page.getByTestId("review-worklist-group-upcoming").waitFor();
     await page.getByTestId("review-worklist-group-unavailable").waitFor();

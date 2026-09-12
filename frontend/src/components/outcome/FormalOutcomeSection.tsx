@@ -15,11 +15,24 @@ import {
   COUNTERFACTUAL_RETURN_LABEL,
   COUNTERFACTUAL_SCOPE_COPY,
   COUNTERFACTUAL_SEPARATION_COPY,
+  FORMAL_OUTCOME_ACTUAL_CAPITAL_COLUMN_HEADER,
+  FORMAL_OUTCOME_BOUNDARY_COLUMN_HEADER,
+  FORMAL_OUTCOME_EMPTY_COPY,
+  FORMAL_OUTCOME_HEADING,
+  FORMAL_OUTCOME_IDENTITY_COLUMN_HEADER,
+  FORMAL_OUTCOME_PROCESS_REVIEW_COLUMN_HEADER,
+  FORMAL_OUTCOME_REFRESH_LABEL,
+  FORMAL_OUTCOME_REPLAY_COLUMN_HEADER,
+  FORMAL_OUTCOME_SUBTITLE,
+  HISTORICAL_DECISION_FACT_COPY,
   PROCESS_REVIEW_BOUND_HEADING,
   PROCESS_REVIEW_COVERAGE_COPY,
   PROCESS_REVIEW_DIMENSIONS,
   PROCESS_REVIEW_ERROR_COPY,
   PROCESS_REVIEW_NONE_COPY,
+  REVIEW_WORKLIST_EMPTY_COPY,
+  REVIEW_WORKLIST_EVALUATION_AS_OF_LABEL,
+  REVIEW_WORKLIST_HEADING,
   actualCapitalSummary,
   counterfactualSummary,
   dueStateLabel,
@@ -32,6 +45,7 @@ import {
   processReviewPacketSummary,
   processReviewQualityLabel,
   processReviewTwoPassSummary,
+  replayFutureFactLabel,
   worklistItems,
   worklistLabel,
   type FormalReviewWorklistFilter,
@@ -286,16 +300,16 @@ export function FormalOutcomeSection() {
   }, [load]);
 
   return (
-    <section className={CARD} aria-label="Formal Decision Outcome">
+    <section className={CARD} aria-label={FORMAL_OUTCOME_HEADING}>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-start gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10">
             <BookOpenCheck className="h-5 w-5 text-violet-500" />
           </div>
           <div>
-            <h2 className="font-medium">Formal Decision Outcome</h2>
+            <h2 className="font-medium">{FORMAL_OUTCOME_HEADING}</h2>
             <p className="text-sm text-muted-foreground">
-              Frozen Decision 的真实结果复盘；与 legacy advice analytics 分开。
+              {FORMAL_OUTCOME_SUBTITLE}
             </p>
           </div>
         </div>
@@ -306,7 +320,7 @@ export function FormalOutcomeSection() {
           className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-accent/50 disabled:opacity-50"
         >
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          刷新 Formal Outcome
+          {FORMAL_OUTCOME_REFRESH_LABEL}
         </button>
       </div>
 
@@ -325,13 +339,13 @@ export function FormalOutcomeSection() {
       )}
 
       {worklist && (
-        <section className="mt-5 rounded-lg border border-border/60 p-4" aria-label="Review Due Worklist">
+        <section className="mt-5 rounded-lg border border-border/60 p-4" aria-label={REVIEW_WORKLIST_HEADING}>
           <div className="flex items-center gap-2">
             <ListChecks className="h-4 w-4" />
-            <h3 className="font-medium">Review Due Worklist</h3>
+            <h3 className="font-medium">{REVIEW_WORKLIST_HEADING}</h3>
           </div>
           <div className="mt-1 text-xs text-muted-foreground">
-            Server evaluation_as_of: {worklist.evaluation_as_of}
+            {REVIEW_WORKLIST_EVALUATION_AS_OF_LABEL}：{worklist.evaluation_as_of}
           </div>
           <div className="mt-4 grid gap-4 lg:grid-cols-3">
             {(["due", "upcoming", "unavailable"] as FormalReviewWorklistFilter[]).map((filter) => {
@@ -344,7 +358,7 @@ export function FormalOutcomeSection() {
                   </div>
                   {entries.length === 0 ? (
                     <div className="rounded-md border border-dashed border-border/50 p-3 text-xs text-muted-foreground">
-                      None
+                      {REVIEW_WORKLIST_EMPTY_COPY}
                     </div>
                   ) : (
                     <div className="space-y-2">
@@ -364,18 +378,18 @@ export function FormalOutcomeSection() {
         </div>
       ) : items.length === 0 && !error ? (
         <div className="mt-5 rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-          暂无已提交 Frozen Decision；Outcome coverage 会保留无实际交易的决策。
+          {FORMAL_OUTCOME_EMPTY_COPY}
         </div>
       ) : (
         <div className="mt-5 overflow-auto">
           <table className="w-full min-w-[900px] text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase tracking-widest text-muted-foreground">
-                <th className="pb-3 pr-4">决策身份</th>
-                <th className="pb-3 pr-4">Boundary</th>
-                <th className="pb-3 pr-4">Replay</th>
-                <th className="pb-3 pr-4">Process Review</th>
-                <th className="pb-3 pr-4">Actual Capital</th>
+                <th className="pb-3 pr-4">{FORMAL_OUTCOME_IDENTITY_COLUMN_HEADER}</th>
+                <th className="pb-3 pr-4">{FORMAL_OUTCOME_BOUNDARY_COLUMN_HEADER}</th>
+                <th className="pb-3 pr-4">{FORMAL_OUTCOME_REPLAY_COLUMN_HEADER}</th>
+                <th className="pb-3 pr-4">{FORMAL_OUTCOME_PROCESS_REVIEW_COLUMN_HEADER}</th>
+                <th className="pb-3 pr-4">{FORMAL_OUTCOME_ACTUAL_CAPITAL_COLUMN_HEADER}</th>
                 <th className="pb-3">{COUNTERFACTUAL_COLUMN_HEADER}</th>
               </tr>
             </thead>
@@ -412,7 +426,7 @@ export function FormalOutcomeSection() {
                       </div>
                       <div className="text-xs text-muted-foreground">committed_at: {item.decision_committed_at || "—"}</div>
                       <div className="text-xs text-muted-foreground">review_by: {item.decision_review_by || "—"}</div>
-                      <div className="text-[11px] text-muted-foreground">Historical decision fact only; not an evaluation.</div>
+                      <div className="text-[11px] text-muted-foreground">{HISTORICAL_DECISION_FACT_COPY}</div>
                     </div>
                     <div className="mt-2 text-xs text-muted-foreground">
                       snapshot {item.decision_snapshot_hash || "—"}
@@ -444,7 +458,7 @@ export function FormalOutcomeSection() {
                   <td className="py-4 pr-4 align-top">
                     <div>{item.decision_time_replay?.replay_hash || "—"}</div>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      {item.replay_future_fact_leak === false ? "future facts excluded" : "replay status unknown"}
+                      {replayFutureFactLabel(item.replay_future_fact_leak)}
                     </div>
                   </td>
                   <td className="py-4 pr-4 align-top">{processReview(item)}</td>

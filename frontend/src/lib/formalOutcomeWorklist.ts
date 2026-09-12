@@ -108,6 +108,23 @@ export const COUNTERFACTUAL_RETURN_LABEL = "收益";
 export const COUNTERFACTUAL_SCOPE_COPY = "仅个股路径，不是组合盈亏，也不是判断质量";
 export const COUNTERFACTUAL_SEPARATION_COPY = "该路径与实际资金结果相互独立。";
 
+export const FORMAL_OUTCOME_HEADING = "正式决策结果";
+export const FORMAL_OUTCOME_SUBTITLE = "冻结决策的真实结果复盘；与旧版建议分析分开。";
+export const FORMAL_OUTCOME_PAGE_SUBTITLE = "正式决策结果与待复核工作清单的正式复盘入口";
+export const FORMAL_OUTCOME_REFRESH_LABEL = "刷新正式结果";
+export const FORMAL_OUTCOME_EMPTY_COPY = "暂无已提交冻结决策；结果覆盖会保留无实际交易的决策。";
+export const FORMAL_OUTCOME_IDENTITY_COLUMN_HEADER = "决策身份";
+export const FORMAL_OUTCOME_BOUNDARY_COLUMN_HEADER = "边界";
+export const FORMAL_OUTCOME_REPLAY_COLUMN_HEADER = "回放";
+export const FORMAL_OUTCOME_PROCESS_REVIEW_COLUMN_HEADER = "过程复核";
+export const FORMAL_OUTCOME_ACTUAL_CAPITAL_COLUMN_HEADER = "实际资金";
+export const HISTORICAL_DECISION_FACT_COPY = "仅历史决策事实，不是评估结论。";
+export const REVIEW_WORKLIST_HEADING = "待复核工作清单";
+export const REVIEW_WORKLIST_EVALUATION_AS_OF_LABEL = "服务端评估时点";
+export const REVIEW_WORKLIST_EMPTY_COPY = "无";
+export const REPLAY_FUTURE_FACTS_EXCLUDED_COPY = "已排除未来事实";
+export const REPLAY_STATUS_UNKNOWN_COPY = "回放状态未知";
+
 export interface FormalOutcomeIdentityInput {
   security_code?: unknown;
   strategy?: unknown;
@@ -248,6 +265,10 @@ export function counterfactualSummary(item: FormalDecisionOutcome): {
     label: counterfactualStateLabel(value.state),
     canonical: displayText(value.state),
   };
+}
+
+export function replayFutureFactLabel(leak: unknown): string {
+  return leak === false ? REPLAY_FUTURE_FACTS_EXCLUDED_COPY : REPLAY_STATUS_UNKNOWN_COPY;
 }
 
 export function mergeOutcomeItem(

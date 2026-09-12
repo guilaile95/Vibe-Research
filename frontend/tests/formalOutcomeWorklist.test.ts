@@ -11,11 +11,27 @@ import {
   COUNTERFACTUAL_RETURN_LABEL,
   COUNTERFACTUAL_SCOPE_COPY,
   COUNTERFACTUAL_SEPARATION_COPY,
+  FORMAL_OUTCOME_ACTUAL_CAPITAL_COLUMN_HEADER,
+  FORMAL_OUTCOME_BOUNDARY_COLUMN_HEADER,
+  FORMAL_OUTCOME_EMPTY_COPY,
+  FORMAL_OUTCOME_HEADING,
+  FORMAL_OUTCOME_IDENTITY_COLUMN_HEADER,
+  FORMAL_OUTCOME_PAGE_SUBTITLE,
+  FORMAL_OUTCOME_PROCESS_REVIEW_COLUMN_HEADER,
+  FORMAL_OUTCOME_REFRESH_LABEL,
+  FORMAL_OUTCOME_REPLAY_COLUMN_HEADER,
+  FORMAL_OUTCOME_SUBTITLE,
+  HISTORICAL_DECISION_FACT_COPY,
   PROCESS_REVIEW_BOUND_HEADING,
   PROCESS_REVIEW_COVERAGE_COPY,
   PROCESS_REVIEW_DIMENSIONS,
   PROCESS_REVIEW_ERROR_COPY,
   PROCESS_REVIEW_NONE_COPY,
+  REPLAY_FUTURE_FACTS_EXCLUDED_COPY,
+  REPLAY_STATUS_UNKNOWN_COPY,
+  REVIEW_WORKLIST_EMPTY_COPY,
+  REVIEW_WORKLIST_EVALUATION_AS_OF_LABEL,
+  REVIEW_WORKLIST_HEADING,
   actualCapitalStateLabel,
   actualCapitalSummary,
   allocationStateLabel,
@@ -32,6 +48,7 @@ import {
   processReviewPacketSummary,
   processReviewQualityLabel,
   processReviewTwoPassSummary,
+  replayFutureFactLabel,
   scanStateLabel,
   worklistItems,
   worklistLabel,
@@ -269,6 +286,54 @@ test("counterfactual path labels stay Chinese and display-only", () => {
     counterfactualStateLabel("EVALUATED"),
     counterfactualStateLabel("NOT_EVALUATED"),
     counterfactualSummary({ counterfactual_outcome: { state: "EVALUATED" } } as any).label,
+  ]) {
+    assert.equal(copy.includes("BUY"), false);
+    assert.equal(copy.includes("SELL"), false);
+    assert.equal(copy.includes("买入"), false);
+    assert.equal(copy.includes("卖出"), false);
+  }
+});
+
+test("formal outcome chrome labels stay Chinese and display-only", () => {
+  assert.equal(FORMAL_OUTCOME_HEADING, "正式决策结果");
+  assert.equal(FORMAL_OUTCOME_SUBTITLE, "冻结决策的真实结果复盘；与旧版建议分析分开。");
+  assert.equal(FORMAL_OUTCOME_PAGE_SUBTITLE, "正式决策结果与待复核工作清单的正式复盘入口");
+  assert.equal(FORMAL_OUTCOME_REFRESH_LABEL, "刷新正式结果");
+  assert.equal(FORMAL_OUTCOME_EMPTY_COPY, "暂无已提交冻结决策；结果覆盖会保留无实际交易的决策。");
+  assert.equal(FORMAL_OUTCOME_IDENTITY_COLUMN_HEADER, "决策身份");
+  assert.equal(FORMAL_OUTCOME_BOUNDARY_COLUMN_HEADER, "边界");
+  assert.equal(FORMAL_OUTCOME_REPLAY_COLUMN_HEADER, "回放");
+  assert.equal(FORMAL_OUTCOME_PROCESS_REVIEW_COLUMN_HEADER, "过程复核");
+  assert.equal(FORMAL_OUTCOME_ACTUAL_CAPITAL_COLUMN_HEADER, "实际资金");
+  assert.equal(HISTORICAL_DECISION_FACT_COPY, "仅历史决策事实，不是评估结论。");
+  assert.equal(REVIEW_WORKLIST_HEADING, "待复核工作清单");
+  assert.equal(REVIEW_WORKLIST_EVALUATION_AS_OF_LABEL, "服务端评估时点");
+  assert.equal(REVIEW_WORKLIST_EMPTY_COPY, "无");
+  assert.equal(REPLAY_FUTURE_FACTS_EXCLUDED_COPY, "已排除未来事实");
+  assert.equal(REPLAY_STATUS_UNKNOWN_COPY, "回放状态未知");
+  assert.equal(replayFutureFactLabel(false), "已排除未来事实");
+  assert.equal(replayFutureFactLabel(true), "回放状态未知");
+  assert.equal(replayFutureFactLabel(undefined), "回放状态未知");
+  assert.equal(replayFutureFactLabel(null), "回放状态未知");
+  for (const copy of [
+    FORMAL_OUTCOME_HEADING,
+    FORMAL_OUTCOME_SUBTITLE,
+    FORMAL_OUTCOME_PAGE_SUBTITLE,
+    FORMAL_OUTCOME_REFRESH_LABEL,
+    FORMAL_OUTCOME_EMPTY_COPY,
+    FORMAL_OUTCOME_IDENTITY_COLUMN_HEADER,
+    FORMAL_OUTCOME_BOUNDARY_COLUMN_HEADER,
+    FORMAL_OUTCOME_REPLAY_COLUMN_HEADER,
+    FORMAL_OUTCOME_PROCESS_REVIEW_COLUMN_HEADER,
+    FORMAL_OUTCOME_ACTUAL_CAPITAL_COLUMN_HEADER,
+    HISTORICAL_DECISION_FACT_COPY,
+    REVIEW_WORKLIST_HEADING,
+    REVIEW_WORKLIST_EVALUATION_AS_OF_LABEL,
+    REVIEW_WORKLIST_EMPTY_COPY,
+    REPLAY_FUTURE_FACTS_EXCLUDED_COPY,
+    REPLAY_STATUS_UNKNOWN_COPY,
+    replayFutureFactLabel(false),
+    replayFutureFactLabel(true),
   ]) {
     assert.equal(copy.includes("BUY"), false);
     assert.equal(copy.includes("SELL"), false);
