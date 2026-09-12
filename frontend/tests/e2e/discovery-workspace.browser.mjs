@@ -192,6 +192,55 @@ function nativeIntelContext() {
   };
 }
 
+function relativePeriod(stock, industry, vsIndustry, market, vsMarket) {
+  return {
+    stock_return_pct: stock,
+    industry_median_pct: industry,
+    vs_industry_pct_points: vsIndustry,
+    market_median_pct: market,
+    vs_market_pct_points: vsMarket,
+    industry_valid_count: 3,
+    industry_member_count: 3,
+    industry_coverage: 1,
+    market_valid_count: 4,
+    market_total_count: 4,
+    market_coverage: 1,
+  };
+}
+
+function stockRelativeContext(code) {
+  return {
+    schema_version: "stock-relative-context.v0.1",
+    status: "normal",
+    source: "RESEARCH_DATA_PLANE+EASTMONEY_CURRENT_INDUSTRY",
+    fetched_at: "2026-09-11T08:00:00Z",
+    code,
+    comparison_date: "2026-09-11",
+    industry_name: "电子",
+    industry_status: "normal",
+    industry_membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+    dataset_id: "ashare_daily_unadjusted",
+    provider_id: "local_bulk_dump",
+    adjustment: "UNADJUSTED",
+    return_semantics: "UNADJUSTED_RAW_PRICE_CHANGE",
+    relative_unit: "PERCENTAGE_POINTS",
+    stock: { return_5d_pct: 12, return_20d_pct: 10, return_60d_pct: 30 },
+    periods: {
+      "5D": relativePeriod(12, 6, 6, 5, 7),
+      "20D": relativePeriod(10, 8, 2, 5.5, 4.5),
+      "60D": relativePeriod(30, 20, 10, 15, 15),
+    },
+    provenance: {
+      classification_provider: "EASTMONEY",
+      membership_source: "astock.a_share_snapshot.industry=f100",
+      membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+      rdp: { artifact_sha256: "fixture" },
+    },
+    warnings: [],
+    limitations: [],
+  };
+}
+
 let server;
 let browser;
 const apiRequests = [];
@@ -235,6 +284,11 @@ try {
     if (url.pathname === "/api/campaigns" && request.method() === "GET") {
       assert.equal(url.searchParams.get("security_code"), "600519");
       await route.fulfill(ok([]));
+      return;
+    }
+    if (url.pathname === "/api/stock-relative-context" && request.method() === "GET") {
+      const code = url.searchParams.get("code") || "600519";
+      await route.fulfill(ok(stockRelativeContext(code)));
       return;
     }
     await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: `unmocked ${request.method()} ${url.pathname}` }) });

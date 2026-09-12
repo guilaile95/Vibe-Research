@@ -193,6 +193,96 @@ const evidenceRecords = [{
   deleted_at: null,
 }];
 
+function emptyRelativePeriod() {
+  return {
+    stock_return_pct: null,
+    industry_median_pct: null,
+    vs_industry_pct_points: null,
+    market_median_pct: null,
+    vs_market_pct_points: null,
+    industry_valid_count: 0,
+    industry_member_count: 3,
+    industry_coverage: 0,
+    market_valid_count: 0,
+    market_total_count: 4,
+    market_coverage: 0,
+  };
+}
+
+function relativePeriod(stock, industry, vsIndustry, market, vsMarket) {
+  return {
+    stock_return_pct: stock,
+    industry_median_pct: industry,
+    vs_industry_pct_points: vsIndustry,
+    market_median_pct: market,
+    vs_market_pct_points: vsMarket,
+    industry_valid_count: 3,
+    industry_member_count: 3,
+    industry_coverage: 1,
+    market_valid_count: 4,
+    market_total_count: 4,
+    market_coverage: 1,
+  };
+}
+
+function relativeEnvelope(code, overrides) {
+  return {
+    schema_version: "stock-relative-context.v0.1",
+    source: "RESEARCH_DATA_PLANE+EASTMONEY_CURRENT_INDUSTRY",
+    fetched_at: "2026-09-11T08:00:00Z",
+    code,
+    industry_membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+    dataset_id: "ashare_daily_unadjusted",
+    provider_id: "local_bulk_dump",
+    adjustment: "UNADJUSTED",
+    return_semantics: "UNADJUSTED_RAW_PRICE_CHANGE",
+    relative_unit: "PERCENTAGE_POINTS",
+    provenance: {
+      classification_provider: "EASTMONEY",
+      membership_source: "astock.a_share_snapshot.industry=f100",
+      membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+      rdp: { artifact_sha256: "fixture" },
+    },
+    warnings: [],
+    limitations: [],
+    ...overrides,
+  };
+}
+
+function stockRelativeContextPayload(code, status = "normal") {
+  if (status === "unavailable") {
+    const emptyPeriod = emptyRelativePeriod();
+    return relativeEnvelope(code, {
+      status,
+      comparison_date: null,
+      industry_name: "电子",
+      industry_status: "unavailable",
+      stock: { return_5d_pct: null, return_20d_pct: null, return_60d_pct: null },
+      periods: { "5D": emptyPeriod, "20D": emptyPeriod, "60D": emptyPeriod },
+      provenance: {
+        classification_provider: "EASTMONEY",
+        membership_source: "astock.a_share_snapshot.industry=f100",
+        membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+        rdp: null,
+      },
+      warnings: ["RDP fixture unavailable；未将缺失数据伪装成 0。"],
+    });
+  }
+
+  return relativeEnvelope(code, {
+    status: "normal",
+    comparison_date: "2026-09-11",
+    industry_name: "电子",
+    industry_status: "normal",
+    stock: { return_5d_pct: 12, return_20d_pct: 10, return_60d_pct: 30 },
+    periods: {
+      "5D": relativePeriod(12, 6, 6, 5, 7),
+      "20D": relativePeriod(10, 8, 2, 5.5, 4.5),
+      "60D": relativePeriod(30, 20, 10, 15, 15),
+    },
+  });
+}
+
 const CAMPAIGN_A = `campaign_${"c".repeat(32)}`;
 const CAMPAIGN_B = `campaign_${"d".repeat(32)}`;
 const CAMPAIGN_C = `campaign_${"e".repeat(32)}`;
@@ -566,6 +656,7 @@ try {
     releaseOldNextAction: null,
     releaseOldContinuity: null,
     apiPaths: [],
+    relativeContextMode: "ok",
   };
 
   await page.route("**/api/**", async (route) => {
@@ -639,6 +730,15 @@ try {
     }
     if (pathname === "/api/native-intel/security-context/600519" && request.method() === "GET") {
       await route.fulfill(ok(nativeIntelContext));
+      return;
+    }
+    if (pathname === "/api/stock-relative-context" && request.method() === "GET") {
+      if (state.relativeContextMode === "fail") {
+        await route.fulfill(unavailable());
+        return;
+      }
+      const code = url.searchParams.get("code") || "600519";
+      await route.fulfill(ok(stockRelativeContextPayload(code)));
       return;
     }
     if (pathname === "/api/decision-inbox" && request.method() === "GET") {
@@ -901,7 +1001,28 @@ try {
   await workspace.getByTestId("native-intel-security-context").waitFor();
   await workspace.locator('[data-evidence-freshness="NOT_EVALUATED"]').waitFor();
   assert.equal(await workspace.locator('[data-evidence-source-conflict="UNKNOWN"]').count(), 1);
-  await workspace.getByTestId("candidate-add-evidence").click();
+  const relative = workspace.getByTestId("stock-relative-context");
+  await relative.waitFor();
+  await relative.getByText("市场 / 行业相对表现").waitFor();
+  await relative.getByTestId("stock-relative-horizon-5D").waitFor();
+  const relativeText = await relative.innerText();
+  assert.match(relativeText, /UNADJUSTED|未复权/);
+  for (const forbidden of ["建议买入", "BUY", "SELL"]) {
+    assert.equal(relativeText.includes(forbidden), false, `relative context must not include ${forbidden}`);
+  }
+
+  state.relativeContextMode = "fail";
+  await page.goto(`http://127.0.0.1:${port}/candidates/600519`, { waitUntil: "domcontentloaded" });
+  const failedWorkspace = page.getByTestId("candidate-workspace");
+  await failedWorkspace.waitFor();
+  await failedWorkspace.locator('[data-position-state="NOT_HELD"]').waitFor();
+  await failedWorkspace.getByTestId("candidate-evidence-gap").waitFor();
+  await failedWorkspace.getByTestId("native-intel-security-context").waitFor();
+  const unavailableRelative = failedWorkspace.getByTestId("stock-relative-context");
+  await unavailableRelative.getByText("相对表现数据暂不可用").waitFor();
+  assert.deepEqual(pageErrors, [], "stock-relative-context 503 must not raise pageerror");
+  state.relativeContextMode = "ok";
+  await failedWorkspace.getByTestId("candidate-add-evidence").click();
   await page.waitForURL(/\/evidence\/new\?/);
   assert.equal(await page.getByPlaceholder("如 600519 / humanoid / AI算力").inputValue(), "600519");
   await page.getByRole("link", { name: "取消" }).click();

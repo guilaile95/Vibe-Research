@@ -140,6 +140,151 @@ function valuationPayload(code) {
   };
 }
 
+function emptyRelativePeriod({
+  industryMemberCount = 0,
+  marketTotalCount = 0,
+  industryCoverage = null,
+  marketCoverage = null,
+} = {}) {
+  return {
+    stock_return_pct: null,
+    industry_median_pct: null,
+    vs_industry_pct_points: null,
+    market_median_pct: null,
+    vs_market_pct_points: null,
+    industry_valid_count: 0,
+    industry_member_count: industryMemberCount,
+    industry_coverage: industryCoverage,
+    market_valid_count: 0,
+    market_total_count: marketTotalCount,
+    market_coverage: marketCoverage,
+  };
+}
+
+function relativePeriod(stock, industry, vsIndustry, market, vsMarket) {
+  return {
+    stock_return_pct: stock,
+    industry_median_pct: industry,
+    vs_industry_pct_points: vsIndustry,
+    market_median_pct: market,
+    vs_market_pct_points: vsMarket,
+    industry_valid_count: 3,
+    industry_member_count: 3,
+    industry_coverage: 1,
+    market_valid_count: 4,
+    market_total_count: 4,
+    market_coverage: 1,
+  };
+}
+
+function relativeEnvelope(code, overrides) {
+  return {
+    schema_version: "stock-relative-context.v0.1",
+    source: "RESEARCH_DATA_PLANE+EASTMONEY_CURRENT_INDUSTRY",
+    fetched_at: "2026-09-11T08:00:00Z",
+    code,
+    industry_membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+    dataset_id: "ashare_daily_unadjusted",
+    provider_id: "local_bulk_dump",
+    adjustment: "UNADJUSTED",
+    return_semantics: "UNADJUSTED_RAW_PRICE_CHANGE",
+    relative_unit: "PERCENTAGE_POINTS",
+    provenance: {
+      classification_provider: "EASTMONEY",
+      membership_source: "astock.a_share_snapshot.industry=f100",
+      membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+      rdp: { artifact_sha256: "fixture" },
+    },
+    warnings: [],
+    limitations: [],
+    ...overrides,
+  };
+}
+
+function stockRelativeContextPayload(code, status = "normal") {
+  if (status === "unavailable") {
+    const emptyPeriod = emptyRelativePeriod();
+    return relativeEnvelope(code, {
+      status,
+      comparison_date: null,
+      industry_name: "电子",
+      industry_status: "unavailable",
+      stock: { return_5d_pct: null, return_20d_pct: null, return_60d_pct: null },
+      periods: { "5D": emptyPeriod, "20D": emptyPeriod, "60D": emptyPeriod },
+      provenance: {
+        classification_provider: "EASTMONEY",
+        membership_source: "astock.a_share_snapshot.industry=f100",
+        membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+        rdp: null,
+      },
+      warnings: ["RDP fixture unavailable；未将缺失数据伪装成 0。"],
+    });
+  }
+
+  if (status === "unknown-industry") {
+    const marketOnly = (stock, market, vsMarket) => ({
+      stock_return_pct: stock,
+      industry_median_pct: null,
+      vs_industry_pct_points: null,
+      market_median_pct: market,
+      vs_market_pct_points: vsMarket,
+      industry_valid_count: 0,
+      industry_member_count: 0,
+      industry_coverage: null,
+      market_valid_count: 4,
+      market_total_count: 4,
+      market_coverage: 1,
+    });
+    return relativeEnvelope(code, {
+      status: "partial",
+      comparison_date: "2026-09-11",
+      industry_name: "UNKNOWN",
+      industry_status: "unknown",
+      stock: { return_5d_pct: 12, return_20d_pct: 10, return_60d_pct: 30 },
+      periods: {
+        "5D": marketOnly(12, 5, 7),
+        "20D": marketOnly(10, 5.5, 4.5),
+        "60D": marketOnly(30, 15, 15),
+      },
+      warnings: ["当前股票行业为 UNKNOWN；不计算行业 benchmark。"],
+    });
+  }
+
+  if (status === "mixed-horizon") {
+    return relativeEnvelope(code, {
+      status: "partial",
+      comparison_date: "2026-09-11",
+      industry_name: "电子",
+      industry_status: "normal",
+      stock: { return_5d_pct: 12, return_20d_pct: 10, return_60d_pct: null },
+      periods: {
+        "5D": relativePeriod(12, 6, 6, 5, 7),
+        "20D": relativePeriod(10, 8, 2, 5.5, 4.5),
+        "60D": emptyRelativePeriod({
+          industryMemberCount: 3,
+          marketTotalCount: 4,
+          industryCoverage: 0,
+          marketCoverage: 0,
+        }),
+      },
+      warnings: ["60D 没有可用 exact-date 观测；未将缺失数据显示为 0。"],
+    });
+  }
+
+  return relativeEnvelope(code, {
+    status: "normal",
+    comparison_date: "2026-09-11",
+    industry_name: "电子",
+    industry_status: "normal",
+    stock: { return_5d_pct: 12, return_20d_pct: 10, return_60d_pct: 30 },
+    periods: {
+      "5D": relativePeriod(12, 6, 6, 5, 7),
+      "20D": relativePeriod(10, 8, 2, 5.5, 4.5),
+      "60D": relativePeriod(30, 20, 10, 15, 15),
+    },
+  });
+}
+
 function klineBars(code) {
   const base = code === "000001" ? 11 : 8;
   return Array.from({ length: 5 }, (_, i) => ({
@@ -320,6 +465,8 @@ function createApiMockController() {
     valuationCalls: [],
     technicalIndicatorsStatus: "normal",
     technicalIndicatorsCalls: [],
+    relativeContextStatus: "normal",
+    relativeContextCalls: [],
     attentionContextStatus: "normal",
     attentionContextCalls: [],
     attentionContextHoldCode: null,
@@ -352,6 +499,12 @@ function createApiMockController() {
 
     const pathname = pathnameOf(url);
     const code = codeOf(url);
+
+    if (pathname.endsWith("/stock-relative-context")) {
+      state.relativeContextCalls.push({ code, url, ts: Date.now() });
+      await route.fulfill(jsonOk(stockRelativeContextPayload(code, state.relativeContextStatus)));
+      return;
+    }
 
     // K-line: delayed / error / hold for race tests
     if (pathname === "/api/kline" || pathname.endsWith("/kline")) {
@@ -661,6 +814,9 @@ function createApiMockController() {
     setTechnicalIndicatorsStatus(status) {
       state.technicalIndicatorsStatus = status;
     },
+    setRelativeContextStatus(status) {
+      state.relativeContextStatus = status;
+    },
     setAttentionContextStatus(status) {
       state.attentionContextStatus = status;
     },
@@ -714,6 +870,27 @@ async function waitForStockHeader(page, code, name) {
   await page.getByText(code, { exact: true }).first().waitFor({ state: "visible", timeout: 10000 });
 }
 
+async function horizonCellTexts(relative, horizon) {
+  const row = relative.getByTestId(`stock-relative-horizon-${horizon}`);
+  await row.waitFor({ state: "visible", timeout: 10000 });
+  const cells = row.locator("td");
+  return {
+    stock: ((await cells.nth(1).innerText()) || "").trim(),
+    industry: ((await cells.nth(2).innerText()) || "").trim(),
+    vsIndustry: ((await cells.nth(3).innerText()) || "").trim(),
+    market: ((await cells.nth(4).innerText()) || "").trim(),
+    vsMarket: ((await cells.nth(5).innerText()) || "").trim(),
+  };
+}
+
+function assertHorizonCells(errors, label, horizon, actual, expected) {
+  for (const [key, value] of Object.entries(expected)) {
+    if (actual[key] !== value) {
+      errors.push(`${label}: ${horizon} ${key} expected ${JSON.stringify(value)}, got ${JSON.stringify(actual[key])}`);
+    }
+  }
+}
+
 async function expandKline(page) {
   const btn = page.getByRole("button", { name: /历史 K 线/ }).first();
   await btn.waitFor({ state: "visible", timeout: 10000 });
@@ -741,6 +918,38 @@ async function runSmoke(page, mock, errors) {
   } catch (e) {
     errors.push(`${label}: after query 000001 missing header: ${e.message}`);
     return;
+  }
+
+  // Stock Relative Context: one production-page card exposes the same-date
+  // stock/industry/market facts and the unadjusted/current-membership limits.
+  try {
+    const relative = page.getByTestId("stock-relative-context");
+    await relative.waitFor({ state: "visible", timeout: 10000 });
+    for (const text of [
+      "市场 / 行业相对表现",
+      "比较日期：2026-09-11",
+      "当前行业：电子",
+      "CURRENT_MEMBERSHIP_SNAPSHOT",
+      "UNADJUSTED / 未复权",
+      "12.00%",
+      "+6.00 个百分点",
+      "+7.00 个百分点",
+      "行业有效样本：3 / 3（100.0%）",
+      "市场有效样本：4 / 4（100.0%）",
+    ]) {
+      if (!(await relative.getByText(text, { exact: false }).first().isVisible().catch(() => false))) {
+        errors.push(`${label}: relative context text not visible: ${text}`);
+      }
+    }
+    const relativeText = await relative.innerText();
+    for (const forbidden of ["建议买入", "建议卖出", "综合评分", "BUY", "SELL"]) {
+      if (relativeText.includes(forbidden)) errors.push(`${label}: forbidden relative wording present: ${forbidden}`);
+    }
+    if (mock.state.relativeContextCalls.length < 1) {
+      errors.push(`${label}: relative context endpoint was not requested`);
+    }
+  } catch (e) {
+    errors.push(`${label}: relative context success scenario failed: ${e.message}`);
   }
 
   // Attention Context 只读面板：绑定已提交代码，展示映射、观察和 provenance。
@@ -773,6 +982,7 @@ async function runSmoke(page, mock, errors) {
 
   // Native Intel 不可用只影响资讯区块，不遮蔽正式 StockData 主数据。
   mock.setAttentionContextStatus("unavailable");
+  mock.setRelativeContextStatus("unavailable");
   await fillCode(page, "000002");
   await clickQuery(page);
   try {
@@ -791,13 +1001,109 @@ async function runSmoke(page, mock, errors) {
   } catch (e) {
     errors.push(`${label}: attention context unavailable scenario failed: ${e.message}`);
   }
+  try {
+    const relativeUnavailable = page.getByTestId("stock-relative-context");
+    await relativeUnavailable.getByText("数据不可用", { exact: true }).waitFor({ state: "visible", timeout: 10000 });
+    const unavailableText = await relativeUnavailable.innerText();
+    if (!unavailableText.includes("—")) errors.push(`${label}: unavailable relative context did not show null marker`);
+    if (unavailableText.includes("0.00%")) errors.push(`${label}: unavailable relative context fabricated 0.00%`);
+  } catch (e) {
+    errors.push(`${label}: relative context unavailable scenario failed: ${e.message}`);
+  }
   mock.setAttentionContextStatus("normal");
+  mock.setRelativeContextStatus("normal");
   await fillCode(page, "000001");
   await clickQuery(page);
   try {
     await waitForStockHeader(page, "000001", "平安银行");
   } catch (e) {
     errors.push(`${label}: restoring 000001 after unavailable scenario failed: ${e.message}`);
+  }
+
+  // UNKNOWN industry: industry benchmark stays unavailable while market comparison remains.
+  mock.setRelativeContextStatus("unknown-industry");
+  await fillCode(page, "000001");
+  await clickQuery(page);
+  try {
+    await waitForStockHeader(page, "000001", "平安银行");
+    const unknownRelative = page.getByTestId("stock-relative-context");
+    await unknownRelative.waitFor({ state: "visible", timeout: 10000 });
+    if (!(await unknownRelative.getByText("部分数据可比", { exact: true }).isVisible().catch(() => false))) {
+      errors.push(`${label}: UNKNOWN industry did not show partial status`);
+    }
+    if (!(await unknownRelative.getByText("当前行业：UNKNOWN", { exact: false }).first().isVisible().catch(() => false))) {
+      errors.push(`${label}: UNKNOWN industry name not visible`);
+    }
+    const unknownNotice = unknownRelative.getByTestId("stock-relative-industry-notice");
+    const noticeText = (await unknownNotice.innerText().catch(() => "")) || "";
+    if (!noticeText.includes("当前行业为 UNKNOWN，行业中位数不计算；市场比较仍可独立显示。")) {
+      errors.push(`${label}: UNKNOWN industry notice missing: ${JSON.stringify(noticeText)}`);
+    }
+    const unknownFive = await horizonCellTexts(unknownRelative, "5D");
+    assertHorizonCells(errors, `${label}: UNKNOWN industry`, "5D", unknownFive, {
+      stock: "+12.00%",
+      industry: "—",
+      vsIndustry: "—",
+      market: "+5.00%",
+      vsMarket: "+7.00 个百分点",
+    });
+    if (unknownFive.industry !== "—" || unknownFive.vsIndustry !== "—") {
+      errors.push(`${label}: UNKNOWN industry did not keep industry cells unavailable`);
+    }
+    if (unknownFive.market === "—" || unknownFive.vsMarket === "—") {
+      errors.push(`${label}: UNKNOWN industry hid the independent market comparison`);
+    }
+    if (!(await page.getByRole("heading", { name: "平安银行" }).isVisible().catch(() => false))) {
+      errors.push(`${label}: UNKNOWN industry broke the StockData header`);
+    }
+  } catch (e) {
+    errors.push(`${label}: UNKNOWN industry relative context scenario failed: ${e.message}`);
+  }
+
+  // Mixed horizon: 5D remains numeric while 60D stays unavailable.
+  mock.setRelativeContextStatus("mixed-horizon");
+  await fillCode(page, "000001");
+  await clickQuery(page);
+  try {
+    await waitForStockHeader(page, "000001", "平安银行");
+    const mixedRelative = page.getByTestId("stock-relative-context");
+    await mixedRelative.waitFor({ state: "visible", timeout: 10000 });
+    if (!(await mixedRelative.getByText("部分数据可比", { exact: true }).isVisible().catch(() => false))) {
+      errors.push(`${label}: mixed-horizon did not show partial status`);
+    }
+    const mixedFive = await horizonCellTexts(mixedRelative, "5D");
+    assertHorizonCells(errors, `${label}: mixed-horizon`, "5D", mixedFive, {
+      stock: "+12.00%",
+      industry: "+6.00%",
+      vsIndustry: "+6.00 个百分点",
+      market: "+5.00%",
+      vsMarket: "+7.00 个百分点",
+    });
+    const mixedSixty = await horizonCellTexts(mixedRelative, "60D");
+    assertHorizonCells(errors, `${label}: mixed-horizon`, "60D", mixedSixty, {
+      stock: "—",
+      industry: "—",
+      vsIndustry: "—",
+      market: "—",
+      vsMarket: "—",
+    });
+    if (mixedSixty.stock.includes("0.00") || mixedSixty.market.includes("0.00")) {
+      errors.push(`${label}: mixed-horizon 60D fabricated 0.00 from unavailable values`);
+    }
+    if (await mixedRelative.getByTestId("stock-relative-industry-notice").isVisible().catch(() => false)) {
+      errors.push(`${label}: mixed-horizon should keep a classified industry without the UNKNOWN notice`);
+    }
+  } catch (e) {
+    errors.push(`${label}: mixed-horizon relative context scenario failed: ${e.message}`);
+  }
+
+  mock.setRelativeContextStatus("normal");
+  await fillCode(page, "000001");
+  await clickQuery(page);
+  try {
+    await waitForStockHeader(page, "000001", "平安银行");
+  } catch (e) {
+    errors.push(`${label}: restoring 000001 after mixed-horizon scenario failed: ${e.message}`);
   }
   mock.resetAttentionContextCalls();
   await sleep(300);
@@ -1198,8 +1504,34 @@ async function main() {
     page.on("pageerror", (err) => {
       errors.push(`pageerror: ${err.message}`);
     });
+    page.on("console", (message) => {
+      const sourceUrl = message.location().url || "unknown";
+      // The existing K-line retry scenario intentionally returns one mocked
+      // 500; do not treat that expected fixture transition as a page defect.
+      if (message.type() === "error" && !sourceUrl.includes("/api/kline")) {
+        errors.push(`console.error: ${message.text()} @ ${sourceUrl}`);
+      }
+    });
 
     await runSmoke(page, mock, errors);
+    await page.setViewportSize({ width: 390, height: 844 });
+    try {
+      const narrowRelative = page.getByTestId("stock-relative-context");
+      await narrowRelative.waitFor({ state: "visible", timeout: 10000 });
+      if (!(await narrowRelative.getByText("市场 / 行业相对表现", { exact: true }).isVisible())) {
+        errors.push("stock-data-smoke narrow: relative context heading not visible");
+      }
+      const viewportState = await page.evaluate(() => ({
+        viewport: window.innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
+        bodyWidth: document.body.scrollWidth,
+      }));
+      if (viewportState.documentWidth > viewportState.viewport + 1 || viewportState.bodyWidth > viewportState.viewport + 1) {
+        errors.push(`stock-data-smoke narrow: page overflow ${JSON.stringify(viewportState)}`);
+      }
+    } catch (e) {
+      errors.push(`stock-data-smoke narrow: relative context check failed: ${e.message}`);
+    }
     await context.close();
   } catch (e) {
     errors.push(`fatal: ${e && e.stack ? e.stack : String(e)}`);
