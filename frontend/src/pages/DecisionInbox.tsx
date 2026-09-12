@@ -888,7 +888,11 @@ export default function DecisionInbox() {
                       strategy={campaign.strategy}
                       reloadEpoch={thesisReloadEpoch}
                     />
-                    <CampaignCommittedDecisionsCard campaignId={campaign.campaign_id} />
+                    <CampaignCommittedDecisionsCard
+                      campaignId={campaign.campaign_id}
+                      securityCode={campaign.security_code}
+                      strategy={campaign.strategy}
+                    />
                   </div>
                 );
               })}
@@ -935,7 +939,11 @@ export default function DecisionInbox() {
                     strategy={item.strategy}
                     reloadEpoch={thesisReloadEpoch}
                   />
-                  <CampaignCommittedDecisionsCard campaignId={item.campaign_id} />
+                  <CampaignCommittedDecisionsCard
+                    campaignId={item.campaign_id}
+                    securityCode={item.security_code}
+                    strategy={item.strategy}
+                  />
                 </div>
               ))}
             </section>
