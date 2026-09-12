@@ -391,6 +391,49 @@ function createApiMockController() {
       return;
     }
 
+    if (pathname.endsWith("/stock-valuation-context")) {
+      const code = new URL(url).searchParams.get("code") || "000001";
+      await route.fulfill(jsonOk({
+        schema_version: "stock-valuation-context.v0.1",
+        status: "unavailable",
+        source: "EASTMONEY_A_SHARE_SNAPSHOT",
+        fetched_at: "2026-09-12T08:00:00Z",
+        code,
+        industry_name: null,
+        industry_status: "unavailable",
+        industry_membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+        valuation_semantics: "CURRENT_MEMBER_VALUATION_DISTRIBUTION_ONLY",
+        historical_valuation_status: "NOT_AVAILABLE",
+        sector_index_valuation_authority: "NOT_AVAILABLE",
+        industry_member_count: 0,
+        pe_source: "eastmoney_clist_f115",
+        pb_source: "eastmoney_clist_f23",
+        pe_ttm: {
+          stock_value: null, stock_sign: "missing", industry_positive_median: null,
+          vs_industry_positive_median: null, rank_among_positive: null, positive_sample_count: 0,
+          rank_order: "ASCENDING_POSITIVE_VALUES", industry_observed_count: 0, industry_missing_count: 0,
+          industry_positive_count: 0, industry_zero_count: 0, industry_negative_count: 0,
+          industry_median_status: "NO_POSITIVE_VALUES",
+        },
+        pb: {
+          stock_value: null, stock_sign: "missing", industry_positive_median: null,
+          vs_industry_positive_median: null, rank_among_positive: null, positive_sample_count: 0,
+          rank_order: "ASCENDING_POSITIVE_VALUES", industry_observed_count: 0, industry_missing_count: 0,
+          industry_positive_count: 0, industry_zero_count: 0, industry_negative_count: 0,
+          industry_median_status: "NO_POSITIVE_VALUES",
+        },
+        provenance: {
+          classification_provider: "EASTMONEY",
+          membership_source: "astock.a_share_snapshot.industry=f100",
+          membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+          pe_ttm_field: "f115", pb_field: "f23", dynamic_pe_field: "f9", dynamic_pe_used: false,
+        },
+        warnings: ["top-risk fixture"],
+        limitations: [],
+      }));
+      return;
+    }
+
     // Native Intel failure is isolated from this unrelated StockData path.
     if (pathname.startsWith("/api/native-intel/security-context/")) {
       const code = pathname.split("/").pop() || "000001";
