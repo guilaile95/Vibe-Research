@@ -129,6 +129,9 @@ _QUOTE = {"600519": {"name": "贵州茅台", "price": 100.0, "mcap_yi": 1000, "p
 
 def test_full_valuation_dirty_forecast(monkeypatch):
     monkeypatch.setattr(astock, "tencent_quote", lambda codes: _QUOTE)
+    monkeypatch.setattr(astock, "a_share_snapshot", lambda: [
+        {"code": "600519", "name": "贵州茅台", "pe_ttm": 20.0, "pb": 5.0},
+    ])
     monkeypatch.setattr(astock, "profit_forecast", lambda code: [
         {"年度": "2026", "预测机构数": "-"},  # 缺「均值」+ 脏机构数
         {"年度": "2027", "均值": "-"},        # '-' 占位
@@ -141,6 +144,9 @@ def test_full_valuation_dirty_forecast(monkeypatch):
 
 def test_full_valuation_string_numbers(monkeypatch):
     monkeypatch.setattr(astock, "tencent_quote", lambda codes: _QUOTE)
+    monkeypatch.setattr(astock, "a_share_snapshot", lambda: [
+        {"code": "600519", "name": "贵州茅台", "pe_ttm": 20.0, "pb": 5.0},
+    ])
     monkeypatch.setattr(astock, "profit_forecast", lambda code: [
         {"年度": "2026年", "均值": "2.0", "预测机构数": "12"},
         {"年度": "2027年", "均值": 2.4},

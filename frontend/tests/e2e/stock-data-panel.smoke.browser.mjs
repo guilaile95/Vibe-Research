@@ -128,8 +128,11 @@ function valuationPayload(code) {
     code,
     price: code === "000001" ? 11.5 : 8.2,
     mcap_yi: code === "000001" ? 2200 : 950,
-    pe_ttm: 5.2,
+    pe_ttm: code === "000001" ? 10 : code === "000002" ? null : 5.2,
     pb: 0.65,
+    pe_ttm_source: "eastmoney_clist_f115",
+    pb_source: "eastmoney_clist_f23",
+    dynamic_pe_used: false,
     eps_26e: 1.8,
     eps_27e: 2.0,
     pe_26e: 6.4,
@@ -714,6 +717,13 @@ async function waitForStockHeader(page, code, name) {
   await page.getByText(code, { exact: true }).first().waitFor({ state: "visible", timeout: 10000 });
 }
 
+async function headerPeValue(page) {
+  const cell = page.getByTestId("stock-header-pe-ttm");
+  const text = await cell.innerText();
+  const lines = text.split("\n").map((s) => s.trim()).filter(Boolean);
+  return { text, value: lines[lines.length - 1] || "" };
+}
+
 async function expandKline(page) {
   const btn = page.getByRole("button", { name: /历史 K 线/ }).first();
   await btn.waitFor({ state: "visible", timeout: 10000 });
@@ -741,6 +751,22 @@ async function runSmoke(page, mock, errors) {
   } catch (e) {
     errors.push(`${label}: after query 000001 missing header: ${e.message}`);
     return;
+  }
+
+  try {
+    const pe = await headerPeValue(page);
+    if (pe.value !== "10") {
+      errors.push(`${label}: expected header PE 10 from f115 mock, got ${JSON.stringify(pe.text)}`);
+    }
+    if (pe.value === "5.2") {
+      errors.push(`${label}: header PE still showing Tencent/percentile 5.2`);
+    }
+    const disclosure = page.getByTestId("stock-header-pe-source");
+    if (!(await disclosure.getByText("PE-TTM 来源 Eastmoney f115；缺失不显示为 0。").isVisible().catch(() => false))) {
+      errors.push(`${label}: f115 disclosure not visible`);
+    }
+  } catch (e) {
+    errors.push(`${label}: 000001 PE(TTM)/f115 disclosure assertion failed: ${e.message}`);
   }
 
   // Attention Context 只读面板：绑定已提交代码，展示映射、观察和 provenance。
@@ -777,6 +803,17 @@ async function runSmoke(page, mock, errors) {
   await clickQuery(page);
   try {
     await waitForStockHeader(page, "000002", "万科A");
+    try {
+      const pe = await headerPeValue(page);
+      if (pe.value !== "—") {
+        errors.push(`${label}: PE(TTM) cell expected —, got ${JSON.stringify(pe.text)}`);
+      }
+      if (pe.value === "0" || pe.value === "0.0" || pe.value === "0.00") {
+        errors.push(`${label}: missing pe_ttm displayed as 0`);
+      }
+    } catch (e) {
+      errors.push(`${label}: 000002 PE(TTM) dash assertion failed: ${e.message}`);
+    }
     const unavailableAttention = page.getByTestId("native-intel-security-context");
     await unavailableAttention.getByText(/Native Intel 暂不可用/).waitFor({ state: "visible", timeout: 10000 });
     if ((await unavailableAttention.getAttribute("data-security-code")) !== "000002") {
