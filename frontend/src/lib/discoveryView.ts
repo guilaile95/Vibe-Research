@@ -42,6 +42,28 @@ export function statusLabel(status: string): string {
   } as Record<string, string>)[status] || status;
 }
 
+export const DISCOVERY_CANDIDATE_ENTRY_LABEL = "进入候选研究";
+export const DISCOVERY_RESTRICTED_FILTER_LABEL = "受限研究筛选";
+
+export function restrictedStatusLabel(status: string): string {
+  return ({
+    ALL: "全部资格",
+    CLEAR: "普通",
+    RESTRICTED: "受限研究",
+    UNKNOWN: "资格未知",
+  } as Record<string, string>)[status] || status;
+}
+
+export function discoveryFunnelLabel(key: string): string {
+  return ({
+    core_universe: "核心池",
+    cheap_scan_passed: "Stage 1 通过",
+    qualification_candidates: "Stage 3 资格检查",
+    sector_coverage: "行业覆盖",
+    excluded: "排除 / 拦截",
+  } as Record<string, string>)[key] || key;
+}
+
 export function displayDiscoveryTime(value: string | null | undefined): string {
   if (!value) return "未知";
   const date = new Date(value);
