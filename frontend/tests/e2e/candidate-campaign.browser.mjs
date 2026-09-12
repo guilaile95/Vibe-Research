@@ -634,7 +634,29 @@ try {
     if (pathname === "/api/evidence" && request.method() === "GET") {
       assert.equal(url.searchParams.get("subject_type"), "stock");
       assert.equal(url.searchParams.get("subject_id"), "600519");
-      await route.fulfill(ok({ items: evidenceRecords, total: evidenceRecords.length, limit: 200, offset: 0 }));
+      const items = evidenceRecords.filter((item) => !item.deleted);
+      await route.fulfill(ok({ items, total: items.length, limit: 200, offset: 0 }));
+      return;
+    }
+    const evidenceIdMatch = pathname.match(/^\/api\/evidence\/([^/]+)$/);
+    if (evidenceIdMatch && request.method() === "GET") {
+      const rec = evidenceRecords.find((item) => item.id === evidenceIdMatch[1] && !item.deleted);
+      if (!rec) {
+        await route.fulfill(unavailable());
+        return;
+      }
+      await route.fulfill(ok(rec));
+      return;
+    }
+    if (evidenceIdMatch && request.method() === "DELETE") {
+      const rec = evidenceRecords.find((item) => item.id === evidenceIdMatch[1]);
+      if (!rec) {
+        await route.fulfill(unavailable());
+        return;
+      }
+      rec.deleted = 1;
+      rec.deleted_at = "2026-08-30T00:00:00Z";
+      await route.fulfill(ok(rec));
       return;
     }
     if (pathname === "/api/native-intel/security-context/600519" && request.method() === "GET") {
@@ -901,6 +923,29 @@ try {
   await workspace.getByTestId("native-intel-security-context").waitFor();
   await workspace.locator('[data-evidence-freshness="NOT_EVALUATED"]').waitFor();
   assert.equal(await workspace.locator('[data-evidence-source-conflict="UNKNOWN"]').count(), 1);
+  const existingEvidence = workspace.getByTestId("candidate-existing-evidence");
+  await existingEvidence.waitFor();
+  const existingHref = await existingEvidence.getAttribute("href");
+  assert.match(existingHref || "", /return_to=/);
+  assert.equal(
+    new URL(existingHref || "", "http://127.0.0.1").searchParams.get("return_to"),
+    "/candidates/600519",
+  );
+  await existingEvidence.click();
+  await page.waitForURL((url) => url.pathname === "/evidence/evidence_financial");
+  await page.getByTestId("evidence-detail-back").getByText("候选研究", { exact: true }).waitFor();
+  await page.getByTestId("evidence-detail-back").click();
+  await page.waitForURL(/\/candidates\/600519$/);
+  await page.getByTestId("candidate-workspace").waitFor();
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByTestId("candidate-existing-evidence").click();
+  await page.getByRole("heading", { name: "2026H1 财务披露" }).waitFor();
+  await page.getByRole("button", { name: /删除$/ }).click();
+  await page.waitForURL(/\/candidates\/600519$/);
+  await page.getByTestId("candidate-workspace").waitFor();
+  assert.equal(await page.getByTestId("candidate-existing-evidence").count(), 0);
+
   await workspace.getByTestId("candidate-add-evidence").click();
   await page.waitForURL(/\/evidence\/new\?/);
   assert.equal(await page.getByPlaceholder("如 600519 / humanoid / AI算力").inputValue(), "600519");

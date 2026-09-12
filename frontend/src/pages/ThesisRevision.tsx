@@ -4,6 +4,7 @@ import { ArrowLeft, Loader2, ExternalLink } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError, type ThesisRevision as ThesisRevisionData } from "@/lib/api";
+import { safeInternalReturnTo } from "@/lib/internalReturnTo";
 import { cn } from "@/lib/utils";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -50,12 +51,7 @@ export function ThesisRevision() {
   const { id, rev } = useParams<{ id: string; rev: string }>();
   const [searchParams] = useSearchParams();
   const thesisPath = `/thesis/${id}`;
-  const requestedReturnTo = searchParams.get("return_to") ?? "";
-  const returnTo = requestedReturnTo === thesisPath
-    || requestedReturnTo.startsWith(`${thesisPath}?`)
-    || requestedReturnTo.startsWith(`${thesisPath}#`)
-    ? requestedReturnTo
-    : thesisPath;
+  const returnTo = safeInternalReturnTo(searchParams.get("return_to"), thesisPath);
   const revNum = rev ? Number(rev) : NaN;
   const [data, setData] = useState<ThesisRevisionData | null>(null);
   const [loading, setLoading] = useState(false);

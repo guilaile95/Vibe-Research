@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Pencil, Save, X, Trash2, Loader2, ExternalLink } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError, type EvidenceRecord, type EvidenceTemporalAuthority } from "@/lib/api";
+import { safeInternalReturnTo } from "@/lib/internalReturnTo";
 import { cn } from "@/lib/utils";
 
 const SUBJECT_TYPES = [
@@ -107,15 +108,22 @@ const temporalBasisLabel: Record<string, string> = {
   NONE: "无权威时间",
 };
 
+function evidenceDetailBackLabel(returnTo: string): string {
+  if (returnTo.startsWith("/candidates/")) return "候选研究";
+  if (returnTo.startsWith("/thesis")) return "投资逻辑";
+  if (returnTo.startsWith("/stock-data")) return "个股数据";
+  if (returnTo.startsWith("/decision-inbox")) return "决策收件箱";
+  return "证据库";
+}
+
 export function EvidenceDetail() {
   const { id } = useParams<{ id: string }>();
+  const nav = useNavigate();
   const [searchParams] = useSearchParams();
-  const requestedReturnTo = searchParams.get("return_to") ?? "";
-  const returnTo = requestedReturnTo === "/evidence" || requestedReturnTo.startsWith("/evidence?")
-    ? requestedReturnTo
-    : "/evidence";
+  const returnTo = safeInternalReturnTo(searchParams.get("return_to"), "/evidence");
+  const backLabel = evidenceDetailBackLabel(returnTo);
   const [record, setRecord] = useState<EvidenceRecord | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(Boolean(id));
   const [err, setErr] = useState<string | null>(null);
 
   const [editing, setEditing] = useState(false);
@@ -251,8 +259,7 @@ export function EvidenceDetail() {
     setEditErr(null);
     try {
       await api.evidenceDelete(id);
-      // 跳回列表
-      window.location.href = "/evidence";
+      nav(returnTo || "/evidence");
     } catch (e) {
       setEditErr(e instanceof ApiError ? e.message : "删除失败");
       setBusy(false);
@@ -262,8 +269,8 @@ export function EvidenceDetail() {
   if (loading && !record) {
     return (
       <div>
-        <Link to={returnTo} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="h-4 w-4" /> 证据库
+        <Link to={returnTo} data-testid="evidence-detail-back" className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+          <ArrowLeft className="h-4 w-4" /> {backLabel}
         </Link>
         <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
           <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 加载中…
@@ -275,8 +282,8 @@ export function EvidenceDetail() {
   if (err && !record) {
     return (
       <div>
-        <Link to={returnTo} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="h-4 w-4" /> 证据库
+        <Link to={returnTo} data-testid="evidence-detail-back" className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+          <ArrowLeft className="h-4 w-4" /> {backLabel}
         </Link>
         <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
           {err}
@@ -289,8 +296,8 @@ export function EvidenceDetail() {
 
   return (
     <div>
-      <Link to={returnTo} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="h-4 w-4" /> 证据库
+      <Link to={returnTo} data-testid="evidence-detail-back" className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+        <ArrowLeft className="h-4 w-4" /> {backLabel}
       </Link>
 
       <PageHeader
@@ -398,7 +405,7 @@ export function EvidenceDetail() {
                   <div><span className="text-muted-foreground">Basis：</span>{temporalBasisLabel[temporal.temporal_basis] ?? temporal.temporal_basis}</div>
                   <div><span className="text-muted-foreground">Effective at：</span><span className="font-mono">{temporal.effective_at ?? "—"}</span></div>
                   <div><span className="text-muted-foreground">EC1：</span>{temporal.ec1_evaluation}</div>
-                  <div className="sm:col-span-3"><span className="text-muted-foreground">Reason：</span>{temporal.reason_codes.join(" · ") || "—"}</div>
+                  <div className="sm:col-span-3"><span className="text-muted-foreground">Reason：</span>{(temporal.reason_codes ?? []).join(" · ") || "—"}</div>
                 </div>
               )}
               <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">

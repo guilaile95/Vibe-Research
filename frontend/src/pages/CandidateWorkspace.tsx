@@ -211,7 +211,13 @@ export function CandidateWorkspace() {
                   {evidence.value.records.slice(0, 5).map((record) => (
                     <li key={record.id} className="flex min-w-0 items-center gap-2">
                       <span className="rounded bg-muted/50 px-1.5 py-0.5 text-[10px]">{record.evidence_type}</span>
-                      <Link to={`/evidence/${encodeURIComponent(record.id)}`} className="min-w-0 flex-1 truncate hover:text-primary hover:underline">{record.claim}</Link>
+                      <Link
+                        to={`/evidence/${encodeURIComponent(record.id)}?${new URLSearchParams({ return_to: returnTo }).toString()}`}
+                        className="min-w-0 flex-1 truncate hover:text-primary hover:underline"
+                        data-testid="candidate-existing-evidence"
+                      >
+                        {record.claim}
+                      </Link>
                       <span className="shrink-0 text-[10px] text-muted-foreground">{record.source_date || "日期未知"}</span>
                     </li>
                   ))}
