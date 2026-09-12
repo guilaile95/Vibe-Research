@@ -796,9 +796,13 @@ async function run() {
     await page.getByTestId(`process-review-bound-${firstRun.decisionId}`).waitFor();
     await page.getByText("挑战覆盖不等于判断正确。", { exact: true }).waitFor();
     await page.getByTestId(`process-review-none-${secondRun.decisionId}`).waitFor();
-    await page.getByText("Security close-to-close path", { exact: true }).first().waitFor();
-    await page.getByText("security path only; not portfolio P&L or decision quality", { exact: true }).first().waitFor();
-    assert.equal(await page.getByText("Security close-to-close path", { exact: true }).count(), 2);
+    await page.getByTestId(`counterfactual-detail-${firstRun.decisionId}`).waitFor();
+    await page.getByText("个股收盘到收盘路径", { exact: true }).first().waitFor();
+    await page.getByText("仅个股路径，不是组合盈亏，也不是判断质量", { exact: true }).first().waitFor();
+    await page.getByText("该路径与实际资金结果相互独立。", { exact: true }).first().waitFor();
+    assert.equal(await page.getByText("个股收盘到收盘路径", { exact: true }).count(), 2);
+    assert.equal(await page.getByTestId(`counterfactual-detail-${firstRun.decisionId}`).count(), 1);
+    assert.equal(await page.getByTestId(`counterfactual-detail-${secondRun.decisionId}`).count(), 1);
     await page.getByTestId("review-worklist-group-due").waitFor();
     await page.getByTestId("review-worklist-group-upcoming").waitFor();
     await page.getByTestId("review-worklist-group-unavailable").waitFor();

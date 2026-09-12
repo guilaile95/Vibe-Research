@@ -8,12 +8,20 @@ import type {
   FormalReviewWorklistItem,
 } from "@/lib/api/types";
 import {
+  COUNTERFACTUAL_COLUMN_HEADER,
+  COUNTERFACTUAL_DECISION_REFERENCE_LABEL,
+  COUNTERFACTUAL_EVALUATION_LABEL,
+  COUNTERFACTUAL_PATH_HEADING,
+  COUNTERFACTUAL_RETURN_LABEL,
+  COUNTERFACTUAL_SCOPE_COPY,
+  COUNTERFACTUAL_SEPARATION_COPY,
   PROCESS_REVIEW_BOUND_HEADING,
   PROCESS_REVIEW_COVERAGE_COPY,
   PROCESS_REVIEW_DIMENSIONS,
   PROCESS_REVIEW_ERROR_COPY,
   PROCESS_REVIEW_NONE_COPY,
   actualCapitalSummary,
+  counterfactualSummary,
   dueStateLabel,
   formalOutcomeIdentityTitle,
   frozenDecisionNbaLabel,
@@ -36,12 +44,6 @@ function stateLabel(value: unknown): string {
   return value;
 }
 
-function counterfactualSummary(item: FormalDecisionOutcome): string {
-  const value = item.counterfactual_outcome;
-  if (!value) return "—";
-  return stateLabel(value.state);
-}
-
 function actualCapitalCell(item: FormalDecisionOutcome) {
   const actual = actualCapitalSummary(item);
   return (
@@ -50,6 +52,43 @@ function actualCapitalCell(item: FormalDecisionOutcome) {
       {actual.canonical ? (
         <div className="mt-1 font-mono text-[11px] text-muted-foreground">{actual.canonical}</div>
       ) : null}
+    </div>
+  );
+}
+
+function counterfactualCell(item: FormalDecisionOutcome) {
+  const counterfactual = counterfactualSummary(item);
+  return (
+    <div data-counterfactual-state={item.counterfactual_outcome?.state || ""}>
+      <div>{counterfactual.label}</div>
+      {counterfactual.canonical ? (
+        <div className="mt-1 font-mono text-[11px] text-muted-foreground">{counterfactual.canonical}</div>
+      ) : null}
+      {item.counterfactual_outcome?.state === "EVALUATED" && (
+        <div
+          className="mt-2 space-y-1 text-xs"
+          data-testid={`counterfactual-detail-${item.decision_id}`}
+        >
+          <div className="font-medium">
+            {COUNTERFACTUAL_PATH_HEADING}
+          </div>
+          <div className="text-muted-foreground">
+            {COUNTERFACTUAL_DECISION_REFERENCE_LABEL}：{pricePointText(item.counterfactual_outcome.start_price_point)}
+          </div>
+          <div className="text-muted-foreground">
+            {COUNTERFACTUAL_EVALUATION_LABEL}：{pricePointText(item.counterfactual_outcome.end_price_point)}
+          </div>
+          <div>
+            {COUNTERFACTUAL_RETURN_LABEL}：{returnText(item.counterfactual_outcome.security_return)}
+          </div>
+          <div className="text-muted-foreground">
+            {COUNTERFACTUAL_SCOPE_COPY}
+          </div>
+        </div>
+      )}
+      <div className="mt-1 text-xs text-muted-foreground">
+        {COUNTERFACTUAL_SEPARATION_COPY}
+      </div>
     </div>
   );
 }
@@ -337,7 +376,7 @@ export function FormalOutcomeSection() {
                 <th className="pb-3 pr-4">Replay</th>
                 <th className="pb-3 pr-4">Process Review</th>
                 <th className="pb-3 pr-4">Actual Capital</th>
-                <th className="pb-3">Counterfactual</th>
+                <th className="pb-3">{COUNTERFACTUAL_COLUMN_HEADER}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -410,34 +449,7 @@ export function FormalOutcomeSection() {
                   </td>
                   <td className="py-4 pr-4 align-top">{processReview(item)}</td>
                   <td className="py-4 pr-4 align-top">{actualCapitalCell(item)}</td>
-                  <td className="py-4 align-top">
-                    <div>{counterfactualSummary(item)}</div>
-                    {item.counterfactual_outcome?.state === "EVALUATED" && (
-                      <div
-                        className="mt-2 space-y-1 text-xs"
-                        data-testid={`counterfactual-detail-${item.decision_id}`}
-                      >
-                        <div className="font-medium">
-                          Security close-to-close path
-                        </div>
-                        <div className="text-muted-foreground">
-                          decision reference: {pricePointText(item.counterfactual_outcome.start_price_point)}
-                        </div>
-                        <div className="text-muted-foreground">
-                          evaluation: {pricePointText(item.counterfactual_outcome.end_price_point)}
-                        </div>
-                        <div>
-                          return: {returnText(item.counterfactual_outcome.security_return)}
-                        </div>
-                        <div className="text-muted-foreground">
-                          security path only; not portfolio P&amp;L or decision quality
-                        </div>
-                      </div>
-                    )}
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      Security path is separate from Actual Capital Outcome.
-                    </div>
-                  </td>
+                  <td className="py-4 align-top">{counterfactualCell(item)}</td>
                 </tr>
               ))}
             </tbody>

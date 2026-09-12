@@ -100,6 +100,14 @@ export const PROCESS_REVIEW_ERROR_COPY = "过程复核不可用；绑定的决�
 export const PROCESS_REVIEW_BOUND_HEADING = "已绑定决策挑战";
 export const PROCESS_REVIEW_COVERAGE_COPY = "挑战覆盖不等于判断正确。";
 
+export const COUNTERFACTUAL_COLUMN_HEADER = "反事实路径";
+export const COUNTERFACTUAL_PATH_HEADING = "个股收盘到收盘路径";
+export const COUNTERFACTUAL_DECISION_REFERENCE_LABEL = "决定参考价";
+export const COUNTERFACTUAL_EVALUATION_LABEL = "评估时点价";
+export const COUNTERFACTUAL_RETURN_LABEL = "收益";
+export const COUNTERFACTUAL_SCOPE_COPY = "仅个股路径，不是组合盈亏，也不是判断质量";
+export const COUNTERFACTUAL_SEPARATION_COPY = "该路径与实际资金结果相互独立。";
+
 export interface FormalOutcomeIdentityInput {
   security_code?: unknown;
   strategy?: unknown;
@@ -158,6 +166,10 @@ export function outcomeStatusLabel(value: unknown): string {
 
 export function actualCapitalStateLabel(value: unknown): string {
   return mappedLabel(value, ACTUAL_CAPITAL_STATE_LABELS);
+}
+
+export function counterfactualStateLabel(value: unknown): string {
+  return mappedLabel(value, OUTCOME_STATUS_LABELS);
 }
 
 export function allocationStateLabel(value: unknown): string {
@@ -223,6 +235,18 @@ export function actualCapitalSummary(item: FormalDecisionOutcome): {
   return {
     label: `${actualCapitalStateLabel(actual.state)} · ${count} 笔已归属成交`,
     canonical: `${displayText(actual.state)} · ${count} exact attributed executed trade(s)`,
+  };
+}
+
+export function counterfactualSummary(item: FormalDecisionOutcome): {
+  label: string;
+  canonical: string;
+} {
+  const value = item.counterfactual_outcome;
+  if (!value) return { label: "—", canonical: "" };
+  return {
+    label: counterfactualStateLabel(value.state),
+    canonical: displayText(value.state),
   };
 }
 

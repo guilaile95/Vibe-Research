@@ -4,6 +4,13 @@ import test from "node:test";
 import { decisionActionLabel } from "../src/lib/decisionActionView.ts";
 import { CAMPAIGN_STRATEGY_LABELS } from "../src/lib/decisionInbox.ts";
 import {
+  COUNTERFACTUAL_COLUMN_HEADER,
+  COUNTERFACTUAL_DECISION_REFERENCE_LABEL,
+  COUNTERFACTUAL_EVALUATION_LABEL,
+  COUNTERFACTUAL_PATH_HEADING,
+  COUNTERFACTUAL_RETURN_LABEL,
+  COUNTERFACTUAL_SCOPE_COPY,
+  COUNTERFACTUAL_SEPARATION_COPY,
   PROCESS_REVIEW_BOUND_HEADING,
   PROCESS_REVIEW_COVERAGE_COPY,
   PROCESS_REVIEW_DIMENSIONS,
@@ -13,6 +20,8 @@ import {
   actualCapitalSummary,
   allocationStateLabel,
   campaignStrategyLabel,
+  counterfactualStateLabel,
+  counterfactualSummary,
   dueStateLabel,
   formalOutcomeIdentityTitle,
   frozenDecisionNbaLabel,
@@ -208,6 +217,64 @@ test("process review status and packet labels stay display-only with unknown enu
   assert.equal(processReviewQualityLabel("FUTURE_QUALITY"), "过程质量：FUTURE_QUALITY");
   assert.equal(processReviewQualityLabel("NOT_EVALUATED").includes("BUY"), false);
   assert.equal(processReviewQualityLabel("NOT_EVALUATED").includes("SELL"), false);
+});
+
+test("counterfactual path labels stay Chinese and display-only", () => {
+  assert.equal(COUNTERFACTUAL_COLUMN_HEADER, "反事实路径");
+  assert.equal(COUNTERFACTUAL_PATH_HEADING, "个股收盘到收盘路径");
+  assert.equal(COUNTERFACTUAL_DECISION_REFERENCE_LABEL, "决定参考价");
+  assert.equal(COUNTERFACTUAL_EVALUATION_LABEL, "评估时点价");
+  assert.equal(COUNTERFACTUAL_RETURN_LABEL, "收益");
+  assert.equal(COUNTERFACTUAL_SCOPE_COPY, "仅个股路径，不是组合盈亏，也不是判断质量");
+  assert.equal(COUNTERFACTUAL_SEPARATION_COPY, "该路径与实际资金结果相互独立。");
+  assert.equal(counterfactualStateLabel("EVALUATED"), "已评估");
+  assert.equal(counterfactualStateLabel("NOT_EVALUATED"), "尚未评估");
+  assert.equal(counterfactualStateLabel("UNKNOWN"), "信息不足");
+  assert.equal(counterfactualStateLabel("ERROR"), "读取失败");
+  assert.equal(counterfactualStateLabel("FUTURE_STATE"), "FUTURE_STATE");
+  assert.equal(counterfactualStateLabel(""), "—");
+  assert.equal(counterfactualStateLabel(null), "—");
+  assert.deepEqual(
+    counterfactualSummary({ counterfactual_outcome: { state: "EVALUATED" } } as any),
+    { label: "已评估", canonical: "EVALUATED" },
+  );
+  assert.deepEqual(
+    counterfactualSummary({ counterfactual_outcome: { state: "NOT_EVALUATED" } } as any),
+    { label: "尚未评估", canonical: "NOT_EVALUATED" },
+  );
+  assert.deepEqual(
+    counterfactualSummary({ counterfactual_outcome: { state: "UNKNOWN" } } as any),
+    { label: "信息不足", canonical: "UNKNOWN" },
+  );
+  assert.deepEqual(
+    counterfactualSummary({ counterfactual_outcome: { state: "ERROR" } } as any),
+    { label: "读取失败", canonical: "ERROR" },
+  );
+  assert.deepEqual(
+    counterfactualSummary({ counterfactual_outcome: { state: "FUTURE_STATE" } } as any),
+    { label: "FUTURE_STATE", canonical: "FUTURE_STATE" },
+  );
+  assert.deepEqual(
+    counterfactualSummary({} as any),
+    { label: "—", canonical: "" },
+  );
+  for (const copy of [
+    COUNTERFACTUAL_COLUMN_HEADER,
+    COUNTERFACTUAL_PATH_HEADING,
+    COUNTERFACTUAL_DECISION_REFERENCE_LABEL,
+    COUNTERFACTUAL_EVALUATION_LABEL,
+    COUNTERFACTUAL_RETURN_LABEL,
+    COUNTERFACTUAL_SCOPE_COPY,
+    COUNTERFACTUAL_SEPARATION_COPY,
+    counterfactualStateLabel("EVALUATED"),
+    counterfactualStateLabel("NOT_EVALUATED"),
+    counterfactualSummary({ counterfactual_outcome: { state: "EVALUATED" } } as any).label,
+  ]) {
+    assert.equal(copy.includes("BUY"), false);
+    assert.equal(copy.includes("SELL"), false);
+    assert.equal(copy.includes("买入"), false);
+    assert.equal(copy.includes("卖出"), false);
+  }
 });
 
 test("missing historical row can be merged from exact outcome authority", () => {
