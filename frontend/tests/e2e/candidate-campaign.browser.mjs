@@ -148,6 +148,9 @@ const campaignsByStatus = {
   "PRE-ENTRY": ["REJECTED", "EXPIRED"],
 };
 
+const NATIVE_INTEL_TITLE = "茅台公开资讯观察";
+const NATIVE_INTEL_URL = "https://example.com/native-intel-maotai";
+
 const nativeIntelContext = {
   status: "normal",
   retrieved_at: "2026-08-27T10:00:00Z",
@@ -165,12 +168,23 @@ const nativeIntelContext = {
     errors: [],
   },
   observation: {
-    items: [],
-    item_count: 0,
-    mention_count: 0,
-    source_count: 0,
-    first_seen_at: null,
-    last_seen_at: null,
+    items: [{
+      item_id: 600519,
+      title: NATIVE_INTEL_TITLE,
+      url: NATIVE_INTEL_URL,
+      source_id: "official-rss",
+      source_name: "官方 RSS",
+      hint: "a-share",
+      published_at: "2026-08-27T08:30:00+08:00",
+      first_seen_at: "2026-08-27T09:00:00Z",
+      last_seen_at: "2026-08-27T09:30:00Z",
+      observation_count: 2,
+    }],
+    item_count: 1,
+    mention_count: 1,
+    source_count: 1,
+    first_seen_at: "2026-08-27T09:00:00Z",
+    last_seen_at: "2026-08-27T09:30:00Z",
   },
   rank_history: { available: false, reason: "registry_sources_have_no_real_rank" },
 };
@@ -566,6 +580,7 @@ try {
     releaseOldNextAction: null,
     releaseOldContinuity: null,
     apiPaths: [],
+    evidenceCreates: [],
   };
 
   await page.route("**/api/**", async (route) => {
@@ -635,6 +650,11 @@ try {
       assert.equal(url.searchParams.get("subject_type"), "stock");
       assert.equal(url.searchParams.get("subject_id"), "600519");
       await route.fulfill(ok({ items: evidenceRecords, total: evidenceRecords.length, limit: 200, offset: 0 }));
+      return;
+    }
+    if (pathname === "/api/evidence" && request.method() === "POST") {
+      state.evidenceCreates.push(request.postDataJSON());
+      await route.fulfill(unavailable("evidence create is user-confirmed only in this fixture"));
       return;
     }
     if (pathname === "/api/native-intel/security-context/600519" && request.method() === "GET") {
@@ -901,7 +921,46 @@ try {
   await workspace.getByTestId("native-intel-security-context").waitFor();
   await workspace.locator('[data-evidence-freshness="NOT_EVALUATED"]').waitFor();
   assert.equal(await workspace.locator('[data-evidence-source-conflict="UNKNOWN"]').count(), 1);
-  await workspace.getByTestId("candidate-add-evidence").click();
+  const capture = workspace.getByTestId("capture-as-evidence");
+  await capture.waitFor();
+  assert.equal(await capture.innerText(), "记为证据");
+  await capture.click();
+  await page.waitForURL(/\/evidence\/new\?/);
+  assert.equal(await page.getByPlaceholder("如：《XX公司2024年三季报点评》").inputValue(), NATIVE_INTEL_TITLE);
+  assert.equal(await page.getByPlaceholder("https://...").inputValue(), NATIVE_INTEL_URL);
+  assert.equal(await page.getByLabel("证据类型").inputValue(), "news");
+  assert.equal(await page.getByLabel("来源日期").inputValue(), "2026-08-27");
+  assert.equal(state.evidenceCreates.length, 0, "Native Intel capture must not auto-create Evidence");
+  await page.getByRole("link", { name: "取消" }).click();
+  await page.waitForURL(/\/candidates\/600519$/);
+
+  evidenceRecords.push({
+    id: "evidence_native_intel",
+    subject_type: "stock",
+    subject_id: "600519",
+    evidence_type: "news",
+    claim: NATIVE_INTEL_TITLE,
+    source_title: NATIVE_INTEL_TITLE,
+    source_url: NATIVE_INTEL_URL,
+    source_date: "2026-08-27",
+    accessed_at: "2026-08-27T10:00:00Z",
+    classification: "unknown",
+    confidence: "medium",
+    created_at: "2026-08-27T10:00:00Z",
+    updated_at: "2026-08-27T10:00:00Z",
+    deleted: 0,
+    deleted_at: null,
+  });
+  await page.goto(`http://127.0.0.1:${port}/candidates/600519`, { waitUntil: "networkidle" });
+  const recordedWorkspace = page.getByTestId("candidate-workspace");
+  await recordedWorkspace.waitFor();
+  const recorded = recordedWorkspace.getByTestId("evidence-already-recorded");
+  await recorded.waitFor();
+  assert.equal(await recorded.innerText(), "已记录");
+  assert.equal(await recorded.getAttribute("href"), "/evidence/evidence_native_intel");
+  assert.equal(await recordedWorkspace.getByTestId("capture-as-evidence").count(), 0);
+
+  await recordedWorkspace.getByTestId("candidate-add-evidence").click();
   await page.waitForURL(/\/evidence\/new\?/);
   assert.equal(await page.getByPlaceholder("如 600519 / humanoid / AI算力").inputValue(), "600519");
   await page.getByRole("link", { name: "取消" }).click();

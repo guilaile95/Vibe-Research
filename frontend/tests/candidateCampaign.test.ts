@@ -7,11 +7,16 @@ import {
   buildCandidateEvidenceGap,
   buildCandidateTradeTerms,
   buildCandidateValuationCase,
+  buildEvidenceNewHref,
   candidateWorkspaceHref,
   deriveCandidatePosition,
+  findEvidenceBySourceUrl,
+  mapEvidenceNewQuery,
   presentPortfolioCapitalContext,
+  safeEvidenceReturnTo,
   selectCandidateCampaigns,
   summarizeCandidateEvidence,
+  toEvidenceSourceDate,
 } from "../src/lib/candidateCampaign.ts";
 
 function campaign(overrides: Partial<CampaignRecord> = {}): CampaignRecord {
@@ -237,4 +242,144 @@ test("portfolio capital malformed authority fails closed without discarding a va
   assert.equal(missing.replacementReview.state, "UNKNOWN");
   assert.equal(missing.capitalAvailability.confirmedCash, null);
   assert.equal(missing.finalAllowedActions, null);
+});
+
+test("safeEvidenceReturnTo keeps same-origin paths and rejects unsafe return_to", () => {
+  assert.equal(safeEvidenceReturnTo("/candidates/600519"), "/candidates/600519");
+  assert.equal(safeEvidenceReturnTo("/stock-data?code=600519"), "/stock-data?code=600519");
+  assert.equal(safeEvidenceReturnTo("/evidence#saved"), "/evidence#saved");
+  assert.equal(safeEvidenceReturnTo("https://evil.example/phish"), "");
+  assert.equal(safeEvidenceReturnTo("//evil.example"), "");
+  assert.equal(safeEvidenceReturnTo("/\\evil.example"), "");
+  assert.equal(safeEvidenceReturnTo("javascript:alert(1)"), "");
+  assert.equal(safeEvidenceReturnTo(""), "");
+});
+
+test("buildEvidenceNewHref prefills evidence create query and omits unsafe return_to", () => {
+  assert.equal(
+    buildEvidenceNewHref({
+      subjectType: "stock",
+      subjectId: "600519",
+      returnTo: "/candidates/600519",
+      evidenceType: "news",
+      sourceTitle: "茅台公开资讯观察",
+      sourceUrl: "https://example.com/native-intel-maotai",
+      sourceDate: "2026-08-27T08:30:00+08:00",
+    }),
+    `/evidence/new?${new URLSearchParams({
+      subject_type: "stock",
+      subject_id: "600519",
+      return_to: "/candidates/600519",
+      evidence_type: "news",
+      source_title: "茅台公开资讯观察",
+      source_url: "https://example.com/native-intel-maotai",
+      source_date: "2026-08-27",
+      claim: "茅台公开资讯观察",
+    }).toString()}`,
+  );
+  const unsafe = buildEvidenceNewHref({
+    subjectId: "600519",
+    returnTo: "https://evil.example",
+    sourceTitle: "董事会决议公告",
+    sourceUrl: "https://example.com/ann",
+    evidenceType: "announcement",
+  });
+  assert.equal(unsafe.includes("return_to="), false);
+  assert.match(unsafe, /^\/evidence\/new\?/);
+  assert.equal(toEvidenceSourceDate("2026-07-20 08:30"), "2026-07-20");
+  assert.equal(toEvidenceSourceDate("not-a-date"), "");
+});
+
+test("mapEvidenceNewQuery copies title/url/date and defaults classification/confidence when unset", () => {
+  const mapped = mapEvidenceNewQuery(new URLSearchParams({
+    subject_type: "stock",
+    subject_id: "600519",
+    evidence_type: "announcement",
+    source_title: "董事会决议公告",
+    source_url: "https://example.com/ann",
+    source_date: "2026-07-10",
+    return_to: "/stock-data?code=600519",
+  }));
+  assert.deepEqual(mapped, {
+    subject_type: "stock",
+    subject_id: "600519",
+    evidence_type: "announcement",
+    claim: "董事会决议公告",
+    source_title: "董事会决议公告",
+    source_url: "https://example.com/ann",
+    source_date: "2026-07-10",
+    classification: "unknown",
+    confidence: "medium",
+    return_to: "/stock-data?code=600519",
+  });
+  const explicitClaim = mapEvidenceNewQuery(new URLSearchParams({
+    subject_id: "600519",
+    source_title: "标题",
+    claim: "用户写的论断",
+    classification: "fact",
+    confidence: "high",
+  }));
+  assert.equal(explicitClaim.claim, "用户写的论断");
+  assert.equal(explicitClaim.classification, "fact");
+  assert.equal(explicitClaim.confidence, "high");
+  assert.equal(mapEvidenceNewQuery(new URLSearchParams({
+    subject_id: "600519",
+    evidence_type: "not-a-type",
+    source_date: "07/10/2026",
+    return_to: "//evil.example",
+  })).return_to, "");
+  assert.equal(mapEvidenceNewQuery(new URLSearchParams({
+    subject_id: "600519",
+    evidence_type: "not-a-type",
+    source_date: "07/10/2026",
+    return_to: "https://evil.example/phish",
+  })).evidence_type, "news");
+  assert.equal(mapEvidenceNewQuery(new URLSearchParams({
+    subject_id: "12",
+    return_to: "/\\evil",
+  })).subject_id, "");
+});
+
+test("findEvidenceBySourceUrl is a frontend ledger lookup and ignores deleted or empty urls", () => {
+  const records: EvidenceRecord[] = [
+    {
+      id: "evidence_keep",
+      subject_type: "stock",
+      subject_id: "600519",
+      evidence_type: "news",
+      claim: "观察",
+      source_title: "观察",
+      source_url: "https://example.com/native-intel-maotai",
+      source_date: "2026-08-27",
+      accessed_at: "2026-08-27T10:00:00Z",
+      classification: "unknown",
+      confidence: "medium",
+      created_at: "2026-08-27T10:00:00Z",
+      updated_at: "2026-08-27T10:00:00Z",
+      deleted: 0,
+      deleted_at: null,
+    },
+    {
+      id: "evidence_deleted",
+      subject_type: "stock",
+      subject_id: "600519",
+      evidence_type: "news",
+      claim: "已删",
+      source_title: "已删",
+      source_url: "https://example.com/deleted",
+      source_date: "2026-08-01",
+      accessed_at: "2026-08-01T00:00:00Z",
+      classification: "unknown",
+      confidence: "medium",
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+      deleted: 1,
+      deleted_at: "2026-08-02T00:00:00Z",
+    },
+  ];
+  assert.equal(findEvidenceBySourceUrl(records, "https://example.com/native-intel-maotai")?.id, "evidence_keep");
+  assert.equal(findEvidenceBySourceUrl(records, " https://example.com/native-intel-maotai ")?.id, "evidence_keep");
+  assert.equal(findEvidenceBySourceUrl(records, "https://example.com/deleted"), undefined);
+  assert.equal(findEvidenceBySourceUrl(records, ""), undefined);
+  assert.equal(findEvidenceBySourceUrl(records, null), undefined);
 });

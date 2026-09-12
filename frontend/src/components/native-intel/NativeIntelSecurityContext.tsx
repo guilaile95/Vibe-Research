@@ -1,13 +1,24 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { AlertCircle, Loader2, RefreshCw, Rss } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { api, ApiError, type NativeIntelSecurityContext as Context } from "@/lib/api";
+import { api, ApiError, type EvidenceRecord, type NativeIntelSecurityContext as Context } from "@/lib/api";
+import { buildEvidenceNewHref, findEvidenceBySourceUrl } from "@/lib/candidateCampaign";
 
 const usable = (status?: string) => status === "normal" || status === "partial" || status === "stale";
 const statusLabel = (status?: string) => ({ normal: "可用", partial: "部分可用", stale: "历史可用 · 已过期", unavailable: "不可用" }[status || ""] || status || "读取中");
 const displayTime = (value?: string | null) => value ? value.replace("T", " ").replace(/Z$/, "") : "未知";
 
-export function NativeIntelSecurityContext({ code }: { code: string }) {
+export function NativeIntelSecurityContext({
+  code,
+  evidenceCapture,
+}: {
+  code: string;
+  evidenceCapture?: {
+    returnTo: string;
+    records?: readonly EvidenceRecord[];
+  };
+}) {
   const [context, setContext] = useState<Context | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,7 +68,46 @@ export function NativeIntelSecurityContext({ code }: { code: string }) {
           {context.mapping.errors.length > 0 && <p className="mt-2 text-[11px] text-warning">部分映射源不可用，未据此猜测：{context.mapping.errors.map((item) => item.source).join("、")}</p>}
           {context.observation.items.length === 0 ? <p className="mt-4 rounded border border-dashed border-border/60 p-4 text-center text-xs text-muted-foreground">当前窗口没有确定匹配的公开资讯。</p> : (
             <ul className="mt-4 space-y-2">
-              {context.observation.items.slice(0, 20).map((item) => <li key={item.item_id} className="border-b border-border/40 pb-2 text-sm"><a href={item.url} target="_blank" rel="noreferrer noopener" className="hover:text-primary hover:underline">{item.title}</a><div className="mt-1 flex flex-wrap gap-x-3 text-[10px] text-muted-foreground"><span>{item.source_name || item.hint}</span><span>首次 {displayTime(item.first_seen_at)}</span><span>最近 {displayTime(item.last_seen_at)}</span><span>观察 {item.observation_count} 次</span></div></li>)}
+              {context.observation.items.slice(0, 20).map((item) => {
+                const recorded = evidenceCapture
+                  ? findEvidenceBySourceUrl(evidenceCapture.records ?? [], item.url)
+                  : undefined;
+                return (
+                  <li key={item.item_id} className="border-b border-border/40 pb-2 text-sm" data-testid="native-intel-item">
+                    <div className="flex items-start justify-between gap-2">
+                      <a href={item.url} target="_blank" rel="noreferrer noopener" className="min-w-0 flex-1 hover:text-primary hover:underline">{item.title}</a>
+                      {evidenceCapture && (recorded?.id ? (
+                        <Link
+                          to={`/evidence/${encodeURIComponent(recorded.id)}`}
+                          className="shrink-0 text-[11px] text-muted-foreground hover:text-primary hover:underline"
+                          data-testid="evidence-already-recorded"
+                        >
+                          已记录
+                        </Link>
+                      ) : recorded ? (
+                        <span className="shrink-0 text-[11px] text-muted-foreground" data-testid="evidence-already-recorded">已记录</span>
+                      ) : (
+                        <Link
+                          to={buildEvidenceNewHref({
+                            subjectType: "stock",
+                            subjectId: code,
+                            returnTo: evidenceCapture.returnTo,
+                            evidenceType: "news",
+                            sourceTitle: item.title,
+                            sourceUrl: item.url,
+                            sourceDate: item.published_at || item.first_seen_at,
+                          })}
+                          className="shrink-0 text-[11px] text-primary hover:underline"
+                          data-testid="capture-as-evidence"
+                        >
+                          记为证据
+                        </Link>
+                      ))}
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-3 text-[10px] text-muted-foreground"><span>{item.source_name || item.hint}</span><span>首次 {displayTime(item.first_seen_at)}</span><span>最近 {displayTime(item.last_seen_at)}</span><span>观察 {item.observation_count} 次</span></div>
+                  </li>
+                );
+              })}
             </ul>
           )}
           <p className="mt-3 border-t border-border/40 pt-2 text-[10px] text-muted-foreground/60">authority_ref：{context.authority_ref || "vibe:native_intel:v0.1"} · RSS 无真实排名时保持 UNKNOWN</p>

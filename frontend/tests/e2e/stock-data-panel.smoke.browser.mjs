@@ -492,14 +492,14 @@ function createApiMockController() {
 
     if (pathname.includes("/announcements")) {
       await route.fulfill(
-        jsonOk([{ date: "2026-07-10", title: "董事会决议公告", type: "公告", url: "" }]),
+        jsonOk([{ date: "2026-07-10", title: "董事会决议公告", type: "公告", url: "https://example.com/announcement" }]),
       );
       return;
     }
 
     if (pathname.includes("/news")) {
       await route.fulfill(
-        jsonOk([{ 新闻标题: `${stockName(code)}相关新闻`, 发布时间: "2026-07-20", 文章来源: "测试", 新闻链接: "" }]),
+        jsonOk([{ 新闻标题: `${stockName(code)}相关新闻`, 发布时间: "2026-07-20", 文章来源: "测试", 新闻链接: "https://example.com/news" }]),
       );
       return;
     }

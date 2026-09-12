@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import {
   candidateWorkspaceHref,
   buildCandidateEvidenceGap,
+  buildEvidenceNewHref,
   deriveCandidatePosition,
   type CandidatePositionPresentation,
 } from "@/lib/candidateCampaign";
@@ -136,7 +137,10 @@ export function CandidateWorkspace() {
           {position.status === "error" && <p className="mt-3 text-xs text-warning" role="alert">{position.error}；不会把读取失败解释为未持有。</p>}
         </GlassCard>
 
-        <NativeIntelSecurityContext code={code} />
+        <NativeIntelSecurityContext
+          code={code}
+          evidenceCapture={{ returnTo, records: evidence.value?.records }}
+        />
 
         <GlassCard data-testid="candidate-evidence-gap">
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -148,7 +152,7 @@ export function CandidateWorkspace() {
             </div>
             <div className="flex gap-3 text-xs">
               <Link
-                to={`/evidence/new?${new URLSearchParams({ subject_type: "stock", subject_id: code, return_to: returnTo }).toString()}`}
+                to={buildEvidenceNewHref({ subjectType: "stock", subjectId: code, returnTo })}
                 className="text-primary hover:underline"
                 data-testid="candidate-add-evidence"
               >

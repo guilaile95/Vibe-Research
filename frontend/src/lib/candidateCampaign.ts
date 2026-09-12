@@ -241,6 +241,112 @@ export function candidateWorkspaceHref(code: string): string {
   return `/candidates/${encodeURIComponent(code.trim())}`;
 }
 
+const EVIDENCE_SUBJECT_TYPES = ["stock", "sector", "theme"] as const;
+const EVIDENCE_TYPES = ["news", "announcement", "report", "research_note", "financial_filing", "other"] as const;
+const EVIDENCE_CLASSIFICATIONS = ["fact", "inference", "unknown"] as const;
+const EVIDENCE_CONFIDENCES = ["high", "medium", "low"] as const;
+
+export type EvidenceNewQueryPrefill = {
+  subject_type: EvidenceRecord["subject_type"];
+  subject_id: string;
+  evidence_type: EvidenceRecord["evidence_type"];
+  claim: string;
+  source_title: string;
+  source_url: string;
+  source_date: string;
+  classification: EvidenceRecord["classification"];
+  confidence: EvidenceRecord["confidence"];
+  return_to: string;
+};
+
+export interface EvidenceNewHrefInput {
+  subjectType?: EvidenceRecord["subject_type"];
+  subjectId: string;
+  returnTo?: string | null;
+  evidenceType?: EvidenceRecord["evidence_type"];
+  sourceTitle?: string | null;
+  sourceUrl?: string | null;
+  sourceDate?: string | null;
+  claim?: string | null;
+}
+
+function oneOf<T extends string>(value: string, allowed: readonly T[]): T | null {
+  return (allowed as readonly string[]).includes(value) ? value as T : null;
+}
+
+/** YYYY-MM-DD prefix only; do not timezone-shift published_at into another calendar day. */
+export function toEvidenceSourceDate(value: string | null | undefined): string {
+  const match = value?.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : "";
+}
+
+/**
+ * return_to must be a same-origin path: starts with `/`, not `//`, no backslash.
+ * Absolute URLs and protocol-relative hosts are rejected.
+ */
+export function safeEvidenceReturnTo(value: string | null | undefined): string {
+  const raw = value?.trim() ?? "";
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return "";
+  if (typeof window === "undefined") return raw;
+  try {
+    const parsed = new URL(raw, window.location.origin);
+    if (parsed.origin !== window.location.origin) return "";
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return "";
+  }
+}
+
+export function mapEvidenceNewQuery(search: URLSearchParams): EvidenceNewQueryPrefill {
+  const subjectType = oneOf(search.get("subject_type")?.trim() ?? "", EVIDENCE_SUBJECT_TYPES) ?? "stock";
+  const subjectIdRaw = search.get("subject_id")?.trim() ?? "";
+  const subjectId = subjectType === "stock"
+    ? (/^\d{6}$/.test(subjectIdRaw) ? subjectIdRaw : "")
+    : subjectIdRaw;
+  const sourceTitle = search.get("source_title")?.trim() ?? "";
+  const claim = (search.get("claim")?.trim() || sourceTitle);
+  return {
+    subject_type: subjectType,
+    subject_id: subjectId,
+    evidence_type: oneOf(search.get("evidence_type")?.trim() ?? "", EVIDENCE_TYPES) ?? "news",
+    claim,
+    source_title: sourceTitle,
+    source_url: search.get("source_url")?.trim() ?? "",
+    source_date: toEvidenceSourceDate(search.get("source_date")),
+    classification: oneOf(search.get("classification")?.trim() ?? "", EVIDENCE_CLASSIFICATIONS) ?? "unknown",
+    confidence: oneOf(search.get("confidence")?.trim() ?? "", EVIDENCE_CONFIDENCES) ?? "medium",
+    return_to: safeEvidenceReturnTo(search.get("return_to")),
+  };
+}
+
+/** User-confirmed Evidence create entry. Does not POST; classification/confidence stay user-owned. */
+export function buildEvidenceNewHref(input: EvidenceNewHrefInput): string {
+  const params = new URLSearchParams();
+  params.set("subject_type", input.subjectType ?? "stock");
+  params.set("subject_id", input.subjectId.trim());
+  const returnTo = safeEvidenceReturnTo(input.returnTo);
+  if (returnTo) params.set("return_to", returnTo);
+  if (input.evidenceType) params.set("evidence_type", input.evidenceType);
+  const sourceTitle = input.sourceTitle?.trim() ?? "";
+  if (sourceTitle) params.set("source_title", sourceTitle);
+  const sourceUrl = input.sourceUrl?.trim() ?? "";
+  if (sourceUrl) params.set("source_url", sourceUrl);
+  const sourceDate = toEvidenceSourceDate(input.sourceDate);
+  if (sourceDate) params.set("source_date", sourceDate);
+  const claim = (input.claim ?? input.sourceTitle)?.trim() ?? "";
+  if (claim) params.set("claim", claim);
+  return `/evidence/new?${params.toString()}`;
+}
+
+export function findEvidenceBySourceUrl(
+  records: readonly EvidenceRecord[],
+  sourceUrl: string | null | undefined,
+): EvidenceRecord | undefined {
+  const url = sourceUrl?.trim() ?? "";
+  if (!url) return undefined;
+  return records.find((record) => Number(record.deleted) !== 1 && (record.source_url ?? "").trim() === url);
+}
+
 /** Position Reality 不完整时保持 UNKNOWN；没有 OPEN 行只在 canonical ledger 上等于 NOT_HELD。 */
 export function deriveCandidatePosition(
   result: DerivedPositionsResult,

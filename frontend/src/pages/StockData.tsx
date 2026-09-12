@@ -32,7 +32,7 @@ import {
   type GlobalStock, type HkCashflow, type KlineBar, type DisclosureItem, type TechnicalIndicators, type TopRiskAnalysis,
 } from "@/lib/api";
 import { indicatorErrorMessage } from "@/lib/technicalIndicatorsView";
-import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
+import { buildEvidenceNewHref, candidateWorkspaceHref } from "@/lib/candidateCampaign";
 import { cn } from "@/lib/utils";
 
 // 金额格式化（后端资金单位：元 / 万元）
@@ -651,17 +651,38 @@ export function StockData() {
             <GlassCard className="mb-4">
               <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Megaphone className="h-4 w-4 text-primary" /> 近期公告（{anns.length}）</h3>
               <div className="space-y-2">
-                {anns.slice(0, 12).map((a, i) => (
-                  <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
-                    <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground">{a.date}</span>
-                    {a.type && <span className="w-24 shrink-0 truncate text-xs text-muted-foreground">{a.type}</span>}
-                    {a.url ? (
-                      <a href={a.url} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-primary">{a.title.replace(/^[^:：]*[:：]/, "")}</a>
-                    ) : (
-                      <span className="flex-1 truncate">{a.title}</span>
-                    )}
-                  </div>
-                ))}
+                {anns.slice(0, 12).map((a, i) => {
+                  const title = a.title.replace(/^[^:：]*[:：]/, "") || a.title;
+                  const canCapture = /^\d{6}$/.test(activeCode);
+                  return (
+                    <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
+                      <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground">{a.date}</span>
+                      {a.type && <span className="w-24 shrink-0 truncate text-xs text-muted-foreground">{a.type}</span>}
+                      {a.url ? (
+                        <a href={a.url} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-primary">{title}</a>
+                      ) : (
+                        <span className="flex-1 truncate">{a.title}</span>
+                      )}
+                      {canCapture && (
+                        <Link
+                          to={buildEvidenceNewHref({
+                            subjectType: "stock",
+                            subjectId: activeCode,
+                            returnTo: `/stock-data?code=${activeCode}`,
+                            evidenceType: "announcement",
+                            sourceTitle: title,
+                            sourceUrl: a.url,
+                            sourceDate: a.date,
+                          })}
+                          className="shrink-0 text-[11px] text-primary hover:underline"
+                          data-testid="stock-data-capture-evidence"
+                        >
+                          记为证据
+                        </Link>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </GlassCard>
           )}
@@ -674,16 +695,36 @@ export function StockData() {
               <p className="text-xs text-muted-foreground/60">暂无新闻</p>
             ) : (
               <div className="space-y-2">
-                {news.slice(0, 10).map((n, i) => (
-                  <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
-                    <span className="w-28 shrink-0 font-mono text-xs text-muted-foreground">{(n.发布时间 || "").slice(0, 16)}</span>
-                    {n.新闻链接 ? (
-                      <a href={n.新闻链接} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-primary">{n.新闻标题}</a>
-                    ) : (
-                      <span className="flex-1 truncate">{n.新闻标题}</span>
-                    )}
-                  </div>
-                ))}
+                {news.slice(0, 10).map((n, i) => {
+                  const canCapture = /^\d{6}$/.test(activeCode);
+                  return (
+                    <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
+                      <span className="w-28 shrink-0 font-mono text-xs text-muted-foreground">{(n.发布时间 || "").slice(0, 16)}</span>
+                      {n.新闻链接 ? (
+                        <a href={n.新闻链接} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-primary">{n.新闻标题}</a>
+                      ) : (
+                        <span className="flex-1 truncate">{n.新闻标题}</span>
+                      )}
+                      {canCapture && (
+                        <Link
+                          to={buildEvidenceNewHref({
+                            subjectType: "stock",
+                            subjectId: activeCode,
+                            returnTo: `/stock-data?code=${activeCode}`,
+                            evidenceType: "news",
+                            sourceTitle: n.新闻标题,
+                            sourceUrl: n.新闻链接,
+                            sourceDate: n.发布时间,
+                          })}
+                          className="shrink-0 text-[11px] text-primary hover:underline"
+                          data-testid="stock-data-capture-evidence"
+                        >
+                          记为证据
+                        </Link>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </GlassCard>
