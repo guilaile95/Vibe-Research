@@ -794,7 +794,7 @@ async function run() {
     await page.getByTestId(`formal-decision-context-${firstRun.decisionId}`).getByText(`冻结时操作：`, { exact: false }).waitFor();
     await page.getByText("无实际交易 · 不适用", { exact: true }).waitFor();
     await page.getByTestId(`process-review-bound-${firstRun.decisionId}`).waitFor();
-    await page.getByText("Challenge coverage is not decision correctness.", { exact: true }).waitFor();
+    await page.getByText("挑战覆盖不等于判断正确。", { exact: true }).waitFor();
     await page.getByTestId(`process-review-none-${secondRun.decisionId}`).waitFor();
     await page.getByText("Security close-to-close path", { exact: true }).first().waitFor();
     await page.getByText("security path only; not portfolio P&L or decision quality", { exact: true }).first().waitFor();
