@@ -1,4 +1,4 @@
-"""StockData header PE/PB must come from Eastmoney clist f115/f23.
+"""StockData header PE/PB must come from Eastmoney single-security f115/f23.
 
 Tencent gtimg field 39 and Eastmoney dynamic PE (f9) are never the header
 contract. Missing TTM is None, never fabricated 0. Offline: no live network.
@@ -28,18 +28,99 @@ def _offline(monkeypatch, quote, *, snapshot=None):
     if snapshot is None:
         monkeypatch.setattr(
             astock,
-            "a_share_snapshot",
-            lambda: (_ for _ in ()).throw(RuntimeError("a_share_snapshot must not hit the network")),
+            "eastmoney_stock_valuation",
+            lambda code: (_ for _ in ()).throw(RuntimeError("valuation unavailable")),
         )
     else:
-        monkeypatch.setattr(astock, "a_share_snapshot", lambda: snapshot)
+        def reader(code):
+            return next((row for row in snapshot if row.get("code") == code), {})
+
+        monkeypatch.setattr(astock, "eastmoney_stock_valuation", reader)
 
 
 def _assert_provenance(out: dict) -> None:
-    assert out["pe_ttm_source"] == "eastmoney_clist_f115"
-    assert out["pb_source"] == "eastmoney_clist_f23"
-    assert out["mcap_source"] == "eastmoney_clist_f20"
+    assert out["pe_ttm_source"] == "eastmoney_ulist_f115"
+    assert out["pb_source"] == "eastmoney_ulist_f23"
+    assert out["mcap_source"] == "eastmoney_ulist_f20"
     assert out["dynamic_pe_used"] is False
+
+
+def test_default_reader_uses_single_security_eastmoney_path(monkeypatch):
+    calls = []
+
+    class Response:
+        def json(self):
+            return {
+                "data": {
+                    "total": 1,
+                    "diff": [{
+                        "f12": "000001",
+                        "f13": 0,
+                        "f14": "测试股",
+                        "f9": 100,
+                        "f115": 10,
+                        "f23": 1.5,
+                        "f20": 5_085_296_143,
+                    }],
+                },
+            }
+
+    def fake_em_get(url, *, params, headers, timeout):
+        calls.append((url, params, headers, timeout))
+        return Response()
+
+    monkeypatch.setattr(astock, "tencent_quote", lambda codes: _quote(pe_ttm=99.0, pb=7.0))
+    monkeypatch.setattr(astock, "profit_forecast", lambda code: [])
+    monkeypatch.setattr(astock, "em_get", fake_em_get)
+    monkeypatch.setattr(
+        astock,
+        "a_share_snapshot",
+        lambda: (_ for _ in ()).throw(AssertionError("full-market snapshot must not be used")),
+    )
+
+    out = astock.full_valuation("000001")
+
+    assert out["pe_ttm"] == 10.0
+    assert out["pb"] == 1.5
+    assert len(calls) == 1
+    assert calls[0][0].endswith("/api/qt/ulist.np/get")
+    assert calls[0][1]["secids"] == "0.000001"
+    assert calls[0][1]["fields"] == "f12,f13,f14,f20,f23,f115"
+
+
+def test_single_security_response_requires_matching_code_and_market(monkeypatch):
+    calls = []
+
+    class Response:
+        def json(self):
+            return {
+                "data": {
+                    "total": 1,
+                    "diff": [{
+                        "f12": "000001",
+                        "f13": 1,
+                        "f14": "错误市场",
+                        "f115": 88,
+                        "f23": 9,
+                        "f20": 900_000_000_000,
+                    }],
+                },
+            }
+
+    def fake_em_get(url, *, params, headers, timeout):
+        calls.append(url)
+        return Response()
+
+    monkeypatch.setattr(astock, "tencent_quote", lambda codes: _quote(pe_ttm=99.0, pb=7.0))
+    monkeypatch.setattr(astock, "profit_forecast", lambda code: [])
+    monkeypatch.setattr(astock, "em_get", fake_em_get)
+
+    out = astock.full_valuation("000001")
+
+    assert len(calls) == 2
+    assert out["pe_ttm"] is None
+    assert out["pb"] is None
+    assert out["mcap_yi"] is None
 
 
 def test_header_pe_uses_snapshot_f115_not_tencent_39(monkeypatch):
@@ -61,7 +142,7 @@ def test_missing_snapshot_f115_is_none_not_tencent_zero(monkeypatch):
     _offline(monkeypatch, _quote(pe_ttm=0.0, pb=0.0))
     out = astock.full_valuation(
         "000001",
-        snapshot_reader=lambda: [{"code": "000001", "name": "测试股", "pe_ttm": None, "pb": None}],
+        valuation_reader=lambda code: {"code": code, "name": "测试股", "pe_ttm": None, "pb": None},
     )
     assert out["pe_ttm"] is None
     assert out["pb"] is None
@@ -84,7 +165,7 @@ def test_mapped_raw_row_uses_f115_not_dynamic_f9(monkeypatch):
     assert mapped is not None
     assert mapped["pe_ttm"] == 10.0
     assert mapped["pb"] == 1.5
-    out = astock.full_valuation("000001", snapshot_reader=lambda: [mapped])
+    out = astock.full_valuation("000001", valuation_reader=lambda code: mapped)
     assert out["pe_ttm"] == 10.0
     assert out["pe_ttm"] != 100
     assert out["pe_ttm"] != 99.0
@@ -95,10 +176,10 @@ def test_mapped_raw_row_uses_f115_not_dynamic_f9(monkeypatch):
 def test_snapshot_raise_pe_none_price_still_from_tencent(monkeypatch):
     _offline(monkeypatch, _quote(pe_ttm=99.0, price=11.5, name="平安银行"))
 
-    def boom():
+    def boom(code):
         raise RuntimeError("snapshot down")
 
-    out = astock.full_valuation("000001", snapshot_reader=boom)
+    out = astock.full_valuation("000001", valuation_reader=boom)
     assert out["pe_ttm"] is None
     assert out["pb"] is None
     assert out["price"] == 11.5

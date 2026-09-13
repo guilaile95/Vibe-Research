@@ -1,4 +1,4 @@
-"""StockData header 总市值 must come from Eastmoney clist f20 (元→亿).
+"""StockData header 总市值 must come from Eastmoney single-security f20 (元→亿).
 
 Tencent gtimg field 44 is never the header contract. Missing market cap is
 None, never fabricated 0. Offline: no live network.
@@ -35,17 +35,20 @@ def _offline(monkeypatch, quote, *, snapshot=None):
     if snapshot is None:
         monkeypatch.setattr(
             astock,
-            "a_share_snapshot",
-            lambda: (_ for _ in ()).throw(RuntimeError("a_share_snapshot must not hit the network")),
+            "eastmoney_stock_valuation",
+            lambda code: (_ for _ in ()).throw(RuntimeError("valuation unavailable")),
         )
     else:
-        monkeypatch.setattr(astock, "a_share_snapshot", lambda: snapshot)
+        def reader(code):
+            return next((row for row in snapshot if row.get("code") == code), {})
+
+        monkeypatch.setattr(astock, "eastmoney_stock_valuation", reader)
 
 
 def _assert_provenance(out: dict) -> None:
-    assert out["pe_ttm_source"] == "eastmoney_clist_f115"
-    assert out["pb_source"] == "eastmoney_clist_f23"
-    assert out["mcap_source"] == "eastmoney_clist_f20"
+    assert out["pe_ttm_source"] == "eastmoney_ulist_f115"
+    assert out["pb_source"] == "eastmoney_ulist_f23"
+    assert out["mcap_source"] == "eastmoney_ulist_f20"
     assert out["dynamic_pe_used"] is False
 
 
@@ -83,13 +86,13 @@ def test_missing_snapshot_market_cap_is_none_not_tencent_zero(monkeypatch):
     _offline(monkeypatch, _quote(mcap_yi=0.0, pe_ttm=0.0, pb=0.0))
     out = astock.full_valuation(
         "000001",
-        snapshot_reader=lambda: [{
+        valuation_reader=lambda code: {
             "code": "000001",
             "name": "测试股",
             "pe_ttm": None,
             "pb": None,
             "market_cap": None,
-        }],
+        },
     )
     _assert_not_zero_mcap(out)
     assert out["pe_ttm"] is None
@@ -101,7 +104,7 @@ def test_missing_market_cap_field_is_none_not_tencent(monkeypatch):
     _offline(monkeypatch, _quote(mcap_yi=88.0))
     out = astock.full_valuation(
         "000001",
-        snapshot_reader=lambda: [{"code": "000001", "name": "测试股", "pe_ttm": 10.0, "pb": 1.0}],
+        valuation_reader=lambda code: {"code": code, "name": "测试股", "pe_ttm": 10.0, "pb": 1.0},
     )
     _assert_not_zero_mcap(out)
     assert out["pe_ttm"] == 10.0
@@ -112,13 +115,13 @@ def test_missing_code_in_snapshot_mcap_none_not_tencent(monkeypatch):
     _offline(monkeypatch, _quote(mcap_yi=0.0))
     out = astock.full_valuation(
         "000001",
-        snapshot_reader=lambda: [{
+        valuation_reader=lambda code: {
             "code": "000002",
             "name": "别的股",
             "pe_ttm": 10.0,
             "pb": 1.0,
             "market_cap": _MCAP_YUAN,
-        }],
+        },
     )
     _assert_not_zero_mcap(out)
     assert out["pe_ttm"] is None
@@ -131,11 +134,11 @@ def test_invalid_snapshot_market_cap_is_none(monkeypatch):
     for bad in ("-", "--", "", "abc", math.nan, math.inf):
         out = astock.full_valuation(
             "000001",
-            snapshot_reader=lambda bad=bad: [{
+            valuation_reader=lambda code, bad=bad: {
                 "code": "000001",
                 "name": "测试股",
                 "market_cap": bad,
-            }],
+            },
         )
         _assert_not_zero_mcap(out)
         _assert_provenance(out)
@@ -157,7 +160,7 @@ def test_mapped_raw_row_uses_f20_not_tencent_44(monkeypatch):
     assert mapped["market_cap"] == pytest.approx(float(_MCAP_YUAN))
     assert mapped["pe_ttm"] == 10.0
     assert mapped["pb"] == 1.5
-    out = astock.full_valuation("000001", snapshot_reader=lambda: [mapped])
+    out = astock.full_valuation("000001", valuation_reader=lambda code: mapped)
     assert out["mcap_yi"] == pytest.approx(_MCAP_YI)
     assert out["mcap_yi"] != 0
     assert out["pe_ttm"] == 10.0
@@ -170,10 +173,10 @@ def test_mapped_raw_row_uses_f20_not_tencent_44(monkeypatch):
 def test_snapshot_raise_mcap_none_price_still_from_tencent(monkeypatch):
     _offline(monkeypatch, _quote(mcap_yi=0.0, pe_ttm=99.0, price=11.5, name="平安银行"))
 
-    def boom():
+    def boom(code):
         raise RuntimeError("snapshot down")
 
-    out = astock.full_valuation("000001", snapshot_reader=boom)
+    out = astock.full_valuation("000001", valuation_reader=boom)
     _assert_not_zero_mcap(out)
     assert out["pe_ttm"] is None
     assert out["pb"] is None
