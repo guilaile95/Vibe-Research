@@ -805,11 +805,11 @@ async function runSmoke(page, mock, errors) {
   const health = page.getByTestId("fundamental-health");
   if (!(await health.isVisible().catch(() => false))) errors.push(`${label}: fundamental health module not visible`);
   for (const text of [
-    "Growth · 增长",
-    "Profitability · 盈利能力",
-    "Cash Flow Quality · 现金流质量",
-    "Balance Sheet Quality · 资产负债表",
-    "Data Quality · 数据质量",
+    "增长",
+    "盈利能力",
+    "现金流质量",
+    "资产负债表质量",
+    "数据质量",
     "披露日期：未知（数据源未提供）",
     "现金转化率",
     "150.0%",
