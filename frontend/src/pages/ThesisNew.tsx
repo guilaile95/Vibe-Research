@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError, type CampaignRecord, type CampaignStrategy } from "@/lib/api";
 import { STRATEGY_HORIZON_RANGES, defaultHorizonForStrategy } from "@/lib/campaignThesis";
+import { safeInternalReturnTo } from "@/lib/internalReturnTo";
 
 const SUBJECT_TYPES = [
   { value: "stock", label: "个股" },
@@ -83,20 +84,6 @@ function parseCampaignStrategy(value: string | null): CampaignStrategy | null {
   return CAMPAIGN_STRATEGIES.includes(value as CampaignStrategy)
     ? value as CampaignStrategy
     : null;
-}
-
-function safeInternalReturnTo(value: string | null, fallback: string): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
-    return fallback;
-  }
-  if (typeof window === "undefined") return fallback;
-  try {
-    const parsed = new URL(value, window.location.origin);
-    if (parsed.origin !== window.location.origin) return fallback;
-    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
-  } catch {
-    return fallback;
-  }
 }
 
 export function ThesisNew() {

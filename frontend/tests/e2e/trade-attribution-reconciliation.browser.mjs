@@ -211,11 +211,12 @@ async function run() {
     await page.goto(`${frontend}/trades`, { waitUntil: "networkidle" });
     await page.getByRole("button", { name: "详情" }).first().click();
     await page.getByText("交易归属与 Campaign 对账").waitFor();
-    await page.getByText("UNALLOCATED", { exact: true }).waitFor();
+    await page.getByText("未归属", { exact: true }).waitFor();
     await page.getByText("RECONCILIATION REQUIRED", { exact: false }).waitFor();
+    await page.getByText("600519 · 波段 · 小仓位买入", { exact: true }).waitFor();
     await page.getByText(decision.decision_id, { exact: true }).waitFor();
     await page.getByRole("button", { name: "明确归属" }).click();
-    await page.getByText("ALLOCATED", { exact: true }).waitFor();
+    await page.getByText("已归属", { exact: true }).waitFor();
     await page.getByText(campaign.campaign_id, { exact: true }).waitFor();
     await page.getByText(decision.decision_id, { exact: true }).waitFor();
     assert.equal((await jsonRequest(backend, `/api/trades/${trade.trade_id}/reconciliation`)).allocation_state, "ALLOCATED");
@@ -231,7 +232,7 @@ async function run() {
 
     await page.reload({ waitUntil: "networkidle" });
     await page.getByRole("button", { name: "详情" }).last().click();
-    await page.getByText("ALLOCATED", { exact: true }).waitFor();
+    await page.getByText("已归属", { exact: true }).waitFor();
 
     const mixedCandidate = {
       decision_id: decision.decision_id,
@@ -260,20 +261,20 @@ async function run() {
     });
     await page.reload({ waitUntil: "networkidle" });
     await page.getByRole("button", { name: "详情" }).first().click();
-    await page.getByText("UNALLOCATED", { exact: true }).waitFor();
+    await page.getByText("未归属", { exact: true }).waitFor();
     await page.getByText("Frozen Decision，但见证校验失败", { exact: false }).waitFor();
     assert.equal(await page.getByRole("button", { name: "明确归属" }).count(), 0);
     assert.equal(await page.getByText("若该交易确实非计划内", { exact: false }).count(), 0);
     await page.unroute(`**/trades/${secondTrade.trade_id}/attribution-candidates`);
     await page.reload({ waitUntil: "networkidle" });
     await page.getByRole("button", { name: "详情" }).first().click();
-    await page.getByText("UNALLOCATED", { exact: true }).waitFor();
+    await page.getByText("未归属", { exact: true }).waitFor();
     await page.getByRole("button", { name: "标记为 UNPLANNED" }).click();
-    await page.getByText("UNPLANNED", { exact: true }).waitFor();
+    await page.getByText("非计划内", { exact: true }).waitFor();
     await page.getByText(/pre_trade_decision=NONE/).waitFor();
     await page.reload({ waitUntil: "networkidle" });
     await page.getByRole("button", { name: "详情" }).first().click();
-    await page.getByText("UNPLANNED", { exact: true }).waitFor();
+    await page.getByText("非计划内", { exact: true }).waitFor();
     const secondState = await jsonRequest(backend, `/api/trades/${secondTrade.trade_id}/reconciliation`);
     assert.equal(secondState.pre_trade_decision, "NONE");
     assert.equal(secondState.pre_trade_thesis, "NONE");
@@ -422,13 +423,14 @@ async function run() {
     await executedModal.waitFor({ state: "detached" });
     await page.getByText(`ID: ${createdRecord.trade_id}`).waitFor();
     await page.getByText("交易归属与 Campaign 对账").waitFor();
-    await page.getByText("UNALLOCATED", { exact: true }).waitFor();
+    await page.getByText("未归属", { exact: true }).waitFor();
+    await page.getByText("600519 · 波段 · 小仓位买入", { exact: true }).waitFor();
     await page.getByText(decision.decision_id, { exact: true }).waitFor();
     await page.locator('[data-continuation-candidate="preferred"]').waitFor();
     await page.getByText("来自 Frozen Decision 续接；仍需你明确归属", { exact: true }).waitFor();
     assert.equal(truxWritePosts, 0, "attribution/unplanned POST must stay 0 before explicit user click");
     await page.getByRole("button", { name: "明确归属" }).click();
-    await page.getByText("ALLOCATED", { exact: true }).waitFor();
+    await page.getByText("已归属", { exact: true }).waitFor();
     assert.equal(truxWritePosts, 1, "explicit attribution must be the only write");
     const createdReadback = await jsonRequest(backend, `/api/trades/${createdRecord.trade_id}`);
     assert.equal(createdReadback.operation, "buy");
@@ -453,7 +455,7 @@ async function run() {
     await partialDetailModal.getByText(`ID: ${partialRecord.trade_id}`, { exact: true }).waitFor();
     await partialDetailModal.getByText("部分执行", { exact: true }).waitFor();
     await partialDetailModal.getByText("仅成交一半", { exact: true }).waitFor();
-    await partialDetailModal.getByText("UNALLOCATED", { exact: true }).waitFor();
+    await partialDetailModal.getByText("未归属", { exact: true }).waitFor();
     assert.equal(truxWritePosts, 1, "partial continuation must not issue attribution/unplanned writes");
     const partialReadback = await jsonRequest(backend, `/api/trades/${partialRecord.trade_id}`);
     assert.equal(partialReadback.operation, "add");
@@ -480,7 +482,7 @@ async function run() {
     await notExecutedModal.waitFor({ state: "detached" });
     await page.getByText(`ID: ${notExecutedRecord.trade_id}`).waitFor();
     // 状态与对账字段都诚实显示 NOT_APPLICABLE（TRADE_NOT_EXECUTED）
-    await page.getByText("NOT_APPLICABLE", { exact: true }).first().waitFor();
+    await page.getByText("不适用", { exact: true }).first().waitFor();
     assert.equal(await page.getByRole("button", { name: "明确归属" }).count(), 0);
     assert.equal(await page.getByRole("button", { name: "标记为 UNPLANNED" }).count(), 0);
     assert.equal(truxWritePosts, 1, "not_executed continuation must not issue attribution/unplanned writes");
