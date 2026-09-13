@@ -358,7 +358,7 @@ async function runE2E() {
 
     await page.goto(`${frontendUrl}/thesis/${strategyMismatch.thesis.id}?${campaignQuery}`, { waitUntil: "networkidle" });
     await page.getByRole("alert").filter({ hasText: "当前 Thesis 与真实 Campaign 的证券或策略不一致" }).waitFor();
-    const mismatchConfirm = page.getByRole("button", { name: "确认 Formal Thesis" });
+    const mismatchConfirm = page.getByRole("button", { name: "确认正式投资逻辑" });
     await mismatchConfirm.waitFor();
     assert.equal(await mismatchConfirm.isDisabled(), true);
     assert.deepEqual(calls, { begin: 0, confirm: 0, freeze: 0, bind: 0 });
@@ -404,13 +404,13 @@ async function runE2E() {
       await claims.fill(claim);
       await claims.press("Enter");
     }
-    await page.getByRole("button", { name: "创建 Formal Thesis 草稿" }).click();
-    await page.getByRole("button", { name: "确认 Formal Thesis" }).waitFor();
+    await page.getByRole("button", { name: "创建正式投资逻辑草稿" }).click();
+    await page.getByRole("button", { name: "确认正式投资逻辑" }).waitFor();
     assert.deepEqual(calls, { begin: 1, confirm: 0, freeze: 0, bind: 0 });
     await page.getByText("状态：draft", { exact: false }).waitFor();
 
     page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "确认 Formal Thesis" }).click();
+    await page.getByRole("button", { name: "确认正式投资逻辑" }).click();
     await page.getByRole("button", { name: "冻结 Formal Original" }).waitFor();
     assert.deepEqual(calls, { begin: 1, confirm: 1, freeze: 0, bind: 0 });
 

@@ -14,6 +14,13 @@ import {
   type CampaignThesisBinding, type InvestmentThesis, type ThesisUpdateInput,
 } from "@/lib/api";
 import {
+  FORMAL_THESIS_CONFIRM_FAILED,
+  FORMAL_THESIS_CONFIRM_LABEL,
+  FORMAL_THESIS_CONFIRM_PROMPT,
+  FORMAL_THESIS_FREEZE_FAILED,
+  FORMAL_THESIS_INDEPENDENT_LIFECYCLE,
+  FORMAL_THESIS_LIFECYCLE_HEADING,
+  FORMAL_THESIS_SELECT_STRATEGY_ERROR,
   STRATEGY_HORIZON_RANGES,
   canConfirmFormalThesis,
   defaultHorizonForStrategy,
@@ -574,7 +581,7 @@ export function ThesisDetail() {
     }
     let formalFields: Pick<ThesisUpdateInput, "strategy" | "expected_horizon" | "free_notes"> = {};
     if (aggregate.thesis.formal_state === "draft") {
-      if (!form.strategy) { setEditErr("请选择 Formal Thesis 策略"); return; }
+      if (!form.strategy) { setEditErr(FORMAL_THESIS_SELECT_STRATEGY_ERROR); return; }
       const min = Number(form.horizon_min);
       const max = Number(form.horizon_max);
       const [rangeMin, rangeMax] = STRATEGY_HORIZON_RANGES[form.strategy];
@@ -644,7 +651,7 @@ export function ThesisDetail() {
 
   const confirmFormalization = async () => {
     if (!id || !aggregate || !canConfirmFormalThesis(aggregate.thesis) || campaignThesisContextBlocked) return;
-    if (!window.confirm("确认后内容将锁定；下一步仍需你显式冻结。是否确认这份 Formal Thesis？")) return;
+    if (!window.confirm(FORMAL_THESIS_CONFIRM_PROMPT)) return;
     const expectedRevision = aggregate.thesis.current_revision;
     const isCurrent = captureLifecycleRun();
     setLifecycleBusy(true);
@@ -661,7 +668,7 @@ export function ThesisDetail() {
     } catch (e) {
       if (!isCurrent()) return;
       if (handleConflict(e)) return;
-      setLifecycleErr(e instanceof ApiError ? e.message : "确认 Formal Thesis 失败");
+      setLifecycleErr(e instanceof ApiError ? e.message : FORMAL_THESIS_CONFIRM_FAILED);
     } finally {
       if (isCurrent()) setLifecycleBusy(false);
     }
@@ -686,7 +693,7 @@ export function ThesisDetail() {
     } catch (e) {
       if (!isCurrent()) return;
       if (handleConflict(e)) return;
-      setLifecycleErr(e instanceof ApiError ? e.message : "冻结 Formal Thesis 失败");
+      setLifecycleErr(e instanceof ApiError ? e.message : FORMAL_THESIS_FREEZE_FAILED);
     } finally {
       if (isCurrent()) setLifecycleBusy(false);
     }
@@ -951,7 +958,7 @@ export function ThesisDetail() {
               <button
                 onClick={archive}
                 disabled={archived || busy || formalState !== null}
-                title={formalState !== null ? "Formal Thesis 使用独立生命周期，不通过 legacy 归档入口处理" : undefined}
+                title={formalState !== null ? FORMAL_THESIS_INDEPENDENT_LIFECYCLE : undefined}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-warning/30 px-3 py-1.5 text-sm text-muted-foreground hover:border-warning hover:text-warning disabled:opacity-50"
               >
                 <Lock className="h-4 w-4" /> 归档
@@ -984,7 +991,7 @@ export function ThesisDetail() {
       <GlassCard className="mb-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold">Formal Thesis 生命周期</h2>
+            <h2 className="text-sm font-semibold">{FORMAL_THESIS_LIFECYCLE_HEADING}</h2>
             <p className="mt-1 text-xs text-muted-foreground">
               状态：{t.formal_state ?? "legacy"} · 当前 v{t.current_revision} · 冻结版本 {t.frozen_revision ? `v${t.frozen_revision}` : "—"}
             </p>
@@ -1019,7 +1026,7 @@ export function ThesisDetail() {
                 disabled={lifecycleBusy || editing || !canConfirmFormalThesis(t) || campaignThesisContextBlocked}
                 className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
-                确认 Formal Thesis
+                {FORMAL_THESIS_CONFIRM_LABEL}
               </button>
             )}
             {t.formal_state === "confirmed" && (

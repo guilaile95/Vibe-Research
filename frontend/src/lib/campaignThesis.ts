@@ -12,6 +12,24 @@ import type {
   ThesisStrategy,
 } from "./api/types.ts";
 
+export const FORMAL_THESIS_LABEL = "正式投资逻辑";
+export const FORMAL_THESIS_CREATE_DRAFT_LABEL = `创建${FORMAL_THESIS_LABEL}草稿`;
+export const FORMAL_THESIS_CONFIRM_LABEL = `确认${FORMAL_THESIS_LABEL}`;
+export const FORMAL_THESIS_FREEZE_LABEL = `冻结${FORMAL_THESIS_LABEL}`;
+export const FORMAL_THESIS_LIFECYCLE_HEADING = `${FORMAL_THESIS_LABEL}生命周期`;
+export const FORMAL_THESIS_SETUP_FORBIDDEN = `已禁止${FORMAL_THESIS_LABEL}设置。`;
+export const FORMAL_THESIS_SETUP_LOADING =
+  `正在读取真实 Campaign，上下文确认前不会允许${FORMAL_THESIS_LABEL}设置。`;
+export const FORMAL_THESIS_CAMPAIGN_DRAFT_CHANGE_SUMMARY =
+  `建立 Campaign ${FORMAL_THESIS_LABEL}草稿`;
+export const FORMAL_THESIS_SELECT_STRATEGY_ERROR = `请选择${FORMAL_THESIS_LABEL}策略`;
+export const FORMAL_THESIS_CONFIRM_PROMPT =
+  `确认后内容将锁定；下一步仍需你显式冻结。是否确认这份${FORMAL_THESIS_LABEL}？`;
+export const FORMAL_THESIS_CONFIRM_FAILED = `${FORMAL_THESIS_CONFIRM_LABEL}失败`;
+export const FORMAL_THESIS_FREEZE_FAILED = `${FORMAL_THESIS_FREEZE_LABEL}失败`;
+export const FORMAL_THESIS_INDEPENDENT_LIFECYCLE =
+  `${FORMAL_THESIS_LABEL}使用独立生命周期，不通过 legacy 归档入口处理`;
+
 // 策略 ↔ 预期周期硬兼容（backend evidence_thesis_store.STRATEGY_HORIZON_RANGES 同一权威表）。
 export const STRATEGY_HORIZON_RANGES: Record<ThesisStrategy, [number, number]> = {
   SHORT: [1, 10],

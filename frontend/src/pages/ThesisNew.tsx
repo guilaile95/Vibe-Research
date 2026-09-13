@@ -4,7 +4,14 @@ import { ArrowLeft, Save, Loader2, Plus, X } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError, type CampaignRecord, type CampaignStrategy } from "@/lib/api";
-import { STRATEGY_HORIZON_RANGES, defaultHorizonForStrategy } from "@/lib/campaignThesis";
+import {
+  FORMAL_THESIS_CAMPAIGN_DRAFT_CHANGE_SUMMARY,
+  FORMAL_THESIS_CREATE_DRAFT_LABEL,
+  FORMAL_THESIS_SETUP_FORBIDDEN,
+  FORMAL_THESIS_SETUP_LOADING,
+  STRATEGY_HORIZON_RANGES,
+  defaultHorizonForStrategy,
+} from "@/lib/campaignThesis";
 
 const SUBJECT_TYPES = [
   { value: "stock", label: "个股" },
@@ -152,7 +159,7 @@ export function ThesisNew() {
     if (!campaignId) {
       setCampaign(null);
       setCampaignStatus("error");
-      setCampaignError("Campaign 上下文缺少 campaign_id，已禁止 Formal Thesis setup。");
+      setCampaignError(`Campaign 上下文缺少 campaign_id，${FORMAL_THESIS_SETUP_FORBIDDEN}`);
       return () => {
         cancelled = true;
       };
@@ -169,13 +176,13 @@ export function ThesisNew() {
         || (queryCampaignStrategy && queryCampaignStrategy !== actual.strategy)
       ) {
         setCampaignStatus("error");
-        setCampaignError("Campaign 上下文与真实 Campaign 不一致，已禁止 Formal Thesis setup。");
+        setCampaignError(`Campaign 上下文与真实 Campaign 不一致，${FORMAL_THESIS_SETUP_FORBIDDEN}`);
         return;
       }
       const horizon = defaultHorizonForStrategy(actual.strategy);
       if (!horizon) {
         setCampaignStatus("error");
-        setCampaignError("Campaign 策略缺少合法 Formal 周期，已禁止 Formal Thesis setup。");
+        setCampaignError(`Campaign 策略缺少合法 Formal 周期，${FORMAL_THESIS_SETUP_FORBIDDEN}`);
         return;
       }
       setCampaign(actual);
@@ -194,7 +201,7 @@ export function ThesisNew() {
       if (cancelled) return;
       setCampaign(null);
       setCampaignStatus("error");
-      setCampaignError(error instanceof ApiError ? error.message : "Campaign 上下文读取失败，已禁止 Formal Thesis setup。");
+      setCampaignError(error instanceof ApiError ? error.message : `Campaign 上下文读取失败，${FORMAL_THESIS_SETUP_FORBIDDEN}`);
     });
     return () => {
       cancelled = true;
@@ -206,7 +213,7 @@ export function ThesisNew() {
 
   const submit = async () => {
     if (campaignContextBlocked) {
-      setErr(campaignError || "Campaign 上下文不可用，已禁止 Formal Thesis setup");
+      setErr(campaignError || `Campaign 上下文不可用，${FORMAL_THESIS_SETUP_FORBIDDEN}`);
       return;
     }
     const activeCampaign = campaignContext ? campaign : null;
@@ -257,7 +264,7 @@ export function ThesisNew() {
           risks: begun.thesis.risks,
           invalidation_conditions: begun.thesis.invalidation_conditions,
           expected_revision: begun.thesis.current_revision,
-          change_summary: "建立 Campaign Formal Thesis 草稿",
+          change_summary: FORMAL_THESIS_CAMPAIGN_DRAFT_CHANGE_SUMMARY,
           strategy,
           expected_horizon: {
             unit: "TRADING_DAY",
@@ -313,8 +320,8 @@ export function ThesisNew() {
       {campaignContextRequested && !campaignContext && (
         <div className="mb-4 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-warning" role="alert">
           {campaignStatus === "loading"
-            ? "正在读取真实 Campaign，上下文确认前不会允许 Formal Thesis setup。"
-            : campaignError || "Campaign 上下文不可用，已禁止 Formal Thesis setup。"}
+            ? FORMAL_THESIS_SETUP_LOADING
+            : campaignError || `Campaign 上下文不可用，${FORMAL_THESIS_SETUP_FORBIDDEN}`}
         </div>
       )}
 
@@ -464,7 +471,7 @@ export function ThesisNew() {
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {busy ? "保存中…" : campaignContext ? "创建 Formal Thesis 草稿" : "保存"}
+            {busy ? "保存中…" : campaignContext ? FORMAL_THESIS_CREATE_DRAFT_LABEL : "保存"}
           </button>
           <Link
             to={returnTo}
