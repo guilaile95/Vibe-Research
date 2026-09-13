@@ -3,7 +3,7 @@
 Last reviewed: 2026-09-10
 
 This file is a recovery pointer, not Engineering Truth and not a second task database.
-Always resolve live GitHub state before acting; do not persist an exact stable SHA here.
+Follow [AGENTS.md](../AGENTS.md#recovery-and-source-of-truth) to decide whether live engineering recovery is needed; do not persist an exact stable SHA here.
 
 ## Current Product Stage
 
@@ -69,20 +69,14 @@ The accepted stable line already contains substantial product foundation:
 These capabilities being present and tested still do not prove product value. Product Reality remains a
 separate truth gate, but Owner has explicitly chosen to continue Planning Parity before activating it.
 
-## Recovery Actions
+## Recovery Pointers
 
-1. Read root `AGENTS.md`.
-2. Resolve the live `feature/research-system-v01` HEAD and exact-head CI.
-3. Read the latest comments on #203 and #162.
-4. Inspect all Open PRs before creating work; treat old Drafts as historical unless the current live
-   authority explicitly names one.
-5. Inspect the local workspace before touching files; preserve uncommitted work.
-6. If a current Planning Parity authorization exists in #203, execute only that bounded slice and
-   restore the freeze after verified closure. If no active authorization exists, remain frozen until the
-   Owner or PM operating under the Owner's continuing Planning Parity direction authorizes the next
-   bounded slice.
-7. If Product Reality Day 1 has started, use #162's evidence fields, activate its observation freeze,
-   and keep private holdings, amounts, Thesis text and broker data out of public GitHub.
+The recovery procedure and authorization gates are maintained only in
+[AGENTS.md](../AGENTS.md#recovery-and-source-of-truth).
+
+- Stable branch: `feature/research-system-v01`; resolve its current HEAD and relevant CI when recovery requires them.
+- Engineering authorization and slice closure: latest authority in [#203](https://github.com/guilaile95/Vibe-Research/issues/203).
+- Product Reality evidence and observation freeze: [#162](https://github.com/guilaile95/Vibe-Research/issues/162). When Day 1 starts, use its evidence fields; keep private holdings, amounts, Thesis text and broker data out of public GitHub.
 
 ## Product Reality Operating Boundary
 

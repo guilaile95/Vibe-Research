@@ -59,6 +59,11 @@ NEXT_ACTION:
 - 本地验证使用隔离、可丢弃的 fixture / 数据目录；先确认所选命令不会写真实账户或持仓。范围内的此类验证与本次失败修复不需逐步确认。
 - 产品真实使用证据与工程验证分开。CI、smoke、演示、合成数据不能证明 Product Reality，不能回填真实观察 Day 1。
 
+## Skill routing
+
+只加载当前任务需要的 Skill 与参考章节；已有明确接口、数据来源和验收时直接复用，不为调用 Skill 重新确认。
+本项目选用 `a-stock-data` 取数实现时，以仓库内 [a-stock-data/SKILL.md](a-stock-data/SKILL.md) 为准，避免与全局同名副本混用；美股 / 港股接口实现按需读取 [global-stock-data/SKILL.md](global-stock-data/SKILL.md)。这两个入口仅用于实际取数或接口维护。用户指定来源或项目已有 provider 时沿用该选择，Skill 不自动替换 provider。
+
 ## DRY
 
 复用现有组件、Hook、测试与工具；当前业务逻辑的重复在能减少维护复杂度时收敛。不为假设中的复用创建通用框架、配置层或第二套实现。
@@ -69,9 +74,9 @@ NEXT_ACTION:
 
 ## Git
 
-- 不使用 `git branch -D`、force push、`git clean`、`git reset`、`git restore`。
+- 默认禁止 `git branch -D`、force push、`git clean`、`git reset`、`git restore`；“可回退”不代表允许丢弃用户工作。
 - 不对已推送提交执行 amend / rebase / squash；只创建普通新提交。
-- 不修改稳定分支，不直接推送 main / 稳定分支。任何例外须有用户明确授权，不能从一般任务授权推断。
+- 默认禁止修改稳定分支或直接推送 main / 稳定分支。上述禁令的例外必须由用户明确点名操作与目标，完成现场安全检查，并在不可逆时取得用户指定的确认口令；一般任务授权不构成例外。
 - 提交仅包含本次任务文件；保留用户未提交与已暂存的其他工作。
 
 ## Security boundaries
