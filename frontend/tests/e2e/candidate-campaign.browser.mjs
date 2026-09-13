@@ -77,6 +77,53 @@ const unavailable = (detail = "candidate browser fixture: unavailable") => ({
   body: JSON.stringify({ detail }),
 });
 
+function stockValuationContextPayload(code) {
+  const metric = (stock, median, delta, rank) => ({
+    stock_value: stock,
+    stock_sign: stock == null ? "missing" : stock > 0 ? "positive" : stock === 0 ? "zero" : "negative",
+    industry_positive_median: median,
+    vs_industry_positive_median: delta,
+    rank_among_positive: rank,
+    positive_sample_count: 2,
+    rank_order: "ASCENDING_POSITIVE_VALUES",
+    industry_observed_count: 4,
+    industry_missing_count: 0,
+    industry_positive_count: 2,
+    industry_zero_count: 1,
+    industry_negative_count: 1,
+    industry_median_status: "NORMAL",
+  });
+  return {
+    schema_version: "stock-valuation-context.v0.1",
+    status: "normal",
+    source: "EASTMONEY_A_SHARE_SNAPSHOT",
+    fetched_at: "2026-09-12T08:00:00Z",
+    code,
+    industry_name: "电子",
+    industry_status: "normal",
+    industry_membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+    valuation_semantics: "CURRENT_MEMBER_VALUATION_DISTRIBUTION_ONLY",
+    historical_valuation_status: "NOT_AVAILABLE",
+    sector_index_valuation_authority: "NOT_AVAILABLE",
+    industry_member_count: 4,
+    pe_source: "eastmoney_clist_f115",
+    pb_source: "eastmoney_clist_f23",
+    pe_ttm: metric(10, 15, -5, 1),
+    pb: metric(1, 1.5, -0.5, 1),
+    provenance: {
+      classification_provider: "EASTMONEY",
+      membership_source: "astock.a_share_snapshot.industry=f100",
+      membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+      pe_ttm_field: "f115",
+      pb_field: "f23",
+      dynamic_pe_field: "f9",
+      dynamic_pe_used: false,
+    },
+    warnings: [],
+    limitations: [],
+  };
+}
+
 const valuation = {
   name: "贵州茅台",
   code: "600519",
@@ -566,6 +613,7 @@ try {
     releaseOldNextAction: null,
     releaseOldContinuity: null,
     apiPaths: [],
+    valuationContextMode: "ok",
   };
 
   await page.route("**/api/**", async (route) => {
@@ -639,6 +687,15 @@ try {
     }
     if (pathname === "/api/native-intel/security-context/600519" && request.method() === "GET") {
       await route.fulfill(ok(nativeIntelContext));
+      return;
+    }
+    if (pathname === "/api/stock-valuation-context" && request.method() === "GET") {
+      if (state.valuationContextMode === "fail") {
+        await route.fulfill(unavailable());
+        return;
+      }
+      const code = url.searchParams.get("code") || "600519";
+      await route.fulfill(ok(stockValuationContextPayload(code)));
       return;
     }
     if (pathname === "/api/decision-inbox" && request.method() === "GET") {
@@ -901,7 +958,28 @@ try {
   await workspace.getByTestId("native-intel-security-context").waitFor();
   await workspace.locator('[data-evidence-freshness="NOT_EVALUATED"]').waitFor();
   assert.equal(await workspace.locator('[data-evidence-source-conflict="UNKNOWN"]').count(), 1);
-  await workspace.getByTestId("candidate-add-evidence").click();
+  const valuationCard = workspace.getByTestId("stock-valuation-context");
+  await valuationCard.waitFor();
+  await valuationCard.getByText("相对行业估值").waitFor();
+  await valuationCard.getByText("Eastmoney f115").waitFor();
+  const valuationText = await valuationCard.innerText();
+  for (const forbidden of ["建议买入", "BUY", "SELL"]) {
+    assert.equal(valuationText.includes(forbidden), false, `valuation context must not include ${forbidden}`);
+  }
+
+  state.valuationContextMode = "fail";
+  await page.goto(`http://127.0.0.1:${port}/candidates/600519`, { waitUntil: "domcontentloaded" });
+  const failedWorkspace = page.getByTestId("candidate-workspace");
+  await failedWorkspace.waitFor();
+  await failedWorkspace.locator('[data-position-state="NOT_HELD"]').waitFor();
+  await failedWorkspace.getByTestId("candidate-evidence-gap").waitFor();
+  await failedWorkspace.getByTestId("native-intel-security-context").waitFor();
+  const unavailableValuation = failedWorkspace.getByTestId("stock-valuation-context");
+  await unavailableValuation.getByText("相对行业估值暂不可用").waitFor();
+  assert.doesNotMatch(await unavailableValuation.innerText(), /\b0\.00\b/, "missing PE must not be shown as 0");
+  assert.deepEqual(pageErrors, [], "stock-valuation-context 503 must not raise pageerror");
+  state.valuationContextMode = "ok";
+  await failedWorkspace.getByTestId("candidate-add-evidence").click();
   await page.waitForURL(/\/evidence\/new\?/);
   assert.equal(await page.getByPlaceholder("如 600519 / humanoid / AI算力").inputValue(), "600519");
   await page.getByRole("link", { name: "取消" }).click();

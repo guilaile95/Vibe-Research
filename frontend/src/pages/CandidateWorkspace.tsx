@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { AlertCircle, ArrowLeft, CheckCircle2, FileSearch, Loader2 } from "lucide-react";
 import { CandidateCampaignPanel } from "@/components/campaign/CandidateCampaignPanel";
 import { NativeIntelSecurityContext } from "@/components/native-intel/NativeIntelSecurityContext";
+import { StockValuationContextCard } from "@/components/stock/StockValuationContextCard";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
@@ -11,7 +12,7 @@ import {
   deriveCandidatePosition,
   type CandidatePositionPresentation,
 } from "@/lib/candidateCampaign";
-import { api, ApiError, type EvidenceRecord } from "@/lib/api";
+import { api, ApiError, type EvidenceRecord, type StockValuationContext } from "@/lib/api";
 
 type LoadState<T> =
   | { status: "loading"; value: null; error: "" }
@@ -41,11 +42,17 @@ export function CandidateWorkspace() {
   const validCode = /^\d{6}$/.test(code);
   const [position, setPosition] = useState<LoadState<CandidatePositionPresentation>>(loadingState);
   const [evidence, setEvidence] = useState<LoadState<{ records: EvidenceRecord[]; total: number }>>(loadingState);
+  const [valuationContext, setValuationContext] = useState<StockValuationContext | null>(null);
+  const [valuationLoading, setValuationLoading] = useState(false);
+  const [valuationError, setValuationError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setPosition(loadingState());
     setEvidence(loadingState());
+    setValuationContext(null);
+    setValuationError(null);
+    setValuationLoading(validCode);
     if (!validCode) return () => { cancelled = true; };
 
     const positionRequest = api.getDerivedPositions()
@@ -62,7 +69,20 @@ export function CandidateWorkspace() {
       .catch((cause) => {
         if (!cancelled) setEvidence({ status: "error", value: null, error: errorMessage(cause, "证据记录读取失败") });
       });
-    void Promise.allSettled([positionRequest, evidenceRequest]);
+    const valuationRequest = api.stockValuationContext(code)
+      .then((result) => {
+        if (!cancelled) {
+          setValuationContext(result);
+          setValuationError(null);
+        }
+      })
+      .catch((cause) => {
+        if (!cancelled) setValuationError(errorMessage(cause, "相对行业估值暂不可用"));
+      })
+      .finally(() => {
+        if (!cancelled) setValuationLoading(false);
+      });
+    void Promise.allSettled([positionRequest, evidenceRequest, valuationRequest]);
 
     return () => { cancelled = true; };
   }, [code, validCode]);
@@ -135,6 +155,12 @@ export function CandidateWorkspace() {
           )}
           {position.status === "error" && <p className="mt-3 text-xs text-warning" role="alert">{position.error}；不会把读取失败解释为未持有。</p>}
         </GlassCard>
+
+        <StockValuationContextCard
+          data={valuationContext}
+          loading={valuationLoading}
+          error={valuationError}
+        />
 
         <NativeIntelSecurityContext code={code} />
 
