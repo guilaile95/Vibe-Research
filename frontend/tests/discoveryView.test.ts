@@ -4,9 +4,12 @@ import test from "node:test";
 
 import { candidateWorkspaceHref } from "../src/lib/candidateCampaign.ts";
 import {
+  DISCOVERY_CANDIDATE_ENTRY_LABEL,
+  discoveryFunnelLabel,
   discoverySectors,
   discoveryTimeSummary,
   filterDiscoveryItems,
+  restrictedStatusLabel,
   type DiscoveryFilters,
 } from "../src/lib/discoveryView.ts";
 import type {
@@ -116,6 +119,29 @@ test("Discovery filters sector/theme, priority, restricted status, and health wi
   assert.deepEqual(sectors, [...sectors].sort((left, right) => left.localeCompare(right, "zh-CN")));
 });
 
+test("Discovery restricted and funnel labels stay Chinese display-only with unknown enum passthrough", () => {
+  assert.equal(restrictedStatusLabel("RESTRICTED"), "受限研究");
+  assert.equal(restrictedStatusLabel("CLEAR"), "普通");
+  assert.equal(restrictedStatusLabel("UNKNOWN"), "资格未知");
+  assert.equal(restrictedStatusLabel("ALL"), "全部资格");
+  assert.equal(restrictedStatusLabel("RESTRICTED_RESEARCH_ONLY"), "RESTRICTED_RESEARCH_ONLY");
+  assert.equal(restrictedStatusLabel("CUSTOM_STATUS"), "CUSTOM_STATUS");
+  assert.equal(discoveryFunnelLabel("core_universe"), "核心池");
+  assert.equal(discoveryFunnelLabel("cheap_scan_passed"), "Stage 1 通过");
+  assert.equal(discoveryFunnelLabel("qualification_candidates"), "Stage 3 资格检查");
+  assert.equal(discoveryFunnelLabel("sector_coverage"), "行业覆盖");
+  assert.equal(discoveryFunnelLabel("excluded"), "排除 / 拦截");
+  assert.equal(discoveryFunnelLabel("UNEXPECTED_BUCKET"), "UNEXPECTED_BUCKET");
+  assert.equal(DISCOVERY_CANDIDATE_ENTRY_LABEL, "进入候选研究");
+  for (const label of [
+    restrictedStatusLabel("RESTRICTED"),
+    discoveryFunnelLabel("core_universe"),
+    DISCOVERY_CANDIDATE_ENTRY_LABEL,
+  ]) {
+    assert.doesNotMatch(label, /\bBUY\b|\bSELL\b|Opportunity Score/);
+  }
+});
+
 test("Discovery only links into Candidate Research and exposes no BUY or hidden score contract", () => {
   assert.equal(candidateWorkspaceHref(swingA.security_code), "/candidates/600003");
 
@@ -124,6 +150,9 @@ test("Discovery only links into Candidate Research and exposes no BUY or hidden 
     "utf8",
   );
   assert.match(source, /candidateWorkspaceHref\(item\.security_code\)/);
+  assert.match(source, /restrictedStatusLabel/);
+  assert.match(source, /discoveryFunnelLabel/);
+  assert.match(source, /DISCOVERY_CANDIDATE_ENTRY_LABEL/);
   assert.doesNotMatch(source, /\/api\/campaigns|\b(?:score|ranking|BUY NOW|BUY SMALL|SCALE IN)\b/i);
 });
 
