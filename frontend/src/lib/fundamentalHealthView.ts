@@ -1,5 +1,11 @@
 import type { Financials } from "@/lib/api";
 
+export const EARNINGS_SNAPSHOT_GROWTH_HEADING = "增长";
+export const EARNINGS_SNAPSHOT_PROFITABILITY_HEADING = "盈利能力";
+export const EARNINGS_SNAPSHOT_CASH_FLOW_QUALITY_HEADING = "现金流质量";
+export const EARNINGS_SNAPSHOT_BALANCE_SHEET_QUALITY_HEADING = "资产负债表质量";
+export const EARNINGS_SNAPSHOT_DATA_QUALITY_HEADING = "数据质量";
+
 export type FundamentalHealthState = "normal" | "partial" | "empty" | "error";
 
 export function fundamentalHealthState(
