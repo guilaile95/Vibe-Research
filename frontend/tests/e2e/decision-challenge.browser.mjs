@@ -309,12 +309,17 @@ async function run() {
     assert.equal(existsSync(join(tempDataDir, "decision_challenges.sqlite3")), false, "Preview must not write Challenge DB");
     assert.equal(existsSync(join(tempDataDir, "frozen_decisions.sqlite3")), false, "Preview must not write Frozen DB");
 
+    const finalize = page.getByRole("button", { name: "完成决策挑战" });
+    assert.equal(await finalize.isDisabled(), true, "empty ANSWERED must keep finalize disabled");
+    await page.getByRole("checkbox", { name: /我已明确填写四个挑战问题/ }).check();
+    assert.equal(await finalize.isDisabled(), true, "empty ANSWERED stays disabled after confirmation");
+    await page.getByRole("checkbox", { name: /我已明确填写四个挑战问题/ }).uncheck();
+
     await page.getByRole("textbox", { name: "最有力的支持证据" }).fill("渠道与报表支持当前等待");
     await page.getByRole("textbox", { name: "最有力的反对证据" }).fill("估值不便宜");
     await page.getByLabel("如果判断失败，最可能的原因 status", { exact: true }).selectOption("UNKNOWN");
     await page.getByRole("textbox", { name: "如果判断失败，最可能的原因" }).fill("还没有足够的失效路径样本");
     await page.getByRole("textbox", { name: "哪些事实会推翻判断" }).fill("连续两个季度毛利率下修则失效");
-    const finalize = page.getByRole("button", { name: "完成决策挑战" });
     assert.equal(await finalize.isEnabled(), false, "Finalize must require explicit confirmation");
     await page.getByRole("checkbox", { name: /我已明确填写四个挑战问题/ }).check();
     assert.equal(await finalize.isEnabled(), true);
