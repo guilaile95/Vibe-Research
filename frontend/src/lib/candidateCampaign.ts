@@ -8,6 +8,7 @@ import type {
   PortfolioFitState,
   ReplacementReviewState,
 } from "./api/types";
+import { safeInternalReturnTo } from "./internalReturnTo.ts";
 
 /** StockData 只呈现仍处于候选研究链路的 Campaign，不重新定义 transition graph。 */
 export const CANDIDATE_CAMPAIGN_STATUSES: readonly CampaignStatus[] = [
@@ -280,23 +281,6 @@ export function toEvidenceSourceDate(value: string | null | undefined): string {
   return match ? match[1] : "";
 }
 
-/**
- * return_to must be a same-origin path: starts with `/`, not `//`, no backslash.
- * Absolute URLs and protocol-relative hosts are rejected.
- */
-export function safeEvidenceReturnTo(value: string | null | undefined): string {
-  const raw = value?.trim() ?? "";
-  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return "";
-  if (typeof window === "undefined") return raw;
-  try {
-    const parsed = new URL(raw, window.location.origin);
-    if (parsed.origin !== window.location.origin) return "";
-    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
-  } catch {
-    return "";
-  }
-}
-
 export function mapEvidenceNewQuery(search: URLSearchParams): EvidenceNewQueryPrefill {
   const subjectType = oneOf(search.get("subject_type")?.trim() ?? "", EVIDENCE_SUBJECT_TYPES) ?? "stock";
   const subjectIdRaw = search.get("subject_id")?.trim() ?? "";
@@ -315,7 +299,7 @@ export function mapEvidenceNewQuery(search: URLSearchParams): EvidenceNewQueryPr
     source_date: toEvidenceSourceDate(search.get("source_date")),
     classification: oneOf(search.get("classification")?.trim() ?? "", EVIDENCE_CLASSIFICATIONS) ?? "unknown",
     confidence: oneOf(search.get("confidence")?.trim() ?? "", EVIDENCE_CONFIDENCES) ?? "medium",
-    return_to: safeEvidenceReturnTo(search.get("return_to")),
+    return_to: safeInternalReturnTo(search.get("return_to"), ""),
   };
 }
 
@@ -324,7 +308,7 @@ export function buildEvidenceNewHref(input: EvidenceNewHrefInput): string {
   const params = new URLSearchParams();
   params.set("subject_type", input.subjectType ?? "stock");
   params.set("subject_id", input.subjectId.trim());
-  const returnTo = safeEvidenceReturnTo(input.returnTo);
+  const returnTo = safeInternalReturnTo(input.returnTo ?? null, "");
   if (returnTo) params.set("return_to", returnTo);
   if (input.evidenceType) params.set("evidence_type", input.evidenceType);
   const sourceTitle = input.sourceTitle?.trim() ?? "";

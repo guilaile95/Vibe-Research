@@ -13,11 +13,11 @@ import {
   findEvidenceBySourceUrl,
   mapEvidenceNewQuery,
   presentPortfolioCapitalContext,
-  safeEvidenceReturnTo,
   selectCandidateCampaigns,
   summarizeCandidateEvidence,
   toEvidenceSourceDate,
 } from "../src/lib/candidateCampaign.ts";
+import { safeInternalReturnTo } from "../src/lib/internalReturnTo.ts";
 
 function campaign(overrides: Partial<CampaignRecord> = {}): CampaignRecord {
   return {
@@ -244,15 +244,16 @@ test("portfolio capital malformed authority fails closed without discarding a va
   assert.equal(missing.finalAllowedActions, null);
 });
 
-test("safeEvidenceReturnTo keeps same-origin paths and rejects unsafe return_to", () => {
-  assert.equal(safeEvidenceReturnTo("/candidates/600519"), "/candidates/600519");
-  assert.equal(safeEvidenceReturnTo("/stock-data?code=600519"), "/stock-data?code=600519");
-  assert.equal(safeEvidenceReturnTo("/evidence#saved"), "/evidence#saved");
-  assert.equal(safeEvidenceReturnTo("https://evil.example/phish"), "");
-  assert.equal(safeEvidenceReturnTo("//evil.example"), "");
-  assert.equal(safeEvidenceReturnTo("/\\evil.example"), "");
-  assert.equal(safeEvidenceReturnTo("javascript:alert(1)"), "");
-  assert.equal(safeEvidenceReturnTo(""), "");
+test("shared safeInternalReturnTo keeps same-origin paths and rejects unsafe return_to", () => {
+  const fallback = "";
+  assert.equal(safeInternalReturnTo("/candidates/600519", fallback), "/candidates/600519");
+  assert.equal(safeInternalReturnTo("/stock-data?code=600519", fallback), "/stock-data?code=600519");
+  assert.equal(safeInternalReturnTo("/evidence#saved", fallback), "/evidence#saved");
+  assert.equal(safeInternalReturnTo("https://evil.example/phish", fallback), fallback);
+  assert.equal(safeInternalReturnTo("//evil.example", fallback), fallback);
+  assert.equal(safeInternalReturnTo("/\\evil.example", fallback), fallback);
+  assert.equal(safeInternalReturnTo("javascript:alert(1)", fallback), fallback);
+  assert.equal(safeInternalReturnTo("", fallback), fallback);
 });
 
 test("buildEvidenceNewHref prefills evidence create query and omits unsafe return_to", () => {

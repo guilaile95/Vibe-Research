@@ -237,6 +237,29 @@ try {
       await route.fulfill(ok([]));
       return;
     }
+    if (url.pathname === "/api/research-events" && request.method() === "GET") {
+      const code = url.searchParams.get("security_code") || "600519";
+      await route.fulfill(ok({
+        schema_version: "research_event_calendar.v0.1",
+        status: "NORMAL",
+        as_of: "2026-08-30",
+        fetched_at: "2026-08-30T02:00:00.000000Z",
+        window: { date_from: "2026-08-16", date_to: "2026-11-28", semantics: "CALENDAR_DAYS" },
+        universe: {
+          kind: "SINGLE_SECURITY",
+          status: "NORMAL",
+          campaign_count: 0,
+          unique_security_count: 1,
+          max_unique_securities: 1,
+          securities: [{ security_code: code, security_name: null, campaign_ids: [] }],
+        },
+        events: [],
+        sources: [],
+        limitations: ["NO_EXPLICIT_EVENT_CATALYST_LINK"],
+        writes: { campaign: 0, thesis: 0, evidence: 0, decision: 0, trade: 0, account: 0 },
+      }));
+      return;
+    }
     await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: `unmocked ${request.method()} ${url.pathname}` }) });
   });
 

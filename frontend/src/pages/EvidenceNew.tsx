@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError } from "@/lib/api";
 import { mapEvidenceNewQuery } from "@/lib/candidateCampaign";
+import { safeInternalReturnTo } from "@/lib/internalReturnTo";
 
 const SUBJECT_TYPES = [
   { value: "stock", label: "个股" },
@@ -47,7 +48,7 @@ export function EvidenceNew() {
   const nav = useNavigate();
   const [searchParams] = useSearchParams();
   const prefill = mapEvidenceNewQuery(searchParams);
-  const returnTo = prefill.return_to;
+  const returnTo = safeInternalReturnTo(prefill.return_to, "");
   const returnToLabel = returnTo === `/candidates/${prefill.subject_id}`
     ? "Candidate Workspace"
     : returnTo

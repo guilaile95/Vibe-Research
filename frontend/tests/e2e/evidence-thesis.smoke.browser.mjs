@@ -270,6 +270,23 @@ function createApiMockState() {
         evidences.set(id, rec);
         return ok({ data: rec });
       }
+      const temporalMatch = pathname.match(/^\/api\/evidence\/([^/]+)\/temporal-authority$/);
+      if (temporalMatch && method === "GET") {
+        return ok({
+          data: {
+            schema_version: "evidence_temporal_authority.v0.1",
+            evidence_id: temporalMatch[1],
+            temporal_state: "UNPROVEN",
+            effective_at: null,
+            temporal_basis: "NONE",
+            authority_refs: [],
+            reason_codes: [],
+            ec1_evaluation: "NOT_EVALUATED",
+            ec1_safe_item: null,
+            observed_time_is_not_effective_time: true,
+          },
+        });
+      }
       const evMatch = pathname.match(/^\/api\/evidence\/([^/]+)$/);
       if (evMatch) {
         const eid = evMatch[1];
@@ -648,6 +665,32 @@ async function runSmoke(page, mock, errors) {
     errors.push(`${label}: linked evidence claim not visible on thesis detail`);
   }
 
+  const viewLink = page.getByTestId("thesis-existing-evidence");
+  await viewLink.waitFor({ state: "visible", timeout: 10000 });
+  const viewEvidenceHref = await viewLink.getAttribute("href");
+  if (!viewEvidenceHref || !viewEvidenceHref.includes("return_to=")) {
+    errors.push(`${label}: thesis 查看证据 must include return_to, href=${viewEvidenceHref}`);
+    return;
+  }
+  const parsedView = new URL(viewEvidenceHref, `http://127.0.0.1:${frontendPort}`);
+  if (parsedView.searchParams.get("return_to") !== `/thesis/${tid}`) {
+    errors.push(`${label}: thesis 查看证据 return_to expected /thesis/${tid}, got ${parsedView.searchParams.get("return_to")}`);
+  }
+  await Promise.all([
+    page.waitForURL((url) => url.pathname === parsedView.pathname, { timeout: 15000 }),
+    viewLink.click(),
+  ]);
+  await page.getByRole("heading", { name: "Q3 营收同比 +25%" }).waitFor({ state: "visible", timeout: 15000 });
+  const backLink = page.getByTestId("evidence-detail-back");
+  await backLink.waitFor({ state: "visible", timeout: 15000 });
+  const backText = (await backLink.innerText()).replace(/\s+/g, "");
+  if (!backText.includes("投资逻辑")) {
+    errors.push(`${label}: evidence detail back label should be 投资逻辑, got ${backText}`);
+  }
+  await backLink.click();
+  await page.waitForURL((url) => url.pathname === `/thesis/${tid}`, { timeout: 15000 });
+  await page.getByRole("heading", { name: "贵州茅台增长逻辑" }).waitFor({ state: "visible", timeout: 15000 });
+
   // ===== 4. 修改 stance → revision 增加（2 → 3）=====
   // 找到「修改立场」按钮
   const stanceBtn = page.getByRole("button", { name: /修改立场$/ }).first();
@@ -743,15 +786,25 @@ async function runSmoke(page, mock, errors) {
     errors.push(`${label}: thesis detail should reflect updated evidence claim`);
   }
 
-  // ===== 7. 软删除 evidence → 当前列表不显示，历史版本仍显示 =====
-  await page.goto(`http://127.0.0.1:${frontendPort}/evidence/${evId}`, {
-    waitUntil: "domcontentloaded",
-  });
+  // ===== 7. 软删除 evidence → 回到 return_to Thesis；当前列表不显示，历史版本仍显示 =====
+  const deleteViewLink = page.getByTestId("thesis-existing-evidence");
+  await deleteViewLink.waitFor({ state: "visible", timeout: 10000 });
+  const deleteViewHref = await deleteViewLink.getAttribute("href");
+  if (!deleteViewHref || !deleteViewHref.includes("return_to=")) {
+    errors.push(`${label}: thesis 查看证据 before delete must include return_to`);
+    return;
+  }
+  await Promise.all([
+    page.waitForURL((url) => url.pathname.startsWith("/evidence/") && url.pathname !== "/evidence/new", { timeout: 15000 }),
+    deleteViewLink.click(),
+  ]);
   await page.getByText("Q3 营收同比 +30%（更新）").first().waitFor({ state: "visible", timeout: 15000 });
   // dialog 已在 runSmoke 开头注册统一 handler
   await page.getByRole("button", { name: /删除$/ }).first().click();
-  // evidence 应被标记 deleted
-  await page.waitForTimeout(500);
+  await page.waitForURL((url) => url.pathname === `/thesis/${tid}`, { timeout: 15000 });
+  if (new URL(page.url()).pathname !== `/thesis/${tid}`) {
+    errors.push(`${label}: delete must navigate to return_to thesis, got ${page.url()}`);
+  }
   const ev = evidences.get(evId);
   if (!ev || ev.deleted !== 1) {
     errors.push(`${label}: evidence not soft-deleted after delete button`);

@@ -7,8 +7,21 @@ import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import { ApiError, listCommittedDecisions, type CommittedDecisionsListResult } from "@/lib/api";
+import type { CampaignStrategy } from "@/lib/api/types";
+import {
+  committedDecisionIdentityTitle,
+  validityStatusAtCommitLabel,
+} from "@/lib/committedDecisionView";
 
-export function CampaignCommittedDecisionsCard({ campaignId }: { campaignId: string }) {
+export function CampaignCommittedDecisionsCard({
+  campaignId,
+  securityCode,
+  strategy,
+}: {
+  campaignId: string;
+  securityCode: string;
+  strategy: CampaignStrategy;
+}) {
   const { hash } = useLocation();
   const [retryEpoch, setRetryEpoch] = useState(0);
   const [state, setState] = useState<{
@@ -78,31 +91,41 @@ export function CampaignCommittedDecisionsCard({ campaignId }: { campaignId: str
         打开详情可查看决定提交时的完整依据。
       </p>
       <ul className="space-y-1.5">
-        {state.data.items.map((item) => (
-          <li
-            key={item.decision_id}
-            id={`committed-decision-${campaignId}-${item.decision_id}`}
-            tabIndex={-1}
-            className="rounded bg-muted/30 px-2 py-1.5 space-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
-          >
-            <p className="font-mono">{item.decision_id}</p>
-            <p className="text-muted-foreground">
-              提交时间：{item.committed_at || "未知"}
-              {item.review_by ? ` · 复核期限：${item.review_by}` : ""}
-              {item.next_best_action ? ` · 当时结论：${item.next_best_action}` : ""}
-              {item.validity_status_at_commit ? ` · 提交时有效性：${item.validity_status_at_commit}` : ""}
-            </p>
-            <Link
-              className="inline-block text-primary underline"
-              to={`/campaigns/${campaignId}/decision-proposal?${new URLSearchParams({
-                decision_id: item.decision_id,
-                return_to: `/decision-inbox#committed-decision-${campaignId}-${item.decision_id}`,
-              })}`}
+        {state.data.items.map((item) => {
+          const title = committedDecisionIdentityTitle({
+            securityCode,
+            strategy,
+            nextBestAction: item.next_best_action,
+          });
+          const validityLabel = validityStatusAtCommitLabel(item.validity_status_at_commit);
+          return (
+            <li
+              key={item.decision_id}
+              id={`committed-decision-${campaignId}-${item.decision_id}`}
+              tabIndex={-1}
+              className="rounded bg-muted/30 px-2 py-1.5 space-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
             >
-              查看详情（含当时依据）→
-            </Link>
-          </li>
-        ))}
+              <p className="font-medium">{title}</p>
+              <p className="text-muted-foreground">
+                提交时间：{item.committed_at || "未知"}
+                {item.review_by ? ` · 复核期限：${item.review_by}` : ""}
+                {validityLabel ? ` · 提交时有效性：${validityLabel}` : ""}
+              </p>
+              <p className="break-all font-mono text-[11px] text-muted-foreground">
+                decision_id: {item.decision_id}
+              </p>
+              <Link
+                className="inline-block text-primary underline"
+                to={`/campaigns/${campaignId}/decision-proposal?${new URLSearchParams({
+                  decision_id: item.decision_id,
+                  return_to: `/decision-inbox#committed-decision-${campaignId}-${item.decision_id}`,
+                })}`}
+              >
+                查看详情（含当时依据）→
+              </Link>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
