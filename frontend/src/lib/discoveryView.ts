@@ -42,6 +42,76 @@ export function statusLabel(status: string): string {
   } as Record<string, string>)[status] || status;
 }
 
+export const DISCOVERY_CANDIDATE_ENTRY_LABEL = "进入候选研究";
+export const DISCOVERY_RESTRICTED_FILTER_LABEL = "受限研究筛选";
+export const DISCOVERY_STRATEGY_FILTER_LABEL = "发现策略";
+export const DISCOVERY_SECTOR_FILTER_LABEL = "发现行业";
+export const DISCOVERY_PRIORITY_FILTER_LABEL = "发现优先级";
+export const DISCOVERY_HEALTH_FILTER_LABEL = "发现数据状态";
+export const DISCOVERY_QUEUE_SCOPE_NOTE = "发现队列只回答“先研究谁、为什么”，不会生成交易决定或自动创建 Campaign。";
+
+export function restrictedStatusLabel(status: string): string {
+  return ({
+    ALL: "全部资格",
+    CLEAR: "普通",
+    RESTRICTED: "受限研究",
+    UNKNOWN: "资格未知",
+  } as Record<string, string>)[status] || status;
+}
+
+export function discoveryFunnelLabel(key: string): string {
+  return ({
+    core_universe: "核心池",
+    cheap_scan_passed: "Stage 1 通过",
+    qualification_candidates: "Stage 3 资格检查",
+    sector_coverage: "行业覆盖",
+    excluded: "排除 / 拦截",
+  } as Record<string, string>)[key] || key;
+}
+
+export function discoveryStrategyLabel(strategy: string): string {
+  return ({
+    SHORT: "短线",
+    MEDIUM: "中线",
+    SWING: "波段",
+  } as Record<string, string>)[strategy] || strategy;
+}
+
+export function researchPriorityLabel(priority: string): string {
+  return ({
+    ALL: "全部优先级",
+    HIGH: "高",
+    MEDIUM: "中",
+    LOW: "低",
+  } as Record<string, string>)[priority] || priority;
+}
+
+export function researchPriorityBadgeLabel(priority: string): string {
+  if (priority === "HIGH" || priority === "MEDIUM" || priority === "LOW") {
+    return `${researchPriorityLabel(priority)}优先`;
+  }
+  return priority;
+}
+
+export function evidenceGateLabel(status: string): string {
+  return ({
+    SUFFICIENT_FOR_RESEARCH: "研究证据足够",
+    PARTIAL: "部分",
+    INSUFFICIENT: "不足",
+    UNKNOWN: "未知",
+    ERROR: "错误",
+  } as Record<string, string>)[status] || status;
+}
+
+export function coverageStatusLabel(status: string): string {
+  return ({
+    AVAILABLE: "已有",
+    PARTIAL: "部分",
+    UNKNOWN: "未知",
+    ERROR: "错误",
+  } as Record<string, string>)[status] || status;
+}
+
 export function displayDiscoveryTime(value: string | null | undefined): string {
   if (!value) return "未知";
   const date = new Date(value);
