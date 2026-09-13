@@ -212,7 +212,7 @@ async function run() {
     await page.getByRole("button", { name: "详情" }).first().click();
     await page.getByText("交易归属与 Campaign 对账").waitFor();
     await page.getByText("UNALLOCATED", { exact: true }).waitFor();
-    await page.getByText("RECONCILIATION REQUIRED", { exact: false }).waitFor();
+    await page.getByText("需要对账：选择真实、已提交且时间有效的已冻结决策", { exact: false }).waitFor();
     await page.getByText(decision.decision_id, { exact: true }).waitFor();
     await page.getByRole("button", { name: "明确归属" }).click();
     await page.getByText("ALLOCATED", { exact: true }).waitFor();
@@ -261,19 +261,25 @@ async function run() {
     await page.reload({ waitUntil: "networkidle" });
     await page.getByRole("button", { name: "详情" }).first().click();
     await page.getByText("UNALLOCATED", { exact: true }).waitFor();
-    await page.getByText("Frozen Decision，但见证校验失败", { exact: false }).waitFor();
+    await page.getByText("发现已冻结决策，但见证校验失败", { exact: false }).waitFor();
     assert.equal(await page.getByRole("button", { name: "明确归属" }).count(), 0);
     assert.equal(await page.getByText("若该交易确实非计划内", { exact: false }).count(), 0);
     await page.unroute(`**/trades/${secondTrade.trade_id}/attribution-candidates`);
     await page.reload({ waitUntil: "networkidle" });
     await page.getByRole("button", { name: "详情" }).first().click();
     await page.getByText("UNALLOCATED", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "标记为 UNPLANNED" }).click();
-    await page.getByText("UNPLANNED", { exact: true }).waitFor();
-    await page.getByText(/pre_trade_decision=NONE/).waitFor();
+    await page.getByRole("button", { name: "标记为非计划内" }).click();
+    const unplannedOrigin = page.locator('[data-origin="UNPLANNED"]');
+    await unplannedOrigin.waitFor();
+    assert.equal(await unplannedOrigin.getAttribute("data-origin"), "UNPLANNED");
+    assert.match(await unplannedOrigin.innerText(), /pre_trade_decision=NONE/);
+    assert.match(await unplannedOrigin.innerText(), /pre_trade_thesis=NONE/);
+    await page.getByText("技术详情").click();
+    await page.getByText("origin=UNPLANNED", { exact: true }).waitFor();
     await page.reload({ waitUntil: "networkidle" });
     await page.getByRole("button", { name: "详情" }).first().click();
-    await page.getByText("UNPLANNED", { exact: true }).waitFor();
+    await page.locator('[data-origin="UNPLANNED"]').waitFor();
+    assert.equal(await page.locator('[data-origin="UNPLANNED"]').getAttribute("data-origin"), "UNPLANNED");
     const secondState = await jsonRequest(backend, `/api/trades/${secondTrade.trade_id}/reconciliation`);
     assert.equal(secondState.pre_trade_decision, "NONE");
     assert.equal(secondState.pre_trade_thesis, "NONE");
@@ -308,7 +314,7 @@ async function run() {
     const openContinuationModal = async () => {
       await page.goto(continuationUrl, { waitUntil: "networkidle" });
       const modal = page.locator("div.fixed.inset-0").filter({ hasText: "新建交易流水" });
-      await modal.getByText("从 Frozen Decision 续接实际执行", { exact: true }).waitFor();
+      await modal.getByText("从已冻结决策续接实际执行", { exact: true }).waitFor();
       return modal;
     };
     const fillCreateForm = async (
@@ -411,7 +417,7 @@ async function run() {
     await executedModal.getByText("本地时间：2098-01-02T10:00", { exact: true }).waitFor();
     await executedModal.getByText(/浏览器解析时区：/).waitFor();
     await executedModal.getByText(/UTC offset：UTC[+-]\d{2}:\d{2}/).waitFor();
-    await executedModal.getByText(`Canonical UTC ISO：${expectedExecutedIso}`, { exact: true }).waitFor();
+    await executedModal.getByText(`规范 UTC ISO：${expectedExecutedIso}`, { exact: true }).waitFor();
     const [createdResponse] = await Promise.all([
       waitForCreatedTrade(),
       executedModal.getByRole("button", { name: "提交创建" }).click(),
@@ -425,7 +431,7 @@ async function run() {
     await page.getByText("UNALLOCATED", { exact: true }).waitFor();
     await page.getByText(decision.decision_id, { exact: true }).waitFor();
     await page.locator('[data-continuation-candidate="preferred"]').waitFor();
-    await page.getByText("来自 Frozen Decision 续接；仍需你明确归属", { exact: true }).waitFor();
+    await page.getByText("来自己冻结决策续接；仍需你明确归属", { exact: true }).waitFor();
     assert.equal(truxWritePosts, 0, "attribution/unplanned POST must stay 0 before explicit user click");
     await page.getByRole("button", { name: "明确归属" }).click();
     await page.getByText("ALLOCATED", { exact: true }).waitFor();
@@ -441,7 +447,7 @@ async function run() {
     const partialModal = await openCreateModal();
     await fillCreateForm(partialModal, { operation: "add", status: "partial", executionTime: "2098-01-03T11:15", fee: "0", otherCost: "0" });
     const expectedPartialIso = await page.evaluate(() => new Date("2098-01-03T11:15").toISOString());
-    await partialModal.getByText(`Canonical UTC ISO：${expectedPartialIso}`, { exact: true }).waitFor();
+    await partialModal.getByText(`规范 UTC ISO：${expectedPartialIso}`, { exact: true }).waitFor();
     const [partialResponse] = await Promise.all([
       waitForCreatedTrade(),
       partialModal.getByRole("button", { name: "提交创建" }).click(),
@@ -482,7 +488,7 @@ async function run() {
     // 状态与对账字段都诚实显示 NOT_APPLICABLE（TRADE_NOT_EXECUTED）
     await page.getByText("NOT_APPLICABLE", { exact: true }).first().waitFor();
     assert.equal(await page.getByRole("button", { name: "明确归属" }).count(), 0);
-    assert.equal(await page.getByRole("button", { name: "标记为 UNPLANNED" }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "标记为非计划内" }).count(), 0);
     assert.equal(truxWritePosts, 1, "not_executed continuation must not issue attribution/unplanned writes");
 
     // --- 持久化成功但详情读取失败：不回滚、不伪装失败，诚实显示读取错误 ---
