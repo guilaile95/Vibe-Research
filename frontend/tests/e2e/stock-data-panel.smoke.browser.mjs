@@ -140,6 +140,110 @@ function valuationPayload(code) {
   };
 }
 
+function emptyValuationMetric() {
+  return {
+    stock_value: null,
+    stock_sign: "missing",
+    industry_positive_median: null,
+    vs_industry_positive_median: null,
+    rank_among_positive: null,
+    positive_sample_count: 0,
+    rank_order: "ASCENDING_POSITIVE_VALUES",
+    industry_observed_count: 0,
+    industry_missing_count: 0,
+    industry_positive_count: 0,
+    industry_zero_count: 0,
+    industry_negative_count: 0,
+    industry_median_status: "NO_POSITIVE_VALUES",
+  };
+}
+
+function stockValuationContextPayload(code, status = "normal") {
+  const metric = (stock, median, delta, rank, extra = {}) => ({
+    stock_value: stock,
+    stock_sign: stock == null ? "missing" : stock > 0 ? "positive" : stock === 0 ? "zero" : "negative",
+    industry_positive_median: median,
+    vs_industry_positive_median: delta,
+    rank_among_positive: rank,
+    positive_sample_count: extra.positive_sample_count ?? 2,
+    rank_order: "ASCENDING_POSITIVE_VALUES",
+    industry_observed_count: extra.industry_observed_count ?? 4,
+    industry_missing_count: extra.industry_missing_count ?? 0,
+    industry_positive_count: extra.industry_positive_count ?? 2,
+    industry_zero_count: extra.industry_zero_count ?? 1,
+    industry_negative_count: extra.industry_negative_count ?? 1,
+    industry_median_status: median == null ? "NO_POSITIVE_VALUES" : "NORMAL",
+  });
+  const base = {
+    schema_version: "stock-valuation-context.v0.1",
+    source: "EASTMONEY_A_SHARE_SNAPSHOT",
+    fetched_at: "2026-09-12T08:00:00Z",
+    code,
+    industry_membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+    valuation_semantics: "CURRENT_MEMBER_VALUATION_DISTRIBUTION_ONLY",
+    historical_valuation_status: "NOT_AVAILABLE",
+    sector_index_valuation_authority: "NOT_AVAILABLE",
+    pe_source: "eastmoney_clist_f115",
+    pb_source: "eastmoney_clist_f23",
+    provenance: {
+      classification_provider: "EASTMONEY",
+      membership_source: "astock.a_share_snapshot.industry=f100",
+      membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+      pe_ttm_field: "f115",
+      pb_field: "f23",
+      dynamic_pe_field: "f9",
+      dynamic_pe_used: false,
+    },
+    limitations: [],
+  };
+  if (status === "unavailable") {
+    return {
+      ...base,
+      status,
+      industry_name: "电子",
+      industry_status: "unavailable",
+      industry_member_count: 0,
+      pe_ttm: emptyValuationMetric(),
+      pb: emptyValuationMetric(),
+      warnings: ["当前行业估值快照不可用；未将缺失估值伪装成 0。"],
+    };
+  }
+  if (status === "unknown-industry") {
+    return {
+      ...base,
+      status: "partial",
+      industry_name: "UNKNOWN",
+      industry_status: "unknown",
+      industry_member_count: 0,
+      pe_ttm: metric(10, null, null, null, { positive_sample_count: 0, industry_observed_count: 0 }),
+      pb: metric(1, null, null, null, { positive_sample_count: 0, industry_observed_count: 0 }),
+      warnings: ["当前股票行业为 UNKNOWN；不计算行业估值中位数。"],
+    };
+  }
+  if (status === "mixed-metric") {
+    return {
+      ...base,
+      status: "partial",
+      industry_name: "电子",
+      industry_status: "normal",
+      industry_member_count: 4,
+      pe_ttm: metric(10, 15, -5, 1),
+      pb: metric(null, 1.5, null, null),
+      warnings: ["个股 PB 缺失；未将缺失估值伪装成 0。"],
+    };
+  }
+  return {
+    ...base,
+    status: "normal",
+    industry_name: "电子",
+    industry_status: "normal",
+    industry_member_count: 4,
+    pe_ttm: metric(10, 15, -5, 1),
+    pb: metric(1, 1.5, -0.5, 1),
+    warnings: [],
+  };
+}
+
 function klineBars(code) {
   const base = code === "000001" ? 11 : 8;
   return Array.from({ length: 5 }, (_, i) => ({
@@ -318,6 +422,8 @@ function createApiMockController() {
     klineHold: null, // { resolve, code } pending fulfill
     klineCalls: [],
     valuationCalls: [],
+    valuationContextStatus: "normal",
+    valuationContextCalls: [],
     technicalIndicatorsStatus: "normal",
     technicalIndicatorsCalls: [],
     attentionContextStatus: "normal",
@@ -352,6 +458,12 @@ function createApiMockController() {
 
     const pathname = pathnameOf(url);
     const code = codeOf(url);
+
+    if (pathname.endsWith("/stock-valuation-context")) {
+      state.valuationContextCalls.push({ code, url, ts: Date.now() });
+      await route.fulfill(jsonOk(stockValuationContextPayload(code, state.valuationContextStatus)));
+      return;
+    }
 
     // K-line: delayed / error / hold for race tests
     if (pathname === "/api/kline" || pathname.endsWith("/kline")) {
@@ -661,6 +773,9 @@ function createApiMockController() {
     setTechnicalIndicatorsStatus(status) {
       state.technicalIndicatorsStatus = status;
     },
+    setValuationContextStatus(status) {
+      state.valuationContextStatus = status;
+    },
     setAttentionContextStatus(status) {
       state.attentionContextStatus = status;
     },
@@ -741,6 +856,111 @@ async function runSmoke(page, mock, errors) {
   } catch (e) {
     errors.push(`${label}: after query 000001 missing header: ${e.message}`);
     return;
+  }
+
+  try {
+    const valuationCard = page.getByTestId("stock-valuation-context");
+    await valuationCard.waitFor({ state: "visible", timeout: 10000 });
+    for (const text of [
+      "相对行业估值",
+      "当前行业：电子",
+      "CURRENT_MEMBERSHIP_SNAPSHOT",
+      "Eastmoney f115",
+      "Eastmoney f23",
+    ]) {
+      if (!(await valuationCard.getByText(text, { exact: false }).first().isVisible().catch(() => false))) {
+        errors.push(`${label}: valuation context text not visible: ${text}`);
+      }
+    }
+    const peRow = valuationCard.getByTestId("stock-valuation-pe");
+    const peCells = peRow.locator("td");
+    if (((await peCells.nth(1).innerText()) || "").trim() !== "10.00") {
+      errors.push(`${label}: PE stock value expected 10.00`);
+    }
+    if (((await peCells.nth(2).innerText()) || "").trim() !== "15.00") {
+      errors.push(`${label}: PE industry median expected 15.00`);
+    }
+    if (((await peCells.nth(3).innerText()) || "").trim() !== "-5.00") {
+      errors.push(`${label}: PE vs industry expected -5.00`);
+    }
+    if (((await peCells.nth(4).innerText()) || "").trim() !== "1 / 2") {
+      errors.push(`${label}: PE rank expected 1 / 2`);
+    }
+    const valuationText = await valuationCard.innerText();
+    for (const forbidden of ["建议买入", "建议卖出", "综合评分", "BUY", "SELL"]) {
+      if (valuationText.includes(forbidden)) errors.push(`${label}: forbidden valuation wording present: ${forbidden}`);
+    }
+    if (mock.state.valuationContextCalls.length < 1) {
+      errors.push(`${label}: valuation context endpoint was not requested`);
+    }
+  } catch (e) {
+    errors.push(`${label}: valuation context success scenario failed: ${e.message}`);
+  }
+
+  mock.setValuationContextStatus("unknown-industry");
+  await fillCode(page, "000001");
+  await clickQuery(page);
+  try {
+    await waitForStockHeader(page, "000001", "平安银行");
+    const unknownCard = page.getByTestId("stock-valuation-context");
+    await unknownCard.getByTestId("stock-valuation-industry-notice").waitFor({ state: "visible", timeout: 10000 });
+    if (!(await unknownCard.getByText("当前行业：UNKNOWN", { exact: false }).first().isVisible().catch(() => false))) {
+      errors.push(`${label}: UNKNOWN industry name not visible`);
+    }
+    const unknownPe = unknownCard.getByTestId("stock-valuation-pe").locator("td");
+    if (((await unknownPe.nth(1).innerText()) || "").trim() !== "10.00") {
+      errors.push(`${label}: UNKNOWN industry hid the stock PE`);
+    }
+    if (((await unknownPe.nth(2).innerText()) || "").trim() !== "—") {
+      errors.push(`${label}: UNKNOWN industry did not keep the industry PE median unavailable`);
+    }
+  } catch (e) {
+    errors.push(`${label}: UNKNOWN industry valuation scenario failed: ${e.message}`);
+  }
+
+  mock.setValuationContextStatus("mixed-metric");
+  await fillCode(page, "000001");
+  await clickQuery(page);
+  try {
+    await waitForStockHeader(page, "000001", "平安银行");
+    const mixedCard = page.getByTestId("stock-valuation-context");
+    await mixedCard.waitFor({ state: "visible", timeout: 10000 });
+    const mixedPe = mixedCard.getByTestId("stock-valuation-pe").locator("td");
+    const mixedPb = mixedCard.getByTestId("stock-valuation-pb").locator("td");
+    if (((await mixedPe.nth(1).innerText()) || "").trim() !== "10.00") {
+      errors.push(`${label}: mixed-metric PE stock value expected 10.00`);
+    }
+    if (((await mixedPb.nth(1).innerText()) || "").trim() !== "—") {
+      errors.push(`${label}: mixed-metric PB should stay unavailable`);
+    }
+    if (((await mixedPb.nth(3).innerText()) || "").trim() !== "—") {
+      errors.push(`${label}: mixed-metric PB delta should stay unavailable`);
+    }
+  } catch (e) {
+    errors.push(`${label}: mixed-metric valuation scenario failed: ${e.message}`);
+  }
+
+  mock.setValuationContextStatus("unavailable");
+  await fillCode(page, "000002");
+  await clickQuery(page);
+  try {
+    await waitForStockHeader(page, "000002", "万科A");
+    const unavailableCard = page.getByTestId("stock-valuation-context");
+    await unavailableCard.getByText("数据不可用", { exact: true }).waitFor({ state: "visible", timeout: 10000 });
+    const unavailablePe = unavailableCard.getByTestId("stock-valuation-pe").locator("td");
+    if (((await unavailablePe.nth(1).innerText()) || "").trim() !== "—") {
+      errors.push(`${label}: unavailable valuation did not keep stock PE as em dash`);
+    }
+  } catch (e) {
+    errors.push(`${label}: unavailable valuation scenario failed: ${e.message}`);
+  }
+  mock.setValuationContextStatus("normal");
+  await fillCode(page, "000001");
+  await clickQuery(page);
+  try {
+    await waitForStockHeader(page, "000001", "平安银行");
+  } catch (e) {
+    errors.push(`${label}: restoring 000001 after valuation scenarios failed: ${e.message}`);
   }
 
   // Attention Context 只读面板：绑定已提交代码，展示映射、观察和 provenance。
@@ -1200,6 +1420,24 @@ async function main() {
     });
 
     await runSmoke(page, mock, errors);
+    await page.setViewportSize({ width: 390, height: 844 });
+    try {
+      const narrowValuation = page.getByTestId("stock-valuation-context");
+      await narrowValuation.waitFor({ state: "visible", timeout: 10000 });
+      if (!(await narrowValuation.getByText("相对行业估值", { exact: true }).isVisible())) {
+        errors.push("stock-data-smoke narrow: valuation context heading not visible");
+      }
+      const viewportState = await page.evaluate(() => ({
+        viewport: window.innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
+        bodyWidth: document.body.scrollWidth,
+      }));
+      if (viewportState.documentWidth > viewportState.viewport + 1 || viewportState.bodyWidth > viewportState.viewport + 1) {
+        errors.push(`stock-data-smoke narrow: page overflow ${JSON.stringify(viewportState)}`);
+      }
+    } catch (e) {
+      errors.push(`stock-data-smoke narrow: valuation context check failed: ${e.message}`);
+    }
     await context.close();
   } catch (e) {
     errors.push(`fatal: ${e && e.stack ? e.stack : String(e)}`);

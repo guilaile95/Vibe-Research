@@ -94,6 +94,7 @@ import research_data_plane_router
 import historical_signal_validation_router
 import factor_validation_router
 import research_event_calendar_router
+import stock_valuation_context_router
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -450,6 +451,8 @@ app.include_router(factor_validation_router.router)
 # PLANNING-PARITY-EVENT-CALENDAR1: bounded read-only aggregation over existing
 # Decision Calendar / StockData contracts; no event persistence or writes.
 app.include_router(research_event_calendar_router.router)
+# Current-member industry PE/PB context for one A-share; snapshot only, no formal writes.
+app.include_router(stock_valuation_context_router.router)
 
 
 @app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)
