@@ -8,8 +8,10 @@
  *   strategy / expected_horizon 结构与存在性）
  * - selectCampaignThesisCandidates 过滤（stock+code 精确、非 archived）与排序（新到旧）、
  *   不自动选唯一权威
+ * - ThesisNew / ThesisDetail 用户可见 Formal Thesis chrome 使用中文正式投资逻辑
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import type {
@@ -20,6 +22,19 @@ import type {
   ThesisStrategy,
 } from "../src/lib/api/types.ts";
 import {
+  FORMAL_THESIS_CAMPAIGN_DRAFT_CHANGE_SUMMARY,
+  FORMAL_THESIS_CONFIRM_FAILED,
+  FORMAL_THESIS_CONFIRM_LABEL,
+  FORMAL_THESIS_CONFIRM_PROMPT,
+  FORMAL_THESIS_CREATE_DRAFT_LABEL,
+  FORMAL_THESIS_FREEZE_FAILED,
+  FORMAL_THESIS_FREEZE_LABEL,
+  FORMAL_THESIS_INDEPENDENT_LIFECYCLE,
+  FORMAL_THESIS_LABEL,
+  FORMAL_THESIS_LIFECYCLE_HEADING,
+  FORMAL_THESIS_SELECT_STRATEGY_ERROR,
+  FORMAL_THESIS_SETUP_FORBIDDEN,
+  FORMAL_THESIS_SETUP_LOADING,
   STRATEGY_HORIZON_RANGES,
   canConfirmFormalThesis,
   canOpenFormalDecisionReview,
@@ -312,4 +327,64 @@ test("Formal Decision Review 门：UNKNOWN、NOT_READY、缺失或非法 project
   }), false);
   assert.equal(canOpenFormalDecisionReview({ ...fixture, current: { ...fixture.current, effective_state: "" } }), false);
   assert.equal(canOpenFormalDecisionReview({ ...fixture, current: { ...fixture.current, effective_state: "NEW_STATE" } }), false);
+});
+
+test("Formal Thesis 用户可见文案使用中文正式投资逻辑", () => {
+  assert.equal(FORMAL_THESIS_LABEL, "正式投资逻辑");
+  assert.equal(FORMAL_THESIS_CREATE_DRAFT_LABEL, "创建正式投资逻辑草稿");
+  assert.equal(FORMAL_THESIS_CONFIRM_LABEL, "确认正式投资逻辑");
+  assert.equal(FORMAL_THESIS_FREEZE_LABEL, "冻结正式投资逻辑");
+  assert.equal(FORMAL_THESIS_LIFECYCLE_HEADING, "正式投资逻辑生命周期");
+  assert.equal(FORMAL_THESIS_SETUP_FORBIDDEN, "已禁止正式投资逻辑设置。");
+  assert.equal(
+    FORMAL_THESIS_SETUP_LOADING,
+    "正在读取真实 Campaign，上下文确认前不会允许正式投资逻辑设置。",
+  );
+  assert.equal(FORMAL_THESIS_CAMPAIGN_DRAFT_CHANGE_SUMMARY, "建立 Campaign 正式投资逻辑草稿");
+  assert.equal(FORMAL_THESIS_SELECT_STRATEGY_ERROR, "请选择正式投资逻辑策略");
+  assert.equal(
+    FORMAL_THESIS_CONFIRM_PROMPT,
+    "确认后内容将锁定；下一步仍需你显式冻结。是否确认这份正式投资逻辑？",
+  );
+  assert.equal(FORMAL_THESIS_CONFIRM_FAILED, "确认正式投资逻辑失败");
+  assert.equal(FORMAL_THESIS_FREEZE_FAILED, "冻结正式投资逻辑失败");
+  assert.equal(
+    FORMAL_THESIS_INDEPENDENT_LIFECYCLE,
+    "正式投资逻辑使用独立生命周期，不通过 legacy 归档入口处理",
+  );
+
+  const labels = [
+    FORMAL_THESIS_LABEL,
+    FORMAL_THESIS_CREATE_DRAFT_LABEL,
+    FORMAL_THESIS_CONFIRM_LABEL,
+    FORMAL_THESIS_FREEZE_LABEL,
+    FORMAL_THESIS_LIFECYCLE_HEADING,
+    FORMAL_THESIS_SETUP_FORBIDDEN,
+    FORMAL_THESIS_SETUP_LOADING,
+    FORMAL_THESIS_CAMPAIGN_DRAFT_CHANGE_SUMMARY,
+    FORMAL_THESIS_SELECT_STRATEGY_ERROR,
+    FORMAL_THESIS_CONFIRM_PROMPT,
+    FORMAL_THESIS_CONFIRM_FAILED,
+    FORMAL_THESIS_FREEZE_FAILED,
+    FORMAL_THESIS_INDEPENDENT_LIFECYCLE,
+  ];
+  for (const label of labels) {
+    assert.doesNotMatch(label, /Formal Thesis/);
+    assert.doesNotMatch(label, /\bBUY\b|\bSELL\b/);
+  }
+
+  for (const page of ["ThesisNew.tsx", "ThesisDetail.tsx"]) {
+    const source = readFileSync(new URL(`../src/pages/${page}`, import.meta.url), "utf8");
+    assert.doesNotMatch(source, /Formal Thesis/);
+    assert.match(source, /FORMAL_THESIS_/);
+  }
+
+  const e2e = readFileSync(
+    new URL("./e2e/current-thesis-activation.browser.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(e2e, /创建 Formal Thesis 草稿/);
+  assert.doesNotMatch(e2e, /确认 Formal Thesis/);
+  assert.match(e2e, /创建正式投资逻辑草稿/);
+  assert.match(e2e, /确认正式投资逻辑/);
 });
