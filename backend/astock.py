@@ -584,17 +584,52 @@ def valuation_percentile(code: str, period: str = "近五年") -> dict:
     return {"period": "近5年", "metrics": metrics}
 
 
-def full_valuation(code: str) -> dict:
-    """单票完整估值：腾讯行情 + 一致预期 EPS + 前向PE/PEG/消化年数。"""
+def full_valuation(code: str, *, snapshot_reader=None) -> dict:
+    """单票完整估值：腾讯现价 + 东财 TTM PE/PB/总市值 + 一致预期 EPS。
+
+    Header ``pe_ttm`` / ``pb`` / ``mcap_yi`` come from mapped ``a_share_snapshot``
+    (f115 / f23 / f20 元→亿). Tencent gtimg 39/46/44 and Eastmoney dynamic f9
+    are never copied into this contract.
+    Snapshot failure, missing code, or invalid values → ``None`` (never fabricated 0).
+    """
     quotes = tencent_quote([code])
     q = quotes.get(code)
     if not q:
         raise ValueError(f"未取到 {code} 的行情")
 
     price = q["price"]
+    pe_ttm = None
+    pb = None
+    mcap_yi = None
+    try:
+        rows = (snapshot_reader or a_share_snapshot)()
+        if isinstance(rows, list):
+            want = str(code).strip()
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("code") or "").strip() != want:
+                    continue
+                pe_ttm = _optional_float(row.get("pe_ttm"))
+                pb = _optional_float(row.get("pb"))
+                mcap_yuan = _optional_float(row.get("market_cap"))
+                if mcap_yuan is not None:
+                    mcap_yi = mcap_yuan / 1e8
+                break
+    except Exception:
+        pe_ttm = None
+        pb = None
+        mcap_yi = None
+
     out = {
         "name": q["name"], "code": code, "price": price,
-        "mcap_yi": q["mcap_yi"], "pe_ttm": q["pe_ttm"], "pb": q["pb"],
+        "mcap_yi": mcap_yi,
+        "pe_ttm": pe_ttm,
+        "pb": pb,
+        "pe_ttm_source": "eastmoney_clist_f115",
+        "pb_source": "eastmoney_clist_f23",
+        "mcap_source": "eastmoney_clist_f20",
+        "dynamic_pe_used": False,
         "eps_26e": None, "eps_27e": None, "pe_26e": None,
         "cagr_pct": None, "peg": None, "digest_years": None, "analyst_count": 0,
     }
