@@ -80,7 +80,7 @@ export function StockValuationContextCard({ data, loading, error }: Props) {
             >
               {data.industry_status === "unknown"
                 ? "当前行业为 UNKNOWN，行业正值中位数不计算；个股估值仍可独立显示。"
-                : "当前行业快照不可用，行业正值中位数不计算；个股估值仍独立显示。"}
+                : "当前估值快照不可用；个股与行业估值均保持不可用，未将缺失显示为 0。"}
             </p>
           )}
 

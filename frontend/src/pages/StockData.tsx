@@ -13,6 +13,7 @@ import { StockThesisPanel } from "@/components/stock/StockThesisPanel";
 import { StockValuationContextCard } from "@/components/stock/StockValuationContextCard";
 import { TechnicalIndicatorsCard } from "@/components/stock/TechnicalIndicatorsCard";
 import { TopRiskAnalysisCard } from "@/components/market/TopRiskAnalysisCard";
+import { ResearchEventCalendar } from "@/components/campaign/ResearchEventCalendar";
 import { NativeIntelSecurityContext } from "@/components/native-intel/NativeIntelSecurityContext";
 import {
   type PanelId,
@@ -631,6 +632,12 @@ export function StockData() {
             loading={stockValuationLoading}
             error={stockValuationError}
           />
+
+          {/^\d{6}$/.test(activeCode) && (
+            <div className="mb-4">
+              <ResearchEventCalendar key={activeCode} securityCode={activeCode} />
+            </div>
+          )}
 
           <NativeIntelSecurityContext code={activeCode} />
 

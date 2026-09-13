@@ -682,7 +682,29 @@ try {
     if (pathname === "/api/evidence" && request.method() === "GET") {
       assert.equal(url.searchParams.get("subject_type"), "stock");
       assert.equal(url.searchParams.get("subject_id"), "600519");
-      await route.fulfill(ok({ items: evidenceRecords, total: evidenceRecords.length, limit: 200, offset: 0 }));
+      const items = evidenceRecords.filter((item) => !item.deleted);
+      await route.fulfill(ok({ items, total: items.length, limit: 200, offset: 0 }));
+      return;
+    }
+    const evidenceIdMatch = pathname.match(/^\/api\/evidence\/([^/]+)$/);
+    if (evidenceIdMatch && request.method() === "GET") {
+      const rec = evidenceRecords.find((item) => item.id === evidenceIdMatch[1] && !item.deleted);
+      if (!rec) {
+        await route.fulfill(unavailable());
+        return;
+      }
+      await route.fulfill(ok(rec));
+      return;
+    }
+    if (evidenceIdMatch && request.method() === "DELETE") {
+      const rec = evidenceRecords.find((item) => item.id === evidenceIdMatch[1]);
+      if (!rec) {
+        await route.fulfill(unavailable());
+        return;
+      }
+      rec.deleted = 1;
+      rec.deleted_at = "2026-08-30T00:00:00Z";
+      await route.fulfill(ok(rec));
       return;
     }
     if (pathname === "/api/native-intel/security-context/600519" && request.method() === "GET") {
@@ -938,6 +960,30 @@ try {
       return;
     }
 
+    if (pathname === "/api/research-events" && request.method() === "GET") {
+      const code = url.searchParams.get("security_code") || "600519";
+      await route.fulfill(ok({
+        schema_version: "research_event_calendar.v0.1",
+        status: "NORMAL",
+        as_of: "2026-08-30",
+        fetched_at: "2026-08-30T02:00:00.000000Z",
+        window: { date_from: "2026-08-16", date_to: "2026-11-28", semantics: "CALENDAR_DAYS" },
+        universe: {
+          kind: "SINGLE_SECURITY",
+          status: "NORMAL",
+          campaign_count: 0,
+          unique_security_count: 1,
+          max_unique_securities: 1,
+          securities: [{ security_code: code, security_name: null, campaign_ids: [] }],
+        },
+        events: [],
+        sources: [],
+        limitations: ["NO_EXPLICIT_EVENT_CATALYST_LINK"],
+        writes: { campaign: 0, thesis: 0, evidence: 0, decision: 0, trade: 0, account: 0 },
+      }));
+      return;
+    }
+
     await route.fulfill(unavailable());
   });
 
@@ -979,7 +1025,31 @@ try {
   assert.doesNotMatch(await unavailableValuation.innerText(), /\b0\.00\b/, "missing PE must not be shown as 0");
   assert.deepEqual(pageErrors, [], "stock-valuation-context 503 must not raise pageerror");
   state.valuationContextMode = "ok";
-  await failedWorkspace.getByTestId("candidate-add-evidence").click();
+
+  const existingEvidence = failedWorkspace.getByTestId("candidate-existing-evidence");
+  await existingEvidence.waitFor();
+  const existingHref = await existingEvidence.getAttribute("href");
+  assert.match(existingHref || "", /return_to=/);
+  assert.equal(
+    new URL(existingHref || "", "http://127.0.0.1").searchParams.get("return_to"),
+    "/candidates/600519",
+  );
+  await existingEvidence.click();
+  await page.waitForURL((url) => url.pathname === "/evidence/evidence_financial");
+  await page.getByTestId("evidence-detail-back").getByText("候选研究", { exact: true }).waitFor();
+  await page.getByTestId("evidence-detail-back").click();
+  await page.waitForURL(/\/candidates\/600519$/);
+  await page.getByTestId("candidate-workspace").waitFor();
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByTestId("candidate-existing-evidence").click();
+  await page.getByRole("heading", { name: "2026H1 财务披露" }).waitFor();
+  await page.getByRole("button", { name: /删除$/ }).click();
+  await page.waitForURL(/\/candidates\/600519$/);
+  await page.getByTestId("candidate-workspace").waitFor();
+  assert.equal(await page.getByTestId("candidate-existing-evidence").count(), 0);
+
+  await page.getByTestId("candidate-add-evidence").click();
   await page.waitForURL(/\/evidence\/new\?/);
   assert.equal(await page.getByPlaceholder("如 600519 / humanoid / AI算力").inputValue(), "600519");
   await page.getByRole("link", { name: "取消" }).click();

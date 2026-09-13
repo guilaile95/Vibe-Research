@@ -18,6 +18,7 @@ import {
   canConfirmFormalThesis,
   defaultHorizonForStrategy,
 } from "@/lib/campaignThesis";
+import { safeInternalReturnTo } from "@/lib/internalReturnTo";
 import { cn } from "@/lib/utils";
 
 const STATUSES = [
@@ -164,20 +165,6 @@ function parseCampaignStrategy(value: string | null): CampaignStrategy | null {
   return CAMPAIGN_STRATEGIES.includes(value as CampaignStrategy)
     ? value as CampaignStrategy
     : null;
-}
-
-function safeInternalReturnTo(value: string | null, fallback: string): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
-    return fallback;
-  }
-  if (typeof window === "undefined") return fallback;
-  try {
-    const parsed = new URL(value, window.location.origin);
-    if (parsed.origin !== window.location.origin) return fallback;
-    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
-  } catch {
-    return fallback;
-  }
 }
 
 interface LinkForm {
@@ -894,10 +881,11 @@ export function ThesisDetail() {
 
   if (!aggregate) return null;
   const t = aggregate.thesis;
+  const currentReturnTo = `${location.pathname}${location.search}${location.hash}`;
   const newEvidenceHref = `/evidence/new?${new URLSearchParams({
     subject_type: t.subject_type,
     subject_id: t.subject_id,
-    return_to: `${location.pathname}${location.search}${location.hash}`,
+    return_to: currentReturnTo,
   }).toString()}`;
 
   return (
@@ -1527,8 +1515,11 @@ export function ThesisDetail() {
                                 置信度 {link.confidence}
                               </span>
                               <Link
-                                to={`/evidence/${link.evidence_id}`}
+                                to={`/evidence/${link.evidence_id}?${new URLSearchParams({
+                                  return_to: currentReturnTo,
+                                }).toString()}`}
                                 className="ml-auto text-[10px] text-muted-foreground hover:text-primary"
+                                data-testid="thesis-existing-evidence"
                               >
                                 查看证据 →
                               </Link>
