@@ -103,6 +103,7 @@ export function TechnicalIndicatorsCard({ env, loading, error }: Props) {
         aria-live="polite"
         aria-busy="true"
         className="card-surface mb-4 p-5"
+        data-testid="technical-indicators"
       >
         <span className="sr-only">技术指标加载中…</span>
         <div className="space-y-3">
@@ -121,7 +122,7 @@ export function TechnicalIndicatorsCard({ env, loading, error }: Props) {
 
   if (error) {
     return (
-      <section role="alert" className="card-surface mb-4 border-warning/30 p-5">
+      <section role="alert" className="card-surface mb-4 border-warning/30 p-5" data-testid="technical-indicators">
         <div className="flex items-center gap-2 text-sm text-warning">
           <span className="font-semibold">技术指标</span>
           <span className="rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[10px]">不可用</span>
@@ -133,7 +134,7 @@ export function TechnicalIndicatorsCard({ env, loading, error }: Props) {
 
   if (!env) {
     return (
-      <section className="card-surface mb-4 p-5">
+      <section className="card-surface mb-4 p-5" data-testid="technical-indicators">
         <div className="py-6 text-center text-sm text-muted-foreground">暂无技术指标数据。</div>
       </section>
     );
@@ -157,7 +158,7 @@ export function TechnicalIndicatorsCard({ env, loading, error }: Props) {
   ];
 
   return (
-    <section className="card-surface mb-4 p-5">
+    <section className="card-surface mb-4 p-5" data-testid="technical-indicators">
       <div className="mb-3 flex flex-wrap items-baseline gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold">
           <span className="block h-4 w-[3px] rounded-full bg-primary" /> 技术指标

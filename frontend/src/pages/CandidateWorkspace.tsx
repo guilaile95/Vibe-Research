@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { AlertCircle, ArrowLeft, CheckCircle2, FileSearch, Loader2 } from "lucide-react";
 import { CandidateCampaignPanel } from "@/components/campaign/CandidateCampaignPanel";
 import { NativeIntelSecurityContext } from "@/components/native-intel/NativeIntelSecurityContext";
+import { TechnicalIndicatorsCard } from "@/components/stock/TechnicalIndicatorsCard";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
@@ -11,7 +12,8 @@ import {
   deriveCandidatePosition,
   type CandidatePositionPresentation,
 } from "@/lib/candidateCampaign";
-import { api, ApiError, type EvidenceRecord } from "@/lib/api";
+import { api, ApiError, type EvidenceRecord, type TechnicalIndicators } from "@/lib/api";
+import { indicatorErrorMessage } from "@/lib/technicalIndicatorsView";
 
 type LoadState<T> =
   | { status: "loading"; value: null; error: "" }
@@ -41,11 +43,13 @@ export function CandidateWorkspace() {
   const validCode = /^\d{6}$/.test(code);
   const [position, setPosition] = useState<LoadState<CandidatePositionPresentation>>(loadingState);
   const [evidence, setEvidence] = useState<LoadState<{ records: EvidenceRecord[]; total: number }>>(loadingState);
+  const [technical, setTechnical] = useState<LoadState<TechnicalIndicators>>(loadingState);
 
   useEffect(() => {
     let cancelled = false;
     setPosition(loadingState());
     setEvidence(loadingState());
+    setTechnical(loadingState());
     if (!validCode) return () => { cancelled = true; };
 
     const positionRequest = api.getDerivedPositions()
@@ -62,7 +66,17 @@ export function CandidateWorkspace() {
       .catch((cause) => {
         if (!cancelled) setEvidence({ status: "error", value: null, error: errorMessage(cause, "证据记录读取失败") });
       });
-    void Promise.allSettled([positionRequest, evidenceRequest]);
+    const technicalRequest = api.technicalIndicators(code)
+      .then((result) => {
+        if (!cancelled) setTechnical({ status: "ready", value: result, error: "" });
+      })
+      .catch((cause) => {
+        if (!cancelled) {
+          const status = cause instanceof ApiError ? cause.status : undefined;
+          setTechnical({ status: "error", value: null, error: indicatorErrorMessage(status) });
+        }
+      });
+    void Promise.allSettled([positionRequest, evidenceRequest, technicalRequest]);
 
     return () => { cancelled = true; };
   }, [code, validCode]);
@@ -135,6 +149,14 @@ export function CandidateWorkspace() {
           )}
           {position.status === "error" && <p className="mt-3 text-xs text-warning" role="alert">{position.error}；不会把读取失败解释为未持有。</p>}
         </GlassCard>
+
+        <div data-testid="candidate-technical-indicators">
+          <TechnicalIndicatorsCard
+            env={technical.status === "ready" ? technical.value : null}
+            loading={technical.status === "loading"}
+            error={technical.status === "error" ? technical.error : null}
+          />
+        </div>
 
         <NativeIntelSecurityContext code={code} />
 

@@ -77,6 +77,58 @@ const unavailable = (detail = "candidate browser fixture: unavailable") => ({
   body: JSON.stringify({ detail }),
 });
 
+function technicalIndicatorsEnvelope(code, { status = "normal" } = {}) {
+  const latestNull = {
+    close: null,
+    sma5: null, sma10: null, sma20: null, sma60: null,
+    ema12: null, ema26: null,
+    macd_dif: null, macd_dea: null, macd_histogram: null,
+    rsi14: null,
+    bollinger_upper: null, bollinger_middle: null, bollinger_lower: null,
+    volume_ratio_5_20: null,
+    kdj_k: null, kdj_d: null, kdj_j: null,
+  };
+  if (status === "unavailable") {
+    return {
+      schema_version: "technical-indicators-v0.2",
+      code,
+      period: "daily",
+      trade_date: null,
+      fetched_at: "2026-07-28T10:00:00Z",
+      status: "unavailable",
+      warnings: ["fixture unavailable"],
+      limitations: [],
+      latest: latestNull,
+      triggers: [],
+      series: [],
+    };
+  }
+  return {
+    schema_version: "technical-indicators-v0.2",
+    code,
+    period: "daily",
+    trade_date: "2026-07-24",
+    fetched_at: "2026-07-28T10:00:00Z",
+    status: "normal",
+    warnings: [],
+    limitations: [],
+    latest: {
+      close: 11.3,
+      sma5: 11.2, sma10: 11.1, sma20: 11.0, sma60: 10.8,
+      ema12: 11.15, ema26: 10.95,
+      macd_dif: 0.12, macd_dea: 0.08, macd_histogram: 0.08,
+      rsi14: 55.0,
+      bollinger_upper: 11.5, bollinger_middle: 11.0, bollinger_lower: 10.5,
+      volume_ratio_5_20: 1.2,
+      kdj_k: 65.25,
+      kdj_d: 58.50,
+      kdj_j: 78.75,
+    },
+    triggers: [],
+    series: [],
+  };
+}
+
 const valuation = {
   name: "贵州茅台",
   code: "600519",
@@ -566,6 +618,7 @@ try {
     releaseOldNextAction: null,
     releaseOldContinuity: null,
     apiPaths: [],
+    technicalIndicatorsMode: "ok",
   };
 
   await page.route("**/api/**", async (route) => {
@@ -639,6 +692,16 @@ try {
     }
     if (pathname === "/api/native-intel/security-context/600519" && request.method() === "GET") {
       await route.fulfill(ok(nativeIntelContext));
+      return;
+    }
+    if (pathname === "/api/market/technical-indicators" && request.method() === "GET") {
+      if (state.technicalIndicatorsMode === "fail") {
+        await route.fulfill(unavailable());
+        return;
+      }
+      const code = url.searchParams.get("code") || "600519";
+      const status = state.technicalIndicatorsMode === "unavailable" ? "unavailable" : "normal";
+      await route.fulfill(ok(technicalIndicatorsEnvelope(code, { status })));
       return;
     }
     if (pathname === "/api/decision-inbox" && request.method() === "GET") {
@@ -901,7 +964,45 @@ try {
   await workspace.getByTestId("native-intel-security-context").waitFor();
   await workspace.locator('[data-evidence-freshness="NOT_EVALUATED"]').waitFor();
   assert.equal(await workspace.locator('[data-evidence-source-conflict="UNKNOWN"]').count(), 1);
-  await workspace.getByTestId("candidate-add-evidence").click();
+  const technicalCard = workspace.getByTestId("candidate-technical-indicators");
+  await technicalCard.waitFor();
+  await technicalCard.getByText("技术指标", { exact: true }).waitFor();
+  await technicalCard.getByText("SMA20", { exact: true }).waitFor();
+  const technicalText = await technicalCard.innerText();
+  assert.match(technicalText, /SMA20[\s\S]*11\.00/);
+  for (const forbidden of ["建议买入", "BUY", "SELL"]) {
+    assert.equal(technicalText.includes(forbidden), false, `technical indicators must not include ${forbidden}`);
+  }
+
+  state.technicalIndicatorsMode = "fail";
+  await page.goto(`http://127.0.0.1:${port}/candidates/600519`, { waitUntil: "domcontentloaded" });
+  const failedWorkspace = page.getByTestId("candidate-workspace");
+  await failedWorkspace.waitFor();
+  await failedWorkspace.locator('[data-position-state="NOT_HELD"]').waitFor();
+  await failedWorkspace.getByTestId("candidate-evidence-gap").waitFor();
+  await failedWorkspace.getByTestId("native-intel-security-context").waitFor();
+  const failedTechnical = failedWorkspace.getByTestId("candidate-technical-indicators");
+  await failedTechnical.getByText("不可用", { exact: true }).waitFor();
+  await failedTechnical.getByText("技术指标暂不可用", { exact: true }).waitFor();
+  assert.doesNotMatch(await failedTechnical.innerText(), /\b0\.00\b/, "503 technical indicators must not fabricate 0");
+  assert.deepEqual(pageErrors, [], "technical-indicators 503 must not raise pageerror");
+
+  state.technicalIndicatorsMode = "unavailable";
+  await page.goto(`http://127.0.0.1:${port}/candidates/600519`, { waitUntil: "domcontentloaded" });
+  const unavailableWorkspace = page.getByTestId("candidate-workspace");
+  await unavailableWorkspace.waitFor();
+  const unavailableTechnical = unavailableWorkspace.getByTestId("candidate-technical-indicators");
+  await unavailableTechnical.getByText("技术指标", { exact: true }).waitFor();
+  await unavailableTechnical.getByText("不可用", { exact: true }).waitFor();
+  await unavailableTechnical.getByText("SMA20", { exact: true }).waitFor();
+  const unavailableText = await unavailableTechnical.innerText();
+  assert.match(unavailableText, /SMA20[\s\S]*?—/);
+  assert.match(unavailableText, /RSI14[\s\S]*?—/);
+  assert.doesNotMatch(unavailableText, /\b0\.00\b/, "unavailable RSI/SMA must not be shown as 0");
+  assert.doesNotMatch(unavailableText, /建议买入|\bBUY\b|\bSELL\b/);
+  assert.deepEqual(pageErrors, [], "unavailable technical-indicators must not raise pageerror");
+  state.technicalIndicatorsMode = "ok";
+  await unavailableWorkspace.getByTestId("candidate-add-evidence").click();
   await page.waitForURL(/\/evidence\/new\?/);
   assert.equal(await page.getByPlaceholder("如 600519 / humanoid / AI算力").inputValue(), "600519");
   await page.getByRole("link", { name: "取消" }).click();
