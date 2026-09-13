@@ -136,18 +136,18 @@ async function main() {
     });
 
     await createEvidence(page, "proven");
-    await page.getByLabel("Source identity").fill("wire:et1-proven");
-    await page.getByLabel("Source published at").fill("2025-01-01T08:00:00.000000Z");
-    await page.getByRole("button", { name: /保存 ASSERTED \/ OBSERVED METADATA/ }).click();
+    await page.getByLabel("来源标识").fill("wire:et1-proven");
+    await page.getByLabel("来源发布时间").fill("2025-01-01T08:00:00.000000Z");
+    await page.getByRole("button", { name: /保存已声明 \/ 已观察的时间信息/ }).click();
     await page.getByText(/未证明/).waitFor();
     if (!(await page.getByText("无权威时间").count())) throw new Error("public metadata must remain unproven");
     await page.reload();
     await page.getByText(/未证明/).waitFor();
-    if (!(await page.getByText("Observed time is not effective time.").count())) throw new Error("temporal distinction not visible after refresh");
+    if (!(await page.getByText("观察时间不是生效时间。").count())) throw new Error("temporal distinction not visible after refresh");
 
     await createEvidence(page, "observed-only");
-    await page.getByLabel("Observed at").fill("2025-01-02T08:00:00.000000Z");
-    await page.getByRole("button", { name: /保存 ASSERTED \/ OBSERVED METADATA/ }).click();
+    await page.getByLabel("观察时间").fill("2025-01-02T08:00:00.000000Z");
+    await page.getByRole("button", { name: /保存已声明 \/ 已观察的时间信息/ }).click();
     await page.getByText(/未证明/).waitFor();
     if (!(await page.getByText("无权威时间").count())) throw new Error("observed-only basis not visible");
     console.log("ET1 real browser vertical passed");
