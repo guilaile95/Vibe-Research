@@ -38,6 +38,7 @@ def _offline(monkeypatch, quote, *, snapshot=None):
 def _assert_provenance(out: dict) -> None:
     assert out["pe_ttm_source"] == "eastmoney_clist_f115"
     assert out["pb_source"] == "eastmoney_clist_f23"
+    assert out["mcap_source"] == "eastmoney_clist_f20"
     assert out["dynamic_pe_used"] is False
 
 
