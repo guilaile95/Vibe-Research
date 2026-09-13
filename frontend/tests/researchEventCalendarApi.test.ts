@@ -56,3 +56,14 @@ test("research event calendar API forwards AbortSignal without changing the read
   assert.equal(request.method, "GET");
   assert.equal(request.signal, controller.signal);
 });
+
+test("research event calendar API appends optional security_code to the query", async () => {
+  requests.length = 0;
+  await api.getResearchEventCalendar({ security_code: "600519" });
+  const request = requests.at(-1);
+  assert.ok(request);
+  assert.equal(request.method, "GET");
+  assert.equal(request.body, undefined);
+  assert.match(request.url, /\/api\/research-events\?/);
+  assert.match(request.url, /security_code=600519/);
+});
