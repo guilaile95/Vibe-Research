@@ -27,6 +27,21 @@ import {
   type TradeContinuationContext,
 } from "@/lib/tradeContinuation";
 import {
+  TRADE_CANONICAL_UTC_ISO_LABEL,
+  TRADE_CONTINUATION_BANNER,
+  TRADE_CONTINUATION_CANDIDATE_HINT,
+  TRADE_FROZEN_DECISION_LABEL,
+  TRADE_MARK_UNPLANNED_BUTTON,
+  TRADE_MARK_UNPLANNED_FAILED,
+  TRADE_NO_CANDIDATE_UNPLANNED_COPY,
+  TRADE_ORIGIN_UNPLANNED,
+  TRADE_RECONCILIATION_POLICY_COPY,
+  TRADE_RECONCILIATION_REQUIRED_COPY,
+  TRADE_TECHNICAL_DETAILS_LABEL,
+  TRADE_UNPLANNED_ORIGIN_COPY,
+  TRADE_WITNESS_INVALID_COPY,
+} from "@/lib/tradeReconciliationView";
+import {
   AlertCircle,
   CheckCircle2,
   Filter,
@@ -263,7 +278,7 @@ export function Trades() {
       await refreshReconciliation(tradeId, selection);
     } catch (e) {
       if (selectionTokenRef.current === selection) {
-        setReconciliationError(e instanceof Error ? e.message : "标记 UNPLANNED 失败");
+        setReconciliationError(e instanceof Error ? e.message : TRADE_MARK_UNPLANNED_FAILED);
       }
     } finally {
       if (selectionTokenRef.current === selection) setReconciliationActionLoading(false);
@@ -813,9 +828,9 @@ export function Trades() {
                   className="rounded-md border border-primary/30 bg-primary/5 p-3 text-xs"
                   data-trade-continuation={activeContinuation.decisionId}
                 >
-                  <p className="font-medium">从 Frozen Decision 续接实际执行</p>
+                  <p className="font-medium">{TRADE_CONTINUATION_BANNER}</p>
                   <p className="mt-1 text-muted-foreground">
-                    {activeContinuation.securityCode} · {activeContinuation.nextBestAction} · {activeContinuation.decisionId}
+                    {activeContinuation.securityCode} · {activeContinuation.nextBestAction} · <span className="font-mono">{activeContinuation.decisionId}</span>
                   </p>
                   <p className="mt-1 leading-5 text-muted-foreground">
                     仅预填证券代码。操作类型、执行状态、成交时间、价格、数量和费用必须按真实执行显式填写；提交后仍需你明确选择归属。
@@ -985,7 +1000,7 @@ export function Trades() {
                           <div>本地时间：<span className="font-mono text-foreground">{executionTimePreview.localValue}</span></div>
                           <div>浏览器解析时区：<span className="font-mono text-foreground">{executionTimePreview.timeZone}</span></div>
                           <div>UTC offset：<span className="font-mono text-foreground">{executionTimePreview.utcOffset}</span></div>
-                          <div>Canonical UTC ISO：<span className="font-mono text-foreground">{executionTimePreview.canonicalUtcIso}</span></div>
+                          <div>{TRADE_CANONICAL_UTC_ISO_LABEL}<span className="font-mono text-foreground">{executionTimePreview.canonicalUtcIso}</span></div>
                         </div>
                       )}
                     </div>
@@ -1286,7 +1301,7 @@ export function Trades() {
                     <div>
                       <h4 className="font-semibold text-foreground">交易归属与 Campaign 对账</h4>
                       <p className="mt-1 text-[11px] text-muted-foreground">
-                        仅接受明确 Frozen Decision 归属或明确 UNPLANNED；系统不自动匹配。
+                        {TRADE_RECONCILIATION_POLICY_COPY}
                       </p>
                     </div>
                     {reconciliationLoading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
@@ -1303,18 +1318,31 @@ export function Trades() {
                       <div><span className="text-muted-foreground">状态：</span><span className="font-semibold text-foreground">{reconciliation.allocation_state}</span></div>
                       <div><span className="text-muted-foreground">对账：</span><span className="font-semibold text-foreground">{reconciliation.reconciliation_requirement}</span></div>
                       {reconciliation.campaign_id && <div className="break-all"><span className="text-muted-foreground">Campaign：</span><span className="font-mono text-foreground">{reconciliation.campaign_id}</span></div>}
-                      {reconciliation.decision_id && <div className="break-all"><span className="text-muted-foreground">Frozen Decision：</span><span className="font-mono text-foreground">{reconciliation.decision_id}</span></div>}
-                      {reconciliation.origin === "UNPLANNED" && <div className="text-amber-400 sm:col-span-2">来源：明确 UNPLANNED（pre_trade_decision=NONE，pre_trade_thesis=NONE）</div>}
+                      {reconciliation.decision_id && <div className="break-all"><span className="text-muted-foreground">{TRADE_FROZEN_DECISION_LABEL}</span><span className="font-mono text-foreground">{reconciliation.decision_id}</span></div>}
+                      {reconciliation.origin === TRADE_ORIGIN_UNPLANNED && (
+                        <div className="text-amber-400 sm:col-span-2" data-origin={TRADE_ORIGIN_UNPLANNED}>
+                          {TRADE_UNPLANNED_ORIGIN_COPY}
+                        </div>
+                      )}
+                      {(reconciliation.origin || reconciliation.decision_id) ? (
+                        <details className="sm:col-span-2 text-[11px] text-muted-foreground">
+                          <summary className="cursor-pointer">{TRADE_TECHNICAL_DETAILS_LABEL}</summary>
+                          <div className="mt-1 space-y-0.5 break-all font-mono">
+                            {reconciliation.origin ? <div>origin={reconciliation.origin}</div> : null}
+                            {reconciliation.decision_id ? <div>decision_id={reconciliation.decision_id}</div> : null}
+                          </div>
+                        </details>
+                      ) : null}
                     </div>
                   )}
 
                   {reconciliation?.allocation_state === "UNALLOCATED" && (
                     <div className="space-y-2 border-t border-border/40 pt-3">
-                      <div className="text-[11px] font-semibold text-amber-400">RECONCILIATION REQUIRED：选择真实、已提交且时间有效的 Frozen Decision</div>
+                      <div className="text-[11px] font-semibold text-amber-400">{TRADE_RECONCILIATION_REQUIRED_COPY}</div>
                       {candidateScanState === "INVALID_WITNESS" ? (
-                        <p className="text-[11px] text-rose-400">发现 Frozen Decision，但见证校验失败，系统已拒绝归属；请修复决策数据或联系管理员。</p>
+                        <p className="text-[11px] text-rose-400">{TRADE_WITNESS_INVALID_COPY}</p>
                       ) : candidateError ? null : attributionCandidates.length === 0 ? (
-                        <p className="text-[11px] text-muted-foreground">没有可归属候选；若该交易确实非计划内，请明确标记 UNPLANNED，系统不会猜测。</p>
+                        <p className="text-[11px] text-muted-foreground">{TRADE_NO_CANDIDATE_UNPLANNED_COPY}</p>
                       ) : attributionCandidates.map((candidate) => {
                         const preferred = isPreferredAttributionCandidate(
                           attributionHint,
@@ -1335,7 +1363,7 @@ export function Trades() {
                             <div className="text-[10px] text-muted-foreground">Campaign {candidate.campaign_id} · {candidate.strategy} · {formatTradeTime(candidate.committed_at)}</div>
                             {preferred ? (
                               <div className="mt-1 text-[10px] font-medium text-primary">
-                                来自 Frozen Decision 续接；仍需你明确归属
+                                {TRADE_CONTINUATION_CANDIDATE_HINT}
                               </div>
                             ) : null}
                           </div>
@@ -1343,7 +1371,7 @@ export function Trades() {
                         </div>
                         );
                       })}
-                      <button type="button" disabled={reconciliationActionLoading} onClick={handleMarkUnplanned} className="rounded border border-amber-500/40 px-2.5 py-1 text-[11px] font-medium text-amber-400 hover:bg-amber-500/10 disabled:opacity-50">标记为 UNPLANNED</button>
+                      <button type="button" disabled={reconciliationActionLoading} onClick={handleMarkUnplanned} className="rounded border border-amber-500/40 px-2.5 py-1 text-[11px] font-medium text-amber-400 hover:bg-amber-500/10 disabled:opacity-50">{TRADE_MARK_UNPLANNED_BUTTON}</button>
                     </div>
                   )}
 

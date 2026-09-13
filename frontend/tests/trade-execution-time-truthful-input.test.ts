@@ -120,7 +120,7 @@ test("未选择执行状态时不显示成交事实字段", () => {
 test("页面显示时区、offset 和 canonical UTC 预览", () => {
   assert.match(pageSource, /浏览器解析时区/);
   assert.match(pageSource, /UTC offset/);
-  assert.match(pageSource, /Canonical UTC ISO/);
+  assert.match(pageSource, /TRADE_CANONICAL_UTC_ISO_LABEL/);
   assert.match(pageSource, /请显式选择真实成交时间/);
   assert.match(pageSource, /type="datetime-local"/);
 });
