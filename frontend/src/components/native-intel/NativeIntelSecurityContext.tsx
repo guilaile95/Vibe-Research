@@ -78,7 +78,7 @@ export function NativeIntelSecurityContext({
                       <a href={item.url} target="_blank" rel="noreferrer noopener" className="min-w-0 flex-1 hover:text-primary hover:underline">{item.title}</a>
                       {evidenceCapture && (recorded?.id ? (
                         <Link
-                          to={`/evidence/${encodeURIComponent(recorded.id)}`}
+                          to={`/evidence/${encodeURIComponent(recorded.id)}?${new URLSearchParams({ return_to: evidenceCapture.returnTo }).toString()}`}
                           className="shrink-0 text-[11px] text-muted-foreground hover:text-primary hover:underline"
                           data-testid="evidence-already-recorded"
                         >
@@ -95,7 +95,7 @@ export function NativeIntelSecurityContext({
                             evidenceType: "news",
                             sourceTitle: item.title,
                             sourceUrl: item.url,
-                            sourceDate: item.published_at || item.first_seen_at,
+                            sourceDate: item.published_at,
                           })}
                           className="shrink-0 text-[11px] text-primary hover:underline"
                           data-testid="capture-as-evidence"

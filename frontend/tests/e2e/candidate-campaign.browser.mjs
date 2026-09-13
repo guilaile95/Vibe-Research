@@ -934,6 +934,18 @@ try {
   await page.getByRole("link", { name: "取消" }).click();
   await page.waitForURL(/\/candidates\/600519$/);
 
+  // Observing an undated source does not establish its publication date.
+  const publishedAt = nativeIntelContext.observation.items[0].published_at;
+  nativeIntelContext.observation.items[0].published_at = null;
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByTestId("capture-as-evidence").click();
+  await page.waitForURL(/\/evidence\/new\?/);
+  assert.equal(await page.getByLabel("来源日期").inputValue(), "");
+  assert.equal(state.evidenceCreates.length, 0, "undated capture must remain user-confirmed");
+  nativeIntelContext.observation.items[0].published_at = publishedAt;
+  await page.getByRole("link", { name: "取消" }).click();
+  await page.waitForURL(/\/candidates\/600519$/);
+
   evidenceRecords.push({
     id: "evidence_native_intel",
     subject_type: "stock",
@@ -957,7 +969,7 @@ try {
   const recorded = recordedWorkspace.getByTestId("evidence-already-recorded");
   await recorded.waitFor();
   assert.equal(await recorded.innerText(), "已记录");
-  assert.equal(await recorded.getAttribute("href"), "/evidence/evidence_native_intel");
+  assert.equal(await recorded.getAttribute("href"), "/evidence/evidence_native_intel?return_to=%2Fcandidates%2F600519");
   assert.equal(await recordedWorkspace.getByTestId("capture-as-evidence").count(), 0);
 
   await recordedWorkspace.getByTestId("candidate-add-evidence").click();
