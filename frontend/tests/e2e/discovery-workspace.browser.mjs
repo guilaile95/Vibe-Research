@@ -178,6 +178,33 @@ function snapshot({ partial = false, stale = false } = {}) {
 
 const ok = (data) => ({ status: 200, contentType: "application/json", body: JSON.stringify({ data }) });
 
+function technicalIndicatorsEnvelope(code) {
+  return {
+    schema_version: "technical-indicators-v0.2",
+    code,
+    period: "daily",
+    trade_date: "2026-07-24",
+    fetched_at: "2026-07-28T10:00:00Z",
+    status: "normal",
+    warnings: [],
+    limitations: [],
+    latest: {
+      close: 11.3,
+      sma5: 11.2, sma10: 11.1, sma20: 11.0, sma60: 10.8,
+      ema12: 11.15, ema26: 10.95,
+      macd_dif: 0.12, macd_dea: 0.08, macd_histogram: 0.08,
+      rsi14: 55.0,
+      bollinger_upper: 11.5, bollinger_middle: 11.0, bollinger_lower: 10.5,
+      volume_ratio_5_20: 1.2,
+      kdj_k: 65.25,
+      kdj_d: 58.50,
+      kdj_j: 78.75,
+    },
+    triggers: [],
+    series: [],
+  };
+}
+
 function nativeIntelContext() {
   return {
     status: "normal",
@@ -235,6 +262,11 @@ try {
     if (url.pathname === "/api/campaigns" && request.method() === "GET") {
       assert.equal(url.searchParams.get("security_code"), "600519");
       await route.fulfill(ok([]));
+      return;
+    }
+    if (url.pathname === "/api/market/technical-indicators" && request.method() === "GET") {
+      const code = url.searchParams.get("code") || "600519";
+      await route.fulfill(ok(technicalIndicatorsEnvelope(code)));
       return;
     }
     await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: `unmocked ${request.method()} ${url.pathname}` }) });
