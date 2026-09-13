@@ -6,11 +6,21 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 import {
   DISCOVERY_CANDIDATE_ENTRY_LABEL,
+  DISCOVERY_HEALTH_FILTER_LABEL,
+  DISCOVERY_PRIORITY_FILTER_LABEL,
+  DISCOVERY_QUEUE_SCOPE_NOTE,
   DISCOVERY_RESTRICTED_FILTER_LABEL,
+  DISCOVERY_SECTOR_FILTER_LABEL,
+  DISCOVERY_STRATEGY_FILTER_LABEL,
+  coverageStatusLabel,
   discoveryFunnelLabel,
   discoverySectors,
+  discoveryStrategyLabel,
   discoveryTimeSummary,
+  evidenceGateLabel,
   filterDiscoveryItems,
+  researchPriorityBadgeLabel,
+  researchPriorityLabel,
   restrictedStatusLabel,
   statusLabel,
   type DiscoveryFilters,
@@ -47,7 +57,14 @@ function ObservationValue({ value }: { value: unknown }) {
 
 function OpportunityCard({ item }: { item: DiscoveryOpportunityItem }) {
   return (
-    <GlassCard className="space-y-3 p-4" data-testid={`discovery-item-${item.strategy}-${item.security_code}`}>
+    <GlassCard
+      className="space-y-3 p-4"
+      data-testid={`discovery-item-${item.strategy}-${item.security_code}`}
+      data-research-priority={item.research_priority}
+      data-evidence-gate={item.evidence_gate}
+      data-fundamental-status={item.fundamental_status}
+      data-catalyst-status={item.catalyst_status}
+    >
       <div className="flex flex-wrap items-start gap-2">
         <div>
           <div className="flex items-center gap-2">
@@ -59,8 +76,8 @@ function OpportunityCard({ item }: { item: DiscoveryOpportunityItem }) {
           </p>
         </div>
         <div className="ml-auto flex flex-wrap justify-end gap-1.5">
-          <Badge tone={item.research_priority}>{item.research_priority} 优先</Badge>
-          <Badge tone={item.evidence_gate}>{item.evidence_gate}</Badge>
+          <Badge tone={item.research_priority}>{researchPriorityBadgeLabel(item.research_priority)}</Badge>
+          <Badge tone={item.evidence_gate}>{evidenceGateLabel(item.evidence_gate)}</Badge>
           {item.restricted_universe.status === "RESTRICTED" ? <Badge tone="RESTRICTED">{restrictedStatusLabel("RESTRICTED")}</Badge> : null}
           {item.restricted_universe.status === "UNKNOWN" ? <Badge tone="UNKNOWN">{restrictedStatusLabel("UNKNOWN")}</Badge> : null}
         </div>
@@ -69,11 +86,11 @@ function OpportunityCard({ item }: { item: DiscoveryOpportunityItem }) {
       <div className="grid gap-2 text-xs sm:grid-cols-3">
         <div className="rounded-lg border border-border/60 bg-muted/20 p-2">
           <span className="text-muted-foreground">基本面</span>
-          <p className="mt-1 font-medium">{item.fundamental_status}</p>
+          <p className="mt-1 font-medium">{coverageStatusLabel(item.fundamental_status)}</p>
         </div>
         <div className="rounded-lg border border-border/60 bg-muted/20 p-2">
           <span className="text-muted-foreground">催化线索</span>
-          <p className="mt-1 font-medium">{item.catalyst_status}</p>
+          <p className="mt-1 font-medium">{coverageStatusLabel(item.catalyst_status)}</p>
         </div>
         <div className="rounded-lg border border-border/60 bg-muted/20 p-2">
           <span className="text-muted-foreground">数据状态</span>
@@ -82,7 +99,7 @@ function OpportunityCard({ item }: { item: DiscoveryOpportunityItem }) {
       </div>
 
       <details className="rounded-lg border border-border/50 bg-background/50 px-3 py-2" open>
-        <summary className="cursor-pointer text-xs font-medium">为什么进入 {item.strategy} 研究队列</summary>
+        <summary className="cursor-pointer text-xs font-medium">为什么进入 {discoveryStrategyLabel(item.strategy)} 研究队列</summary>
         <div className="mt-2 space-y-2">
           {item.supporting_observations.map((observation) => (
             <div key={`${observation.code}-${observation.source_ref}`} className="flex items-start justify-between gap-3 text-xs">
@@ -220,27 +237,27 @@ export function DiscoveryWorkspace() {
       </GlassCard>
 
       <GlassCard className="space-y-3 p-4" data-testid="discovery-filters">
-        <div className="flex flex-wrap gap-1 rounded-lg border border-border/60 bg-muted/20 p-1" role="tablist" aria-label="Discovery strategy">
+        <div className="flex flex-wrap gap-1 rounded-lg border border-border/60 bg-muted/20 p-1" role="tablist" aria-label={DISCOVERY_STRATEGY_FILTER_LABEL}>
           {STRATEGIES.map((strategy) => (
             <button key={strategy} type="button" role="tab" aria-selected={filters.strategy === strategy} onClick={() => setFilters((current) => ({ ...current, strategy }))} className={`rounded-md px-3 py-1.5 text-sm ${filters.strategy === strategy ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`} data-testid={`strategy-${strategy}`}>
-              {strategy} <span className="ml-1 text-[10px] text-muted-foreground">{snapshot.queues[strategy].length}</span>
+              {discoveryStrategyLabel(strategy)} <span className="ml-1 text-[10px] text-muted-foreground">{snapshot.queues[strategy].length}</span>
             </button>
           ))}
         </div>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          <select aria-label="Discovery sector" value={filters.sector} onChange={(event) => setFilters((current) => ({ ...current, sector: event.target.value }))} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
+          <select aria-label={DISCOVERY_SECTOR_FILTER_LABEL} value={filters.sector} onChange={(event) => setFilters((current) => ({ ...current, sector: event.target.value }))} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
             <option value="ALL">全部行业 / 主题</option>
             {sectors.map((sector) => <option key={sector} value={sector}>{sector}</option>)}
           </select>
-          <select aria-label="Discovery priority" value={filters.priority} onChange={(event) => setFilters((current) => ({ ...current, priority: event.target.value as DiscoveryFilters["priority"] }))} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
-            {PRIORITIES.map((priority) => <option key={priority} value={priority}>{priority === "ALL" ? "全部优先级" : `${priority} 优先`}</option>)}
+          <select aria-label={DISCOVERY_PRIORITY_FILTER_LABEL} value={filters.priority} onChange={(event) => setFilters((current) => ({ ...current, priority: event.target.value as DiscoveryFilters["priority"] }))} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
+            {PRIORITIES.map((priority) => <option key={priority} value={priority}>{priority === "ALL" ? researchPriorityLabel("ALL") : researchPriorityBadgeLabel(priority)}</option>)}
           </select>
           <select aria-label={DISCOVERY_RESTRICTED_FILTER_LABEL} data-testid="discovery-restricted-filter" value={filters.restricted} onChange={(event) => setFilters((current) => ({ ...current, restricted: event.target.value as DiscoveryFilters["restricted"] }))} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
             {(["ALL", "CLEAR", "RESTRICTED", "UNKNOWN"] as const).map((value) => (
               <option key={value} value={value}>{restrictedStatusLabel(value)}</option>
             ))}
           </select>
-          <select aria-label="Discovery health" value={filters.health} onChange={(event) => setFilters((current) => ({ ...current, health: event.target.value as DiscoveryFilters["health"] }))} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
+          <select aria-label={DISCOVERY_HEALTH_FILTER_LABEL} value={filters.health} onChange={(event) => setFilters((current) => ({ ...current, health: event.target.value as DiscoveryFilters["health"] }))} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
             <option value="ALL">全部数据状态</option><option value="normal">可用</option><option value="partial">部分可用</option><option value="unknown">未知</option><option value="error">错误</option>
           </select>
         </div>
@@ -258,7 +275,7 @@ export function DiscoveryWorkspace() {
           {snapshot.excluded.map((item, index) => (
             <div key={`${item.security_code}-${item.strategy || "all"}-${index}`} className="flex flex-wrap items-center gap-2 py-2 text-xs">
               <span className="font-medium">{item.name}</span><span className="font-mono text-muted-foreground">{item.security_code}</span>
-              {item.strategy ? <span>{item.strategy}</span> : null}
+              {item.strategy ? <span>{discoveryStrategyLabel(item.strategy)}</span> : null}
               <span className="ml-auto text-muted-foreground">{item.reason_codes.join(" · ")}</span>
             </div>
           ))}
@@ -267,7 +284,7 @@ export function DiscoveryWorkspace() {
 
       <div className="space-y-1 text-[11px] text-muted-foreground">
         {snapshot.limitations.map((line) => <p key={line}>{line}</p>)}
-        <p>Discovery 只回答“先研究谁、为什么”，不会生成交易决定或自动创建 Campaign。</p>
+        <p>{DISCOVERY_QUEUE_SCOPE_NOTE}</p>
       </div>
     </section>
   );

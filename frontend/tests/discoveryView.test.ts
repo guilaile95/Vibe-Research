@@ -5,10 +5,20 @@ import test from "node:test";
 import { candidateWorkspaceHref } from "../src/lib/candidateCampaign.ts";
 import {
   DISCOVERY_CANDIDATE_ENTRY_LABEL,
+  DISCOVERY_HEALTH_FILTER_LABEL,
+  DISCOVERY_PRIORITY_FILTER_LABEL,
+  DISCOVERY_QUEUE_SCOPE_NOTE,
+  DISCOVERY_SECTOR_FILTER_LABEL,
+  DISCOVERY_STRATEGY_FILTER_LABEL,
+  coverageStatusLabel,
   discoveryFunnelLabel,
   discoverySectors,
+  discoveryStrategyLabel,
   discoveryTimeSummary,
+  evidenceGateLabel,
   filterDiscoveryItems,
+  researchPriorityBadgeLabel,
+  researchPriorityLabel,
   restrictedStatusLabel,
   type DiscoveryFilters,
 } from "../src/lib/discoveryView.ts";
@@ -142,6 +152,48 @@ test("Discovery restricted and funnel labels stay Chinese display-only with unkn
   }
 });
 
+test("Discovery opportunity card labels stay Chinese display-only with unknown enum passthrough", () => {
+  assert.equal(researchPriorityLabel("HIGH"), "高");
+  assert.equal(researchPriorityLabel("MEDIUM"), "中");
+  assert.equal(researchPriorityLabel("LOW"), "低");
+  assert.equal(researchPriorityLabel("ALL"), "全部优先级");
+  assert.equal(researchPriorityLabel("URGENT"), "URGENT");
+  assert.equal(researchPriorityBadgeLabel("HIGH"), "高优先");
+  assert.equal(researchPriorityBadgeLabel("MEDIUM"), "中优先");
+  assert.equal(researchPriorityBadgeLabel("LOW"), "低优先");
+  assert.equal(researchPriorityBadgeLabel("UNKNOWN"), "UNKNOWN");
+  assert.doesNotMatch(researchPriorityBadgeLabel("HIGH"), /\bHIGH\b/);
+  assert.equal(evidenceGateLabel("SUFFICIENT_FOR_RESEARCH"), "研究证据足够");
+  assert.equal(evidenceGateLabel("PARTIAL"), "部分");
+  assert.equal(evidenceGateLabel("INSUFFICIENT"), "不足");
+  assert.equal(evidenceGateLabel("UNKNOWN"), "未知");
+  assert.equal(evidenceGateLabel("ERROR"), "错误");
+  assert.equal(evidenceGateLabel("CUSTOM_GATE"), "CUSTOM_GATE");
+  assert.equal(coverageStatusLabel("AVAILABLE"), "已有");
+  assert.equal(coverageStatusLabel("PARTIAL"), "部分");
+  assert.equal(coverageStatusLabel("UNKNOWN"), "未知");
+  assert.equal(coverageStatusLabel("ERROR"), "错误");
+  assert.equal(coverageStatusLabel("MISSING"), "MISSING");
+  assert.equal(discoveryStrategyLabel("SHORT"), "短线");
+  assert.equal(discoveryStrategyLabel("MEDIUM"), "中线");
+  assert.equal(discoveryStrategyLabel("SWING"), "波段");
+  assert.equal(discoveryStrategyLabel("INTRADAY"), "INTRADAY");
+  assert.equal(DISCOVERY_STRATEGY_FILTER_LABEL, "发现策略");
+  assert.equal(DISCOVERY_SECTOR_FILTER_LABEL, "发现行业");
+  assert.equal(DISCOVERY_PRIORITY_FILTER_LABEL, "发现优先级");
+  assert.equal(DISCOVERY_HEALTH_FILTER_LABEL, "发现数据状态");
+  assert.equal(DISCOVERY_QUEUE_SCOPE_NOTE, "发现队列只回答“先研究谁、为什么”，不会生成交易决定或自动创建 Campaign。");
+  for (const label of [
+    researchPriorityBadgeLabel("HIGH"),
+    evidenceGateLabel("SUFFICIENT_FOR_RESEARCH"),
+    coverageStatusLabel("AVAILABLE"),
+    discoveryStrategyLabel("SHORT"),
+    DISCOVERY_QUEUE_SCOPE_NOTE,
+  ]) {
+    assert.doesNotMatch(label, /\bBUY\b|\bSELL\b|Opportunity Score|\bHIGH\b/);
+  }
+});
+
 test("Discovery only links into Candidate Research and exposes no BUY or hidden score contract", () => {
   assert.equal(candidateWorkspaceHref(swingA.security_code), "/candidates/600003");
 
@@ -153,6 +205,17 @@ test("Discovery only links into Candidate Research and exposes no BUY or hidden 
   assert.match(source, /restrictedStatusLabel/);
   assert.match(source, /discoveryFunnelLabel/);
   assert.match(source, /DISCOVERY_CANDIDATE_ENTRY_LABEL/);
+  assert.match(source, /researchPriorityBadgeLabel/);
+  assert.match(source, /evidenceGateLabel/);
+  assert.match(source, /coverageStatusLabel/);
+  assert.match(source, /data-research-priority=\{item\.research_priority\}/);
+  assert.match(source, /data-evidence-gate=\{item\.evidence_gate\}/);
+  assert.match(source, /data-fundamental-status=\{item\.fundamental_status\}/);
+  assert.match(source, /data-catalyst-status=\{item\.catalyst_status\}/);
+  assert.match(source, /DISCOVERY_QUEUE_SCOPE_NOTE/);
+  assert.match(source, /DISCOVERY_STRATEGY_FILTER_LABEL/);
+  assert.doesNotMatch(source, /\{item\.research_priority\} 优先/);
+  assert.doesNotMatch(source, /aria-label="Discovery (?:strategy|sector|priority|health)"/);
   assert.doesNotMatch(source, /\/api\/campaigns|\b(?:score|ranking|BUY NOW|BUY SMALL|SCALE IN)\b/i);
 });
 

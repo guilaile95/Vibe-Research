@@ -251,7 +251,16 @@ try {
   await page.getByTestId("discovery-summary").getByText(/行情归属 2026-08-28/).waitFor();
   await page.getByTestId("discovery-summary").getByText("核心池", { exact: true }).waitFor();
   assert.doesNotMatch(await page.getByTestId("discovery-summary").innerText(), /行情归属 2026-08-30/);
-  await page.getByTestId("discovery-item-SWING-600519").getByText("CATALYST_DISCLOSED", { exact: true }).waitFor();
+  const swingCard = page.getByTestId("discovery-item-SWING-600519");
+  await swingCard.getByText("CATALYST_DISCLOSED", { exact: true }).waitFor();
+  assert.equal(await swingCard.getAttribute("data-research-priority"), "HIGH");
+  assert.equal(await swingCard.getAttribute("data-evidence-gate"), "SUFFICIENT_FOR_RESEARCH");
+  assert.equal(await swingCard.getAttribute("data-fundamental-status"), "AVAILABLE");
+  assert.equal(await swingCard.getAttribute("data-catalyst-status"), "AVAILABLE");
+  await swingCard.getByText("高优先", { exact: true }).waitFor();
+  await swingCard.getByText("研究证据足够", { exact: true }).waitFor();
+  await swingCard.getByText("已有", { exact: true }).first().waitFor();
+  assert.equal((await workspace.getByText("HIGH 优先", { exact: true }).count()), 0);
   const discoveryText = await workspace.innerText();
   assert.doesNotMatch(discoveryText, /\bBUY\b|Opportunity Score|综合评分/);
   assert.equal(await page.locator('[data-testid*="market-cloud"], [data-testid*="market-intel"]').count(), 0);
@@ -289,10 +298,14 @@ try {
   await page.getByTestId("discovery-summary").getByText("部分可用", { exact: true }).first().waitFor();
   const unknownCard = page.getByTestId("discovery-item-SWING-300012");
   await unknownCard.waitFor();
-  await unknownCard.getByText("UNKNOWN", { exact: true }).first().waitFor();
-  await unknownCard.getByText("未知", { exact: true }).waitFor();
+  assert.equal(await unknownCard.getAttribute("data-evidence-gate"), "UNKNOWN");
+  assert.equal(await unknownCard.getAttribute("data-research-priority"), "MEDIUM");
+  assert.equal(await unknownCard.getAttribute("data-fundamental-status"), "UNKNOWN");
+  await unknownCard.getByText("未知", { exact: true }).first().waitFor();
   assert.equal((await unknownCard.getByText("HIGH 优先", { exact: true }).count()), 0);
-  await page.getByTestId("discovery-item-SWING-600519").waitFor();
+  assert.equal((await unknownCard.getByText("高优先", { exact: true }).count()), 0);
+  assert.equal((await workspace.getByText("HIGH 优先", { exact: true }).count()), 0);
+  await page.getByTestId("discovery-item-SWING-600519").getByText("CATALYST_DISCLOSED", { exact: true }).waitFor();
 
   // Failed refresh keeps the successful snapshot timestamp and labels the separate attempt time.
   const staleResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/screener/discovery" && new URL(response.url()).searchParams.get("refresh") === "true");
