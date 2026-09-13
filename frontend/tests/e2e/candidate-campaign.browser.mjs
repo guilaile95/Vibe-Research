@@ -1040,7 +1040,9 @@ try {
   await page.waitForURL(/\/candidates\/600519$/);
   await page.getByTestId("candidate-workspace").waitFor();
   assert.equal(await page.getByRole("link", { name: "2026H1 财务披露", exact: true }).count(), 0);
-  assert.equal(await page.getByRole("link", { name: NATIVE_INTEL_TITLE, exact: true }).count(), 1);
+  const retainedNativeEvidence = page.getByTestId("candidate-workspace").getByTestId("candidate-existing-evidence");
+  assert.equal(await retainedNativeEvidence.count(), 1);
+  assert.equal(await retainedNativeEvidence.getAttribute("href"), "/evidence/evidence_native_intel?return_to=%2Fcandidates%2F600519");
 
   await page.getByTestId("candidate-workspace").getByTestId("candidate-add-evidence").click();
   await page.waitForURL(/\/evidence\/new\?/);
