@@ -19,6 +19,7 @@ def get_research_events(
     date_to: str | None = Query(None),
     event_types: list[str] | None = Query(None),
     campaign_ids: list[str] | None = Query(None),
+    security_code: str | None = Query(None),
 ):
     """Return only a bounded projection; this endpoint has no write method."""
     try:
@@ -27,6 +28,7 @@ def get_research_events(
             date_to=date_to,
             event_types=event_types,
             campaign_ids=campaign_ids,
+            security_code=security_code,
         )
     except service.ResearchEventCalendarValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
