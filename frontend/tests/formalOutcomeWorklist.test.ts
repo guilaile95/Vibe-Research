@@ -4,6 +4,11 @@ import test from "node:test";
 import { decisionActionLabel } from "../src/lib/decisionActionView.ts";
 import { CAMPAIGN_STRATEGY_LABELS } from "../src/lib/decisionInbox.ts";
 import {
+  PROCESS_REVIEW_BOUND_HEADING,
+  PROCESS_REVIEW_COVERAGE_COPY,
+  PROCESS_REVIEW_DIMENSIONS,
+  PROCESS_REVIEW_ERROR_COPY,
+  PROCESS_REVIEW_NONE_COPY,
   actualCapitalStateLabel,
   actualCapitalSummary,
   allocationStateLabel,
@@ -13,6 +18,11 @@ import {
   frozenDecisionNbaLabel,
   mergeOutcomeItem,
   outcomeStatusLabel,
+  processReviewDimensionLabel,
+  processReviewDimensionStatusLabel,
+  processReviewPacketSummary,
+  processReviewQualityLabel,
+  processReviewTwoPassSummary,
   scanStateLabel,
   worklistItems,
   worklistLabel,
@@ -124,6 +134,80 @@ test("outcome, actual-capital, and attribution labels stay display-only", () => 
     actualCapitalSummary({ actual_capital_outcome: { state: "NO_ACTUAL_TRADE" } } as any),
     { label: "无实际交易 · 不适用", canonical: "NO_ACTUAL_TRADE / NOT_APPLICABLE" },
   );
+});
+
+test("process review dimension labels reuse Decision Proposal Challenge copy", () => {
+  assert.deepEqual(PROCESS_REVIEW_DIMENSIONS, [
+    "STRONGEST_SUPPORTING_EVIDENCE",
+    "STRONGEST_OPPOSING_EVIDENCE",
+    "PRE_MORTEM",
+    "INVALIDATION_FACTS",
+  ]);
+  assert.equal(processReviewDimensionLabel("STRONGEST_SUPPORTING_EVIDENCE"), "最有力的支持证据");
+  assert.equal(processReviewDimensionLabel("STRONGEST_OPPOSING_EVIDENCE"), "最有力的反对证据");
+  assert.equal(processReviewDimensionLabel("PRE_MORTEM"), "如果判断失败，最可能的原因");
+  assert.equal(processReviewDimensionLabel("INVALIDATION_FACTS"), "哪些事实会推翻判断");
+  assert.equal(processReviewDimensionLabel("FUTURE_DIMENSION"), "FUTURE_DIMENSION");
+  assert.equal(processReviewDimensionLabel(""), "—");
+  assert.equal(processReviewDimensionLabel(null), "—");
+});
+
+test("process review NONE and ERROR copy stay descriptive without BUY/SELL", () => {
+  assert.equal(PROCESS_REVIEW_NONE_COPY, "本次冻结决定没有绑定预冻结决策挑战。");
+  assert.equal(PROCESS_REVIEW_ERROR_COPY, "过程复核不可用；绑定的决策挑战权威损坏或无法读取。");
+  assert.equal(PROCESS_REVIEW_BOUND_HEADING, "已绑定决策挑战");
+  assert.equal(PROCESS_REVIEW_COVERAGE_COPY, "挑战覆盖不等于判断正确。");
+  for (const copy of [
+    PROCESS_REVIEW_NONE_COPY,
+    PROCESS_REVIEW_ERROR_COPY,
+    PROCESS_REVIEW_BOUND_HEADING,
+    PROCESS_REVIEW_COVERAGE_COPY,
+  ]) {
+    assert.equal(copy.includes("BUY"), false);
+    assert.equal(copy.includes("SELL"), false);
+    assert.equal(copy.includes("买入"), false);
+    assert.equal(copy.includes("卖出"), false);
+  }
+});
+
+test("process review status and packet labels stay display-only with unknown enum fallback", () => {
+  assert.equal(processReviewDimensionStatusLabel("ANSWERED"), "已回答");
+  assert.equal(processReviewDimensionStatusLabel("UNKNOWN"), "未知");
+  assert.equal(processReviewDimensionStatusLabel("NOT_ANSWERED"), "未回答");
+  assert.equal(processReviewDimensionStatusLabel("FUTURE_STATUS"), "FUTURE_STATUS");
+  assert.deepEqual(
+    processReviewPacketSummary({ packet_state: "COMPLETE", challenge_evaluation: "EVALUATED" }),
+    { label: "数据包：完整 · 评估：已评估", canonical: "packet: COMPLETE · evaluation: EVALUATED" },
+  );
+  assert.deepEqual(
+    processReviewPacketSummary({ packet_state: "FUTURE_PACKET", challenge_evaluation: "FUTURE_EVAL" }),
+    { label: "数据包：FUTURE_PACKET · 评估：FUTURE_EVAL", canonical: "packet: FUTURE_PACKET · evaluation: FUTURE_EVAL" },
+  );
+  assert.deepEqual(
+    processReviewTwoPassSummary({
+      two_pass_state: "VALID",
+      two_pass_semantic_independence_verified: "NO",
+    }),
+    {
+      label: "两轮：有效 · 语义独立性已验证：否",
+      canonical: "two-pass: VALID · semantic independence verified: NO",
+    },
+  );
+  assert.deepEqual(
+    processReviewTwoPassSummary({
+      two_pass_state: "FUTURE_PASS",
+      two_pass_semantic_independence_verified: "FUTURE_FLAG",
+    }),
+    {
+      label: "两轮：FUTURE_PASS · 语义独立性已验证：FUTURE_FLAG",
+      canonical: "two-pass: FUTURE_PASS · semantic independence verified: FUTURE_FLAG",
+    },
+  );
+  assert.equal(processReviewQualityLabel("NOT_EVALUATED"), "过程质量：尚未评估");
+  assert.equal(processReviewQualityLabel(undefined), "过程质量：尚未评估");
+  assert.equal(processReviewQualityLabel("FUTURE_QUALITY"), "过程质量：FUTURE_QUALITY");
+  assert.equal(processReviewQualityLabel("NOT_EVALUATED").includes("BUY"), false);
+  assert.equal(processReviewQualityLabel("NOT_EVALUATED").includes("SELL"), false);
 });
 
 test("missing historical row can be merged from exact outcome authority", () => {

@@ -49,6 +49,57 @@ const SCAN_STATE_LABELS: Record<string, string> = {
   NOT_APPLICABLE: "不适用",
 };
 
+export const PROCESS_REVIEW_DIMENSIONS = [
+  "STRONGEST_SUPPORTING_EVIDENCE",
+  "STRONGEST_OPPOSING_EVIDENCE",
+  "PRE_MORTEM",
+  "INVALIDATION_FACTS",
+] as const;
+
+const PROCESS_REVIEW_DIMENSION_LABELS: Record<string, string> = {
+  STRONGEST_SUPPORTING_EVIDENCE: "最有力的支持证据",
+  STRONGEST_OPPOSING_EVIDENCE: "最有力的反对证据",
+  PRE_MORTEM: "如果判断失败，最可能的原因",
+  INVALIDATION_FACTS: "哪些事实会推翻判断",
+};
+
+const PROCESS_REVIEW_STATUS_LABELS: Record<string, string> = {
+  ANSWERED: "已回答",
+  UNKNOWN: "未知",
+  NOT_ANSWERED: "未回答",
+};
+
+const PROCESS_REVIEW_PACKET_STATE_LABELS: Record<string, string> = {
+  COMPLETE: "完整",
+  INCOMPLETE: "不完整",
+};
+
+const PROCESS_REVIEW_EVALUATION_LABELS: Record<string, string> = {
+  EVALUATED: "已评估",
+  UNKNOWN: "未知",
+  NOT_EVALUATED: "尚未评估",
+  ERROR: "读取失败",
+};
+
+const PROCESS_REVIEW_TWO_PASS_STATE_LABELS: Record<string, string> = {
+  VALID: "有效",
+  INCOMPLETE: "不完整",
+};
+
+const PROCESS_REVIEW_INDEPENDENCE_LABELS: Record<string, string> = {
+  YES: "是",
+  NO: "否",
+};
+
+const PROCESS_REVIEW_QUALITY_STATE_LABELS: Record<string, string> = {
+  NOT_EVALUATED: "尚未评估",
+};
+
+export const PROCESS_REVIEW_NONE_COPY = "本次冻结决定没有绑定预冻结决策挑战。";
+export const PROCESS_REVIEW_ERROR_COPY = "过程复核不可用；绑定的决策挑战权威损坏或无法读取。";
+export const PROCESS_REVIEW_BOUND_HEADING = "已绑定决策挑战";
+export const PROCESS_REVIEW_COVERAGE_COPY = "挑战覆盖不等于判断正确。";
+
 export interface FormalOutcomeIdentityInput {
   security_code?: unknown;
   strategy?: unknown;
@@ -115,6 +166,39 @@ export function allocationStateLabel(value: unknown): string {
 
 export function scanStateLabel(value: unknown): string {
   return mappedLabel(value, SCAN_STATE_LABELS);
+}
+
+export function processReviewDimensionLabel(value: unknown): string {
+  return mappedLabel(value, PROCESS_REVIEW_DIMENSION_LABELS);
+}
+
+export function processReviewDimensionStatusLabel(value: unknown): string {
+  return mappedLabel(value, PROCESS_REVIEW_STATUS_LABELS);
+}
+
+export function processReviewQualityLabel(value: unknown): string {
+  const state = typeof value === "string" && value ? value : "NOT_EVALUATED";
+  return `过程质量：${mappedLabel(state, PROCESS_REVIEW_QUALITY_STATE_LABELS)}`;
+}
+
+export function processReviewPacketSummary(review: {
+  packet_state?: string | null;
+  challenge_evaluation?: string | null;
+}): { label: string; canonical: string } {
+  return {
+    label: `数据包：${mappedLabel(review.packet_state, PROCESS_REVIEW_PACKET_STATE_LABELS)} · 评估：${mappedLabel(review.challenge_evaluation, PROCESS_REVIEW_EVALUATION_LABELS)}`,
+    canonical: `packet: ${displayText(review.packet_state)} · evaluation: ${displayText(review.challenge_evaluation)}`,
+  };
+}
+
+export function processReviewTwoPassSummary(review: {
+  two_pass_state?: string | null;
+  two_pass_semantic_independence_verified?: string | null;
+}): { label: string; canonical: string } {
+  return {
+    label: `两轮：${mappedLabel(review.two_pass_state, PROCESS_REVIEW_TWO_PASS_STATE_LABELS)} · 语义独立性已验证：${mappedLabel(review.two_pass_semantic_independence_verified, PROCESS_REVIEW_INDEPENDENCE_LABELS)}`,
+    canonical: `two-pass: ${displayText(review.two_pass_state)} · semantic independence verified: ${displayText(review.two_pass_semantic_independence_verified)}`,
+  };
 }
 
 export function actualCapitalSummary(item: FormalDecisionOutcome): {
