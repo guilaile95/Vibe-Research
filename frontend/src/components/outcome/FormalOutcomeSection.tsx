@@ -8,12 +8,30 @@ import type {
   FormalReviewWorklistItem,
 } from "@/lib/api/types";
 import {
+  COUNTERFACTUAL_COLUMN_HEADER,
+  COUNTERFACTUAL_DECISION_REFERENCE_LABEL,
+  COUNTERFACTUAL_EVALUATION_LABEL,
+  COUNTERFACTUAL_PATH_HEADING,
+  COUNTERFACTUAL_RETURN_LABEL,
+  COUNTERFACTUAL_SCOPE_COPY,
+  COUNTERFACTUAL_SEPARATION_COPY,
+  PROCESS_REVIEW_BOUND_HEADING,
+  PROCESS_REVIEW_COVERAGE_COPY,
+  PROCESS_REVIEW_DIMENSIONS,
+  PROCESS_REVIEW_ERROR_COPY,
+  PROCESS_REVIEW_NONE_COPY,
   actualCapitalSummary,
+  counterfactualSummary,
   dueStateLabel,
   formalOutcomeIdentityTitle,
   frozenDecisionNbaLabel,
   mergeOutcomeItem,
   outcomeStatusLabel,
+  processReviewDimensionLabel,
+  processReviewDimensionStatusLabel,
+  processReviewPacketSummary,
+  processReviewQualityLabel,
+  processReviewTwoPassSummary,
   worklistItems,
   worklistLabel,
   type FormalReviewWorklistFilter,
@@ -26,12 +44,6 @@ function stateLabel(value: unknown): string {
   return value;
 }
 
-function counterfactualSummary(item: FormalDecisionOutcome): string {
-  const value = item.counterfactual_outcome;
-  if (!value) return "—";
-  return stateLabel(value.state);
-}
-
 function actualCapitalCell(item: FormalDecisionOutcome) {
   const actual = actualCapitalSummary(item);
   return (
@@ -40,6 +52,43 @@ function actualCapitalCell(item: FormalDecisionOutcome) {
       {actual.canonical ? (
         <div className="mt-1 font-mono text-[11px] text-muted-foreground">{actual.canonical}</div>
       ) : null}
+    </div>
+  );
+}
+
+function counterfactualCell(item: FormalDecisionOutcome) {
+  const counterfactual = counterfactualSummary(item);
+  return (
+    <div data-counterfactual-state={item.counterfactual_outcome?.state || ""}>
+      <div>{counterfactual.label}</div>
+      {counterfactual.canonical ? (
+        <div className="mt-1 font-mono text-[11px] text-muted-foreground">{counterfactual.canonical}</div>
+      ) : null}
+      {item.counterfactual_outcome?.state === "EVALUATED" && (
+        <div
+          className="mt-2 space-y-1 text-xs"
+          data-testid={`counterfactual-detail-${item.decision_id}`}
+        >
+          <div className="font-medium">
+            {COUNTERFACTUAL_PATH_HEADING}
+          </div>
+          <div className="text-muted-foreground">
+            {COUNTERFACTUAL_DECISION_REFERENCE_LABEL}：{pricePointText(item.counterfactual_outcome.start_price_point)}
+          </div>
+          <div className="text-muted-foreground">
+            {COUNTERFACTUAL_EVALUATION_LABEL}：{pricePointText(item.counterfactual_outcome.end_price_point)}
+          </div>
+          <div>
+            {COUNTERFACTUAL_RETURN_LABEL}：{returnText(item.counterfactual_outcome.security_return)}
+          </div>
+          <div className="text-muted-foreground">
+            {COUNTERFACTUAL_SCOPE_COPY}
+          </div>
+        </div>
+      )}
+      <div className="mt-1 text-xs text-muted-foreground">
+        {COUNTERFACTUAL_SEPARATION_COPY}
+      </div>
     </div>
   );
 }
@@ -61,13 +110,6 @@ function returnText(value: string | number | null | undefined): string {
   if (!Number.isFinite(numeric)) return String(value);
   return `${(numeric * 100).toFixed(2)}%`;
 }
-
-const PROCESS_DIMENSIONS = [
-  "STRONGEST_SUPPORTING_EVIDENCE",
-  "STRONGEST_OPPOSING_EVIDENCE",
-  "PRE_MORTEM",
-  "INVALIDATION_FACTS",
-] as const;
 
 function reviewWorklistItem(item: FormalReviewWorklistItem, onFocus: (decisionId: string) => void) {
   const identity = formalOutcomeIdentityTitle({
@@ -111,41 +153,66 @@ function processReview(item: FormalDecisionOutcome) {
   if (!review || review.state === "NONE") {
     return (
       <div data-testid={`process-review-none-${item.decision_id}`}>
-        No pre-freeze Challenge was bound to this Frozen Decision.
+        {PROCESS_REVIEW_NONE_COPY}
       </div>
     );
   }
   if (review.state === "ERROR") {
     return (
       <div data-testid={`process-review-error-${item.decision_id}`}>
-        Process Review unavailable; the bound Challenge authority is corrupt or unavailable.
+        {PROCESS_REVIEW_ERROR_COPY}
       </div>
     );
   }
+  const packet = processReviewPacketSummary(review);
+  const twoPass = processReviewTwoPassSummary(review);
+  const qualityState = review.process_quality?.state || "NOT_EVALUATED";
   return (
-    <div data-testid={`process-review-bound-${item.decision_id}`} className="space-y-2">
-      <div className="font-medium">Challenge bound</div>
+    <div
+      data-testid={`process-review-bound-${item.decision_id}`}
+      className="space-y-2"
+      data-process-review-state={review.state || ""}
+    >
+      <div className="font-medium">{PROCESS_REVIEW_BOUND_HEADING}</div>
       <div className="font-mono text-xs">challenge_id: {review.challenge_id || "—"}</div>
       <div className="text-xs text-muted-foreground">finalized_at: {review.finalized_at || "—"}</div>
-      <div className="text-xs text-muted-foreground">
-        packet: {review.packet_state || "—"} · evaluation: {review.challenge_evaluation || "—"}
+      <div
+        className="text-xs text-muted-foreground"
+        data-packet-state={review.packet_state || ""}
+        data-challenge-evaluation={review.challenge_evaluation || ""}
+      >
+        <div>{packet.label}</div>
+        <div className="mt-1 font-mono text-[11px]">{packet.canonical}</div>
       </div>
-      <div className="text-xs text-muted-foreground">
-        two-pass: {review.two_pass_state || "—"} · semantic independence verified: {review.two_pass_semantic_independence_verified || "—"}
+      <div
+        className="text-xs text-muted-foreground"
+        data-two-pass-state={review.two_pass_state || ""}
+        data-two-pass-semantic-independence-verified={review.two_pass_semantic_independence_verified || ""}
+      >
+        <div>{twoPass.label}</div>
+        <div className="mt-1 font-mono text-[11px]">{twoPass.canonical}</div>
       </div>
       <div className="space-y-1">
-        {PROCESS_DIMENSIONS.map((name) => {
+        {PROCESS_REVIEW_DIMENSIONS.map((name) => {
           const dimension = review.dimensions?.[name];
           return (
             <div key={name} className="rounded border border-border/50 p-2 text-xs">
-              <div className="font-medium">{name}: {dimension?.status || "—"}</div>
+              <div
+                className="font-medium"
+                data-dimension={name}
+                data-status={dimension?.status || ""}
+              >
+                {processReviewDimensionLabel(name)}：{processReviewDimensionStatusLabel(dimension?.status)}
+              </div>
               <div className="mt-1 whitespace-pre-wrap text-muted-foreground">{dimension?.text || ""}</div>
             </div>
           );
         })}
       </div>
-      <div className="text-xs font-medium">Process quality: NOT_EVALUATED</div>
-      <div className="text-xs text-muted-foreground">Challenge coverage is not decision correctness.</div>
+      <div className="text-xs font-medium" data-process-quality={qualityState}>
+        {processReviewQualityLabel(review.process_quality?.state)}
+      </div>
+      <div className="text-xs text-muted-foreground">{PROCESS_REVIEW_COVERAGE_COPY}</div>
     </div>
   );
 }
@@ -309,7 +376,7 @@ export function FormalOutcomeSection() {
                 <th className="pb-3 pr-4">Replay</th>
                 <th className="pb-3 pr-4">Process Review</th>
                 <th className="pb-3 pr-4">Actual Capital</th>
-                <th className="pb-3">Counterfactual</th>
+                <th className="pb-3">{COUNTERFACTUAL_COLUMN_HEADER}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -382,34 +449,7 @@ export function FormalOutcomeSection() {
                   </td>
                   <td className="py-4 pr-4 align-top">{processReview(item)}</td>
                   <td className="py-4 pr-4 align-top">{actualCapitalCell(item)}</td>
-                  <td className="py-4 align-top">
-                    <div>{counterfactualSummary(item)}</div>
-                    {item.counterfactual_outcome?.state === "EVALUATED" && (
-                      <div
-                        className="mt-2 space-y-1 text-xs"
-                        data-testid={`counterfactual-detail-${item.decision_id}`}
-                      >
-                        <div className="font-medium">
-                          Security close-to-close path
-                        </div>
-                        <div className="text-muted-foreground">
-                          decision reference: {pricePointText(item.counterfactual_outcome.start_price_point)}
-                        </div>
-                        <div className="text-muted-foreground">
-                          evaluation: {pricePointText(item.counterfactual_outcome.end_price_point)}
-                        </div>
-                        <div>
-                          return: {returnText(item.counterfactual_outcome.security_return)}
-                        </div>
-                        <div className="text-muted-foreground">
-                          security path only; not portfolio P&amp;L or decision quality
-                        </div>
-                      </div>
-                    )}
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      Security path is separate from Actual Capital Outcome.
-                    </div>
-                  </td>
+                  <td className="py-4 align-top">{counterfactualCell(item)}</td>
                 </tr>
               ))}
             </tbody>
