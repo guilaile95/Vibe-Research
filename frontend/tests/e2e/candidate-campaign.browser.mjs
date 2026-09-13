@@ -1041,6 +1041,7 @@ try {
   await page.getByTestId("candidate-workspace").waitFor();
   assert.equal(await page.getByRole("link", { name: "2026H1 财务披露", exact: true }).count(), 0);
   const retainedNativeEvidence = page.getByTestId("candidate-workspace").getByTestId("candidate-existing-evidence");
+  await retainedNativeEvidence.waitFor();
   assert.equal(await retainedNativeEvidence.count(), 1);
   assert.equal(await retainedNativeEvidence.getAttribute("href"), "/evidence/evidence_native_intel?return_to=%2Fcandidates%2F600519");
 
