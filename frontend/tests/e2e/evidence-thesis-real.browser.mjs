@@ -8,6 +8,7 @@
  */
 
 import { chromium } from "playwright";
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, existsSync, readdirSync, createReadStream } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,6 +21,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
 const frontendDist = path.join(root, "frontend", "dist");
 const backendDir = path.join(root, "backend");
+let evidenceServerLog = "";
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -99,6 +101,10 @@ function startBackend(dbPath, port, allowedOrigin) {
       ...process.env,
       VR_ALLOW_ORIGINS: allowedOrigin,
       VIBE_RESEARCH_EVIDENCE_THESIS_DB: dbPath,
+      VR_DATA_DIR: join(dirname(dbPath), "data"),
+      VR_REPORTS_DIR: join(dirname(dbPath), "reports"),
+      VIBE_RESEARCH_REVIEW_DB: join(dirname(dbPath), "review.db"),
+      VIBE_NATIVE_INTEL_DISABLE_SCHEDULER: "1",
     };
     const { cmd, extraArgs } = getPythonConfig();
     const args = [...extraArgs, "app:app", `--port=${port}`, "--host=127.0.0.1"];
@@ -106,6 +112,7 @@ function startBackend(dbPath, port, allowedOrigin) {
     let started = false;
     const timeout = setTimeout(() => { if (!started) { proc.kill(); reject(new Error("Backend startup timeout")); } }, 30000);
     const onData = (msg) => {
+      if (msg.includes("/api/evidence/")) evidenceServerLog = (evidenceServerLog + msg).slice(-8000);
       if (started) return;
       if (msg.includes("Uvicorn running") || msg.includes("Application startup complete")) {
         started = true; clearTimeout(timeout); resolve(proc);
@@ -129,6 +136,7 @@ async function main() {
   const apiUrl = `http://127.0.0.1:${backendPort}`;
 
   let backend, browser, page, frontendServer;
+  const pageErrors = [];
 
   try {
     console.log("[E2E] Starting backend...");
@@ -142,9 +150,12 @@ async function main() {
     browser = await chromium.launch({ headless: true, executablePath: findChromium() });
     const context = await browser.newContext({ baseURL: baseUrl });
     page = await context.newPage();
+    page.on("pageerror", error => pageErrors.push(error.message));
 
     // Proxy ALL /api/* to real backend (NO mock)
     let updateBodyCapture = null;
+    let delayedSave = null;
+    let rejectSubjectChangeId = null;
     await page.route("**/api/**", async (route) => {
       const request = route.request();
       const url = request.url();
@@ -160,15 +171,26 @@ async function main() {
       }
       const target = `${apiUrl}${p}`;
       try {
+        // The failure case sends a forbidden field to the REAL backend; no response is mocked.
+        const rejectSubjectChange = request.method() === "PUT"
+          && parsed.pathname === `/api/evidence/${rejectSubjectChangeId}`;
         const resp = await fetch(target, {
           method: request.method(),
           headers: { ...request.headers(), host: undefined },
-          body: request.postDataBuffer() || undefined,
+          body: rejectSubjectChange
+            ? JSON.stringify({ ...request.postDataJSON(), subject_id: "000001" })
+            : request.postDataBuffer() || undefined,
         });
+        const body = Buffer.from(await resp.arrayBuffer());
+        if (request.method() === "PUT" && parsed.pathname === `/api/evidence/${delayedSave?.id}`) {
+          delayedSave.received({ status: resp.status, body: JSON.parse(body.toString()) });
+          await sleep(800); // Controlled latency, never a synchronization wait for success.
+          await delayedSave.release; // Keep pending-state assertions deterministic on slow runners.
+        }
         await route.fulfill({
           status: resp.status,
           headers: Object.fromEntries([...resp.headers.entries()].filter(([k]) => k !== "transfer-encoding")),
-          body: Buffer.from(await resp.arrayBuffer()),
+          body,
         });
       } catch (e) {
         console.error(`[E2E] Proxy error: ${e.message}`);
@@ -233,10 +255,38 @@ async function main() {
 
     // Edit claim text
     const textarea = page.locator("textarea").first();
-    await textarea.fill("公司2024Q3营收同比+25%，超预期");
-    await page.click('button:has-text("保存")');
-    await page.waitForURL(/\/evidence\/[a-f0-9-]+$/);
-    await page.waitForTimeout(300);
+    const evidencePath = `/api/evidence/${evId}`;
+    const waitForEvidencePut = () => page.waitForResponse(response =>
+      new URL(response.url()).pathname === evidencePath && response.request().method() === "PUT");
+    const readonlyClaim = claim => page.locator("p").filter({ hasText: claim });
+    async function readEvidence() {
+      const response = await fetch(`${apiUrl}${evidencePath}`);
+      assert.equal(response.status, 200, "same-ID Evidence GET must succeed");
+      return (await response.json()).data;
+    }
+    async function verifySaved(responsePromise, claim, scenario) {
+      const response = await responsePromise;
+      const payload = await response.json();
+      assert.equal(response.status(), 200, `Evidence PUT failed: ${JSON.stringify(payload)}`);
+      assert.equal(payload.data.id, evId);
+      assert.equal(payload.data.claim, claim);
+      assert.equal(payload.data.source_date, "2024-11-15");
+      assert.equal(payload.data.subject_type, "stock");
+      assert.equal(payload.data.subject_id, "600519");
+      const persisted = await readEvidence();
+      assert.deepEqual(persisted, payload.data, "PUT response must match persisted same-ID GET");
+      await textarea.waitFor({ state: "hidden" });
+      await readonlyClaim(claim).waitFor({ state: "visible" });
+      assert.equal(await readonlyClaim(claim).innerText(), claim);
+      assert.equal(await page.getByRole("button", { name: "编辑", exact: true }).isVisible(), true);
+      console.log(`[E2E] Evidence ${scenario}: ${JSON.stringify({ id: evId, putStatus: response.status(), response: payload.data, getStatus: 200, persisted, editing: false, readonlyClaim: claim })}`);
+      return persisted;
+    }
+    const normalClaim = "公司2024Q3营收同比+25%，超预期";
+    await textarea.fill(normalClaim);
+    const normalPut = waitForEvidencePut(); // Register before clicking: the URL itself does not change.
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    await verifySaved(normalPut, normalClaim, "NORMAL");
 
     // Hard assert: update body does NOT contain subject fields (must capture PUT)
     if (!updateBodyCapture) {
@@ -253,12 +303,52 @@ async function main() {
     }
     console.log("  ✓ Update body correct: no subject fields, source_date preserved");
 
-    // Verify updated text visible
-    const evText2 = await page.locator("body").innerText();
-    if (!evText2.includes("超预期")) {
-      throw new Error("Updated evidence text not visible");
+    // Hold the genuine backend response: the old 300ms body check would fail here.
+    await editBtn.click();
+    const slowClaim = `${normalClaim}（慢响应验收）`;
+    await textarea.fill(slowClaim);
+    let backendReceived, releaseResponse;
+    const received = new Promise(resolve => { backendReceived = resolve; });
+    delayedSave = { id: evId, received: backendReceived, release: new Promise(resolve => { releaseResponse = resolve; }) };
+    const slowPut = waitForEvidencePut();
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    try {
+      const actual = await received;
+      assert.equal(actual.status, 200);
+      await page.waitForTimeout(300); // Reproduce the old decision point, not a success wait.
+      assert.equal((await page.locator("body").innerText()).includes(slowClaim), false, "old assertion must be premature");
+      assert.equal(await textarea.isVisible(), true);
+      assert.equal(await page.getByRole("button", { name: "保存中…", exact: true }).isDisabled(), true);
+      assert.equal(await readonlyClaim(slowClaim).count(), 0, "input text is not saved read-only content");
+      assert.deepEqual(await readEvidence(), actual.body.data, "backend already persisted before response delivery");
+      console.log(`[E2E] Evidence DELAYED pending: ${JSON.stringify({ id: evId, backendStatus: actual.status, editing: true, saving: true, oldAssertionWouldFail: true })}`);
+    } finally {
+      releaseResponse();
     }
-    console.log("  ✓ Evidence updated successfully");
+    const saved = await verifySaved(slowPut, slowClaim, "DELAYED");
+    delayedSave = null;
+
+    // A real 422 must keep the draft editable and leave persisted/read-only content unchanged.
+    await editBtn.click();
+    const failedClaim = "此修改应被真实后端拒绝";
+    await textarea.fill(failedClaim);
+    rejectSubjectChangeId = evId;
+    const failedPut = waitForEvidencePut();
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    const rejected = await failedPut;
+    const rejection = await rejected.json();
+    assert.equal(rejected.status(), 422);
+    assert.ok(rejection.detail.some(item => item.type === "extra_forbidden" && item.loc.at(-1) === "subject_id"));
+    await page.getByText("HTTP 422", { exact: true }).waitFor({ state: "visible" });
+    assert.equal(await textarea.isVisible(), true);
+    assert.equal(await textarea.inputValue(), failedClaim);
+    assert.equal(await page.getByRole("button", { name: "保存", exact: true }).isEnabled(), true);
+    assert.equal(await readonlyClaim(failedClaim).count(), 0);
+    assert.deepEqual(await readEvidence(), saved, "failed PUT must not change persisted evidence");
+    console.log(`[E2E] Evidence FAILED: ${JSON.stringify({ id: evId, putStatus: rejected.status(), response: rejection, persisted: saved, editing: true, errorVisible: true, savedClaimVisible: false })}`);
+    rejectSubjectChangeId = null;
+    await page.getByRole("button", { name: "取消", exact: true }).click();
+    await readonlyClaim(slowClaim).waitFor({ state: "visible" });
 
     // ═══════════════════════════════════════════════
     //  3. Create Thesis — UI form
@@ -584,6 +674,8 @@ async function main() {
   } catch (err) {
     console.error(`\n[E2E] ❌ Test failed: ${err.message}`);
     console.error(err.stack);
+    console.error("[E2E] Page errors:", JSON.stringify(pageErrors));
+    console.error("[E2E] Evidence server log:\n", evidenceServerLog);
     process.exitCode = 1;
   } finally {
     if (browser) { await browser.close(); }
