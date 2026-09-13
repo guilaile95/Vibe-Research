@@ -3,6 +3,7 @@ import { BarChart3, ChevronDown, History, Loader2, AlertCircle, TrendingUp, Targ
 import { api } from "@/lib/api";
 import type { AdoptionSummary, OutcomeSummary, StockAnalyticsItem } from "@/lib/api/types";
 import { FormalOutcomeSection } from "@/components/outcome/FormalOutcomeSection";
+import { FORMAL_OUTCOME_PAGE_SUBTITLE } from "@/lib/formalOutcomeWorklist";
 
 /**
  * P1-REV1：本页是 Formal Decision 的「决策复盘」主页面。
@@ -64,7 +65,7 @@ const DecisionPerformance: React.FC = () => {
     <div className="space-y-8">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">决策复盘</h1>
-        <p className="text-muted-foreground">Formal Decision Outcome 与 Review Worklist 的正式复盘入口</p>
+        <p className="text-muted-foreground">{FORMAL_OUTCOME_PAGE_SUBTITLE}</p>
       </div>
 
       <FormalOutcomeSection />
