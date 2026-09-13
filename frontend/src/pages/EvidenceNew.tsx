@@ -4,6 +4,7 @@ import { ArrowLeft, Save, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError } from "@/lib/api";
+import { evidenceReturnToLabel } from "@/lib/internalReturnTo";
 
 const SUBJECT_TYPES = [
   { value: "stock", label: "个股" },
@@ -56,11 +57,7 @@ export function EvidenceNew() {
     : querySubjectId;
   // return_to 只接受站内路径（以单个 "/" 开头），支持从 Thesis 页等入口创建后回跳。
   const returnTo = queryReturnTo.startsWith("/") && !queryReturnTo.startsWith("//") ? queryReturnTo : "";
-  const returnToLabel = returnTo === `/candidates/${initialSubjectId}`
-    ? "Candidate Workspace"
-    : returnTo
-      ? "返回"
-      : "证据库";
+  const returnToLabel = evidenceReturnToLabel(returnTo);
   const [form, setForm] = useState(() => ({
     subject_type: initialSubjectType as "stock" | "sector" | "theme",
     subject_id: initialSubjectId,
@@ -81,7 +78,7 @@ export function EvidenceNew() {
 
   const submit = async () => {
     if (!form.subject_id.trim()) { setErr("请填写主体代码/标识"); return; }
-    if (!form.claim.trim()) { setErr("请填写证据论断（claim）"); return; }
+    if (!form.claim.trim()) { setErr("请填写证据论断"); return; }
     if (!form.source_title.trim()) { setErr("请填写来源标题"); return; }
     if (!form.accessed_at) { setErr("请填写查阅时间"); return; }
 
@@ -171,7 +168,7 @@ export function EvidenceNew() {
             </select>
           </label>
           <label className={`${labelCls} sm:col-span-2`}>
-            证据论断（claim） <span className="text-destructive">*</span>
+            证据论断 <span className="text-destructive">*</span>
             <textarea
               value={form.claim}
               onChange={(e) => set("claim", e.target.value)}
