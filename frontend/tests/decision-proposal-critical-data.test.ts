@@ -33,6 +33,8 @@ test("Formal Decision Review exposes truthful optional Decision Challenge read s
   assert.match(reviewSource, /challengeReadState !== "FOUND"/);
   assert.match(reviewSource, /challengeReadState === "ABSENT"/);
   assert.match(reviewSource, /完成决策挑战/);
+  assert.match(reviewSource, /challengeDimensionsReady\(challengeDraft\)/);
+  assert.match(reviewSource, /challengeFinalizeFailureReadState\(err\)/);
   assert.match(reviewSource, /data-decision-quality="NOT_EVALUATED"/);
   assert.match(reviewSource, /不会写入虚假引用/);
   assert.doesNotMatch(reviewSource, /quality_score/);
