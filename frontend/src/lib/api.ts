@@ -1613,6 +1613,7 @@ export interface ResearchEventCalendarQuery {
   date_to?: string;
   event_types?: ResearchEventType[];
   campaign_ids?: string[];
+  security_code?: string;
   signal?: AbortSignal;
 }
 
@@ -1622,6 +1623,7 @@ export async function getResearchEventCalendar(
   const query = new URLSearchParams();
   if (params?.date_from) query.set("date_from", params.date_from);
   if (params?.date_to) query.set("date_to", params.date_to);
+  if (params?.security_code) query.set("security_code", params.security_code);
   for (const eventType of params?.event_types ?? []) query.append("event_types", eventType);
   for (const campaignId of params?.campaign_ids ?? []) query.append("campaign_ids", campaignId);
   const qs = query.toString();

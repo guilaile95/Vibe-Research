@@ -137,6 +137,28 @@ function valuationPayload(code) {
   };
 }
 
+function researchEventCalendarEmptyEnvelope(code) {
+  return {
+    schema_version: "research_event_calendar.v0.1",
+    status: "NORMAL",
+    as_of: "2026-07-29",
+    fetched_at: "2026-07-30T09:30:12.123456Z",
+    window: { date_from: "2026-07-15", date_to: "2026-10-27", semantics: "CALENDAR_DAYS" },
+    universe: {
+      kind: "SINGLE_SECURITY",
+      status: "NORMAL",
+      campaign_count: 0,
+      unique_security_count: 1,
+      max_unique_securities: 1,
+      securities: [{ security_code: code, security_name: null, campaign_ids: [] }],
+    },
+    events: [],
+    sources: [],
+    limitations: ["NO_EXPLICIT_EVENT_CATALYST_LINK"],
+    writes: { campaign: 0, thesis: 0, evidence: 0, decision: 0, trade: 0, account: 0 },
+  };
+}
+
 function jsonOk(body) {
   return {
     status: 200,
@@ -506,6 +528,12 @@ function createApiMockController() {
       || pathname === "/api/investor-qa"
     ) {
       await route.fulfill(jsonOk([]));
+      return;
+    }
+
+    if (pathname === "/api/research-events") {
+      const securityCode = new URL(url).searchParams.get("security_code") || "000001";
+      await route.fulfill(jsonOk(researchEventCalendarEmptyEnvelope(securityCode)));
       return;
     }
 
