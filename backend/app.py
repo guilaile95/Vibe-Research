@@ -95,6 +95,7 @@ import historical_signal_validation_router
 import factor_validation_router
 import research_event_calendar_router
 import stock_relative_context_router
+import stock_valuation_context_router
 from decision_cockpit_service import (
     generate_tomorrow_plan,
     freeze_tomorrow_plan,
@@ -453,6 +454,8 @@ app.include_router(factor_validation_router.router)
 app.include_router(research_event_calendar_router.router)
 # PLANNING-PARITY-STOCK-RELATIVE-CONTEXT1: current, read-only stock context.
 app.include_router(stock_relative_context_router.router)
+# Current-member industry PE/PB context for one A-share; snapshot only, no formal writes.
+app.include_router(stock_valuation_context_router.router)
 
 
 @app.exception_handler(evidence_thesis_router.RevisionConflictHTTPException)

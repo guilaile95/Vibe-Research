@@ -11,6 +11,7 @@ import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
 import { OptionalDataPanel } from "@/components/ui/OptionalDataPanel";
 import { StockThesisPanel } from "@/components/stock/StockThesisPanel";
 import { StockRelativeContextCard } from "@/components/stock/StockRelativeContextCard";
+import { StockValuationContextCard } from "@/components/stock/StockValuationContextCard";
 import { TechnicalIndicatorsCard } from "@/components/stock/TechnicalIndicatorsCard";
 import { TopRiskAnalysisCard } from "@/components/market/TopRiskAnalysisCard";
 import { ResearchEventCalendar } from "@/components/campaign/ResearchEventCalendar";
@@ -33,6 +34,7 @@ import {
   type DividendRow, type FundFlowRow, type DragonTiger, type Lockup, type Blocks, type HotConcept, type QaRow,
   type GlobalStock, type HkCashflow, type KlineBar, type DisclosureItem, type TechnicalIndicators, type TopRiskAnalysis,
   type StockRelativeContext,
+  type StockValuationContext,
 } from "@/lib/api";
 import { indicatorErrorMessage } from "@/lib/technicalIndicatorsView";
 import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
@@ -142,6 +144,9 @@ export function StockData() {
   const [stockRelativeContext, setStockRelativeContext] = useState<StockRelativeContext | null>(null);
   const [stockRelativeLoading, setStockRelativeLoading] = useState(false);
   const [stockRelativeError, setStockRelativeError] = useState<string | null>(null);
+  const [stockValuationContext, setStockValuationContext] = useState<StockValuationContext | null>(null);
+  const [stockValuationError, setStockValuationError] = useState<string | null>(null);
+  const [stockValuationLoading, setStockValuationLoading] = useState(false);
   const [panelStates, setPanelStates] = useState<PanelStates>(() => createInitialPanelStates());
   // 技术指标与价格触发（独立 fetch，与 K 线面板解耦）
   const [tiEnv, setTiEnv] = useState<TechnicalIndicators | null>(null);
@@ -331,6 +336,9 @@ export function StockData() {
     setStockRelativeContext(null);
     setStockRelativeError(null);
     setStockRelativeLoading(false);
+    setStockValuationContext(null);
+    setStockValuationError(null);
+    setStockValuationLoading(false);
     setKline([]); setKlineErr(null); setFinance({}); setFinanceErr(null); setInfo({}); setInfoErr(null); setDisc([]); setDiscErr(null);
     setTiEnv(null); setTiLoading(false); setTiError(null);
     commitPanelStates(resetPanelStates());
@@ -376,6 +384,12 @@ export function StockData() {
       if (rid === runIdRef.current) setStockRelativeError(e instanceof ApiError ? e.message : "相对表现数据暂不可用");
     }).finally(() => {
       if (rid === runIdRef.current) setStockRelativeLoading(false);
+    });
+    setStockValuationLoading(true);
+    api.stockValuationContext(c).then(ok(setStockValuationContext)).catch((e) => {
+      if (rid === runIdRef.current) setStockValuationError(e instanceof ApiError ? e.message : "相对行业估值暂不可用");
+    }).finally(() => {
+      if (rid === runIdRef.current) setStockValuationLoading(false);
     });
     // K 线 / 季报财务 / 基本面 / 巨潮公告：均为可选依赖，改为按需展开加载（避免每次查询都发 501）
     try {
@@ -637,6 +651,12 @@ export function StockData() {
             data={stockRelativeContext}
             loading={stockRelativeLoading}
             error={stockRelativeError}
+          />
+
+          <StockValuationContextCard
+            data={stockValuationContext}
+            loading={stockValuationLoading}
+            error={stockValuationError}
           />
 
           {/^\d{6}$/.test(activeCode) && (

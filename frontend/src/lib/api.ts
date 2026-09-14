@@ -22,6 +22,7 @@ import type {
   SectorMarketContextData,
   SectorIndustryContextData,
   StockRelativeContext,
+  StockValuationContext,
   Quote,
   Valuation,
   Report,
@@ -965,6 +966,10 @@ export const api = {
   /** Current-member industry and full-market relative performance for one A-share. */
   stockRelativeContext: (code: string) =>
     get<StockRelativeContext>(`/stock-relative-context?code=${encodeURIComponent(code)}`),
+
+  /** Current-member industry PE/PB context for one A-share. */
+  stockValuationContext: (code: string) =>
+    get<StockValuationContext>(`/stock-valuation-context?code=${encodeURIComponent(code)}`),
 
   // -------------------------------------------------------------------------
   // 投资逻辑与证据账本（Investment Thesis & Evidence Ledger）

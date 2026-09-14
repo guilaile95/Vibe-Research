@@ -5,6 +5,7 @@ import { CandidateCampaignPanel } from "@/components/campaign/CandidateCampaignP
 import { ResearchEventCalendar } from "@/components/campaign/ResearchEventCalendar";
 import { NativeIntelSecurityContext } from "@/components/native-intel/NativeIntelSecurityContext";
 import { StockRelativeContextCard } from "@/components/stock/StockRelativeContextCard";
+import { StockValuationContextCard } from "@/components/stock/StockValuationContextCard";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
@@ -13,7 +14,7 @@ import {
   deriveCandidatePosition,
   type CandidatePositionPresentation,
 } from "@/lib/candidateCampaign";
-import { api, ApiError, type EvidenceRecord, type StockRelativeContext } from "@/lib/api";
+import { api, ApiError, type EvidenceRecord, type StockRelativeContext, type StockValuationContext } from "@/lib/api";
 
 type LoadState<T> =
   | { status: "loading"; value: null; error: "" }
@@ -46,6 +47,9 @@ export function CandidateWorkspace() {
   const [relativeContext, setRelativeContext] = useState<StockRelativeContext | null>(null);
   const [relativeLoading, setRelativeLoading] = useState(false);
   const [relativeError, setRelativeError] = useState<string | null>(null);
+  const [valuationContext, setValuationContext] = useState<StockValuationContext | null>(null);
+  const [valuationLoading, setValuationLoading] = useState(false);
+  const [valuationError, setValuationError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,6 +58,9 @@ export function CandidateWorkspace() {
     setRelativeContext(null);
     setRelativeError(null);
     setRelativeLoading(validCode);
+    setValuationContext(null);
+    setValuationError(null);
+    setValuationLoading(validCode);
     if (!validCode) return () => { cancelled = true; };
 
     const positionRequest = api.getDerivedPositions()
@@ -83,7 +90,20 @@ export function CandidateWorkspace() {
       .finally(() => {
         if (!cancelled) setRelativeLoading(false);
       });
-    void Promise.allSettled([positionRequest, evidenceRequest, relativeRequest]);
+    const valuationRequest = api.stockValuationContext(code)
+      .then((result) => {
+        if (!cancelled) {
+          setValuationContext(result);
+          setValuationError(null);
+        }
+      })
+      .catch((cause) => {
+        if (!cancelled) setValuationError(errorMessage(cause, "相对行业估值暂不可用"));
+      })
+      .finally(() => {
+        if (!cancelled) setValuationLoading(false);
+      });
+    void Promise.allSettled([positionRequest, evidenceRequest, relativeRequest, valuationRequest]);
 
     return () => { cancelled = true; };
   }, [code, validCode]);
@@ -161,6 +181,12 @@ export function CandidateWorkspace() {
           data={relativeContext}
           loading={relativeLoading}
           error={relativeError}
+        />
+
+        <StockValuationContextCard
+          data={valuationContext}
+          loading={valuationLoading}
+          error={valuationError}
         />
 
         <NativeIntelSecurityContext code={code} />
