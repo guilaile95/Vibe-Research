@@ -195,6 +195,9 @@ const campaignsByStatus = {
   "PRE-ENTRY": ["REJECTED", "EXPIRED"],
 };
 
+const NATIVE_INTEL_TITLE = "茅台公开资讯观察";
+const NATIVE_INTEL_URL = "https://example.com/native-intel-maotai";
+
 const nativeIntelContext = {
   status: "normal",
   retrieved_at: "2026-08-27T10:00:00Z",
@@ -212,12 +215,23 @@ const nativeIntelContext = {
     errors: [],
   },
   observation: {
-    items: [],
-    item_count: 0,
-    mention_count: 0,
-    source_count: 0,
-    first_seen_at: null,
-    last_seen_at: null,
+    items: [{
+      item_id: 600519,
+      title: NATIVE_INTEL_TITLE,
+      url: NATIVE_INTEL_URL,
+      source_id: "official-rss",
+      source_name: "官方 RSS",
+      hint: "a-share",
+      published_at: "2026-08-27T08:30:00+08:00",
+      first_seen_at: "2026-08-27T09:00:00Z",
+      last_seen_at: "2026-08-27T09:30:00Z",
+      observation_count: 2,
+    }],
+    item_count: 1,
+    mention_count: 1,
+    source_count: 1,
+    first_seen_at: "2026-08-27T09:00:00Z",
+    last_seen_at: "2026-08-27T09:30:00Z",
   },
   rank_history: { available: false, reason: "registry_sources_have_no_real_rank" },
 };
@@ -705,6 +719,7 @@ try {
     apiPaths: [],
     relativeContextMode: "ok",
     valuationContextMode: "ok",
+    evidenceCreates: [],
   };
 
   await page.route("**/api/**", async (route) => {
@@ -796,6 +811,11 @@ try {
       rec.deleted = 1;
       rec.deleted_at = "2026-08-30T00:00:00Z";
       await route.fulfill(ok(rec));
+      return;
+    }
+    if (pathname === "/api/evidence" && request.method() === "POST") {
+      state.evidenceCreates.push(request.postDataJSON());
+      await route.fulfill(unavailable("evidence create is user-confirmed only in this fixture"));
       return;
     }
     if (pathname === "/api/native-intel/security-context/600519" && request.method() === "GET") {
@@ -1148,7 +1168,58 @@ try {
   assert.deepEqual(pageErrors, [], "stock-valuation-context 503 must not raise pageerror");
   state.valuationContextMode = "ok";
 
-  const existingEvidence = failedWorkspace.getByTestId("candidate-existing-evidence");
+  const capture = workspace.getByTestId("capture-as-evidence");
+  await capture.waitFor();
+  assert.equal(await capture.innerText(), "记为证据");
+  await capture.click();
+  await page.waitForURL(/\/evidence\/new\?/);
+  assert.equal(await page.getByPlaceholder("如：《XX公司2024年三季报点评》").inputValue(), NATIVE_INTEL_TITLE);
+  assert.equal(await page.getByPlaceholder("https://...").inputValue(), NATIVE_INTEL_URL);
+  assert.equal(await page.getByLabel("证据类型").inputValue(), "news");
+  assert.equal(await page.getByLabel("来源日期").inputValue(), "2026-08-27");
+  assert.equal(state.evidenceCreates.length, 0, "Native Intel capture must not auto-create Evidence");
+  await page.getByRole("link", { name: "取消" }).click();
+  await page.waitForURL(/\/candidates\/600519$/);
+
+  // Observing an undated source does not establish its publication date.
+  const publishedAt = nativeIntelContext.observation.items[0].published_at;
+  nativeIntelContext.observation.items[0].published_at = null;
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByTestId("capture-as-evidence").click();
+  await page.waitForURL(/\/evidence\/new\?/);
+  assert.equal(await page.getByLabel("来源日期").inputValue(), "");
+  assert.equal(state.evidenceCreates.length, 0, "undated capture must remain user-confirmed");
+  nativeIntelContext.observation.items[0].published_at = publishedAt;
+  await page.getByRole("link", { name: "取消" }).click();
+  await page.waitForURL(/\/candidates\/600519$/);
+
+  evidenceRecords.push({
+    id: "evidence_native_intel",
+    subject_type: "stock",
+    subject_id: "600519",
+    evidence_type: "news",
+    claim: NATIVE_INTEL_TITLE,
+    source_title: NATIVE_INTEL_TITLE,
+    source_url: NATIVE_INTEL_URL,
+    source_date: "2026-08-27",
+    accessed_at: "2026-08-27T10:00:00Z",
+    classification: "unknown",
+    confidence: "medium",
+    created_at: "2026-08-27T10:00:00Z",
+    updated_at: "2026-08-27T10:00:00Z",
+    deleted: 0,
+    deleted_at: null,
+  });
+  await page.goto(`http://127.0.0.1:${port}/candidates/600519`, { waitUntil: "networkidle" });
+  const recordedWorkspace = page.getByTestId("candidate-workspace");
+  await recordedWorkspace.waitFor();
+  const recorded = recordedWorkspace.getByTestId("evidence-already-recorded");
+  await recorded.waitFor();
+  assert.equal(await recorded.innerText(), "已记录");
+  assert.equal(await recorded.getAttribute("href"), "/evidence/evidence_native_intel?return_to=%2Fcandidates%2F600519");
+  assert.equal(await recordedWorkspace.getByTestId("capture-as-evidence").count(), 0);
+
+  const existingEvidence = recordedWorkspace.getByRole("link", { name: "2026H1 财务披露", exact: true });
   await existingEvidence.waitFor();
   const existingHref = await existingEvidence.getAttribute("href");
   assert.match(existingHref || "", /return_to=/);
@@ -1164,14 +1235,18 @@ try {
   await page.getByTestId("candidate-workspace").waitFor();
 
   page.once("dialog", (dialog) => dialog.accept());
-  await page.getByTestId("candidate-existing-evidence").click();
+  await page.getByRole("link", { name: "2026H1 财务披露", exact: true }).click();
   await page.getByRole("heading", { name: "2026H1 财务披露" }).waitFor();
   await page.getByRole("button", { name: /删除$/ }).click();
   await page.waitForURL(/\/candidates\/600519$/);
   await page.getByTestId("candidate-workspace").waitFor();
-  assert.equal(await page.getByTestId("candidate-existing-evidence").count(), 0);
+  assert.equal(await page.getByRole("link", { name: "2026H1 财务披露", exact: true }).count(), 0);
+  const retainedNativeEvidence = page.getByTestId("candidate-workspace").getByTestId("candidate-existing-evidence");
+  await retainedNativeEvidence.waitFor();
+  assert.equal(await retainedNativeEvidence.count(), 1);
+  assert.equal(await retainedNativeEvidence.getAttribute("href"), "/evidence/evidence_native_intel?return_to=%2Fcandidates%2F600519");
 
-  await page.getByTestId("candidate-add-evidence").click();
+  await page.getByTestId("candidate-workspace").getByTestId("candidate-add-evidence").click();
   await page.waitForURL(/\/evidence\/new\?/);
   assert.equal(await page.getByPlaceholder("如 600519 / humanoid / AI算力").inputValue(), "600519");
   await page.getByRole("link", { name: "取消" }).click();

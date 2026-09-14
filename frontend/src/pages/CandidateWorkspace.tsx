@@ -11,6 +11,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import {
   candidateWorkspaceHref,
   buildCandidateEvidenceGap,
+  buildEvidenceNewHref,
   deriveCandidatePosition,
   type CandidatePositionPresentation,
 } from "@/lib/candidateCampaign";
@@ -189,7 +190,10 @@ export function CandidateWorkspace() {
           error={valuationError}
         />
 
-        <NativeIntelSecurityContext code={code} />
+        <NativeIntelSecurityContext
+          code={code}
+          evidenceCapture={{ returnTo, records: evidence.value?.records }}
+        />
 
         <ResearchEventCalendar key={code} securityCode={code} />
 
@@ -203,7 +207,7 @@ export function CandidateWorkspace() {
             </div>
             <div className="flex gap-3 text-xs">
               <Link
-                to={`/evidence/new?${new URLSearchParams({ subject_type: "stock", subject_id: code, return_to: returnTo }).toString()}`}
+                to={buildEvidenceNewHref({ subjectType: "stock", subjectId: code, returnTo })}
                 className="text-primary hover:underline"
                 data-testid="candidate-add-evidence"
               >

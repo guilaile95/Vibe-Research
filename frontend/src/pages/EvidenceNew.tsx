@@ -4,6 +4,7 @@ import { ArrowLeft, Save, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError } from "@/lib/api";
+import { mapEvidenceNewQuery } from "@/lib/candidateCampaign";
 import { safeInternalReturnTo } from "@/lib/internalReturnTo";
 
 const SUBJECT_TYPES = [
@@ -46,31 +47,24 @@ const nowLocal = () => {
 export function EvidenceNew() {
   const nav = useNavigate();
   const [searchParams] = useSearchParams();
-  const querySubjectType = searchParams.get("subject_type");
-  const querySubjectId = searchParams.get("subject_id") ?? "";
-  const initialSubjectType = querySubjectType === "stock" || querySubjectType === "sector" || querySubjectType === "theme"
-    ? querySubjectType
-    : "stock";
-  const initialSubjectId = initialSubjectType === "stock"
-    ? /^\d{6}$/.test(querySubjectId) ? querySubjectId : ""
-    : querySubjectId;
-  const returnTo = safeInternalReturnTo(searchParams.get("return_to"), "");
-  const returnToLabel = returnTo === `/candidates/${initialSubjectId}`
+  const prefill = mapEvidenceNewQuery(searchParams);
+  const returnTo = safeInternalReturnTo(prefill.return_to, "");
+  const returnToLabel = returnTo === `/candidates/${prefill.subject_id}`
     ? "Candidate Workspace"
     : returnTo
       ? "返回"
       : "证据库";
   const [form, setForm] = useState(() => ({
-    subject_type: initialSubjectType as "stock" | "sector" | "theme",
-    subject_id: initialSubjectId,
-    evidence_type: "news" as "news" | "announcement" | "report" | "research_note" | "financial_filing" | "other",
-    claim: "",
-    source_title: "",
-    source_url: "",
-    source_date: "",
+    subject_type: prefill.subject_type,
+    subject_id: prefill.subject_id,
+    evidence_type: prefill.evidence_type,
+    claim: prefill.claim,
+    source_title: prefill.source_title,
+    source_url: prefill.source_url,
+    source_date: prefill.source_date,
     accessed_at: nowLocal(),
-    classification: "fact" as "fact" | "inference" | "unknown",
-    confidence: "medium" as "high" | "medium" | "low",
+    classification: prefill.classification,
+    confidence: prefill.confidence,
   }));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);

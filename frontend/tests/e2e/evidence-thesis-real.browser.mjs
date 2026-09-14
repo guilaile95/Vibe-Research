@@ -156,11 +156,17 @@ async function main() {
     let updateBodyCapture = null;
     let delayedSave = null;
     let rejectSubjectChangeId = null;
+    let evidenceCreatePostCount = 0;
+    const evidenceCreatePostRequests = [];
     await page.route("**/api/**", async (route) => {
       const request = route.request();
       const url = request.url();
       const parsed = new URL(url);
       const p = parsed.pathname + parsed.search;
+      if (request.method() === "POST" && parsed.pathname === "/api/evidence") {
+        evidenceCreatePostCount += 1;
+        evidenceCreatePostRequests.push({ path: p, body: request.postDataJSON() });
+      }
       // Capture Evidence PUT body for hard assert (no subject fields)
       if (request.method() === "PUT" && /\/api\/evidence\/[^/]+$/.test(parsed.pathname)) {
         try {
@@ -200,42 +206,86 @@ async function main() {
 
     await page.goto(baseUrl);
     await page.waitForLoadState("domcontentloaded");
+    const evidencePostCountBeforePrefill = evidenceCreatePostCount;
+    assert.equal(evidencePostCountBeforePrefill, 0, "no Evidence POST should occur before prefill navigation");
+
+    async function readEvidence(evidenceId = evId) {
+      const response = await fetch(`${apiUrl}/api/evidence/${evidenceId}`);
+      assert.equal(response.status, 200, "same-ID Evidence GET must succeed");
+      return (await response.json()).data;
+    }
 
     // ═══════════════════════════════════════════════
-    //  1. Create Evidence — UI form
+    //  1. Capture prefilled Evidence — explicit Save through real backend
     // ═══════════════════════════════════════════════
-    console.log("\n[E2E] 1. Create Evidence (UI)");
-    await page.goto(`${baseUrl}/evidence/new`);
-    await page.waitForURL(/\/evidence\/new$/);
+    console.log("\n[E2E] 1. Capture prefilled Evidence (UI + real backend)");
+    const prefillQuery = new URLSearchParams({
+      subject_type: "stock",
+      subject_id: "600519",
+      evidence_type: "news",
+      source_title: "茅台公开资讯观察",
+      source_url: "https://example.com/native-intel-maotai",
+      source_date: "2024-11-15",
+      return_to: "/stock-data?code=600519",
+    });
+    await page.goto(`${baseUrl}/evidence/new?${prefillQuery.toString()}`);
+    await page.waitForURL(/\/evidence\/new\?/);
     await page.waitForSelector('select');
+    assert.equal(evidenceCreatePostCount, evidencePostCountBeforePrefill, "prefill navigation must not auto-save Evidence");
+    console.log(`  ✓ Prefill loaded without Evidence POST: ${JSON.stringify({ postCountBeforePrefill: evidencePostCountBeforePrefill, postCountBeforeSave: evidenceCreatePostCount })}`);
 
-    // subject_type is already "stock" — skip
-    // evidence_type select (2nd select) → "news"
-    const allSelects = page.locator("select");
-    await allSelects.nth(1).selectOption("news");
+    assert.equal(await page.locator('input[placeholder*="600519"]').inputValue(), "600519");
+    assert.equal(await page.locator('textarea[placeholder*="一句话"]').inputValue(), "茅台公开资讯观察");
+    assert.equal(await page.locator('input[placeholder*="XX公司"]').inputValue(), "茅台公开资讯观察");
+    assert.equal(await page.locator('input[placeholder*="https://"]').inputValue(), "https://example.com/native-intel-maotai");
+    assert.equal(await page.locator('input[type="date"]').inputValue(), "2024-11-15");
+    assert.equal(await page.locator("select").nth(1).inputValue(), "news");
+    assert.equal(await page.locator("select").nth(2).inputValue(), "unknown");
+    assert.equal(await page.locator("select").nth(3).inputValue(), "medium");
 
-    await page.fill('input[placeholder*="600519"]', "600519");
-    await page.fill('textarea[placeholder*="一句话"]', "公司2024Q3营收同比+25%");
-    await page.fill('input[placeholder*="XX公司"]', "茅台Q3财报点评");
-    await page.fill('input[placeholder*="https://"]', "https://example.com/maotai-q3");
-    await page.fill('input[type="date"]', "2024-11-15");
+    const waitForEvidencePost = page.waitForResponse(response =>
+      new URL(response.url()).pathname === "/api/evidence" && response.request().method() === "POST");
+    const evidencePostBeforeSave = page.locator('button:has-text("保存")');
+    assert.equal(await evidencePostBeforeSave.isVisible(), true);
+    const evidencePostCountBeforeExplicitSave = evidenceCreatePostCount;
+    assert.equal(evidencePostCountBeforeExplicitSave, evidencePostCountBeforePrefill, "Evidence POST count must remain zero before explicit Save");
 
-    const saveBtn = page.locator('button:has-text("保存")');
-    await saveBtn.click();
-    await page.waitForURL(/\/evidence\/[a-f0-9-]+$/);
-    const evId = page.url().split("/").pop();
-    console.log(`  ✓ Evidence created: ${evId}`);
+    await evidencePostBeforeSave.click();
+    const evidencePost = await waitForEvidencePost;
+    assert.equal(evidencePost.status(), 200, "prefilled Evidence POST must succeed");
+    const evidencePostPayload = await evidencePost.json();
+    assert.ok(evidencePostPayload.data?.id, "Evidence POST must return an exact evidence id");
+    assert.equal(evidenceCreatePostCount, evidencePostCountBeforeExplicitSave + 1, "explicit Save must produce exactly one Evidence POST");
+    assert.equal(evidenceCreatePostRequests.length, evidenceCreatePostCount, "all real Evidence POST requests must be recorded by the proxy");
+    const evId = evidencePostPayload.data.id;
+    await page.waitForURL((url) => url.pathname === "/stock-data" && url.searchParams.get("code") === "600519");
+    assert.equal(new URL(page.url()).pathname, "/stock-data", "successful capture must honor the supplied return_to path");
+    const createdEvidence = await readEvidence(evId);
+    assert.equal(createdEvidence.id, evId);
+    assert.equal(createdEvidence.claim, "茅台公开资讯观察");
+    assert.equal(createdEvidence.source_title, "茅台公开资讯观察");
+    assert.equal(createdEvidence.source_url, "https://example.com/native-intel-maotai");
+    assert.equal(createdEvidence.source_date, "2024-11-15");
+    assert.equal(createdEvidence.classification, "unknown");
+    assert.equal(createdEvidence.confidence, "medium");
+    const persistedCore = ["id", "subject_type", "subject_id", "evidence_type", "claim", "source_title", "source_url", "source_date", "classification", "confidence"];
+    assert.deepEqual(
+      Object.fromEntries(persistedCore.map(field => [field, createdEvidence[field]])),
+      Object.fromEntries(persistedCore.map(field => [field, evidencePostPayload.data[field]])),
+      "Evidence POST response core data must match same-ID GET readback",
+    );
+    console.log(`  ✓ Prefill required explicit Save and persisted exact Evidence ${evId}: ${JSON.stringify({ postStatus: evidencePost.status(), postCountBeforeSave: evidencePostCountBeforeExplicitSave, postCountAfterSave: evidenceCreatePostCount, postRequestPath: evidenceCreatePostRequests.at(-1)?.path, getStatus: 200, claim: createdEvidence.claim, source_title: createdEvidence.source_title, source_url: createdEvidence.source_url, source_date: createdEvidence.source_date })}`);
 
+    await page.goto(`${baseUrl}/evidence/${evId}`);
     // Hard assert: source_date displayed without timezone shift
     await page.waitForLoadState("networkidle");
     await page.waitForTimeout(500);
-    const evText = await page.locator("body").innerText();
-    if (!evText.includes("2024-11-15")) {
-      // Debug: check what page content shows
-      console.log(`  [debug] Page text excerpt: ${evText.substring(200, 400)}`);
-      throw new Error("source_date 2024-11-15 not visible on evidence detail page");
-    }
-    console.log("  ✓ source_date 2024-11-15 displayed correctly");
+    const readonlyClaim = page.locator("p").filter({ hasText: /^茅台公开资讯观察$/ });
+    assert.equal(await readonlyClaim.count(), 2, "read-only detail must show the exact claim and source title");
+    assert.equal(await page.locator('a[href="https://example.com/native-intel-maotai"]').filter({ hasText: "https://example.com/native-intel-maotai" }).count(), 1, "read-only detail must show the exact source URL link");
+    const readonlyDate = page.locator("p").filter({ hasText: /来源日期：2024-11-15/ });
+    assert.equal(await readonlyDate.count(), 1, "read-only detail must show the exact source date");
+    console.log("  ✓ read-only detail preserved exact claim/source_title/source_url/source_date");
 
     // ═══════════════════════════════════════════════
     //  2. Edit Evidence — UI form
@@ -258,12 +308,7 @@ async function main() {
     const evidencePath = `/api/evidence/${evId}`;
     const waitForEvidencePut = () => page.waitForResponse(response =>
       new URL(response.url()).pathname === evidencePath && response.request().method() === "PUT");
-    const readonlyClaim = claim => page.locator("p").filter({ hasText: claim });
-    async function readEvidence() {
-      const response = await fetch(`${apiUrl}${evidencePath}`);
-      assert.equal(response.status, 200, "same-ID Evidence GET must succeed");
-      return (await response.json()).data;
-    }
+    const readonlyClaimFor = claim => page.locator("p").filter({ hasText: claim });
     async function verifySaved(responsePromise, claim, scenario) {
       const response = await responsePromise;
       const payload = await response.json();
@@ -276,8 +321,8 @@ async function main() {
       const persisted = await readEvidence();
       assert.deepEqual(persisted, payload.data, "PUT response must match persisted same-ID GET");
       await textarea.waitFor({ state: "hidden" });
-      await readonlyClaim(claim).waitFor({ state: "visible" });
-      assert.equal(await readonlyClaim(claim).innerText(), claim);
+      await readonlyClaimFor(claim).waitFor({ state: "visible" });
+      assert.equal(await readonlyClaimFor(claim).innerText(), claim);
       assert.equal(await page.getByRole("button", { name: "编辑", exact: true }).isVisible(), true);
       console.log(`[E2E] Evidence ${scenario}: ${JSON.stringify({ id: evId, putStatus: response.status(), response: payload.data, getStatus: 200, persisted, editing: false, readonlyClaim: claim })}`);
       return persisted;
@@ -319,7 +364,7 @@ async function main() {
       assert.equal((await page.locator("body").innerText()).includes(slowClaim), false, "old assertion must be premature");
       assert.equal(await textarea.isVisible(), true);
       assert.equal(await page.getByRole("button", { name: "保存中…", exact: true }).isDisabled(), true);
-      assert.equal(await readonlyClaim(slowClaim).count(), 0, "input text is not saved read-only content");
+      assert.equal(await readonlyClaimFor(slowClaim).count(), 0, "input text is not saved read-only content");
       assert.deepEqual(await readEvidence(), actual.body.data, "backend already persisted before response delivery");
       console.log(`[E2E] Evidence DELAYED pending: ${JSON.stringify({ id: evId, backendStatus: actual.status, editing: true, saving: true, oldAssertionWouldFail: true })}`);
     } finally {
@@ -343,12 +388,12 @@ async function main() {
     assert.equal(await textarea.isVisible(), true);
     assert.equal(await textarea.inputValue(), failedClaim);
     assert.equal(await page.getByRole("button", { name: "保存", exact: true }).isEnabled(), true);
-    assert.equal(await readonlyClaim(failedClaim).count(), 0);
+    assert.equal(await readonlyClaimFor(failedClaim).count(), 0);
     assert.deepEqual(await readEvidence(), saved, "failed PUT must not change persisted evidence");
     console.log(`[E2E] Evidence FAILED: ${JSON.stringify({ id: evId, putStatus: rejected.status(), response: rejection, persisted: saved, editing: true, errorVisible: true, savedClaimVisible: false })}`);
     rejectSubjectChangeId = null;
     await page.getByRole("button", { name: "取消", exact: true }).click();
-    await readonlyClaim(slowClaim).waitFor({ state: "visible" });
+    await readonlyClaimFor(slowClaim).waitFor({ state: "visible" });
 
     // ═══════════════════════════════════════════════
     //  3. Create Thesis — UI form
