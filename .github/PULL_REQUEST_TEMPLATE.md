@@ -1,19 +1,14 @@
-# Pull Request（个人项目最小模板）
+## 变更与范围
 
-## 变更范围
+说明解决的问题、最终行为及必要的范围边界。
 
-- 功能/修复：
-- 主要文件：
+## 验证证据
 
-## 验证证据（必须真实填写；未运行就写"未运行"）
+填写实际运行的相关命令、结果与验证时的 Base / Head；未运行或不适用的项目说明原因。
+按受影响契约选择现有测试、构建或 E2E；纯文档改动可记录 diff / 链接检查，无需填写整套产品测试清单。
 
-- [ ] 后端离线测试：`pytest backend -m "not live"` → 结果
-- [ ] 前端：`npm test` → 结果；`npm run build` → 结果
-- [ ] E2E（如涉及 UI）：`npm run test:e2e:<suite>` → 结果
-- [ ] 未触碰：稳定分支、生产数据、密钥/Token
-- [ ] 基于当前稳定 Head：`git rev-parse origin/feature/research-system-v01`
+## 剩余问题与交付状态
 
-## 说明
-
-- Draft 状态下不得 Ready/merge；CI 未全绿（含 GitHub billing 阻断）时保持 Draft。
-- 本 PR 不解决：（如适用，列出明确排除项）
+说明未完成的验收或阻断；无则写“无”。
+授权、Draft / Ready / merge、Git 与数据边界遵循 [AGENTS.md](../AGENTS.md#authorization-and-delivery)。
+未获 Ready / merge 授权或 required CI 未通过时保持 Draft；billing 阻断不算通过。
