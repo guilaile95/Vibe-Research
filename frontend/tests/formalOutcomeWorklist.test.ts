@@ -124,6 +124,26 @@ test("outcome, actual-capital, and attribution labels stay display-only", () => 
     actualCapitalSummary({ actual_capital_outcome: { state: "NO_ACTUAL_TRADE" } } as any),
     { label: "无实际交易 · 不适用", canonical: "NO_ACTUAL_TRADE / NOT_APPLICABLE" },
   );
+  assert.deepEqual(
+    actualCapitalSummary({ actual_capital_outcome: { state: "EVALUATED", trade_count: 1 } } as any),
+    { label: "已评估 · 1 笔已归属成交", canonical: "EVALUATED · 1 exact attributed executed trade(s)" },
+  );
+  assert.deepEqual(
+    actualCapitalSummary({ actual_capital_outcome: { state: "EVALUATED", trade_count: 0 } } as any),
+    { label: "已评估 · 0 笔已归属成交", canonical: "EVALUATED · 0 exact attributed executed trade(s)" },
+  );
+  assert.deepEqual(
+    actualCapitalSummary({ actual_capital_outcome: { state: "ERROR", trade_count: 0 } } as any),
+    { label: "读取失败", canonical: "ERROR" },
+  );
+  assert.deepEqual(
+    actualCapitalSummary({ actual_capital_outcome: { state: "EVALUATED" } } as any),
+    { label: "已评估", canonical: "EVALUATED" },
+  );
+  assert.deepEqual(
+    actualCapitalSummary({ actual_capital_outcome: { state: "UNKNOWN", trade_count: 3 } } as any),
+    { label: "信息不足 · 3 笔已归属成交", canonical: "UNKNOWN · 3 exact attributed executed trade(s)" },
+  );
 });
 
 test("missing historical row can be merged from exact outcome authority", () => {

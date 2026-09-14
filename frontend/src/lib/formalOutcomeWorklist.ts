@@ -135,7 +135,24 @@ export function actualCapitalSummary(item: FormalDecisionOutcome): {
       canonical: "PENDING / NOT_DUE",
     };
   }
-  const count = actual.trade_count ?? 0;
+  if (actual.state === "ERROR") {
+    return {
+      label: actualCapitalStateLabel("ERROR"),
+      canonical: "ERROR",
+    };
+  }
+  const hasState = typeof actual.state === "string" && actual.state.length > 0;
+  if (!hasState) return { label: "—", canonical: "" };
+  const count = actual.trade_count;
+  const hasKnownCount = typeof count === "number"
+    && Number.isSafeInteger(count)
+    && count >= 0;
+  if (!hasKnownCount) {
+    return {
+      label: actualCapitalStateLabel(actual.state),
+      canonical: displayText(actual.state),
+    };
+  }
   return {
     label: `${actualCapitalStateLabel(actual.state)} · ${count} 笔已归属成交`,
     canonical: `${displayText(actual.state)} · ${count} exact attributed executed trade(s)`,

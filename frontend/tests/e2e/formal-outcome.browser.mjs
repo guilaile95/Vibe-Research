@@ -443,6 +443,37 @@ print(json.dumps({'first': first, 'second': second, 'exact': exact, 'unplanned':
   return JSON.parse(result.stdout.trim());
 }
 
+function corruptAttributionSnapshotHash(env, python, decisionId) {
+  const script = `
+import os
+import sqlite3
+
+connection = sqlite3.connect(os.environ['VIBE_RESEARCH_TRADE_ATTRIBUTION_DB'])
+cursor = connection.execute(
+    'UPDATE formal_trade_attributions SET decision_snapshot_hash = ? WHERE decision_id = ?',
+    ('0' * 64, os.environ['OL1_CORRUPT_DECISION_ID']),
+)
+connection.commit()
+assert cursor.rowcount == 1, cursor.rowcount
+connection.close()
+`;
+  const result = spawnSync(python.cmd, [...python.args, "-c", script], {
+    cwd: backendDir,
+    env: {
+      ...env,
+      OL1_CORRUPT_DECISION_ID: decisionId,
+    },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolver) => { resolve = resolver; });
+  return { promise, resolve };
+}
+
 function createOutcomeHistoryFillers(env, python, template, count = 50) {
   const script = `
 import json
@@ -591,6 +622,7 @@ async function run() {
     const page = await browser.newPage();
     const consoleErrors = [];
     const exactOutcomeRequests = [];
+    let outcomeListGate = null;
     page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
     page.on("request", (request) => {
       const url = new URL(request.url());
@@ -610,6 +642,15 @@ async function run() {
           headers: request.headers(),
           body: request.method() === "GET" || request.method() === "HEAD" ? undefined : request.postDataBuffer(),
         });
+        if (
+          outcomeListGate
+          && request.method() === "GET"
+          && url.pathname === "/api/formal-decision-outcomes"
+        ) {
+          const gate = outcomeListGate;
+          outcomeListGate = null;
+          await gate.promise;
+        }
         await route.fulfill({
           status: response.status,
           headers: Object.fromEntries(response.headers.entries()),
@@ -783,7 +824,24 @@ async function run() {
         legacyAnalyticsRequests.push(request.url());
       }
     });
-    await page.goto(`${frontend}/decision-performance?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`, { waitUntil: "networkidle" });
+    const initialOutcomeListGate = deferred();
+    outcomeListGate = initialOutcomeListGate;
+    const initialOutcomeListRequest = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return request.method() === "GET"
+        && url.pathname === "/api/formal-decision-outcomes";
+    });
+    await page.goto(`${frontend}/decision-performance?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}`, { waitUntil: "domcontentloaded" });
+    await initialOutcomeListRequest;
+    const outcomeSection = page.getByRole("region", { name: "Formal Decision Outcome" });
+    const refreshOutcomeButton = outcomeSection.getByRole("button", { name: "刷新 Formal Outcome" });
+    try {
+      assert.equal(await refreshOutcomeButton.isDisabled(), true, "real outcome list response gate must retain loading state");
+      assert.equal(await outcomeSection.locator('[data-testid^="formal-outcome-"]').count(), 0);
+      assert.ok(await outcomeSection.locator("svg.animate-spin").count() >= 2, "loading must show section and refresh spinners");
+    } finally {
+      initialOutcomeListGate.resolve();
+    }
     await page.getByRole("heading", { name: "Formal Decision Outcome" }).waitFor();
     await page.getByTestId(`formal-outcome-${historyFillerIds[0]}`).getByText("待评估 · 尚未到期", { exact: true }).waitFor();
     await page.getByTestId(`formal-decision-context-${firstRun.decisionId}`).getByText(identityTitle({
@@ -793,6 +851,11 @@ async function run() {
     }), { exact: true }).waitFor();
     await page.getByTestId(`formal-decision-context-${firstRun.decisionId}`).getByText(`冻结时操作：`, { exact: false }).waitFor();
     await page.getByText("无实际交易 · 不适用", { exact: true }).waitFor();
+    const firstActualCapital = page
+      .getByTestId(`formal-outcome-${firstRun.decisionId}`)
+      .locator('[data-actual-capital-state="EVALUATED"]');
+    await firstActualCapital.getByText("已评估 · 1 笔已归属成交", { exact: true }).waitFor();
+    await firstActualCapital.getByText("EVALUATED · 1 exact attributed executed trade(s)", { exact: true }).waitFor();
     await page.getByTestId(`process-review-bound-${firstRun.decisionId}`).waitFor();
     await page.getByText("Challenge coverage is not decision correctness.", { exact: true }).waitFor();
     await page.getByTestId(`process-review-none-${secondRun.decisionId}`).waitFor();
@@ -876,6 +939,7 @@ async function run() {
       true,
     );
     assert.equal(await page.getByTestId(`formal-outcome-${firstRun.decisionId}`).getByText("BUY", { exact: true }).count(), 0);
+
     const actionableConsoleErrors = consoleErrors.filter(
       (message) => !message.includes("ERR_NETWORK_ACCESS_DENIED")
         && !message.includes("ERR_CONNECTION_CLOSED")
@@ -918,6 +982,38 @@ async function run() {
     assert.equal(await reloadedUpcoming.getByText("尚未到期", { exact: true }).count(), 1);
     assert.equal(await page.locator('[data-testid^="formal-outcome-"]').count(), 50);
     assert.equal(await page.getByTestId(`formal-outcome-${thirdRun.decisionId}`).count(), 0);
+
+    corruptAttributionSnapshotHash(env, pythonScriptConfig(), firstRun.decisionId);
+    const errorListResponsePromise = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return response.request().method() === "GET"
+        && url.pathname === "/api/formal-decision-outcomes";
+    });
+    await refreshOutcomeButton.click();
+    const errorListResponse = await errorListResponsePromise;
+    assert.equal(errorListResponse.status(), 200);
+    const errorListPayload = await errorListResponse.json();
+    const errorOutcome = errorListPayload.data.find((entry) => entry.decision_id === firstRun.decisionId);
+    assert.equal(errorOutcome.outcome_status, "ERROR", JSON.stringify(errorOutcome));
+    assert.equal(errorOutcome.actual_capital_outcome.state, "ERROR", JSON.stringify(errorOutcome));
+    assert.equal(errorOutcome.actual_capital_outcome.trade_count, 0, JSON.stringify(errorOutcome));
+    const errorActualCapital = page
+      .getByTestId(`formal-outcome-${firstRun.decisionId}`)
+      .locator('[data-actual-capital-state="ERROR"]');
+    await errorActualCapital.getByText("读取失败", { exact: true }).waitFor();
+    await errorActualCapital.getByText("ERROR", { exact: true }).waitFor();
+    const errorActualCapitalText = await errorActualCapital.innerText();
+    assert.doesNotMatch(errorActualCapitalText, /\d+\s*笔已归属成交/);
+    assert.doesNotMatch(errorActualCapitalText, /exact attributed executed trade/);
+    await page.getByText("无实际交易 · 不适用", { exact: true }).waitFor();
+    console.log("[E2E evidence]", JSON.stringify({
+      loading: { refresh_disabled: true, outcome_rows: 0 },
+      positive: firstBefore.actual_capital_outcome,
+      known_zero: secondOutcome.actual_capital_outcome,
+      error_http_status: errorListResponse.status(),
+      error_api: errorOutcome.actual_capital_outcome,
+      error_ui: errorActualCapitalText,
+    }));
     console.log("[E2E] P0-CF1 Formal Decision Outcome vertical passed");
   } catch (error) {
     const detail = backendLog ? `\nBackend log:\n${backendLog}` : "";
