@@ -392,8 +392,8 @@ export interface Quote {
 
 
 export interface Valuation {
-  name: string; code: string; price: number; mcap_yi: number;
-  pe_ttm: number; pb: number;
+  name: string; code: string; price: number; mcap_yi: number | null;
+  pe_ttm: number | null; pb: number | null;
   eps_26e: number | null; eps_27e: number | null; pe_26e: number | null;
   cagr_pct: number | null; peg: number | null; digest_years: number | null;
   analyst_count: number; forecast_note?: string;
