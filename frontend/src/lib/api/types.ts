@@ -386,6 +386,53 @@ export type SectorIndustryContextData = {
   limitations: string[];
 };
 
+export type StockRelativeHorizon = "5D" | "20D" | "60D";
+
+export type StockRelativePeriod = {
+  stock_return_pct: number | null;
+  industry_median_pct: number | null;
+  vs_industry_pct_points: number | null;
+  market_median_pct: number | null;
+  vs_market_pct_points: number | null;
+  industry_valid_count: number;
+  industry_member_count: number;
+  industry_coverage: number | null;
+  market_valid_count: number;
+  market_total_count: number;
+  market_coverage: number | null;
+};
+
+export type StockRelativeContext = {
+  schema_version: "stock-relative-context.v0.1";
+  status: "normal" | "partial" | "unavailable";
+  source: string;
+  fetched_at: string;
+  code: string;
+  comparison_date: string | null;
+  industry_name: string | null;
+  industry_status: "normal" | "unknown" | "unavailable";
+  industry_membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT";
+  dataset_id: string;
+  provider_id: string;
+  adjustment: "UNADJUSTED";
+  return_semantics: "UNADJUSTED_RAW_PRICE_CHANGE";
+  relative_unit: "PERCENTAGE_POINTS";
+  stock: {
+    return_5d_pct: number | null;
+    return_20d_pct: number | null;
+    return_60d_pct: number | null;
+  };
+  periods: Record<StockRelativeHorizon, StockRelativePeriod>;
+  provenance: {
+    classification_provider: "EASTMONEY";
+    membership_source: string;
+    membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT";
+    rdp: Record<string, unknown> | null;
+  };
+  warnings: string[];
+  limitations: string[];
+};
+
 export interface IntelDigestInputItem {
   title?: string;
   source?: string;
@@ -438,8 +485,8 @@ export interface Quote {
 
 
 export interface Valuation {
-  name: string; code: string; price: number; mcap_yi: number;
-  pe_ttm: number; pb: number;
+  name: string; code: string; price: number; mcap_yi: number | null;
+  pe_ttm: number | null; pb: number | null;
   eps_26e: number | null; eps_27e: number | null; pe_26e: number | null;
   cagr_pct: number | null; peg: number | null; digest_years: number | null;
   analyst_count: number; forecast_note?: string;
