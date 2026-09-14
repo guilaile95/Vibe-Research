@@ -311,6 +311,52 @@ export type SectorIndustryContextItem = {
 };
 
 
+export type StockValuationMetric = {
+  stock_value: number | null;
+  stock_sign: "positive" | "zero" | "negative" | "missing";
+  industry_positive_median: number | null;
+  vs_industry_positive_median: number | null;
+  rank_among_positive: number | null;
+  positive_sample_count: number;
+  rank_order: "ASCENDING_POSITIVE_VALUES";
+  industry_observed_count: number;
+  industry_missing_count: number;
+  industry_positive_count: number;
+  industry_zero_count: number;
+  industry_negative_count: number;
+  industry_median_status: string;
+};
+
+export type StockValuationContext = {
+  schema_version: "stock-valuation-context.v0.1";
+  status: "normal" | "partial" | "unavailable";
+  source: string;
+  fetched_at: string;
+  code: string;
+  industry_name: string | null;
+  industry_status: "normal" | "unknown" | "unavailable";
+  industry_membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT";
+  valuation_semantics: "CURRENT_MEMBER_VALUATION_DISTRIBUTION_ONLY";
+  historical_valuation_status: "NOT_AVAILABLE";
+  sector_index_valuation_authority: "NOT_AVAILABLE";
+  industry_member_count: number;
+  pe_source: "eastmoney_clist_f115";
+  pb_source: "eastmoney_clist_f23";
+  pe_ttm: StockValuationMetric;
+  pb: StockValuationMetric;
+  provenance: {
+    classification_provider: "EASTMONEY";
+    membership_source: string;
+    membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT";
+    pe_ttm_field: "f115";
+    pb_field: "f23";
+    dynamic_pe_field: "f9";
+    dynamic_pe_used: false;
+  };
+  warnings: string[];
+  limitations: string[];
+};
+
 export type SectorIndustryContextData = {
   schema_version: "sector_industry_context.v0.2";
   status: "normal" | "partial" | "unavailable";
@@ -336,6 +382,53 @@ export type SectorIndustryContextData = {
   rdp_as_of?: string | null;
   rdp_provenance?: Record<string, unknown> | null;
   items: SectorIndustryContextItem[];
+  warnings: string[];
+  limitations: string[];
+};
+
+export type StockRelativeHorizon = "5D" | "20D" | "60D";
+
+export type StockRelativePeriod = {
+  stock_return_pct: number | null;
+  industry_median_pct: number | null;
+  vs_industry_pct_points: number | null;
+  market_median_pct: number | null;
+  vs_market_pct_points: number | null;
+  industry_valid_count: number;
+  industry_member_count: number;
+  industry_coverage: number | null;
+  market_valid_count: number;
+  market_total_count: number;
+  market_coverage: number | null;
+};
+
+export type StockRelativeContext = {
+  schema_version: "stock-relative-context.v0.1";
+  status: "normal" | "partial" | "unavailable";
+  source: string;
+  fetched_at: string;
+  code: string;
+  comparison_date: string | null;
+  industry_name: string | null;
+  industry_status: "normal" | "unknown" | "unavailable";
+  industry_membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT";
+  dataset_id: string;
+  provider_id: string;
+  adjustment: "UNADJUSTED";
+  return_semantics: "UNADJUSTED_RAW_PRICE_CHANGE";
+  relative_unit: "PERCENTAGE_POINTS";
+  stock: {
+    return_5d_pct: number | null;
+    return_20d_pct: number | null;
+    return_60d_pct: number | null;
+  };
+  periods: Record<StockRelativeHorizon, StockRelativePeriod>;
+  provenance: {
+    classification_provider: "EASTMONEY";
+    membership_source: string;
+    membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT";
+    rdp: Record<string, unknown> | null;
+  };
   warnings: string[];
   limitations: string[];
 };
@@ -392,8 +485,8 @@ export interface Quote {
 
 
 export interface Valuation {
-  name: string; code: string; price: number; mcap_yi: number;
-  pe_ttm: number; pb: number;
+  name: string; code: string; price: number; mcap_yi: number | null;
+  pe_ttm: number | null; pb: number | null;
   eps_26e: number | null; eps_27e: number | null; pe_26e: number | null;
   cagr_pct: number | null; peg: number | null; digest_years: number | null;
   analyst_count: number; forecast_note?: string;

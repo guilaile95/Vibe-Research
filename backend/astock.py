@@ -250,6 +250,59 @@ def security_profile(code: str, *, strict: bool = False) -> dict:
     return {}
 
 
+def eastmoney_stock_valuation(code: str) -> dict:
+    """单只 A 股的 f115 PE-TTM、f23 PB 与 f20 总市值。"""
+    if not (isinstance(code, str) and len(code) == 6 and code.isdigit()):
+        raise ValueError("code must be a 6-digit A-share code")
+
+    expected_market = 1 if code.startswith("6") else 0
+    params = {
+        "secids": f"{expected_market}.{code}",
+        "fields": "f12,f13,f14,f20,f23,f115",
+        "fltt": "2",
+        "invt": "2",
+    }
+    headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
+    last_error: Exception | None = None
+
+    for host in _A_SHARE_CLIST_HOSTS:
+        try:
+            response = em_get(
+                f"https://{host}/api/qt/ulist.np/get",
+                params=params,
+                headers=headers,
+                timeout=15,
+            )
+            if getattr(response, "status_code", 200) >= 400:
+                raise RuntimeError("eastmoney stock valuation returned an error status")
+            payload = response.json()
+            data = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(data, dict):
+                raise RuntimeError("eastmoney stock valuation response missing data")
+
+            rows = _normalize_clist_diff(data.get("diff"))
+            matches = [
+                row for row in rows
+                if str(row.get("f12") or "").strip() == code
+                and str(row.get("f13")).strip() == str(expected_market)
+            ]
+            if len(matches) != 1:
+                raise RuntimeError("eastmoney stock valuation identity mismatch")
+
+            row = matches[0]
+            return {
+                "code": str(row.get("f12") or "").strip(),
+                "name": str(row.get("f14") or "").strip(),
+                "pe_ttm": _optional_float(row.get("f115")),
+                "pb": _optional_float(row.get("f23")),
+                "market_cap": _optional_float(row.get("f20")),
+            }
+        except Exception as exc:  # noqa: BLE001 - try the existing delayed host, then fail closed
+            last_error = exc
+
+    raise RuntimeError("eastmoney stock valuation unavailable") from last_error
+
+
 def disclosure(code: str) -> list[dict]:
     """巨潮公告全文列表（akshare cninfo，本环境不稳，保留作备用）。"""
     ak = _akshare()
@@ -584,17 +637,45 @@ def valuation_percentile(code: str, period: str = "近五年") -> dict:
     return {"period": "近5年", "metrics": metrics}
 
 
-def full_valuation(code: str) -> dict:
-    """单票完整估值：腾讯行情 + 一致预期 EPS + 前向PE/PEG/消化年数。"""
+def full_valuation(code: str, *, valuation_reader=None) -> dict:
+    """单票完整估值：腾讯现价 + 东财 TTM PE/PB/总市值 + 一致预期 EPS。
+
+    Header ``pe_ttm`` / ``pb`` / ``mcap_yi`` come from Eastmoney's single-security
+    ulist response (f115 / f23 / f20 元→亿). Tencent gtimg 39/46/44 and
+    Eastmoney dynamic f9 are never copied into this contract. Source failure,
+    identity mismatch, or invalid values → ``None`` (never fabricated 0).
+    """
     quotes = tencent_quote([code])
     q = quotes.get(code)
     if not q:
         raise ValueError(f"未取到 {code} 的行情")
 
     price = q["price"]
+    pe_ttm = None
+    pb = None
+    mcap_yi = None
+    try:
+        row = (valuation_reader or eastmoney_stock_valuation)(code)
+        if isinstance(row, dict) and str(row.get("code") or "").strip() == code:
+            pe_ttm = _optional_float(row.get("pe_ttm"))
+            pb = _optional_float(row.get("pb"))
+            mcap_yuan = _optional_float(row.get("market_cap"))
+            if mcap_yuan is not None:
+                mcap_yi = mcap_yuan / 1e8
+    except Exception:
+        pe_ttm = None
+        pb = None
+        mcap_yi = None
+
     out = {
         "name": q["name"], "code": code, "price": price,
-        "mcap_yi": q["mcap_yi"], "pe_ttm": q["pe_ttm"], "pb": q["pb"],
+        "mcap_yi": mcap_yi,
+        "pe_ttm": pe_ttm,
+        "pb": pb,
+        "pe_ttm_source": "eastmoney_ulist_f115",
+        "pb_source": "eastmoney_ulist_f23",
+        "mcap_source": "eastmoney_ulist_f20",
+        "dynamic_pe_used": False,
         "eps_26e": None, "eps_27e": None, "pe_26e": None,
         "cagr_pct": None, "peg": None, "digest_years": None, "analyst_count": 0,
     }

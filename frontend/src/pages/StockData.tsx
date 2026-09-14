@@ -10,6 +10,8 @@ import { AskAiButton } from "@/components/ui/AskAiButton";
 import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
 import { OptionalDataPanel } from "@/components/ui/OptionalDataPanel";
 import { StockThesisPanel } from "@/components/stock/StockThesisPanel";
+import { StockRelativeContextCard } from "@/components/stock/StockRelativeContextCard";
+import { StockValuationContextCard } from "@/components/stock/StockValuationContextCard";
 import { TechnicalIndicatorsCard } from "@/components/stock/TechnicalIndicatorsCard";
 import { TopRiskAnalysisCard } from "@/components/market/TopRiskAnalysisCard";
 import { ResearchEventCalendar } from "@/components/campaign/ResearchEventCalendar";
@@ -31,6 +33,8 @@ import {
   type Financials, type Announcement, type MarginRow, type BlockTradeRow, type HolderRow,
   type DividendRow, type FundFlowRow, type DragonTiger, type Lockup, type Blocks, type HotConcept, type QaRow,
   type GlobalStock, type HkCashflow, type KlineBar, type DisclosureItem, type TechnicalIndicators, type TopRiskAnalysis,
+  type StockRelativeContext,
+  type StockValuationContext,
 } from "@/lib/api";
 import { indicatorErrorMessage } from "@/lib/technicalIndicatorsView";
 import { buildEvidenceNewHref, candidateWorkspaceHref } from "@/lib/candidateCampaign";
@@ -137,6 +141,12 @@ export function StockData() {
   const [topRisk, setTopRisk] = useState<TopRiskAnalysis | null>(null);
   const [topRiskErr, setTopRiskErr] = useState<string | null>(null);
   const [topRiskLoading, setTopRiskLoading] = useState(false);
+  const [stockRelativeContext, setStockRelativeContext] = useState<StockRelativeContext | null>(null);
+  const [stockRelativeLoading, setStockRelativeLoading] = useState(false);
+  const [stockRelativeError, setStockRelativeError] = useState<string | null>(null);
+  const [stockValuationContext, setStockValuationContext] = useState<StockValuationContext | null>(null);
+  const [stockValuationError, setStockValuationError] = useState<string | null>(null);
+  const [stockValuationLoading, setStockValuationLoading] = useState(false);
   const [panelStates, setPanelStates] = useState<PanelStates>(() => createInitialPanelStates());
   // 技术指标与价格触发（独立 fetch，与 K 线面板解耦）
   const [tiEnv, setTiEnv] = useState<TechnicalIndicators | null>(null);
@@ -323,6 +333,12 @@ export function StockData() {
     setMargin([]); setBlockT([]); setHolders([]); setDividend([]); setFundFlow([]); setDt(null); setLockup(null); setBlocks(null); setHotCon([]); setQa([]);
     setGStock(null);
     setCashflow(null);
+    setStockRelativeContext(null);
+    setStockRelativeError(null);
+    setStockRelativeLoading(false);
+    setStockValuationContext(null);
+    setStockValuationError(null);
+    setStockValuationLoading(false);
     setKline([]); setKlineErr(null); setFinance({}); setFinanceErr(null); setInfo({}); setInfoErr(null); setDisc([]); setDiscErr(null);
     setTiEnv(null); setTiLoading(false); setTiError(null);
     commitPanelStates(resetPanelStates());
@@ -362,6 +378,18 @@ export function StockData() {
       if (rid === runIdRef.current) setTopRiskErr(e instanceof ApiError ? e.message : "顶部风险分析失败");
     }).finally(() => {
       if (rid === runIdRef.current) setTopRiskLoading(false);
+    });
+    setStockRelativeLoading(true);
+    api.stockRelativeContext(c).then(ok(setStockRelativeContext)).catch((e) => {
+      if (rid === runIdRef.current) setStockRelativeError(e instanceof ApiError ? e.message : "相对表现数据暂不可用");
+    }).finally(() => {
+      if (rid === runIdRef.current) setStockRelativeLoading(false);
+    });
+    setStockValuationLoading(true);
+    api.stockValuationContext(c).then(ok(setStockValuationContext)).catch((e) => {
+      if (rid === runIdRef.current) setStockValuationError(e instanceof ApiError ? e.message : "相对行业估值暂不可用");
+    }).finally(() => {
+      if (rid === runIdRef.current) setStockValuationLoading(false);
     });
     // K 线 / 季报财务 / 基本面 / 巨潮公告：均为可选依赖，改为按需展开加载（避免每次查询都发 501）
     try {
@@ -406,11 +434,11 @@ export function StockData() {
     void run(initialCode);
   }, []);
 
-  const metrics = val ? [
+  const metrics: { k: string; v: string; testId?: string }[] = val ? [
     { k: "现价", v: fmt(val.price) },
-    { k: "PE(TTM)", v: fmt(val.pe_ttm) },
-    { k: "PB", v: fmt(val.pb) },
-    { k: "总市值", v: fmt(val.mcap_yi, " 亿") },
+    { k: "PE(TTM)", v: fmt(val.pe_ttm), testId: "stock-header-pe-ttm" },
+    { k: "PB", v: fmt(val.pb), testId: "stock-header-pb" },
+    { k: "总市值", v: fmt(val.mcap_yi, " 亿"), testId: "stock-header-mcap" },
     { k: "26E EPS", v: fmt(val.eps_26e) },
     { k: "前向PE", v: fmt(val.pe_26e) },
     { k: "PEG", v: fmt(val.peg) },
@@ -418,7 +446,7 @@ export function StockData() {
   ] : [];
 
   const aiContext = val
-    ? `个股：${val.name}（${val.code}）\n现价 ${val.price} · PE(TTM) ${val.pe_ttm} · PB ${val.pb} · 市值 ${val.mcap_yi}亿\n` +
+    ? `个股：${val.name}（${val.code}）\n现价 ${val.price} · PE(TTM) ${fmt(val.pe_ttm)} · PB ${fmt(val.pb)} · 市值 ${fmt(val.mcap_yi, "亿")}\n` +
       `26E EPS ${val.eps_26e ?? "—"} · 前向PE ${val.pe_26e ?? "—"} · PEG ${val.peg ?? "—"} · 消化 ${val.digest_years ?? "—"}年 · 机构覆盖 ${val.analyst_count} 家\n` +
       (pctl?.metrics.pe_ttm ? `估值历史分位(近5年)：PE-TTM 处于 ${pctl.metrics.pe_ttm.percentile}% 分位、PB 处于 ${pctl.metrics.pb?.percentile ?? "—"}% 分位\n` : "") +
       (fin?.revenue ? `财务快照(报告期末${fin.period_end ?? "未知"}，披露日期未知，非PIT)：营收 ${fin.revenue}(同比${fin.revenue_yoy ?? "未知"})、净利润 ${fin.net_profit ?? "未知"}(同比${fin.net_profit_yoy ?? "未知"})、扣非净利润同比 ${fin.deduct_net_profit_yoy ?? "未知"}、ROE ${fin.roe ?? "未知"}、毛利率 ${fin.gross_margin ?? "未知"}、经营现金流 ${fin.operating_cash_flow ?? "未知"}、现金转化率 ${fin.cash_conversion_ratio ?? "未知"}、自由现金流 ${fin.free_cash_flow ?? "未知"}、资产负债率 ${fin.debt_ratio ?? "未知"}\n` : "") +
@@ -600,18 +628,36 @@ export function StockData() {
             </div>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               {metrics.map((m) => (
-                <div key={m.k} className="rounded-lg bg-muted/30 p-3">
+                <div key={m.k} className="rounded-lg bg-muted/30 p-3" data-testid={m.testId}>
                   <p className="text-xs text-muted-foreground">{m.k}</p>
                   <p className="mt-0.5 font-mono text-lg font-bold">{m.v}</p>
                 </div>
               ))}
             </div>
+            <p className="mt-3 text-[11px] text-muted-foreground/60" data-testid="stock-header-pe-source">
+              PE-TTM 来源 Eastmoney f115；缺失不显示为 0。
+            </p>
+            <p className="mt-1 text-[11px] text-muted-foreground/60" data-testid="stock-header-mcap-source">
+              总市值来源 Eastmoney f20；缺失不显示为 0。
+            </p>
             {val.forecast_note && (
               <p className="mt-3 text-xs text-warning">{val.forecast_note}</p>
             )}
           </GlassCard>
 
           <TopRiskAnalysisCard env={topRisk} loading={topRiskLoading} error={topRiskErr} />
+
+          <StockRelativeContextCard
+            data={stockRelativeContext}
+            loading={stockRelativeLoading}
+            error={stockRelativeError}
+          />
+
+          <StockValuationContextCard
+            data={stockValuationContext}
+            loading={stockValuationLoading}
+            error={stockValuationError}
+          />
 
           {/^\d{6}$/.test(activeCode) && (
             <div className="mb-4">

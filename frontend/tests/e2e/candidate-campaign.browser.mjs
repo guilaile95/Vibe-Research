@@ -77,6 +77,53 @@ const unavailable = (detail = "candidate browser fixture: unavailable") => ({
   body: JSON.stringify({ detail }),
 });
 
+function stockValuationContextPayload(code) {
+  const metric = (stock, median, delta, rank) => ({
+    stock_value: stock,
+    stock_sign: stock == null ? "missing" : stock > 0 ? "positive" : stock === 0 ? "zero" : "negative",
+    industry_positive_median: median,
+    vs_industry_positive_median: delta,
+    rank_among_positive: rank,
+    positive_sample_count: 2,
+    rank_order: "ASCENDING_POSITIVE_VALUES",
+    industry_observed_count: 4,
+    industry_missing_count: 0,
+    industry_positive_count: 2,
+    industry_zero_count: 1,
+    industry_negative_count: 1,
+    industry_median_status: "NORMAL",
+  });
+  return {
+    schema_version: "stock-valuation-context.v0.1",
+    status: "normal",
+    source: "EASTMONEY_A_SHARE_SNAPSHOT",
+    fetched_at: "2026-09-12T08:00:00Z",
+    code,
+    industry_name: "电子",
+    industry_status: "normal",
+    industry_membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+    valuation_semantics: "CURRENT_MEMBER_VALUATION_DISTRIBUTION_ONLY",
+    historical_valuation_status: "NOT_AVAILABLE",
+    sector_index_valuation_authority: "NOT_AVAILABLE",
+    industry_member_count: 4,
+    pe_source: "eastmoney_clist_f115",
+    pb_source: "eastmoney_clist_f23",
+    pe_ttm: metric(10, 15, -5, 1),
+    pb: metric(1, 1.5, -0.5, 1),
+    provenance: {
+      classification_provider: "EASTMONEY",
+      membership_source: "astock.a_share_snapshot.industry=f100",
+      membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+      pe_ttm_field: "f115",
+      pb_field: "f23",
+      dynamic_pe_field: "f9",
+      dynamic_pe_used: false,
+    },
+    warnings: [],
+    limitations: [],
+  };
+}
+
 const valuation = {
   name: "贵州茅台",
   code: "600519",
@@ -206,6 +253,96 @@ const evidenceRecords = [{
   deleted: 0,
   deleted_at: null,
 }];
+
+function emptyRelativePeriod() {
+  return {
+    stock_return_pct: null,
+    industry_median_pct: null,
+    vs_industry_pct_points: null,
+    market_median_pct: null,
+    vs_market_pct_points: null,
+    industry_valid_count: 0,
+    industry_member_count: 3,
+    industry_coverage: 0,
+    market_valid_count: 0,
+    market_total_count: 4,
+    market_coverage: 0,
+  };
+}
+
+function relativePeriod(stock, industry, vsIndustry, market, vsMarket) {
+  return {
+    stock_return_pct: stock,
+    industry_median_pct: industry,
+    vs_industry_pct_points: vsIndustry,
+    market_median_pct: market,
+    vs_market_pct_points: vsMarket,
+    industry_valid_count: 3,
+    industry_member_count: 3,
+    industry_coverage: 1,
+    market_valid_count: 4,
+    market_total_count: 4,
+    market_coverage: 1,
+  };
+}
+
+function relativeEnvelope(code, overrides) {
+  return {
+    schema_version: "stock-relative-context.v0.1",
+    source: "RESEARCH_DATA_PLANE+EASTMONEY_CURRENT_INDUSTRY",
+    fetched_at: "2026-09-11T08:00:00Z",
+    code,
+    industry_membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+    dataset_id: "ashare_daily_unadjusted",
+    provider_id: "local_bulk_dump",
+    adjustment: "UNADJUSTED",
+    return_semantics: "UNADJUSTED_RAW_PRICE_CHANGE",
+    relative_unit: "PERCENTAGE_POINTS",
+    provenance: {
+      classification_provider: "EASTMONEY",
+      membership_source: "astock.a_share_snapshot.industry=f100",
+      membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+      rdp: { artifact_sha256: "fixture" },
+    },
+    warnings: [],
+    limitations: [],
+    ...overrides,
+  };
+}
+
+function stockRelativeContextPayload(code, status = "normal") {
+  if (status === "unavailable") {
+    const emptyPeriod = emptyRelativePeriod();
+    return relativeEnvelope(code, {
+      status,
+      comparison_date: null,
+      industry_name: "电子",
+      industry_status: "unavailable",
+      stock: { return_5d_pct: null, return_20d_pct: null, return_60d_pct: null },
+      periods: { "5D": emptyPeriod, "20D": emptyPeriod, "60D": emptyPeriod },
+      provenance: {
+        classification_provider: "EASTMONEY",
+        membership_source: "astock.a_share_snapshot.industry=f100",
+        membership_semantics: "CURRENT_MEMBERSHIP_SNAPSHOT",
+        rdp: null,
+      },
+      warnings: ["RDP fixture unavailable；未将缺失数据伪装成 0。"],
+    });
+  }
+
+  return relativeEnvelope(code, {
+    status: "normal",
+    comparison_date: "2026-09-11",
+    industry_name: "电子",
+    industry_status: "normal",
+    stock: { return_5d_pct: 12, return_20d_pct: 10, return_60d_pct: 30 },
+    periods: {
+      "5D": relativePeriod(12, 6, 6, 5, 7),
+      "20D": relativePeriod(10, 8, 2, 5.5, 4.5),
+      "60D": relativePeriod(30, 20, 10, 15, 15),
+    },
+  });
+}
 
 const CAMPAIGN_A = `campaign_${"c".repeat(32)}`;
 const CAMPAIGN_B = `campaign_${"d".repeat(32)}`;
@@ -580,6 +717,8 @@ try {
     releaseOldNextAction: null,
     releaseOldContinuity: null,
     apiPaths: [],
+    relativeContextMode: "ok",
+    valuationContextMode: "ok",
     evidenceCreates: [],
   };
 
@@ -681,6 +820,24 @@ try {
     }
     if (pathname === "/api/native-intel/security-context/600519" && request.method() === "GET") {
       await route.fulfill(ok(nativeIntelContext));
+      return;
+    }
+    if (pathname === "/api/stock-relative-context" && request.method() === "GET") {
+      if (state.relativeContextMode === "fail") {
+        await route.fulfill(unavailable());
+        return;
+      }
+      const code = url.searchParams.get("code") || "600519";
+      await route.fulfill(ok(stockRelativeContextPayload(code)));
+      return;
+    }
+    if (pathname === "/api/stock-valuation-context" && request.method() === "GET") {
+      if (state.valuationContextMode === "fail") {
+        await route.fulfill(unavailable());
+        return;
+      }
+      const code = url.searchParams.get("code") || "600519";
+      await route.fulfill(ok(stockValuationContextPayload(code)));
       return;
     }
     if (pathname === "/api/decision-inbox" && request.method() === "GET") {
@@ -967,6 +1124,50 @@ try {
   await workspace.getByTestId("native-intel-security-context").waitFor();
   await workspace.locator('[data-evidence-freshness="NOT_EVALUATED"]').waitFor();
   assert.equal(await workspace.locator('[data-evidence-source-conflict="UNKNOWN"]').count(), 1);
+  const relative = workspace.getByTestId("stock-relative-context");
+  await relative.waitFor();
+  await relative.getByText("市场 / 行业相对表现").waitFor();
+  await relative.getByTestId("stock-relative-horizon-5D").waitFor();
+  const relativeText = await relative.innerText();
+  assert.match(relativeText, /UNADJUSTED|未复权/);
+  for (const forbidden of ["建议买入", "BUY", "SELL"]) {
+    assert.equal(relativeText.includes(forbidden), false, `relative context must not include ${forbidden}`);
+  }
+  const valuationCard = workspace.getByTestId("stock-valuation-context");
+  await valuationCard.waitFor();
+  await valuationCard.getByText("相对行业估值").waitFor();
+  await valuationCard.getByText("Eastmoney f115").waitFor();
+  const valuationText = await valuationCard.innerText();
+  for (const forbidden of ["建议买入", "BUY", "SELL"]) {
+    assert.equal(valuationText.includes(forbidden), false, `valuation context must not include ${forbidden}`);
+  }
+
+  state.relativeContextMode = "fail";
+  await page.goto(`http://127.0.0.1:${port}/candidates/600519`, { waitUntil: "domcontentloaded" });
+  const relativeFailedWorkspace = page.getByTestId("candidate-workspace");
+  await relativeFailedWorkspace.waitFor();
+  await relativeFailedWorkspace.locator('[data-position-state="NOT_HELD"]').waitFor();
+  await relativeFailedWorkspace.getByTestId("candidate-evidence-gap").waitFor();
+  await relativeFailedWorkspace.getByTestId("native-intel-security-context").waitFor();
+  await relativeFailedWorkspace.getByTestId("stock-relative-context").getByText("相对表现数据暂不可用").waitFor();
+  await relativeFailedWorkspace.getByTestId("stock-valuation-context").getByText("相对行业估值").waitFor();
+  assert.deepEqual(pageErrors, [], "stock-relative-context 503 must not raise pageerror");
+  state.relativeContextMode = "ok";
+
+  state.valuationContextMode = "fail";
+  await page.goto(`http://127.0.0.1:${port}/candidates/600519`, { waitUntil: "domcontentloaded" });
+  const failedWorkspace = page.getByTestId("candidate-workspace");
+  await failedWorkspace.waitFor();
+  await failedWorkspace.locator('[data-position-state="NOT_HELD"]').waitFor();
+  await failedWorkspace.getByTestId("candidate-evidence-gap").waitFor();
+  await failedWorkspace.getByTestId("native-intel-security-context").waitFor();
+  const unavailableValuation = failedWorkspace.getByTestId("stock-valuation-context");
+  await unavailableValuation.getByText("相对行业估值暂不可用").waitFor();
+  assert.doesNotMatch(await unavailableValuation.innerText(), /\b0\.00\b/, "missing PE must not be shown as 0");
+  await failedWorkspace.getByTestId("stock-relative-context").getByText("市场 / 行业相对表现").waitFor();
+  assert.deepEqual(pageErrors, [], "stock-valuation-context 503 must not raise pageerror");
+  state.valuationContextMode = "ok";
+
   const capture = workspace.getByTestId("capture-as-evidence");
   await capture.waitFor();
   assert.equal(await capture.innerText(), "记为证据");
