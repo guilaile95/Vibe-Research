@@ -21,6 +21,7 @@ import type {
   SectorDynamicData,
   SectorMarketContextData,
   SectorIndustryContextData,
+  StockRelativeContext,
   Quote,
   Valuation,
   Report,
@@ -960,6 +961,10 @@ export const api = {
   /** Eastmoney 当前行业成员与 RDP 个股历史行情的只读横向矩阵。 */
   getSectorIndustryContext: () =>
     get<SectorIndustryContextData>("/sector-research/industry-context"),
+
+  /** Current-member industry and full-market relative performance for one A-share. */
+  stockRelativeContext: (code: string) =>
+    get<StockRelativeContext>(`/stock-relative-context?code=${encodeURIComponent(code)}`),
 
   // -------------------------------------------------------------------------
   // 投资逻辑与证据账本（Investment Thesis & Evidence Ledger）

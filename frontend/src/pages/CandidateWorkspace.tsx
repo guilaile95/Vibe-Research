@@ -4,6 +4,7 @@ import { AlertCircle, ArrowLeft, CheckCircle2, FileSearch, Loader2 } from "lucid
 import { CandidateCampaignPanel } from "@/components/campaign/CandidateCampaignPanel";
 import { ResearchEventCalendar } from "@/components/campaign/ResearchEventCalendar";
 import { NativeIntelSecurityContext } from "@/components/native-intel/NativeIntelSecurityContext";
+import { StockRelativeContextCard } from "@/components/stock/StockRelativeContextCard";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
@@ -12,7 +13,7 @@ import {
   deriveCandidatePosition,
   type CandidatePositionPresentation,
 } from "@/lib/candidateCampaign";
-import { api, ApiError, type EvidenceRecord } from "@/lib/api";
+import { api, ApiError, type EvidenceRecord, type StockRelativeContext } from "@/lib/api";
 
 type LoadState<T> =
   | { status: "loading"; value: null; error: "" }
@@ -42,11 +43,17 @@ export function CandidateWorkspace() {
   const validCode = /^\d{6}$/.test(code);
   const [position, setPosition] = useState<LoadState<CandidatePositionPresentation>>(loadingState);
   const [evidence, setEvidence] = useState<LoadState<{ records: EvidenceRecord[]; total: number }>>(loadingState);
+  const [relativeContext, setRelativeContext] = useState<StockRelativeContext | null>(null);
+  const [relativeLoading, setRelativeLoading] = useState(false);
+  const [relativeError, setRelativeError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setPosition(loadingState());
     setEvidence(loadingState());
+    setRelativeContext(null);
+    setRelativeError(null);
+    setRelativeLoading(validCode);
     if (!validCode) return () => { cancelled = true; };
 
     const positionRequest = api.getDerivedPositions()
@@ -63,7 +70,20 @@ export function CandidateWorkspace() {
       .catch((cause) => {
         if (!cancelled) setEvidence({ status: "error", value: null, error: errorMessage(cause, "证据记录读取失败") });
       });
-    void Promise.allSettled([positionRequest, evidenceRequest]);
+    const relativeRequest = api.stockRelativeContext(code)
+      .then((result) => {
+        if (!cancelled) {
+          setRelativeContext(result);
+          setRelativeError(null);
+        }
+      })
+      .catch((cause) => {
+        if (!cancelled) setRelativeError(errorMessage(cause, "相对表现数据暂不可用"));
+      })
+      .finally(() => {
+        if (!cancelled) setRelativeLoading(false);
+      });
+    void Promise.allSettled([positionRequest, evidenceRequest, relativeRequest]);
 
     return () => { cancelled = true; };
   }, [code, validCode]);
@@ -136,6 +156,12 @@ export function CandidateWorkspace() {
           )}
           {position.status === "error" && <p className="mt-3 text-xs text-warning" role="alert">{position.error}；不会把读取失败解释为未持有。</p>}
         </GlassCard>
+
+        <StockRelativeContextCard
+          data={relativeContext}
+          loading={relativeLoading}
+          error={relativeError}
+        />
 
         <NativeIntelSecurityContext code={code} />
 
