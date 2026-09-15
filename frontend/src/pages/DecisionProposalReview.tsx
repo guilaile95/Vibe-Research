@@ -22,6 +22,7 @@ import {
 import type { CampaignRecord, CampaignThesisBinding, CampaignCurrentThesis, ThesisAggregate, CampaignAIDraftGenerateResult, DecisionProposalDraftWitness, ResearchContinuity } from "@/lib/api";
 import { ResearchBrief } from "@/components/campaign/ResearchBrief";
 import { buildResearchBrief } from "@/lib/researchBrief";
+import { CAMPAIGN_STATUS_LABELS, isTerminalCampaignStatus } from "@/lib/decisionInbox";
 
 type ChallengeReadState = "PENDING" | "FOUND" | "ABSENT" | "ERROR";
 
@@ -364,6 +365,8 @@ export function DecisionProposalReview() {
     void (async () => {
       try {
         const nextCampaign = await api.getCampaign(campaignId);
+        if (cancelled || generation !== contextGeneration.current) return;
+        setCampaign(nextCampaign);
         const nextBinding = await api.getCampaignThesisBinding(campaignId);
         const [nextCurrent, nextAggregate] = await Promise.all([
           api.getCampaignCurrentThesis(campaignId),
@@ -371,7 +374,6 @@ export function DecisionProposalReview() {
         ]);
         if (cancelled || generation !== contextGeneration.current) return;
         const result = resolveDecisionContext(nextCampaign, nextBinding, nextCurrent, nextAggregate);
-        setCampaign(nextCampaign);
         setBinding(nextBinding);
         setCurrentThesis(nextCurrent);
         setBoundThesis(nextAggregate);
@@ -644,6 +646,7 @@ export function DecisionProposalReview() {
         && (challengeReadState !== "FOUND" || !bindChallenge || !challengePacket?.challenge_id))
     ) return;
     setBusy("commit");
+    const commitGeneration = contextGeneration.current;
     setError("");
     setCommitted(null);
     try {
@@ -676,7 +679,22 @@ export function DecisionProposalReview() {
       if (err instanceof ApiError && err.status === 409) {
         setPreview(null);
         setConfirmed(false);
-        setError("决策草案已失效，投资计划或当前投资逻辑已经变化，请重新预览。");
+        try {
+          const freshCampaign = await api.getCampaign(campaignId);
+          if (commitGeneration !== contextGeneration.current) return;
+          setCampaign(freshCampaign);
+          if (isTerminalCampaignStatus(freshCampaign.status)) {
+            setChallengePacket(null);
+            setChallengeReadState("ABSENT");
+            setBindChallenge(false);
+            setError("");
+          } else {
+            setError("决策草案已失效，投资计划或当前投资逻辑已经变化，请重新预览。");
+          }
+        } catch {
+          if (commitGeneration !== contextGeneration.current) return;
+          setError("决策草案已失效，且当前无法重新读取投资计划状态。请刷新页面后再继续。");
+        }
       } else {
         setError(err instanceof ApiError ? err.message : "正式决策提交失败。");
       }
@@ -780,6 +798,38 @@ export function DecisionProposalReview() {
       {historyRead?.id === `${campaignId}:${historicalId}` && historyRead.error && <p role="alert">历史决定读取失败：{historyRead.error}；未切换到其他决定。</p>}
       <button type="button" className="ml-3 underline" onClick={() => setHistoryRetry((value) => value + 1)}>重新读取此决定</button>
       {decisionReadbackSection}
+    </div>
+  );
+
+  if (campaign && isTerminalCampaignStatus(campaign.status)) return (
+    <div className="space-y-6" data-testid="terminal-campaign-decision-readonly" data-campaign-status={campaign.status}>
+      <PageHeader
+        title="本轮研究已结束"
+        subtitle={`${CAMPAIGN_STATUS_LABELS[campaign.status]} · 这轮研究只保留历史记录与复盘，不再形成新的正式判断。`}
+        actions={(
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              to="/decision-inbox"
+              className="inline-flex items-center gap-1.5 rounded border border-border/60 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+              data-testid="terminal-campaign-return-to-inbox"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> 返回决策待办
+            </Link>
+            <button type="button" onClick={() => navigate(-1)} className="inline-flex items-center gap-1.5 rounded border border-border/60 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">
+              返回
+            </button>
+          </div>
+        )}
+      />
+      <ResearchBrief
+        model={researchBrief}
+        bindingThesisId={binding?.thesis_id ?? ""}
+        boundThesisId={boundThesis?.thesis.id ?? ""}
+      />
+      <section className="rounded-lg border border-border/60 bg-muted/20 p-4 text-sm">
+        <h2 className="font-semibold">如需重新研究，请新建一轮研究</h2>
+        <p className="mt-2 text-muted-foreground">旧投资计划继续用于查看已提交的正式决定、研究历史和复盘；新的判断应放在新的投资计划中。</p>
+      </section>
     </div>
   );
 
