@@ -1109,6 +1109,37 @@ try {
 
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
+  const sectorReturnTo = "/sectors/pcb/overview?view=dynamic#company-002463";
+  await page.goto(`http://127.0.0.1:${port}/stock-data?code=600519&return_to=${encodeURIComponent(sectorReturnTo)}`, { waitUntil: "networkidle" });
+  await page.locator('[data-active-code="600519"]').waitFor();
+  const contextualCandidateHref = await page.getByTestId("stock-data-candidate-entry").getAttribute("href");
+  assert.equal(
+    new URL(contextualCandidateHref || "", "http://127.0.0.1").searchParams.get("return_to"),
+    "/stock-data?code=600519&return_to=%2Fsectors%2Fpcb%2Foverview%3Fview%3Ddynamic%23company-002463",
+    "StockData candidate entry must preserve the complete StockData route as return context",
+  );
+  await page.getByTestId("stock-data-candidate-entry").click();
+  await page.waitForURL(/\/candidates\/600519\?return_to=/);
+  assert.equal(
+    await page.getByTestId("candidate-stock-data-entry").getAttribute("href"),
+    "/stock-data?code=600519&return_to=%2Fsectors%2Fpcb%2Foverview%3Fview%3Ddynamic%23company-002463",
+    "Candidate source entry must return to the complete validated StockData path",
+  );
+  const contextualEvidence = page.getByTestId("candidate-existing-evidence").first();
+  if (await contextualEvidence.count()) {
+    assert.equal(
+      new URL(await contextualEvidence.getAttribute("href") || "", "http://127.0.0.1").searchParams.get("return_to"),
+      "/candidates/600519?return_to=%2Fstock-data%3Fcode%3D600519%26return_to%3D%252Fsectors%252Fpcb%252Foverview%253Fview%253Ddynamic%2523company-002463",
+      "Candidate Evidence links must retain the complete Candidate route",
+    );
+  }
+  await page.getByTestId("candidate-stock-data-entry").click();
+  await page.waitForURL(/\/stock-data\?code=600519&return_to=/);
+  await page.getByTestId("stock-data-sector-return").click();
+  await page.waitForURL(/\/sectors\/pcb\/overview\?view=dynamic#company-002463/);
+
+  // Keep the existing independent Candidate flow on its historical URL shape.
+  state.apiPaths.length = 0;
   await page.goto(`http://127.0.0.1:${port}/stock-data?code=600519`, { waitUntil: "networkidle" });
   await page.locator('[data-active-code="600519"]').waitFor();
   assert.equal(

@@ -65,9 +65,9 @@ test("CandidateWorkspace existing evidence href includes return_to", () => {
   const src = readSrc("pages/CandidateWorkspace.tsx");
   assert.ok(
     src.includes("`/evidence/${encodeURIComponent(record.id)}?${new URLSearchParams({ return_to: returnTo }).toString()}`"),
-    "existing evidence links must append return_to = candidateWorkspaceHref(code)",
+    "existing evidence links must append return_to = the complete CandidateWorkspace route",
   );
-  assert.match(src, /const returnTo = candidateWorkspaceHref\(code\)/);
+  assert.match(src, /const returnTo = `\$\{location\.pathname\}\$\{location\.search\}\$\{location\.hash\}`/);
 });
 
 test("ThesisDetail existing evidence href includes current return_to", () => {

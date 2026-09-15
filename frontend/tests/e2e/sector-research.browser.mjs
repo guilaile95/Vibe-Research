@@ -407,6 +407,35 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
       errors.push(`${label}: expand expected +1 dynamic data request, before=${dataReqBefore}, after=${dataReqAfter}`);
     }
 
+    if (sectorKey === "pcb") {
+      const entry = page.getByTestId("sector-company-stock-data-entry").first();
+      if (!(await entry.isVisible().catch(() => false))) {
+        errors.push(`${label}: valid representative company missing StockData entry`);
+      } else {
+        const href = await entry.getAttribute("href");
+        const parsed = new URL(href || "", page.url());
+        if (parsed.pathname !== "/stock-data" || parsed.searchParams.get("code") !== "002463") {
+          errors.push(`${label}: representative StockData href lost exact code: ${href}`);
+        }
+        if (parsed.searchParams.get("return_to") !== new URL(page.url()).pathname + new URL(page.url()).search + new URL(page.url()).hash) {
+          errors.push(`${label}: representative StockData href lost sector return path: ${href}`);
+        }
+        const sectorUrl = page.url();
+        await entry.click();
+        await page.waitForURL(/\/stock-data\?code=002463/);
+        if (new URL(page.url()).searchParams.get("code") !== "002463") {
+          errors.push(`${label}: clicked representative entry changed security code`);
+        }
+        const stockReturn = page.getByTestId("stock-data-sector-return");
+        if (await stockReturn.isVisible().catch(() => false)) {
+          await stockReturn.click();
+          await page.waitForURL(new URL(sectorUrl).pathname + new URL(sectorUrl).search + new URL(sectorUrl).hash);
+        } else {
+          errors.push(`${label}: StockData did not expose source return while data was unavailable`);
+        }
+      }
+    }
+
     // Collapse & re-open
     const collapseBtn = page.getByRole("button", { name: /收起/ }).last();
     if (await collapseBtn.isVisible().catch(() => false)) {
