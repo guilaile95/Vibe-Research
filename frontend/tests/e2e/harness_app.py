@@ -8,6 +8,7 @@ backend/ or the product workspace.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 
 import app as app_module
 import sector_research_data as srd
@@ -133,7 +134,16 @@ def _fake_dynamic(sector_key: str) -> dict:
                         "error": "依赖未安装",
                     },
                 },
-            }
+            },
+            *(
+                [
+                    {"code": "", "name": "缺少代码样本", "panels": {}},
+                    {"code": "02463", "name": "五位代码样本", "panels": {}},
+                    {"code": "００２４６３", "name": "非 ASCII 代码样本", "panels": {}},
+                ]
+                if os.environ.get("VR_E2E_COMPANY_NAVIGATION") == "1"
+                else []
+            ),
         ],
     }
 
@@ -240,5 +250,6 @@ srd.discover_sector_reports = _fake_discover  # type: ignore[assignment]
 srd.get_sector_dynamic_data = _fake_dynamic  # type: ignore[assignment]
 app_module.smc.build_sector_market_context = _fake_sector_market_context  # type: ignore[assignment]
 app_module.market.get_board_ranking = _fake_board_ranking  # type: ignore[assignment]
+app_module.astock.stock_fund_flow_120d = lambda _code: []  # type: ignore[assignment]
 app_module._download_pdf = _fake_download_pdf  # type: ignore[assignment]
 app_module._get_cached_discovery = _e2e_get_cached_discovery  # type: ignore[assignment]

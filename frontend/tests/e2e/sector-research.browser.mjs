@@ -26,7 +26,9 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
 const frontendDist = path.join(root, "frontend", "dist");
-const shotDir = path.join(root, "docs", "screenshots", "sector-research-accept");
+const shotDir = process.env.E2E_SCREENSHOT_DIR
+  ? path.resolve(process.env.E2E_SCREENSHOT_DIR)
+  : path.join(root, "docs", "screenshots", "sector-research-accept");
 const harnessSrc = path.join(__dirname, "harness_app.py");
 const backendDir = path.join(root, "backend");
 const e2eDir = __dirname;
@@ -106,6 +108,10 @@ function startStaticServer(dir, port, apiBackendPort) {
         },
       );
       proxyReq.on("error", (err) => {
+        if (res.headersSent || res.destroyed) {
+          res.destroy();
+          return;
+        }
         res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
         res.end(`Bad Gateway (proxy error): ${err.message}`);
       });
@@ -172,6 +178,8 @@ function createNetworkBag(errors, label) {
     sectorReportsRequests: {},
     sectorImportRequests: {},
     sectorReportsDetails: [],
+    businessWrites: [],
+    clientErrors: [],
     badStatuses: [],
   };
 
@@ -182,6 +190,9 @@ function createNetworkBag(errors, label) {
       errors.push(`${label} double api path: ${url}`);
     }
     const status = response.status();
+    if (status >= 400 && status < 500) {
+      bag.clientErrors.push(`${response.request().method()} ${new URL(url).pathname}${new URL(url).search} -> ${status}`);
+    }
     if (status === 404 || status === 422 || status >= 500) {
       bag.badStatuses.push(`${status} ${url}`);
       errors.push(`${label} unexpected HTTP ${status}: ${url}`);
@@ -190,6 +201,9 @@ function createNetworkBag(errors, label) {
       const u = new URL(url);
       const p = u.pathname;
       const method = response.request().method();
+      if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+        bag.businessWrites.push(`${method} ${p}`);
+      }
       if (p.includes("/sector-research/data/pcb") && method === "GET") bag.dataPcb += 1;
       if (p.includes("/sector-research/reports/pcb") && method === "GET") bag.reportsPcb += 1;
       if (p.includes("/sector-research/import/pcb") && method === "POST") bag.importPost += 1;
@@ -387,6 +401,9 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
   // Return to overview for screenshot & dynamic/discovery tests
   await page.getByRole("link", { name: "总览" }).first().click();
   await page.waitForLoadState("networkidle");
+  if (sectorKey === "pcb") {
+    await page.goto(`${page.url()}?scope=company&days=180#representative-companies`, { waitUntil: "networkidle" });
+  }
 
   // Screenshot
   const shotName = isMobile ? `mobile-${sectorKey}-overview-390.png` : `desktop-${sectorKey}-overview.png`;
@@ -408,6 +425,12 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
     }
 
     if (sectorKey === "pcb") {
+      const liveDataText = await page.getByText("002463 一致预期：依赖未安装").first().innerText().catch(() => "");
+      if (!liveDataText) errors.push(`${label}: partial warning was not preserved`);
+      const entries = page.getByTestId("sector-company-stock-data-entry");
+      if (await entries.count() !== 1) {
+        errors.push(`${label}: missing/invalid/non-ASCII company codes must not create StockData links`);
+      }
       const entry = page.getByTestId("sector-company-stock-data-entry").first();
       if (!(await entry.isVisible().catch(() => false))) {
         errors.push(`${label}: valid representative company missing StockData entry`);
@@ -421,8 +444,9 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
           errors.push(`${label}: representative StockData href lost sector return path: ${href}`);
         }
         const sectorUrl = page.url();
+        const writesBeforeNavigation = networkBag.bag.businessWrites.length;
         await entry.click();
-        await page.waitForURL(/\/stock-data\?code=002463/);
+        await page.waitForURL(new URL(`/stock-data?${parsed.searchParams.toString()}`, sectorUrl).toString());
         if (new URL(page.url()).searchParams.get("code") !== "002463") {
           errors.push(`${label}: clicked representative entry changed security code`);
         }
@@ -432,6 +456,9 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
           await page.waitForURL(sectorUrl);
         } else {
           errors.push(`${label}: StockData did not expose source return while data was unavailable`);
+        }
+        if (networkBag.bag.businessWrites.length !== writesBeforeNavigation) {
+          errors.push(`${label}: Sector → StockData → Sector navigation emitted a business write`);
         }
       }
     }
@@ -553,6 +580,66 @@ async function runStrengthOnly(browser, errors, networkBag) {
   page.on("response", networkBag.onResponse);
   await testSectorStrengthWorkflow(page, errors, label);
   await context.close();
+}
+
+async function runCompanyNavigationOnly(browser, errors, networkBag) {
+  let expected400ConsoleCount = 0;
+  for (const [viewportName, viewport] of [["desktop", { width: 1440, height: 900 }], ["mobile-390", { width: 390, height: 844 }]]) {
+    const label = `sector-company-navigation ${viewportName}`;
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    page.on("pageerror", (error) => errors.push(`${label} pageerror: ${error.message}`));
+    page.on("console", (msg) => {
+      const text = msg.text();
+      if (msg.type() === "error") {
+        if (text.includes("Failed to load resource") && text.includes("400")) expected400ConsoleCount += 1;
+        else errors.push(`${label} console: ${text}`);
+      }
+    });
+    page.on("response", networkBag.onResponse);
+
+    const sectorUrl = `http://127.0.0.1:${frontendPort}/sectors/pcb/overview?scope=company&days=180#representative-companies`;
+    await page.goto(sectorUrl, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: /展开/ }).last().click();
+    await page.getByText("002463 一致预期：依赖未安装").first().waitFor({ state: "visible" });
+
+    const entries = page.getByTestId("sector-company-stock-data-entry");
+    if (await entries.count() !== 1) {
+      errors.push(`${label}: missing/invalid/non-ASCII company codes must not create StockData links`);
+    }
+    const entry = entries.first();
+    const href = await entry.getAttribute("href");
+    const parsed = new URL(href || "", sectorUrl);
+    if (parsed.pathname !== "/stock-data" || parsed.searchParams.get("code") !== "002463") {
+      errors.push(`${label}: representative StockData href lost exact code: ${href}`);
+    }
+    if (parsed.searchParams.get("return_to") !== new URL(sectorUrl).pathname + new URL(sectorUrl).search + new URL(sectorUrl).hash) {
+      errors.push(`${label}: representative StockData href lost sector return path: ${href}`);
+    }
+
+    const writesBeforeNavigation = networkBag.bag.businessWrites.length;
+    await entry.click();
+    await page.waitForURL(new URL(`/stock-data?${parsed.searchParams.toString()}`, sectorUrl).toString());
+    await page.getByTestId("stock-data-sector-return").click();
+    await page.waitForURL(sectorUrl);
+    if (networkBag.bag.businessWrites.length !== writesBeforeNavigation) {
+      errors.push(`${label}: Sector → StockData → Sector navigation emitted a business write`);
+    }
+    await context.close();
+  }
+  const allowedFixture400 = new Set([
+    "GET /api/fund-flow?code= -> 400",
+    "GET /api/fund-flow?code=02463 -> 400",
+  ]);
+  if (networkBag.bag.clientErrors.length !== 4 || networkBag.bag.clientErrors.some((item) => !allowedFixture400.has(item))) {
+    errors.push(`sector-company-navigation: unexpected client responses: ${JSON.stringify(networkBag.bag.clientErrors)}`);
+  }
+  if (expected400ConsoleCount !== networkBag.bag.clientErrors.length) {
+    errors.push(`sector-company-navigation: unmatched 400 console errors=${expected400ConsoleCount}, responses=${networkBag.bag.clientErrors.length}`);
+  }
+  if (networkBag.bag.badStatuses.length > 0) {
+    errors.push(`sector-company-navigation: unexpected bad statuses: ${JSON.stringify(networkBag.bag.badStatuses)}`);
+  }
 }
 
 async function runDesktop(browser, errors, networkBag) {
@@ -682,6 +769,7 @@ function assertNetworkBag(bag, errors) {
 
 async function main() {
   const strengthOnly = process.argv.includes("--strength-only");
+  const companyNavigationOnly = process.argv.includes("--company-navigation-only");
   if (!existsSync(frontendDist)) {
     throw new Error("frontend/dist missing; run npm run build first");
   }
@@ -718,6 +806,7 @@ async function main() {
         PYTHONPATH: [backendDir, e2eDir, process.env.PYTHONPATH || ""].filter(Boolean).join(process.platform === "win32" ? ";" : ":"),
         VR_DATA_DIR: dataDir,
         VR_REPORTS_DIR: reportsDir,
+        VR_E2E_COMPANY_NAVIGATION: companyNavigationOnly ? "1" : "0",
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -742,7 +831,9 @@ async function main() {
 
     const browser = await launchBrowser();
     try {
-      if (strengthOnly) {
+      if (companyNavigationOnly) {
+        await runCompanyNavigationOnly(browser, errors, networkBag);
+      } else if (strengthOnly) {
         await runStrengthOnly(browser, errors, networkBag);
       } else {
         await runDesktop(browser, errors, networkBag);
@@ -750,6 +841,13 @@ async function main() {
       }
     } finally {
       await browser.close().catch(() => {});
+    }
+
+    if (companyNavigationOnly) {
+      console.log(`Sector company navigation client responses: ${JSON.stringify(networkBag.bag.clientErrors)}`);
+      if (errors.length) throw new Error(`sector company navigation failed:\n${errors.join("\n")}`);
+      console.log(`Sector company navigation OK; browser=${browserLabel}`);
+      return;
     }
 
     if (strengthOnly) {
