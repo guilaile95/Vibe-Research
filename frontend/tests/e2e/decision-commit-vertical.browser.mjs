@@ -857,7 +857,11 @@ async function run() {
         && request.error === "net::ERR_ABORTED"
         && url.pathname === "/api/research-events"
         && url.search === "";
-      return !expectedCalendarAbort;
+      const expectedContinuityAbort = request.method === "GET"
+        && request.error === "net::ERR_ABORTED"
+        && url.pathname === `/api/campaigns/${campaign.campaign_id}/research-continuity`
+        && url.search === "";
+      return !expectedCalendarAbort && !expectedContinuityAbort;
     });
     assert.equal(unexpectedConsoleErrors.length, 0, `unexpected browser console errors: ${JSON.stringify(unexpectedConsoleErrors)}`);
     assert.equal(unexpectedFailedRequests.length, 0, `unexpected failed requests: ${JSON.stringify(unexpectedFailedRequests)}`);
