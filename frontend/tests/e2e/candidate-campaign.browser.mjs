@@ -1112,6 +1112,21 @@ try {
   const sectorReturnTo = "/sectors/pcb/overview?view=dynamic#company-002463";
   await page.goto(`http://127.0.0.1:${port}/stock-data?code=600519&return_to=${encodeURIComponent(sectorReturnTo)}`, { waitUntil: "networkidle" });
   await page.locator('[data-active-code="600519"]').waitFor();
+  await page.locator('input').first().fill("600520");
+  await page.getByRole("button", { name: "查询" }).click();
+  await page.locator('[data-active-code="600520"]').waitFor();
+  const switchedHref = await page.getByTestId("stock-data-candidate-entry").getAttribute("href");
+  assert.equal(
+    new URL(switchedHref || "", "http://127.0.0.1").searchParams.get("return_to"),
+    "/stock-data?code=600520&return_to=%2Fsectors%2Fpcb%2Foverview%3Fview%3Ddynamic%23company-002463",
+    "manual StockData code switch must bind the forwarded route to activeCode",
+  );
+  await page.goto(`http://127.0.0.1:${port}/stock-data?code=600519&return_to=${encodeURIComponent("https://evil.example/phish")}`, { waitUntil: "networkidle" });
+  await page.locator('[data-active-code="600519"]').waitFor();
+  assert.equal(await page.getByTestId("stock-data-sector-return").count(), 0, "unsafe return_to must not create a return link");
+
+  await page.goto(`http://127.0.0.1:${port}/stock-data?code=600519&return_to=${encodeURIComponent(sectorReturnTo)}`, { waitUntil: "networkidle" });
+  await page.locator('[data-active-code="600519"]').waitFor();
   const contextualCandidateHref = await page.getByTestId("stock-data-candidate-entry").getAttribute("href");
   assert.equal(
     new URL(contextualCandidateHref || "", "http://127.0.0.1").searchParams.get("return_to"),

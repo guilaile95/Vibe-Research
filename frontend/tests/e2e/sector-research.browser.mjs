@@ -429,7 +429,7 @@ async function testSectorFullWorkflow(page, sectorKey, isMobile, errors, network
         const stockReturn = page.getByTestId("stock-data-sector-return");
         if (await stockReturn.isVisible().catch(() => false)) {
           await stockReturn.click();
-          await page.waitForURL(new URL(sectorUrl).pathname + new URL(sectorUrl).search + new URL(sectorUrl).hash);
+          await page.waitForURL(sectorUrl);
         } else {
           errors.push(`${label}: StockData did not expose source return while data was unavailable`);
         }

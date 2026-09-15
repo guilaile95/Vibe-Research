@@ -480,9 +480,9 @@ export function StockData() {
       <PageHeader
         title="个股数据"
         subtitle="行情 · 估值 · 研报 · 新闻 · 资金面"
-        actions={((val || gstock) || stockReturnPath) && (
+        actions={((val || gstock) || returnTo) && (
           <div className="flex flex-wrap items-center gap-2">
-            {stockReturnPath && (
+            {returnTo && (
               <Link
                 to={returnTo}
                 className="rounded-md border border-border/60 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
@@ -491,24 +491,28 @@ export function StockData() {
                 返回来源
               </Link>
             )}
-            {(val || gstock) && /^\d{6}$/.test(activeCode) && (
-              <Link
-                to={candidateHref}
-                className="rounded-md border border-primary/50 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10"
-                data-testid="stock-data-candidate-entry"
-              >
-                候选研究
-              </Link>
+            {(val || gstock) && (
+              <>
+                {/^\d{6}$/.test(activeCode) && (
+                  <Link
+                    to={candidateHref}
+                    className="rounded-md border border-primary/50 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10"
+                    data-testid="stock-data-candidate-entry"
+                  >
+                    候选研究
+                  </Link>
+                )}
+                <AskAiButton
+                  context={gstock ? gAiContext : aiContext}
+                  // 本页不换路由就能换标的，必须按已解析代码分开存对话，否则会串台。
+                  scopeKey={gstock ? `g:${gstock.code}` : val?.code}
+                  label="让 AI 读这些数据"
+                  suggestions={gstock
+                    ? ["这家公司基本面怎么样", "盈利能力如何", "有什么风险"]
+                    : ["这个估值贵不贵", "机构一致预期怎么看", "近期研报的分歧点", "有什么风险"]}
+                />
+              </>
             )}
-            <AskAiButton
-              context={gstock ? gAiContext : aiContext}
-              // 本页不换路由就能换标的，必须按已解析代码分开存对话，否则会串台。
-              scopeKey={gstock ? `g:${gstock.code}` : val?.code}
-              label="让 AI 读这些数据"
-              suggestions={gstock
-                ? ["这家公司基本面怎么样", "盈利能力如何", "有什么风险"]
-                : ["这个估值贵不贵", "机构一致预期怎么看", "近期研报的分歧点", "有什么风险"]}
-            />
           </div>
         )}
       />
