@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import {
   Search, FileText, Newspaper, Loader2, AlertCircle, LineChart, BarChart3, Megaphone,
   Wallet, Trophy, CalendarClock, Boxes, MessageSquare,
@@ -38,6 +38,7 @@ import {
 } from "@/lib/api";
 import { indicatorErrorMessage } from "@/lib/technicalIndicatorsView";
 import { buildEvidenceNewHref, candidateWorkspaceHref } from "@/lib/candidateCampaign";
+import { safeInternalReturnTo } from "@/lib/internalReturnTo";
 import { cn } from "@/lib/utils";
 
 // 金额格式化（后端资金单位：元 / 万元）
@@ -102,9 +103,12 @@ function ValBand({ label, m }: { label: string; m: ValMetric }) {
 }
 
 export function StockData() {
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const [code, setCode] = useState("");
   /** 已提交查询的代码；面板请求只读此值，输入框改动不改 activeCode */
   const [activeCode, setActiveCode] = useState("");
+  const returnTo = safeInternalReturnTo(searchParams.get("return_to"), "");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [val, setVal] = useState<Valuation | null>(null);
@@ -461,32 +465,54 @@ export function StockData() {
         ? `财务(${gstock.metrics.report_date})：营收 ${bigMoney(gstock.metrics.revenue, gstock.market)}(同比${round2(gstock.metrics.revenue_yoy, "%")})、归母净利 ${bigMoney(gstock.metrics.net_profit, gstock.market)}、EPS ${gstock.metrics.eps ?? "—"}、ROE ${round2(gstock.metrics.roe, "%")}、毛利率 ${round2(gstock.metrics.gross_margin, "%")}、净利率 ${round2(gstock.metrics.net_margin, "%")}、资产负债率 ${round2(gstock.metrics.debt_ratio, "%")}`
         : "")
     : "";
+  const stockReturnPath = (() => {
+    if (!returnTo || !/^\d{6}$/.test(activeCode)) return "";
+    const params = new URLSearchParams(searchParams);
+    params.set("code", activeCode);
+    return `${location.pathname}?${params.toString()}${location.hash}`;
+  })();
+  const candidateHref = /^\d{6}$/.test(activeCode)
+    ? `${candidateWorkspaceHref(activeCode)}${stockReturnPath ? `?${new URLSearchParams({ return_to: stockReturnPath }).toString()}` : ""}`
+    : "";
 
   return (
     <div data-active-code={activeCode || undefined}>
       <PageHeader
         title="个股数据"
         subtitle="行情 · 估值 · 研报 · 新闻 · 资金面"
-        actions={(val || gstock) && (
+        actions={((val || gstock) || returnTo) && (
           <div className="flex flex-wrap items-center gap-2">
-            {/^\d{6}$/.test(activeCode) && (
+            {returnTo && (
               <Link
-                to={candidateWorkspaceHref(activeCode)}
-                className="rounded-md border border-primary/50 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10"
-                data-testid="stock-data-candidate-entry"
+                to={returnTo}
+                className="rounded-md border border-border/60 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+                data-testid="stock-data-sector-return"
               >
-                候选研究
+                返回来源
               </Link>
             )}
-            <AskAiButton
-              context={gstock ? gAiContext : aiContext}
-              // 本页不换路由就能换标的，必须按已解析代码分开存对话，否则会串台。
-              scopeKey={gstock ? `g:${gstock.code}` : val?.code}
-              label="让 AI 读这些数据"
-              suggestions={gstock
-                ? ["这家公司基本面怎么样", "盈利能力如何", "有什么风险"]
-                : ["这个估值贵不贵", "机构一致预期怎么看", "近期研报的分歧点", "有什么风险"]}
-            />
+            {(val || gstock) && (
+              <>
+                {/^\d{6}$/.test(activeCode) && (
+                  <Link
+                    to={candidateHref}
+                    className="rounded-md border border-primary/50 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10"
+                    data-testid="stock-data-candidate-entry"
+                  >
+                    候选研究
+                  </Link>
+                )}
+                <AskAiButton
+                  context={gstock ? gAiContext : aiContext}
+                  // 本页不换路由就能换标的，必须按已解析代码分开存对话，否则会串台。
+                  scopeKey={gstock ? `g:${gstock.code}` : val?.code}
+                  label="让 AI 读这些数据"
+                  suggestions={gstock
+                    ? ["这家公司基本面怎么样", "盈利能力如何", "有什么风险"]
+                    : ["这个估值贵不贵", "机构一致预期怎么看", "近期研报的分歧点", "有什么风险"]}
+                />
+              </>
+            )}
           </div>
         )}
       />

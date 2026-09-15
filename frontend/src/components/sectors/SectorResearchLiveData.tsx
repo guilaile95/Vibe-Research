@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
+import { Link, useLocation } from "react-router-dom";
 import { GlassCard } from "@/components/ui/GlassCard";
 import {
   api,
@@ -83,6 +84,7 @@ function capitalErrorMessage(error: unknown): string {
 }
 
 export function SectorResearchLiveData({ sectorKey }: Props) {
+  const location = useLocation();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<SectorDynamicData | null>(null);
@@ -198,6 +200,7 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
   const capitalTotal = data?.companies?.length ?? 0;
   const capitalResolved = Object.values(capitalFlowByCode);
   const capitalOk = capitalResolved.filter((item) => item.summary != null).length;
+  const sectorReturnTo = `${location.pathname}${location.search}${location.hash}`;
 
   const capitalSeries = useMemo(() => {
     if (!data?.companies) return null;
@@ -308,6 +311,13 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
                 const capitalSummary = capital?.summary;
                 const combinedOk = ok + (capitalSummary ? 1 : 0);
                 const combinedTotal = total + 1;
+                const validCode = /^[0-9]{6}$/.test(c.code);
+                const stockDataHref = validCode
+                  ? `/stock-data?${new URLSearchParams({
+                      code: c.code,
+                      return_to: sectorReturnTo,
+                    }).toString()}`
+                  : null;
                 return (
                   <div
                     key={c.code}
@@ -483,6 +493,15 @@ export function SectorResearchLiveData({ sectorKey }: Props) {
                       <p className="mt-1 line-clamp-2 text-[10px] text-muted-foreground">
                         {errors.join(" · ")}
                       </p>
+                    )}
+                    {stockDataHref && (
+                      <Link
+                        to={stockDataHref}
+                        className="mt-2 inline-flex text-[11px] font-medium text-primary hover:underline"
+                        data-testid="sector-company-stock-data-entry"
+                      >
+                        查看个股数据
+                      </Link>
                     )}
                   </div>
                 );
