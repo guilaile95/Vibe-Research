@@ -62,6 +62,7 @@ _CAMPAIGN_RE = re.compile(r"^campaign_[0-9a-f]{32}$")
 _THESIS_RE = re.compile(r"^[0-9a-f]{32}$")
 _DECISION_RE = re.compile(r"^decision_[0-9a-f]{32}$")
 _FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
+TERMINAL_CAMPAIGN_STATUSES = frozenset({"CLOSED", "REJECTED", "EXPIRED"})
 
 
 class DecisionCommitRuntimeError(RuntimeError):
@@ -78,6 +79,10 @@ class CurrentThesisUnavailableError(DecisionCommitRuntimeError):
 
 class ProposalStaleError(DecisionCommitRuntimeError):
     """The server-owned proposal fingerprint no longer matches the request."""
+
+
+class TerminalCampaignDecisionConflictError(DecisionCommitRuntimeError):
+    """A terminal Campaign cannot receive a new Formal Decision."""
 
 
 class CommitConfirmationRequiredError(DecisionCommitRuntimeError):
@@ -919,6 +924,13 @@ def _read_campaign(ports: RuntimePorts, campaign_id: str) -> Mapping[str, Any]:
     return copy.deepcopy(dict(campaign))
 
 
+def _require_campaign_accepts_new_decision(campaign: Mapping[str, Any]) -> None:
+    if campaign.get("status") in TERMINAL_CAMPAIGN_STATUSES:
+        raise TerminalCampaignDecisionConflictError(
+            "terminal Campaign cannot receive a new Formal Decision"
+        )
+
+
 def _read_thesis_once(
     ports: RuntimePorts, campaign_id: str
 ) -> Mapping[str, Any] | None:
@@ -1305,6 +1317,7 @@ def preview_decision_proposal(
     if snapshot_as_of != _canonical_utc(snapshot_as_of, "as_of"):
         raise DecisionCommitInputError("as_of must be canonical UTC")
     campaign = _read_campaign(ports, campaign_key)
+    _require_campaign_accepts_new_decision(campaign)
     raw_thesis = _read_thesis_once(ports, campaign_key)
     frozen = _read_frozen(ports, campaign)
     critical_data = _read_critical_data(ports, campaign, snapshot_as_of)
@@ -1503,6 +1516,40 @@ def _validate_committed_readback(
         raise FrozenDecisionIntegrityError("Frozen Decision proposal provenance is missing")
 
 
+def _find_unique_proposal_marker(
+    frozen: Sequence[Mapping[str, Any]], expected_marker: str
+) -> tuple[int | None, Mapping[str, Any] | None]:
+    existing_index: int | None = None
+    existing: Mapping[str, Any] | None = None
+    for index, item in enumerate(frozen):
+        if (
+            isinstance(item.get("source_refs"), list)
+            and expected_marker in item["source_refs"]
+        ):
+            if existing is not None:
+                raise FrozenDecisionIntegrityError(
+                    "Frozen Decision proposal provenance is duplicated"
+                )
+            existing_index = index
+            existing = item
+    return existing_index, existing
+
+
+def _pre_write_validator(
+    *,
+    ports: RuntimePorts,
+    campaign_id: str,
+    challenge_validator: Callable[[Mapping[str, Any], str], None] | None,
+) -> Callable[[Mapping[str, Any], str], None]:
+    def validate(payload: Mapping[str, Any], committed_at: str) -> None:
+        fresh_campaign = _read_campaign(ports, campaign_id)
+        _require_campaign_accepts_new_decision(fresh_campaign)
+        if challenge_validator is not None:
+            challenge_validator(payload, committed_at)
+
+    return validate
+
+
 def commit_decision_proposal(
     campaign_id: str,
     payload: Mapping[str, Any],
@@ -1552,8 +1599,14 @@ def commit_decision_proposal(
 
     with _COMMIT_LOCK:
         campaign = _read_campaign(ports, campaign_key)
-        raw_thesis = _read_thesis_once(ports, campaign_key)
         frozen = _read_frozen(ports, campaign)
+        expected_marker = f"{PROPOSAL_SOURCE_PREFIX}{expected}"
+        existing_index, existing = _find_unique_proposal_marker(
+            frozen, expected_marker
+        )
+        if existing is None:
+            _require_campaign_accepts_new_decision(campaign)
+        raw_thesis = _read_thesis_once(ports, campaign_key)
         critical_data = _read_critical_data(ports, campaign, as_of)
         candidate_position, candidate_account, candidate_incumbents = (
             _read_candidate_authorities(ports, campaign, as_of)
@@ -1604,20 +1657,6 @@ def commit_decision_proposal(
             proposal=result, drafts=drafts, critical_data=critical_data
         )
         marker = f"{PROPOSAL_SOURCE_PREFIX}{fingerprint}"
-        expected_marker = f"{PROPOSAL_SOURCE_PREFIX}{expected}"
-        existing_index: int | None = None
-        existing: Mapping[str, Any] | None = None
-        for index, item in enumerate(frozen):
-            if (
-                isinstance(item.get("source_refs"), list)
-                and expected_marker in item["source_refs"]
-            ):
-                if existing is not None:
-                    raise FrozenDecisionIntegrityError(
-                        "Frozen Decision proposal provenance is duplicated"
-                    )
-                existing_index = index
-                existing = item
         if fingerprint != expected and existing is None:
             raise ProposalStaleError("proposal fingerprint mismatch; re-preview required")
         if existing is not None:
@@ -1696,9 +1735,9 @@ def commit_decision_proposal(
             frozen_payload = _freeze_payload(
                 result, authorities, drafts, fingerprint, challenge_id=challenge_id
             )
-            validator = None
+            challenge_validator = None
             if challenge_id is not None:
-                validator = _challenge_pre_write_validator(
+                challenge_validator = _challenge_pre_write_validator(
                     challenge_id=challenge_id,
                     campaign=campaign,
                     proposal=result,
@@ -1709,13 +1748,20 @@ def commit_decision_proposal(
             if writer is not None:
                 stored = writer(
                     frozen_payload,
-                    pre_write_validator=validator,
+                    pre_write_validator=_pre_write_validator(
+                        ports=ports,
+                        campaign_id=campaign_key,
+                        challenge_validator=challenge_validator,
+                    ),
                 )
             else:
-                if validator is not None:
+                if challenge_validator is not None:
                     raise FrozenDecisionIntegrityError(
                         "Challenge-bound Frozen Decision writer lacks service-owned pre-write validation"
                     )
+                _require_campaign_accepts_new_decision(
+                    _read_campaign(ports, campaign_key)
+                )
                 stored = ports.freeze_writer(frozen_payload)
         else:
             stored = existing
@@ -1827,6 +1873,8 @@ __all__ = [
     "OPPORTUNITY_POLICY_VERSION",
     "PROPOSAL_SOURCE_PREFIX",
     "ProposalStaleError",
+    "TerminalCampaignDecisionConflictError",
+    "TERMINAL_CAMPAIGN_STATUSES",
     "PRODUCTION_PORTS",
     "RISK_POLICY_VERSION",
     "RuntimePorts",

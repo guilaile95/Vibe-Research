@@ -546,6 +546,12 @@ def _draft() -> dict:
 
 def _ports(thesis: dict | None = None):
     state = {
+        "campaign": {
+            "campaign_id": CAMPAIGN_ID,
+            "security_code": "600519",
+            "strategy": "SWING",
+            "status": "PRE-ENTRY",
+        },
         "frozen": [],
         "writes": 0,
         "position": {"authority_state": "CANONICAL", "holdings": []},
@@ -575,12 +581,7 @@ def _ports(thesis: dict | None = None):
         return freeze_writer(payload)
 
     return runtime.RuntimePorts(
-        campaign_reader=lambda _campaign_id: {
-            "campaign_id": CAMPAIGN_ID,
-            "security_code": "600519",
-            "strategy": "SWING",
-            "status": "PRE-ENTRY",
-        },
+        campaign_reader=lambda _campaign_id: deepcopy(state["campaign"]),
         thesis_reader=lambda _campaign_id: deepcopy(thesis_source),
         frozen_reader=frozen_reader,
         evidence_reader=lambda _campaign: (),
@@ -671,6 +672,15 @@ def test_pre_entry_buy_requires_challenge_and_freezes_candidate_policy(monkeypat
     assert frozen["portfolio_view"]["portfolio_capital_context"]["capital_availability"]["state"] == "AVAILABLE"
     assert frozen["portfolio_view"]["portfolio_capital_context"]["replacement_review"]["state"] == "NOT_REQUIRED"
     assert state["writes"] == 1
+
+    state["campaign"]["status"] = "REJECTED"
+    with pytest.raises(runtime.ProposalStaleError):
+        runtime.commit_decision_proposal(
+            CAMPAIGN_ID, {**commit, "challenge_id": "challenge_test"}, ports=ports
+        )
+    assert state["writes"] == 1
+    historical = runtime.get_committed_decision(CAMPAIGN_ID, DECISION_ID, ports=ports)
+    assert historical["committed"] == frozen
 
 
 @pytest.mark.parametrize("changed", ["account", "position", "position_cost", "incumbent"])
