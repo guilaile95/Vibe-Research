@@ -1,10 +1,15 @@
 import type {
+  CampaignStatus,
   FormalDecisionOutcome,
   FormalDecisionReviewWorklist,
   FormalReviewWorklistItem,
 } from "@/lib/api/types";
 import { decisionActionLabel } from "./decisionActionView.ts";
-import { CAMPAIGN_STRATEGY_LABELS } from "./decisionInbox.ts";
+import {
+  CAMPAIGN_STATUS_LABELS,
+  CAMPAIGN_STRATEGY_LABELS,
+  isTerminalCampaignStatus,
+} from "./decisionInbox.ts";
 
 export type FormalReviewWorklistFilter = "due" | "upcoming" | "unavailable";
 
@@ -166,4 +171,72 @@ export function mergeOutcomeItem(
   const index = items.findIndex((item) => item.decision_id === outcome.decision_id);
   if (index < 0) return [...items, outcome];
   return items.map((item, currentIndex) => currentIndex === index ? outcome : item);
+}
+
+export type OutcomeResearchEntryKind = "current-proposal" | "new-research" | "unavailable";
+
+export interface OutcomeResearchEntry {
+  kind: OutcomeResearchEntryKind;
+  label: string;
+  /** null 表示没有可安全导航的目标；调用方必须只渲染文本。 */
+  href: string | null;
+  detail: string;
+}
+
+const A_SHARE_CODE = /^\d{6}$/;
+
+/**
+ * 历史 Decision 的下一步入口。三个概念严格分开：
+ * - 历史 Decision 本身是只读事实，不是入口；
+ * - Campaign 尚未结束 → 继续这轮研究（它自己的 Proposal）；
+ * - Campaign 已终态 → 新判断必须新建一轮研究，不重开、不改写原来这轮。
+ *
+ * Campaign 身份或状态读不到时返回 unavailable，绝不猜测目标。
+ */
+export function outcomeResearchEntry(
+  campaignId: unknown,
+  campaignStatus: unknown,
+  securityCode: unknown,
+): OutcomeResearchEntry {
+  if (typeof campaignId !== "string" || !campaignId.trim()) {
+    return {
+      kind: "unavailable",
+      label: "Campaign 身份缺失",
+      href: null,
+      detail: "这条历史 Decision 没有可核对的 Campaign，已停止导航。",
+    };
+  }
+  if (
+    typeof campaignStatus !== "string"
+    || !Object.prototype.hasOwnProperty.call(CAMPAIGN_STATUS_LABELS, campaignStatus)
+  ) {
+    return {
+      kind: "unavailable",
+      label: "Campaign 状态未知",
+      href: null,
+      detail: "无法确认这一轮研究是否仍然有效，已停止导航。",
+    };
+  }
+  if (isTerminalCampaignStatus(campaignStatus as CampaignStatus)) {
+    if (typeof securityCode !== "string" || !A_SHARE_CODE.test(securityCode)) {
+      return {
+        kind: "unavailable",
+        label: "缺少可用的证券代码",
+        href: null,
+        detail: "这一轮研究已结束，但没有可用的 6 位证券代码，已停止导航。",
+      };
+    }
+    return {
+      kind: "new-research",
+      label: "需要新判断：新建一轮研究",
+      href: `/candidates/${securityCode}`,
+      detail: "这一轮研究已结束。新判断需要在候选研究中显式选择策略后新建，原来这轮不会被重新打开或改写。",
+    };
+  }
+  return {
+    kind: "current-proposal",
+    label: "继续这轮研究（Proposal）",
+    href: `/campaigns/${encodeURIComponent(campaignId.trim())}/decision-proposal`,
+    detail: "这一轮研究尚未结束，进入它的 Proposal 与生命周期；不会新建或改写正式决策。",
+  };
 }
