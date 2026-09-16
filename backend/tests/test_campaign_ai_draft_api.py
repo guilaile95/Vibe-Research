@@ -87,6 +87,35 @@ def test_preview_route_maps_stale_witness_to_409_before_any_write(monkeypatch):
     assert writes == {"campaign": 0, "formal": 0, "frozen": 0, "trade": 0}
 
 
+@pytest.mark.parametrize("operation", ["preview", "commit"])
+def test_decision_routes_map_terminal_campaign_to_stable_409(monkeypatch, operation):
+    def terminal(*_args, **_kwargs):
+        raise commit_runtime.TerminalCampaignDecisionConflictError("terminal")
+
+    monkeypatch.setattr(
+        decision_commit_router.runtime,
+        f"{operation}_decision_proposal",
+        terminal,
+    )
+    body = _draft()
+    if operation == "commit":
+        body = {
+            **body,
+            "as_of": AS_OF,
+            "expected_proposal_fingerprint": "a" * 64,
+            "user_confirmed": True,
+        }
+    response = TestClient(_app(decision_commit_router)).post(
+        f"/api/campaigns/{CAMPAIGN_ID}/decision-proposal/{operation}",
+        json=body,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "本轮研究已结束，历史记录仍可查看；如需形成新判断，请新建一轮研究。"
+    )
+
+
 def test_preview_runtime_rejects_non_strict_json_and_does_not_write():
     from test_decision_commit_runtime import _ports, _thesis
 

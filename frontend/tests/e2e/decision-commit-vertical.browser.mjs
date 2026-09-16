@@ -354,6 +354,7 @@ async function run() {
     let authorityFailure = false;
     let failDeltaReadback = false;
     let committedDecisionId = null;
+    let terminalWithoutThesisId = null;
     const readbackVariant = process.env.DCR1_READBACK_VARIANT || "valid";
     assert.ok(
       ["valid", "malformed", "decision-mismatch", "campaign-mismatch"].includes(readbackVariant),
@@ -366,10 +367,14 @@ async function run() {
     });
     // 研究摘要零业务写入监控：打开 / 展开摘要不得产生任何非只读 API 请求。
     const apiWriteRequests = [];
+    let latestCommitRequestBody = null;
     page.on("request", (request) => {
       const url = new URL(request.url());
       if (url.pathname.startsWith("/api/") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) {
         apiWriteRequests.push(`${request.method()} ${url.pathname}`);
+      }
+      if (request.method() === "POST" && url.pathname === `/api/campaigns/${campaign.campaign_id}/decision-proposal/commit`) {
+        latestCommitRequestBody = request.postDataJSON();
       }
     });
     // 与 decision-challenge.browser.mjs 相同方向的 node 侧代理：
@@ -765,10 +770,80 @@ async function run() {
       const oldAfterUpdate = await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/decision-proposal/committed/${reread.committed.decision_id}`);
       assert.deepEqual(oldAfterUpdate.committed, reread.committed, "old decision snapshot must remain exact");
       console.log("[R6] path1: new evidence -> confirmed delta -> ADDED -> new explicit decision; old snapshot unchanged");
+
+      const successfulCommitBody = structuredClone(latestCommitRequestBody);
+      const successfulDecisionId = committedDecisionId;
+      assert.ok(successfulCommitBody, "successful commit request must be observable");
+      const beforeTerminal = await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/decision-proposal/committed`);
+
+      await page.getByRole("button", { name: "预览决策草案" }).click();
+      await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
+      await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/transitions`, "POST", {
+        expected_status: "ACTIVE",
+        to_status: "CLOSED",
+      });
+      const terminalCommitResponse = page.waitForResponse((response) => (
+        response.request().method() === "POST"
+        && response.url().endsWith(`/api/campaigns/${campaign.campaign_id}/decision-proposal/commit`)
+        && response.status() === 409
+      ));
+      await page.getByRole("checkbox", { name: /我已检查股票判断、操作倾向、组合限制/ }).check();
+      await page.getByRole("button", { name: "确认并冻结正式决策" }).click();
+      await terminalCommitResponse;
+      const terminalReadonly = page.getByTestId("terminal-campaign-decision-readonly");
+      await terminalReadonly.waitFor();
+      assert.equal(await terminalReadonly.getAttribute("data-campaign-status"), "CLOSED");
+      assert.match(await terminalReadonly.innerText(), /如需重新研究，请新建一轮研究/);
+      assert.equal(await page.getByRole("button", { name: "预览决策草案" }).count(), 0);
+      assert.equal(await page.getByRole("button", { name: "确认并冻结正式决策" }).count(), 0);
+      const afterRejectedTerminalCommit = await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/decision-proposal/committed`);
+      assert.deepEqual(afterRejectedTerminalCommit.items.map((item) => item.decision_id), beforeTerminal.items.map((item) => item.decision_id));
+
+      const idempotentRetry = await jsonRequest(
+        backend,
+        `/api/campaigns/${campaign.campaign_id}/decision-proposal/commit`,
+        "POST",
+        successfulCommitBody,
+      );
+      assert.equal(idempotentRetry.idempotent, true);
+      assert.equal(idempotentRetry.committed.decision_id, successfulDecisionId);
+      assert.deepEqual(idempotentRetry.committed, (await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/decision-proposal/committed/${successfulDecisionId}`)).committed);
+      assert.equal((await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/decision-proposal/committed`)).total, beforeTerminal.total);
+
+      const writeCountBeforeHistory = apiWriteRequests.length;
+      await page.goto(`${frontend}/campaigns/${campaign.campaign_id}/decision-proposal?decision_id=${successfulDecisionId}`, { waitUntil: "domcontentloaded" });
+      await page.getByTestId("historical-decision-detail").waitFor();
+      await page.locator(`[data-committed-decision-id="${successfulDecisionId}"]`).waitFor();
+      assert.equal(apiWriteRequests.length, writeCountBeforeHistory, "terminal historical detail must remain read-only");
+
+      const terminalWithoutThesis = await jsonRequest(backend, "/api/campaigns", "POST", {
+        security_code: "000001",
+        strategy: "SWING",
+      }, 201);
+      terminalWithoutThesisId = terminalWithoutThesis.campaign_id;
+      await jsonRequest(backend, `/api/campaigns/${terminalWithoutThesis.campaign_id}/transitions`, "POST", {
+        expected_status: "DRAFT",
+        to_status: "REJECTED",
+      });
+      await page.goto(`${frontend}/campaigns/${terminalWithoutThesis.campaign_id}/decision-proposal`, { waitUntil: "domcontentloaded" });
+      const terminalWithoutBinding = page.getByTestId("terminal-campaign-decision-readonly");
+      await terminalWithoutBinding.waitFor();
+      assert.equal(await terminalWithoutBinding.getAttribute("data-campaign-status"), "REJECTED");
+      assert.equal(await page.getByRole("button", { name: "预览决策草案" }).count(), 0, "terminal read-only state must not depend on Thesis binding");
+      console.log("[terminal admission] stale open-page commit rejected; exact retry and historical detail preserved");
     }
     const expectedFontBlock = "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap";
     const expectedChallenge404 = `/api/campaigns/${campaign.campaign_id}/decision-challenge`;
-    assert.deepEqual(notFoundResponses, readbackVariant === "valid" ? [expectedChallenge404, expectedChallenge404] : [expectedChallenge404], "only the optional challenge lookup may be 404");
+    const expectedTerminalBinding404 = readbackVariant === "valid"
+      ? `/api/campaigns/${terminalWithoutThesisId}/thesis-binding`
+      : null;
+    assert.deepEqual(
+      notFoundResponses,
+      readbackVariant === "valid"
+        ? [expectedChallenge404, expectedChallenge404, expectedChallenge404, expectedTerminalBinding404]
+        : [expectedChallenge404],
+      "only optional Challenge and the terminal no-Thesis fixture binding may be 404",
+    );
     const unexpectedConsoleErrors = consoleErrors.filter(
       (message) => !message.includes("ERR_NETWORK_ACCESS_DENIED")
         && !message.includes("Failed to load resource: the server responded with a status of 404 (Not Found)")
@@ -782,7 +857,11 @@ async function run() {
         && request.error === "net::ERR_ABORTED"
         && url.pathname === "/api/research-events"
         && url.search === "";
-      return !expectedCalendarAbort;
+      const expectedContinuityAbort = request.method === "GET"
+        && request.error === "net::ERR_ABORTED"
+        && url.pathname === `/api/campaigns/${campaign.campaign_id}/research-continuity`
+        && url.search === "";
+      return !expectedCalendarAbort && !expectedContinuityAbort;
     });
     assert.equal(unexpectedConsoleErrors.length, 0, `unexpected browser console errors: ${JSON.stringify(unexpectedConsoleErrors)}`);
     assert.equal(unexpectedFailedRequests.length, 0, `unexpected failed requests: ${JSON.stringify(unexpectedFailedRequests)}`);

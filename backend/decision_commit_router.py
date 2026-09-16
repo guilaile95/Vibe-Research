@@ -23,6 +23,7 @@ _CONFIRMATION_REQUIRED = "必须显式确认后才能冻结 Formal Decision"
 _COMMIT_UNAVAILABLE = "Formal Decision 提交暂不可用"
 _DECISION_NOT_FOUND = "Frozen Decision 不存在"
 _CHALLENGE_BIND = "Decision Challenge 无法绑定到这次 Freeze"
+_TERMINAL_CAMPAIGN = "本轮研究已结束，历史记录仍可查看；如需形成新判断，请新建一轮研究。"
 
 
 class DecisionProposalPreviewIn(BaseModel):
@@ -68,6 +69,8 @@ def preview_decision_proposal(
         raise HTTPException(422, _INVALID_INPUT) from None
     except runtime.ProposalStaleError:
         raise HTTPException(409, _STALE_PROPOSAL) from None
+    except runtime.TerminalCampaignDecisionConflictError:
+        raise HTTPException(409, _TERMINAL_CAMPAIGN) from None
     except runtime.CurrentThesisUnavailableError:
         raise HTTPException(409, _THESIS_UNAVAILABLE) from None
     except campaign_service.CampaignServiceError:
@@ -96,6 +99,8 @@ def commit_decision_proposal(
         raise HTTPException(422, _CONFIRMATION_REQUIRED) from None
     except runtime.ProposalStaleError:
         raise HTTPException(409, _STALE_PROPOSAL) from None
+    except runtime.TerminalCampaignDecisionConflictError:
+        raise HTTPException(409, _TERMINAL_CAMPAIGN) from None
     except ai_draft_service.CampaignAIDraftWitnessStaleError:
         raise HTTPException(409, _STALE_PROPOSAL) from None
     except runtime.ChallengeBindingError:

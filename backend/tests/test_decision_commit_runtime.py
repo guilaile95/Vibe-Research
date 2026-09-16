@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 import json
 
 import pytest
@@ -97,8 +98,13 @@ def _ports(
     frozen: list[dict] | None = None,
     critical_data_reader=None,
     committed_at: str = AS_OF,
+    campaign: dict | None = None,
 ):
-    state = {"frozen": list(frozen or []), "writes": 0}
+    state = {
+        "campaign": deepcopy(campaign or _campaign()),
+        "frozen": list(frozen or []),
+        "writes": 0,
+    }
 
     def frozen_reader(*, campaign_id: str, limit: int, offset: int):
         assert campaign_id == CAMPAIGN_ID
@@ -126,7 +132,7 @@ def _ports(
         )
 
     return runtime.RuntimePorts(
-        campaign_reader=lambda _campaign_id: _campaign(),
+        campaign_reader=lambda _campaign_id: deepcopy(state["campaign"]),
         thesis_reader=lambda _campaign_id: deepcopy(thesis) if thesis is not None else (_ for _ in ()).throw(
             __import__("campaign_service").ThesisBindingNotFoundError()
         ),
@@ -139,6 +145,121 @@ def _ports(
             lambda _campaign, as_of: {**_critical_data(), "as_of": as_of}
         ),
     ), state
+
+
+@pytest.mark.parametrize("status", ["CLOSED", "REJECTED", "EXPIRED"])
+def test_terminal_campaign_preview_is_rejected_without_authority_reads_or_writes(status):
+    ports, state = _ports(_thesis(), campaign={**_campaign(), "status": status})
+    authority_reads = {"thesis": 0, "frozen": 0, "critical": 0}
+    ports = replace(
+        ports,
+        thesis_reader=lambda _campaign_id: authority_reads.__setitem__(
+            "thesis", authority_reads["thesis"] + 1
+        ),
+        frozen_reader=lambda **_kwargs: authority_reads.__setitem__(
+            "frozen", authority_reads["frozen"] + 1
+        ),
+        critical_data_reader=lambda _campaign, _as_of: authority_reads.__setitem__(
+            "critical", authority_reads["critical"] + 1
+        ),
+    )
+
+    with pytest.raises(runtime.TerminalCampaignDecisionConflictError):
+        runtime.preview_decision_proposal(
+            CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF
+        )
+
+    assert authority_reads == {"thesis": 0, "frozen": 0, "critical": 0}
+    assert state["writes"] == 0
+
+
+@pytest.mark.parametrize("status", ["CLOSED", "REJECTED", "EXPIRED"])
+def test_terminal_transition_after_preview_rejects_new_commit_without_write(status):
+    ports, state = _ports(_thesis())
+    preview = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF
+    )
+    state["campaign"]["status"] = status
+
+    with pytest.raises(runtime.TerminalCampaignDecisionConflictError):
+        runtime.commit_decision_proposal(
+            CAMPAIGN_ID,
+            {
+                **_draft(),
+                "as_of": AS_OF,
+                "expected_proposal_fingerprint": preview["proposal_fingerprint"],
+                "user_confirmed": True,
+            },
+            ports=ports,
+        )
+
+    assert state["writes"] == 0
+
+
+def test_terminal_transition_at_service_pre_write_check_rejects_new_commit():
+    ports, state = _ports(_thesis())
+    preview = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF
+    )
+
+    def transition_then_validate(payload, *, pre_write_validator=None):
+        state["campaign"]["status"] = "CLOSED"
+        assert pre_write_validator is not None
+        pre_write_validator(payload, AS_OF)
+        return ports.freeze_writer(payload)
+
+    ports = replace(
+        ports,
+        freeze_writer_with_pre_write_validation=transition_then_validate,
+    )
+    with pytest.raises(runtime.TerminalCampaignDecisionConflictError):
+        runtime.commit_decision_proposal(
+            CAMPAIGN_ID,
+            {
+                **_draft(),
+                "as_of": AS_OF,
+                "expected_proposal_fingerprint": preview["proposal_fingerprint"],
+                "user_confirmed": True,
+            },
+            ports=ports,
+        )
+
+    assert state["writes"] == 0
+
+
+def test_terminal_transition_at_bare_writer_final_check_rejects_without_write():
+    ports, state = _ports(_thesis())
+    preview = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF
+    )
+    reads = {"count": 0}
+
+    def campaign_reader(_campaign_id):
+        reads["count"] += 1
+        current = deepcopy(state["campaign"])
+        if reads["count"] >= 2:
+            current["status"] = "CLOSED"
+        return current
+
+    ports = replace(
+        ports,
+        campaign_reader=campaign_reader,
+        freeze_writer_with_pre_write_validation=None,
+    )
+    with pytest.raises(runtime.TerminalCampaignDecisionConflictError):
+        runtime.commit_decision_proposal(
+            CAMPAIGN_ID,
+            {
+                **_draft(),
+                "as_of": AS_OF,
+                "expected_proposal_fingerprint": preview["proposal_fingerprint"],
+                "user_confirmed": True,
+            },
+            ports=ports,
+        )
+
+    assert reads["count"] == 2
+    assert state["writes"] == 0
 
 
 def test_preview_is_uncommitted_and_has_no_prior_boundary_without_fake_id():
@@ -392,6 +513,34 @@ def test_commit_requires_strict_confirmation_and_reuses_frozen_service_port():
     commit["user_confirmed"] = False
     with pytest.raises(runtime.CommitConfirmationRequiredError):
         runtime.commit_decision_proposal(CAMPAIGN_ID, commit, ports=ports)
+
+
+def test_successful_request_retries_idempotently_after_campaign_closes():
+    ports, state = _ports(_thesis())
+    preview = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF
+    )
+    commit = {
+        **_draft(),
+        "as_of": AS_OF,
+        "expected_proposal_fingerprint": preview["proposal_fingerprint"],
+        "user_confirmed": True,
+    }
+    first = runtime.commit_decision_proposal(CAMPAIGN_ID, commit, ports=ports)
+    state["campaign"]["status"] = "CLOSED"
+
+    repeat = runtime.commit_decision_proposal(CAMPAIGN_ID, commit, ports=ports)
+
+    assert first["idempotent"] is False
+    assert repeat["idempotent"] is True
+    assert repeat["committed"] == first["committed"]
+    assert repeat["committed"]["decision_id"] == DECISION_ID
+    assert state["writes"] == 1
+
+    changed = {**commit, "review_by": "2026-08-31T00:00:00.000000Z"}
+    with pytest.raises(runtime.ProposalStaleError):
+        runtime.commit_decision_proposal(CAMPAIGN_ID, changed, ports=ports)
+    assert state["writes"] == 1
 
 
 def test_idempotent_replay_revalidates_original_authority_graph():
