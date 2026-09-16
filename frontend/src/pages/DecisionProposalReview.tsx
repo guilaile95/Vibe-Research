@@ -801,6 +801,11 @@ export function DecisionProposalReview() {
     </div>
   );
 
+  // 终态只读页只提供「新建一轮」入口；代码不可用时不渲染任何链接。
+  const terminalNewRoundCode = campaign && /^\d{6}$/.test(campaign.security_code)
+    ? campaign.security_code
+    : null;
+
   if (campaign && isTerminalCampaignStatus(campaign.status)) return (
     <div className="space-y-6" data-testid="terminal-campaign-decision-readonly" data-campaign-status={campaign.status}>
       <PageHeader
@@ -829,6 +834,19 @@ export function DecisionProposalReview() {
       <section className="rounded-lg border border-border/60 bg-muted/20 p-4 text-sm">
         <h2 className="font-semibold">如需重新研究，请新建一轮研究</h2>
         <p className="mt-2 text-muted-foreground">旧投资计划继续用于查看已提交的正式决定、研究历史和复盘；新的判断应放在新的投资计划中。</p>
+        {terminalNewRoundCode ? (
+          <Link
+            to={`/candidates/${terminalNewRoundCode}`}
+            className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+            data-testid="terminal-campaign-new-research-entry"
+          >
+            新建一轮研究（候选研究）→
+          </Link>
+        ) : (
+          <p className="mt-3 text-warning" data-testid="terminal-campaign-new-research-unavailable">
+            缺少可用的 6 位证券代码，已停止导航；请从决策待办新建研究。
+          </p>
+        )}
       </section>
     </div>
   );
