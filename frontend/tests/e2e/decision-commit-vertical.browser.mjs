@@ -794,6 +794,23 @@ async function run() {
       await terminalReadonly.waitFor();
       assert.equal(await terminalReadonly.getAttribute("data-campaign-status"), "CLOSED");
       assert.match(await terminalReadonly.innerText(), /如需重新研究，请新建一轮研究/);
+      const terminalNewRound = page.getByTestId("terminal-campaign-new-research-entry");
+      await terminalNewRound.waitFor();
+      assert.equal(
+        await terminalNewRound.getAttribute("href"),
+        `/candidates/${campaign.security_code}`,
+        "terminal round must offer an explicit new-round entry for the exact security",
+      );
+      assert.doesNotMatch(
+        await terminalNewRound.getAttribute("href"),
+        /decision_/,
+        "new round must not route back into decision history",
+      );
+      assert.equal(
+        await page.getByTestId("terminal-campaign-new-research-unavailable").count(),
+        0,
+        "a valid security code must not degrade to the unavailable state",
+      );
       assert.equal(await page.getByRole("button", { name: "预览决策草案" }).count(), 0);
       assert.equal(await page.getByRole("button", { name: "确认并冻结正式决策" }).count(), 0);
       const afterRejectedTerminalCommit = await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/decision-proposal/committed`);
