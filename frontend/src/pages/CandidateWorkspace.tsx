@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { AlertCircle, ArrowLeft, CheckCircle2, FileSearch, Loader2 } from "lucide-react";
 import { CandidateCampaignPanel } from "@/components/campaign/CandidateCampaignPanel";
 import { ResearchEventCalendar } from "@/components/campaign/ResearchEventCalendar";
@@ -9,13 +9,13 @@ import { StockValuationContextCard } from "@/components/stock/StockValuationCont
 import { GlassCard } from "@/components/ui/GlassCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
-  candidateWorkspaceHref,
   buildCandidateEvidenceGap,
   buildEvidenceNewHref,
   deriveCandidatePosition,
   type CandidatePositionPresentation,
 } from "@/lib/candidateCampaign";
 import { api, ApiError, type EvidenceRecord, type StockRelativeContext, type StockValuationContext } from "@/lib/api";
+import { safeInternalReturnTo } from "@/lib/internalReturnTo";
 
 type LoadState<T> =
   | { status: "loading"; value: null; error: "" }
@@ -42,6 +42,8 @@ function errorMessage(cause: unknown, fallback: string): string {
 
 export function CandidateWorkspace() {
   const { code = "" } = useParams();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const validCode = /^\d{6}$/.test(code);
   const [position, setPosition] = useState<LoadState<CandidatePositionPresentation>>(loadingState);
   const [evidence, setEvidence] = useState<LoadState<{ records: EvidenceRecord[]; total: number }>>(loadingState);
@@ -127,7 +129,8 @@ export function CandidateWorkspace() {
   }
 
   const evidenceGap = evidence.value ? buildCandidateEvidenceGap(evidence.value.records) : null;
-  const returnTo = candidateWorkspaceHref(code);
+  const sourceReturnTo = safeInternalReturnTo(searchParams.get("return_to"), "");
+  const returnTo = `${location.pathname}${location.search}${location.hash}`;
 
   return (
     <div className="space-y-6" data-testid="candidate-workspace" data-security-code={code}>
@@ -136,11 +139,11 @@ export function CandidateWorkspace() {
         subtitle="按三步核对事实、建立投资计划并形成正式决策；系统不会自动买入，也不会把信息不足猜成事实。"
         actions={(
           <Link
-            to={`/stock-data?code=${encodeURIComponent(code)}`}
+            to={sourceReturnTo || `/stock-data?code=${encodeURIComponent(code)}`}
             className="inline-flex items-center gap-1.5 rounded border border-border/60 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
             data-testid="candidate-stock-data-entry"
           >
-            <ArrowLeft className="h-3.5 w-3.5" /> 个股数据
+            <ArrowLeft className="h-3.5 w-3.5" /> {sourceReturnTo ? "返回来源" : "个股数据"}
           </Link>
         )}
       />
