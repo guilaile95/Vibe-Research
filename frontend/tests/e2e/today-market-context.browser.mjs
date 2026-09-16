@@ -469,6 +469,11 @@ try {
   await radarUnavailableIntel.getByText("PARTIAL · 部分可用", { exact: true }).waitFor();
   await radarUnavailableIntel.getByText("半导体产业链出现重要进展", { exact: true }).waitFor();
   await radarUnavailableIntel.getByText("赛道摘要：", { exact: false }).waitFor();
+  assert.equal(
+    await radarUnavailableIntel.getByTestId("market-intel-stat-radar").innerText(),
+    "赛道来源 未知 · 未知 赛道",
+    "radar 权威未读取时不得用本地列表长度或其他默认值冒充赛道计数",
+  );
 
   scenario = "daily-fail";
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
