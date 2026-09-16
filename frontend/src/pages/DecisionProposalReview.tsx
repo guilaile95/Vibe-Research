@@ -14,6 +14,7 @@ import {
   CANDIDATE_CONFIDENCE_LEVELS,
   buildCandidateTradeTerms,
   buildCandidateValuationCase,
+  candidateWorkspaceHref,
   presentPortfolioCapitalContext,
   type CandidateConfidence,
   type CandidateTradeTermsDraft,
@@ -836,7 +837,7 @@ export function DecisionProposalReview() {
         <p className="mt-2 text-muted-foreground">旧投资计划继续用于查看已提交的正式决定、研究历史和复盘；新的判断应放在新的投资计划中。</p>
         {terminalNewRoundCode ? (
           <Link
-            to={`/candidates/${terminalNewRoundCode}`}
+            to={candidateWorkspaceHref(terminalNewRoundCode)}
             className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
             data-testid="terminal-campaign-new-research-entry"
           >
