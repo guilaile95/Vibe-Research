@@ -12,6 +12,7 @@ import {
   formalOutcomeIdentityTitle,
   frozenDecisionNbaLabel,
   mergeOutcomeItem,
+  outcomeResearchEntry,
   outcomeStatusLabel,
   scanStateLabel,
   worklistItems,
@@ -160,4 +161,38 @@ test("missing historical row can be merged from exact outcome authority", () => 
   const merged = mergeOutcomeItem([existing], fetched);
   assert.deepEqual(merged.map((item) => item.decision_id), [existing.decision_id, fetched.decision_id]);
   assert.equal(mergeOutcomeItem(merged, { ...fetched, outcome_status: "EVALUATED" } as any)[1].outcome_status, "EVALUATED");
+});
+
+test("open campaign points at its current Proposal, closed campaign points at a new research round", () => {
+  const campaignId = "campaign_0123456789abcdef0123456789abcdef";
+
+  const open = outcomeResearchEntry(campaignId, "ACTIVE", "600519");
+  assert.equal(open.kind, "current-proposal");
+  assert.equal(open.href, `/campaigns/${campaignId}/decision-proposal`);
+
+  const setup = outcomeResearchEntry(campaignId, "RESEARCHING", "600519");
+  assert.equal(setup.kind, "current-proposal");
+
+  for (const terminal of ["CLOSED", "REJECTED", "EXPIRED"]) {
+    const entry = outcomeResearchEntry(campaignId, terminal, "600519");
+    assert.equal(entry.kind, "new-research", terminal);
+    assert.equal(entry.href, "/candidates/600519");
+    assert.equal(entry.href?.includes(campaignId), false, "new research must not route back into the closed round");
+  }
+});
+
+test("unknown campaign identity or status stops navigation instead of guessing a target", () => {
+  const campaignId = "campaign_0123456789abcdef0123456789abcdef";
+
+  for (const entry of [
+    outcomeResearchEntry(undefined, "ACTIVE", "600519"),
+    outcomeResearchEntry("", "ACTIVE", "600519"),
+    outcomeResearchEntry(campaignId, undefined, "600519"),
+    outcomeResearchEntry(campaignId, "ARCHIVED", "600519"),
+    outcomeResearchEntry(campaignId, "CLOSED", undefined),
+    outcomeResearchEntry(campaignId, "CLOSED", "60051"),
+  ]) {
+    assert.equal(entry.kind, "unavailable");
+    assert.equal(entry.href, null);
+  }
 });

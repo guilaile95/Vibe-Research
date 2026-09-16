@@ -940,6 +940,20 @@ async function run() {
     );
     assert.equal(await page.getByTestId(`formal-outcome-${firstRun.decisionId}`).getByText("BUY", { exact: true }).count(), 0);
 
+    // 历史 Decision 的下一步入口按 Campaign 实时状态解析：Campaign 未结束时指向
+    // 它自己的 Proposal，绝不把用户送回 decision_id 历史详情。
+    const researchEntry = page.getByTestId(`outcome-research-entry-${firstRun.decisionId}`);
+    await researchEntry.waitFor();
+    assert.equal(await researchEntry.getAttribute("data-research-entry-kind"), "current-proposal");
+    assert.equal(
+      await researchEntry.getByRole("link").getAttribute("href"),
+      `/campaigns/${firstCampaign.campaign_id}/decision-proposal`,
+    );
+    for (const outcomeRow of await page.locator('[data-testid^="outcome-research-entry-"]').all()) {
+      const href = await outcomeRow.getByRole("link").getAttribute("href");
+      if (href) assert.doesNotMatch(href, /decision_/, `next step must not route into decision history: ${href}`);
+    }
+
     const actionableConsoleErrors = consoleErrors.filter(
       (message) => !message.includes("ERR_NETWORK_ACCESS_DENIED")
         && !message.includes("ERR_CONNECTION_CLOSED")

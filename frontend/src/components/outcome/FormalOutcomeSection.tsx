@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { AlertCircle, BookOpenCheck, ListChecks, Loader2, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import type {
@@ -13,6 +14,7 @@ import {
   formalOutcomeIdentityTitle,
   frozenDecisionNbaLabel,
   mergeOutcomeItem,
+  outcomeResearchEntry,
   outcomeStatusLabel,
   worklistItems,
   worklistLabel,
@@ -40,6 +42,25 @@ function actualCapitalCell(item: FormalDecisionOutcome) {
       {actual.canonical ? (
         <div className="mt-1 font-mono text-[11px] text-muted-foreground">{actual.canonical}</div>
       ) : null}
+    </div>
+  );
+}
+
+function researchEntryCell(item: FormalDecisionOutcome, campaignStatus: string | undefined) {
+  const entry = outcomeResearchEntry(item.campaign_id, campaignStatus, item.security_code);
+  return (
+    <div
+      data-testid={`outcome-research-entry-${item.decision_id}`}
+      data-research-entry-kind={entry.kind}
+    >
+      {entry.href ? (
+        <Link to={entry.href} className="text-sm font-medium text-primary hover:underline">
+          {entry.label} →
+        </Link>
+      ) : (
+        <div className="text-sm text-warning">{entry.label}</div>
+      )}
+      <div className="mt-1 text-xs text-muted-foreground">{entry.detail}</div>
     </div>
   );
 }
@@ -156,6 +177,8 @@ export function FormalOutcomeSection() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [worklistError, setWorklistError] = useState<string | null>(null);
+  const [campaignStatuses, setCampaignStatuses] = useState<Record<string, string>>({});
+  const [campaignError, setCampaignError] = useState<string | null>(null);
   const [pendingFocusDecisionId, setPendingFocusDecisionId] = useState<string | null>(null);
   const [evaluationAsOf] = useState(() => (
     new URLSearchParams(window.location.search).get("evaluation_as_of") || undefined
@@ -165,13 +188,15 @@ export function FormalOutcomeSection() {
     setLoading(true);
     setError(null);
     setWorklistError(null);
-    const [outcomeResult, worklistResult] = await Promise.allSettled([
+    setCampaignError(null);
+    const [outcomeResult, worklistResult, campaignResult] = await Promise.allSettled([
       api.listFormalDecisionOutcomes({
         evaluation_as_of: evaluationAsOf,
         limit: 50,
         offset: 0,
       }),
       api.getFormalDecisionReviewWorklist(),
+      api.listCampaigns(),
     ]);
     if (outcomeResult.status === "fulfilled") {
       setItems(outcomeResult.value);
@@ -184,6 +209,14 @@ export function FormalOutcomeSection() {
     } else {
       setWorklistError(worklistResult.reason?.message || "Review Due Worklist authority unavailable");
       setWorklist(null);
+    }
+    if (campaignResult.status === "fulfilled") {
+      const statuses: Record<string, string> = {};
+      for (const record of campaignResult.value) statuses[record.campaign_id] = record.status;
+      setCampaignStatuses(statuses);
+    } else {
+      setCampaignError(campaignResult.reason?.message || "Campaign authority unavailable");
+      setCampaignStatuses({});
     }
     setLoading(false);
   }, [evaluationAsOf]);
@@ -257,6 +290,13 @@ export function FormalOutcomeSection() {
         </div>
       )}
 
+      {campaignError && (
+        <div className="mt-4 flex items-center gap-2 rounded-md bg-amber-500/10 p-3 text-sm text-amber-600">
+          <AlertCircle className="h-4 w-4" />
+          <span>Campaign 状态读取失败（{campaignError}）；每行的下一步已按未知处理，不做导航。</span>
+        </div>
+      )}
+
       {worklist && (
         <section className="mt-5 rounded-lg border border-border/60 p-4" aria-label="Review Due Worklist">
           <div className="flex items-center gap-2">
@@ -301,7 +341,7 @@ export function FormalOutcomeSection() {
         </div>
       ) : (
         <div className="mt-5 overflow-auto">
-          <table className="w-full min-w-[900px] text-sm">
+          <table className="w-full min-w-[1100px] text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase tracking-widest text-muted-foreground">
                 <th className="pb-3 pr-4">决策身份</th>
@@ -309,7 +349,8 @@ export function FormalOutcomeSection() {
                 <th className="pb-3 pr-4">Replay</th>
                 <th className="pb-3 pr-4">Process Review</th>
                 <th className="pb-3 pr-4">Actual Capital</th>
-                <th className="pb-3">Counterfactual</th>
+                <th className="pb-3 pr-4">Counterfactual</th>
+                <th className="pb-3">下一步</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -409,6 +450,9 @@ export function FormalOutcomeSection() {
                     <div className="mt-1 text-xs text-muted-foreground">
                       Security path is separate from Actual Capital Outcome.
                     </div>
+                  </td>
+                  <td className="py-4 align-top">
+                    {researchEntryCell(item, campaignStatuses[item.campaign_id || ""])}
                   </td>
                 </tr>
               ))}
