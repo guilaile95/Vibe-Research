@@ -5,6 +5,7 @@ import type {
   FormalReviewWorklistItem,
 } from "@/lib/api/types";
 import { decisionActionLabel } from "./decisionActionView.ts";
+import { candidateWorkspaceHref } from "./candidateCampaign.ts";
 import {
   CAMPAIGN_STATUS_LABELS,
   CAMPAIGN_STRATEGY_LABELS,
@@ -229,7 +230,7 @@ export function outcomeResearchEntry(
     return {
       kind: "new-research",
       label: "需要新判断：新建一轮研究",
-      href: `/candidates/${securityCode}`,
+      href: candidateWorkspaceHref(securityCode),
       detail: "这一轮研究已结束。候选研究会显示该证券当前的研究线；需要新一轮时在那一步显式选择策略后新建。原来这轮不会被重新打开或改写。",
     };
   }
