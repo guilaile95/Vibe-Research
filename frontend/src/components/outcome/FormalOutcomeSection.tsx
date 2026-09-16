@@ -58,7 +58,7 @@ function researchEntryCell(item: FormalDecisionOutcome, campaignStatus: string |
           {entry.label} →
         </Link>
       ) : (
-        <div className="text-sm text-warning" role="status">{entry.label}</div>
+        <div className="text-sm text-warning">{entry.label}</div>
       )}
       <div className="mt-1 text-xs text-muted-foreground">{entry.detail}</div>
     </div>
