@@ -380,6 +380,25 @@ try {
   assert.equal(radarRefreshCalls, 1);
 
   // Initial-load fixtures: each surface keeps its own honest state.
+  scenario = "native-fail";
+  await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
+  const failedIntel = page.getByTestId("market-intel-panel");
+  await failedIntel.getByText("公开资讯：", { exact: false }).waitFor();
+  // 公开资讯权威从未读取：计数块必须显示未知，不得把未知渲染成已核实的 0。
+  assert.equal(
+    await failedIntel.getByTestId("market-intel-stat-history").innerText(),
+    "历史资讯 未知",
+  );
+  assert.equal(
+    await failedIntel.getByTestId("market-intel-stat-sources").innerText(),
+    "公开来源 未知",
+  );
+  assert.equal(
+    (await failedIntel.getByTestId("market-intel-stat-sources").innerText()).includes("正常"),
+    false,
+    "unread source authority must not claim 正常",
+  );
+
   scenario = "cloud-fail";
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
   await page.getByText("市场快照暂不可用", { exact: true }).first().waitFor();

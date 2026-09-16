@@ -28,7 +28,7 @@ import {
 import { runIntelDigestGeneration } from "@/lib/intelDigestOrchestrator";
 import { formatShanghaiTime } from "@/lib/intelDigestView";
 import { hasLlm } from "@/lib/llm";
-import { deriveMarketIntelStatus } from "@/lib/marketIntelStatus";
+import { deriveMarketIntelStatus, knownCountText, sourceHealthText } from "@/lib/marketIntelStatus";
 import { cn } from "@/lib/utils";
 import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 
@@ -402,9 +402,9 @@ export default function MarketIntelPanel({ embedded = false }: MarketIntelPanelP
           <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />正在读取市场情报…</p>
         ) : (
           <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
-            <div className="rounded-lg border border-border/50 bg-background/60 p-2"><Database className="mr-1 inline h-3.5 w-3.5" />历史资讯 {runtime?.store?.item_count ?? items?.total ?? 0}</div>
-            <div className="rounded-lg border border-border/50 bg-background/60 p-2">公开来源 {runtime?.sources?.healthy ?? 0}/{runtime?.sources?.total ?? 0} 正常</div>
-            <div className="rounded-lg border border-border/50 bg-background/60 p-2">赛道来源 {radar?.stats.total_sources ?? 0} · {radar?.stats.industries ?? industries.length} 赛道</div>
+            <div data-testid="market-intel-stat-history" className="rounded-lg border border-border/50 bg-background/60 p-2"><Database className="mr-1 inline h-3.5 w-3.5" />历史资讯 {knownCountText(runtime?.store?.item_count ?? items?.total)}</div>
+            <div data-testid="market-intel-stat-sources" className="rounded-lg border border-border/50 bg-background/60 p-2">公开来源 {sourceHealthText(runtime?.sources)}</div>
+            <div data-testid="market-intel-stat-radar" className="rounded-lg border border-border/50 bg-background/60 p-2">赛道来源 {knownCountText(radar?.stats.total_sources)} · {knownCountText(radar?.stats.industries)} 赛道</div>
             <div className="rounded-lg border border-border/50 bg-background/60 p-2"><Clock className="mr-1 inline h-3.5 w-3.5" />{formatShanghaiTime(updatedAt || radar?.generated_at)}</div>
           </div>
         )}
