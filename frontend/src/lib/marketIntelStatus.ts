@@ -54,3 +54,20 @@ export function sourceHealthText(
   if (healthy === null || total === null) return "未知";
   return `${healthy}/${total} 正常`;
 }
+
+/**
+ * 历史资讯计数。store 自报的 item_count 是直接计数，优先采用；
+ * 只有在它有信号表明不可信时才丢弃 items 的 total ——
+ * 后端在 store 读取失败时用它自己的错误分支返回 HTTP 200 + 硬编码 total=0
+ * （native_intel_router 的 NativeIntelStoreError 分支），那个 0 不是已核实的计数。
+ */
+export function knownHistoryItemCount(input: {
+  store?: { readable?: unknown; item_count?: unknown } | null | undefined;
+  items?: { status?: unknown; total?: unknown } | null | undefined;
+}): number | null {
+  const storeCount = finiteNumber(input.store?.item_count);
+  if (storeCount !== null) return storeCount;
+  if (input.store?.readable === false) return null;
+  if (input.items?.status === "unavailable") return null;
+  return finiteNumber(input.items?.total);
+}
