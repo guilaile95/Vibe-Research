@@ -28,7 +28,14 @@ import {
 import { runIntelDigestGeneration } from "@/lib/intelDigestOrchestrator";
 import { formatShanghaiTime } from "@/lib/intelDigestView";
 import { hasLlm } from "@/lib/llm";
-import { deriveMarketIntelStatus, knownCountText, knownHistoryItemCount, sourceHealthText } from "@/lib/marketIntelStatus";
+import {
+  deriveMarketIntelStatus,
+  knownCountText,
+  knownHistoryItemCount,
+  sourceHealthText,
+  trendEmptyReason,
+  TREND_EMPTY_LABELS,
+} from "@/lib/marketIntelStatus";
 import { cn } from "@/lib/utils";
 import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 
@@ -318,6 +325,7 @@ export default function MarketIntelPanel({ embedded = false }: MarketIntelPanelP
 
   const visibleItems = items?.items ?? [];
   const entities = trending?.entities ?? [];
+  const trendEmpty = trendEmptyReason({ loading, trending });
   const digest = currentIndustry ? digests[currentIndustry.key] : undefined;
   const nativeStatuses = [runtime?.status, items?.status, trending?.status].filter((status): status is NativeIntelStatus["status"] => Boolean(status));
   const hasNativeData = nativeStatuses.some((status) => status !== "unavailable");
@@ -444,7 +452,13 @@ export default function MarketIntelPanel({ embedded = false }: MarketIntelPanelP
             })}
           </div>
         ) : (
-          <p className="mt-3 text-xs text-muted-foreground">{loading ? "正在计算关注趋势…" : "当前窗口暂无可计算的关注趋势。"}</p>
+          <p
+            className="mt-3 text-xs text-muted-foreground"
+            data-testid="market-intel-trending-empty"
+            data-trend-empty-reason={trendEmpty}
+          >
+            {TREND_EMPTY_LABELS[trendEmpty]}
+          </p>
         )}
         <p className="mt-2 text-[10px] text-muted-foreground/70">趋势仅使用本地观察次数、来源数和环比，不补伪造排名。</p>
       </section>

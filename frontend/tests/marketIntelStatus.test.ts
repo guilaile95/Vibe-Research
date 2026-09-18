@@ -5,6 +5,8 @@ import {
   knownCountText,
   knownHistoryItemCount,
   sourceHealthText,
+  trendEmptyReason,
+  TREND_EMPTY_LABELS,
 } from "../src/lib/marketIntelStatus.ts";
 
 const base = {
@@ -71,4 +73,32 @@ test("store failure must not surface the router's hardcoded zero as a count", ()
     9,
   );
   assert.equal(knownCountText(knownHistoryItemCount({ store: {}, items: {} })), "未知");
+});
+
+test("only a read-and-available authority may report an empty trend window", () => {
+  assert.equal(trendEmptyReason({ loading: true, trending: null }), "loading");
+  assert.equal(trendEmptyReason({ loading: true, trending: { status: "unavailable" } }), "loading");
+  assert.equal(trendEmptyReason({ loading: false, trending: null }), "unread");
+  assert.equal(trendEmptyReason({ loading: false, trending: undefined }), "unread");
+  assert.equal(trendEmptyReason({ loading: false, trending: { status: "unavailable" } }), "unavailable");
+  for (const status of ["normal", "partial", "stale"]) {
+    assert.equal(trendEmptyReason({ loading: false, trending: { status } }), "empty", status);
+  }
+  // 「自报可用」是白名单，不是排除法：任何未声明状态都不得落到「确定为空」。
+  for (const trending of [{}, { status: undefined }, { status: null }, { status: "degraded" }]) {
+    assert.equal(
+      trendEmptyReason({ loading: false, trending: trending as { status?: unknown } }),
+      "unavailable",
+      JSON.stringify(trending),
+    );
+  }
+});
+
+test("unread and unavailable trend states never claim the window is empty", () => {
+  for (const reason of ["unread", "unavailable"] as const) {
+    assert.doesNotMatch(TREND_EMPTY_LABELS[reason], /暂无/);
+    assert.match(TREND_EMPTY_LABELS[reason], /不能判断/);
+  }
+  assert.equal(TREND_EMPTY_LABELS.empty, "当前窗口暂无可计算的关注趋势。");
+  assert.equal(TREND_EMPTY_LABELS.loading, "正在计算关注趋势…");
 });
