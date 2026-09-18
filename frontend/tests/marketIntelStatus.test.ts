@@ -84,6 +84,14 @@ test("only a read-and-available authority may report an empty trend window", () 
   for (const status of ["normal", "partial", "stale"]) {
     assert.equal(trendEmptyReason({ loading: false, trending: { status } }), "empty", status);
   }
+  // 「自报可用」是白名单，不是排除法：任何未声明状态都不得落到「确定为空」。
+  for (const trending of [{}, { status: undefined }, { status: null }, { status: "degraded" }]) {
+    assert.equal(
+      trendEmptyReason({ loading: false, trending: trending as { status?: unknown } }),
+      "unavailable",
+      JSON.stringify(trending),
+    );
+  }
 });
 
 test("unread and unavailable trend states never claim the window is empty", () => {

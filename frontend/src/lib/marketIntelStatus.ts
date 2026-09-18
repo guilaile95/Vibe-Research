@@ -74,9 +74,12 @@ export function knownHistoryItemCount(input: {
 
 export type TrendEmptyReason = "loading" | "unread" | "unavailable" | "empty";
 
+const TREND_AVAILABLE_STATUSES: readonly string[] = ["normal", "partial", "stale"];
+
 /**
- * 关注趋势列表为空时的原因。只有权威真的读到过、并且自报可用时，
- * 「空列表」才等于「当前窗口没有趋势」；未读取成功与自报不可用都不等于确定为空。
+ * 关注趋势列表为空时的原因。只有权威真的读到过、并且自报为**已知可用状态**时，
+ * 「空列表」才等于「当前窗口没有趋势」；未读取成功、自报不可用、以及任何未声明
+ * 状态都不能被说成确定为空。
  */
 export function trendEmptyReason(input: {
   loading: boolean;
@@ -84,8 +87,9 @@ export function trendEmptyReason(input: {
 }): TrendEmptyReason {
   if (input.loading) return "loading";
   if (!input.trending) return "unread";
-  if (input.trending.status === "unavailable") return "unavailable";
-  return "empty";
+  const status = (input.trending as { status?: unknown }).status;
+  if (typeof status === "string" && TREND_AVAILABLE_STATUSES.includes(status)) return "empty";
+  return "unavailable";
 }
 
 export const TREND_EMPTY_LABELS: Record<TrendEmptyReason, string> = {
