@@ -198,6 +198,14 @@ async function handleApi(route) {
   }
   if (pathName === "/api/native-intel/trending") {
     if (scenario === "native-fail") return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "native intel unavailable" }) });
+    // 权威真的读到过、且自报可用，但窗口内确实没有趋势 —— 这才是「确定为空」。
+    if (scenario === "native-trending-empty") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      ...nativeTrending,
+      status: "normal",
+      item_count: 0,
+      items: [],
+      entities: [],
+    }) });
     if (scenario === "native-store-unavailable") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
       status: "unavailable",
       error: "本地资讯数据存储不可用，无法读写",
@@ -376,6 +384,9 @@ try {
   assert.equal(await mainNav.locator('a[href="/daily-review"]').getAttribute("aria-current"), "page");
   assert.equal(await page.getByRole("heading", { name: "市场情报", exact: true }).count(), 1);
   assert.equal(await page.locator("[data-market-cloud]").count(), 0, "Intel must not embed Market Cloud");
+  // normal：trending 读取成功且有数据 → 保持真实趋势展示，不出现「空窗口」提示。
+  assert.equal(await marketPanel.getByTestId("market-intel-trending-empty").count(), 0);
+  assert.equal(await marketPanel.locator('[aria-label="近 24 小时关注趋势"]').count(), 1);
   assert.equal(await page.getByText("Investment News", { exact: true }).count(), 0);
   assert.equal(await page.getByText("关注雷达", { exact: true }).count(), 0);
   await marketPanel.getByText("半导体产业链出现重要进展", { exact: true }).waitFor();
@@ -423,6 +434,16 @@ try {
     false,
     "unread source authority must not claim 正常",
   );
+  // trending 请求被拒（trending 从未成功读取）→ 不得宣称「暂无趋势」。
+  assert.equal(
+    await failedIntel.getByTestId("market-intel-trending-empty").getAttribute("data-trend-empty-reason"),
+    "unread",
+  );
+  assert.doesNotMatch(
+    await failedIntel.getByTestId("market-intel-trending-empty").innerText(),
+    /暂无/,
+    "unread trending must not be asserted as an empty window",
+  );
 
   // store 读取失败：/items 用 HTTP 200 + 硬编码 total=0 表达失败，
   // 那个 0 不是计到的条数，不得渲染成「历史资讯 0」。
@@ -443,6 +464,29 @@ try {
     await storeFailedIntel.getByTestId("market-intel-stat-radar").innerText(),
     "赛道来源 12 · 12 赛道",
   );
+  // HTTP 成功但权威自报 unavailable → 同样不得宣称「暂无趋势」。
+  assert.equal(
+    await storeFailedIntel.getByTestId("market-intel-trending-empty").getAttribute("data-trend-empty-reason"),
+    "unavailable",
+  );
+  assert.doesNotMatch(
+    await storeFailedIntel.getByTestId("market-intel-trending-empty").innerText(),
+    /暂无/,
+  );
+
+  // 权威读取成功、自报可用、窗口内确实没有趋势 → 这才允许宣称「暂无」。
+  scenario = "native-trending-empty";
+  await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
+  const emptyTrendIntel = page.getByTestId("market-intel-panel");
+  await emptyTrendIntel.getByTestId("market-intel-trending-empty").waitFor();
+  assert.equal(
+    await emptyTrendIntel.getByTestId("market-intel-trending-empty").getAttribute("data-trend-empty-reason"),
+    "empty",
+  );
+  assert.equal(
+    await emptyTrendIntel.getByTestId("market-intel-trending-empty").innerText(),
+    "当前窗口暂无可计算的关注趋势。",
+  );
 
   scenario = "cloud-fail";
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
@@ -461,6 +505,10 @@ try {
   await unavailableIntel.getByText("PARTIAL · 部分可用", { exact: true }).waitFor();
   await unavailableIntel.getByText("公开资讯：", { exact: false }).waitFor();
   await unavailableIntel.getByRole("button", { name: /AI 人工智能/ }).waitFor();
+  assert.equal(
+    await unavailableIntel.getByTestId("market-intel-trending-empty").getAttribute("data-trend-empty-reason"),
+    "unavailable",
+  );
   await page.getByTestId("today-market-surface").locator("[data-market-cloud-chart]").waitFor({ state: "visible" });
 
   scenario = "radar-fail";

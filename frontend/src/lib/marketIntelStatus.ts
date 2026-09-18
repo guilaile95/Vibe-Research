@@ -71,3 +71,26 @@ export function knownHistoryItemCount(input: {
   if (input.items?.status === "unavailable") return null;
   return finiteNumber(input.items?.total);
 }
+
+export type TrendEmptyReason = "loading" | "unread" | "unavailable" | "empty";
+
+/**
+ * 关注趋势列表为空时的原因。只有权威真的读到过、并且自报可用时，
+ * 「空列表」才等于「当前窗口没有趋势」；未读取成功与自报不可用都不等于确定为空。
+ */
+export function trendEmptyReason(input: {
+  loading: boolean;
+  trending?: { status?: unknown } | null | undefined;
+}): TrendEmptyReason {
+  if (input.loading) return "loading";
+  if (!input.trending) return "unread";
+  if (input.trending.status === "unavailable") return "unavailable";
+  return "empty";
+}
+
+export const TREND_EMPTY_LABELS: Record<TrendEmptyReason, string> = {
+  loading: "正在计算关注趋势…",
+  unread: "关注趋势尚未成功读取，不能判断当前窗口是否有趋势。",
+  unavailable: "关注趋势暂不可用，不能判断当前窗口是否有趋势。",
+  empty: "当前窗口暂无可计算的关注趋势。",
+};
