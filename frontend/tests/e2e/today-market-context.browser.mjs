@@ -162,6 +162,14 @@ async function handleApi(route) {
   }
   if (pathName === "/api/native-intel/status") {
     if (scenario === "native-fail") return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "native intel unavailable" }) });
+    // store 读取失败的真实形状（native_intel_service）：HTTP 200 + status unavailable +
+    // store.readable=false，且没有 item_count / sources。
+    if (scenario === "native-store-unavailable") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      status: "unavailable",
+      error: "本地资讯数据存储不可用，无法读写",
+      generated_at: now,
+      store: { readable: false, db_path: "unreadable.sqlite3" },
+    }) });
     const status = scenario === "native-unavailable" ? "unavailable" : scenario === "both-partial" ? "partial" : "normal";
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
       ...nativeRuntime,
@@ -171,6 +179,15 @@ async function handleApi(route) {
   }
   if (pathName === "/api/native-intel/items") {
     if (scenario === "native-fail") return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "native intel unavailable" }) });
+    // 真实路由在 store 失败分支返回 HTTP 200 + items=[] + 硬编码 total=0。
+    if (scenario === "native-store-unavailable") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      status: "unavailable",
+      error: "本地资讯数据存储不可用，无法读写",
+      items: [],
+      total: 0,
+      limit: 40,
+      offset: 0,
+    }) });
     const status = scenario === "native-unavailable" ? "unavailable" : "normal";
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
       ...nativeItems,
@@ -181,6 +198,14 @@ async function handleApi(route) {
   }
   if (pathName === "/api/native-intel/trending") {
     if (scenario === "native-fail") return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "native intel unavailable" }) });
+    if (scenario === "native-store-unavailable") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      status: "unavailable",
+      error: "本地资讯数据存储不可用，无法读写",
+      window_hours: 24,
+      item_count: 0,
+      items: [],
+      entities: [],
+    }) });
     const status = scenario === "native-unavailable" ? "unavailable" : "normal";
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
       ...nativeTrending,
@@ -380,6 +405,45 @@ try {
   assert.equal(radarRefreshCalls, 1);
 
   // Initial-load fixtures: each surface keeps its own honest state.
+  scenario = "native-fail";
+  await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
+  const failedIntel = page.getByTestId("market-intel-panel");
+  await failedIntel.getByText("公开资讯：", { exact: false }).waitFor();
+  // 公开资讯权威从未读取：计数块必须显示未知，不得把未知渲染成已核实的 0。
+  assert.equal(
+    await failedIntel.getByTestId("market-intel-stat-history").innerText(),
+    "历史资讯 未知",
+  );
+  assert.equal(
+    await failedIntel.getByTestId("market-intel-stat-sources").innerText(),
+    "公开来源 未知",
+  );
+  assert.equal(
+    (await failedIntel.getByTestId("market-intel-stat-sources").innerText()).includes("正常"),
+    false,
+    "unread source authority must not claim 正常",
+  );
+
+  // store 读取失败：/items 用 HTTP 200 + 硬编码 total=0 表达失败，
+  // 那个 0 不是计到的条数，不得渲染成「历史资讯 0」。
+  scenario = "native-store-unavailable";
+  await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
+  const storeFailedIntel = page.getByTestId("market-intel-panel");
+  await storeFailedIntel.getByTestId("market-intel-stat-history").waitFor();
+  assert.equal(
+    await storeFailedIntel.getByTestId("market-intel-stat-history").innerText(),
+    "历史资讯 未知",
+  );
+  assert.equal(
+    await storeFailedIntel.getByTestId("market-intel-stat-sources").innerText(),
+    "公开来源 未知",
+  );
+  // radar 权威本身读取正常，计数块不受影响。
+  assert.equal(
+    await storeFailedIntel.getByTestId("market-intel-stat-radar").innerText(),
+    "赛道来源 12 · 12 赛道",
+  );
+
   scenario = "cloud-fail";
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
   await page.getByText("市场快照暂不可用", { exact: true }).first().waitFor();
@@ -405,6 +469,11 @@ try {
   await radarUnavailableIntel.getByText("PARTIAL · 部分可用", { exact: true }).waitFor();
   await radarUnavailableIntel.getByText("半导体产业链出现重要进展", { exact: true }).waitFor();
   await radarUnavailableIntel.getByText("赛道摘要：", { exact: false }).waitFor();
+  assert.equal(
+    await radarUnavailableIntel.getByTestId("market-intel-stat-radar").innerText(),
+    "赛道来源 未知 · 未知 赛道",
+    "radar 权威未读取时不得用本地列表长度或其他默认值冒充赛道计数",
+  );
 
   scenario = "daily-fail";
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
