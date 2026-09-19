@@ -2,6 +2,11 @@ import { ClipboardList } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import type { FinancialPeriod, Financials } from "@/lib/api";
 import {
+  EARNINGS_SNAPSHOT_BALANCE_SHEET_QUALITY_HEADING,
+  EARNINGS_SNAPSHOT_CASH_FLOW_QUALITY_HEADING,
+  EARNINGS_SNAPSHOT_DATA_QUALITY_HEADING,
+  EARNINGS_SNAPSHOT_GROWTH_HEADING,
+  EARNINGS_SNAPSHOT_PROFITABILITY_HEADING,
   formatFinancialAmount,
   formatFinancialRatio,
   fundamentalHealthState,
@@ -53,7 +58,7 @@ export function EarningsSnapshot({ fin, error }: Props) {
       {latest && state !== "error" && state !== "empty" && (
         <div className="space-y-4">
           <section>
-            <h4 className="mb-2 text-xs font-semibold">Growth · 增长</h4>
+            <h4 className="mb-2 text-xs font-semibold">{EARNINGS_SNAPSHOT_GROWTH_HEADING}</h4>
             <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
               <Fact label="营业总收入" value={latest.revenue} sub={`同比 ${latest.revenue_yoy ?? "未知"}`} />
               <Fact label="净利润" value={latest.net_profit} sub={`同比 ${latest.net_profit_yoy ?? "未知"}`} />
@@ -62,7 +67,7 @@ export function EarningsSnapshot({ fin, error }: Props) {
           </section>
 
           <section>
-            <h4 className="mb-2 text-xs font-semibold">Profitability · 盈利能力</h4>
+            <h4 className="mb-2 text-xs font-semibold">{EARNINGS_SNAPSHOT_PROFITABILITY_HEADING}</h4>
             <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
               <Fact label="ROE" value={latest.roe} />
               <Fact label="销售毛利率" value={latest.gross_margin} />
@@ -72,7 +77,7 @@ export function EarningsSnapshot({ fin, error }: Props) {
           </section>
 
           <section>
-            <h4 className="mb-2 text-xs font-semibold">Cash Flow Quality · 现金流质量</h4>
+            <h4 className="mb-2 text-xs font-semibold">{EARNINGS_SNAPSHOT_CASH_FLOW_QUALITY_HEADING}</h4>
             <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
               <Fact label="经营现金流" value={formatFinancialAmount(latest.operating_cash_flow)} sub="与净利润同一报告期" />
               <Fact label="现金转化率" value={formatFinancialRatio(latest.cash_conversion_ratio)} sub="经营现金流 / 净利润" />
@@ -84,7 +89,7 @@ export function EarningsSnapshot({ fin, error }: Props) {
           </section>
 
           <section>
-            <h4 className="mb-2 text-xs font-semibold">Balance Sheet Quality · 资产负债表</h4>
+            <h4 className="mb-2 text-xs font-semibold">{EARNINGS_SNAPSHOT_BALANCE_SHEET_QUALITY_HEADING}</h4>
             <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
               <Fact label="资产负债率" value={latest.debt_ratio} />
               <Fact label="流动比率" value={latest.current_ratio} />
@@ -96,7 +101,7 @@ export function EarningsSnapshot({ fin, error }: Props) {
           </section>
 
           <section className="rounded-lg border border-border/60 p-3 text-xs text-muted-foreground">
-            <h4 className="mb-2 font-semibold text-foreground">Data Quality · 数据质量</h4>
+            <h4 className="mb-2 font-semibold text-foreground">{EARNINGS_SNAPSHOT_DATA_QUALITY_HEADING}</h4>
             <div className="grid gap-1 sm:grid-cols-2">
               <span>报告期末：{latest.period_end ?? "未知"}</span>
               <span>披露日期：未知（数据源未提供）</span>
