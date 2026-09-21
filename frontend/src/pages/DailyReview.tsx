@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import {
   Sparkles, Loader2, AlertCircle, RefreshCw, Gauge, TrendingUp, TrendingDown,
   Plus, X, Flame, BarChart3, Globe, Layers, Save, History, Eye, ChevronLeft, ChevronRight,
-  GitCompare,
+  GitCompare, Inbox, Star, HeartPulse,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -37,6 +37,18 @@ import { cn } from "@/lib/utils";
 const HISTORY_LIMIT = 20;
 const COMPARE_BOARD_LIMIT = 10;
 const COMPARE_STOCK_LIMIT = 10;
+
+/**
+ * 今天页面内的三个视图：只切视图，不触发请求、不写任何业务状态。
+ * 当前市场 = 实时复盘；历史复盘 = 只读浏览已保存快照；快照对比 = 结构化差异。
+ */
+const TODAY_VIEWS = [
+  { key: "market", label: "当前市场" },
+  { key: "history", label: "历史复盘" },
+  { key: "compare", label: "快照对比" },
+] as const;
+
+type TodayView = (typeof TODAY_VIEWS)[number]["key"];
 
 const rateCell = (v: number | null | undefined) =>
   v == null || !Number.isFinite(v) ? "—" : `${(v * 100).toFixed(1)}%`;
@@ -145,6 +157,9 @@ export function DailyReview() {
   const [watchLoading, setWatchLoading] = useState(false);
 
   const [boardTab, setBoardTab] = useState<"industry" | "concept" | "region">("industry");
+
+  // 页面内视图（纯视图状态；切换不重新请求、不自动保存、不自动 AI）
+  const [todayView, setTodayView] = useState<TodayView>("market");
 
   // 显式保存当前复盘（不自动触发）
   const [saveLoading, setSaveLoading] = useState(false);
@@ -991,19 +1006,16 @@ export function DailyReview() {
         subtitle="每日复盘与自选观察"
       />
 
-      <section data-testid="today-market-surface" className="mb-10 space-y-8">
-        <MarketCloud embedded />
-        <MarketIntelPanel embedded />
-      </section>
-
-      <section aria-labelledby="daily-review-section-title" className="mb-4 flex flex-wrap items-start justify-between gap-3 border-t border-border/60 pt-6">
-        <div>
-          <h2 id="daily-review-section-title" className="text-lg font-semibold text-foreground">每日复盘</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {tradeDateLabel !== "—" ? tradeDateLabel : today} · 大盘 / 情绪 / 板块与自选
-          </p>
-        </div>
-        <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
+      {/* 第一行：交易日期 + 当前市场 / 历史复盘 / 快照对比 + 原刷新与保存操作 */}
+      <section aria-labelledby="daily-review-section-title" className="mb-4 border-t border-border/60 pt-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 id="daily-review-section-title" className="text-lg font-semibold text-foreground">每日复盘</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {tradeDateLabel !== "—" ? tradeDateLabel : today} · 大盘 / 情绪 / 板块与自选
+            </p>
+          </div>
+          <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
             <button
               onClick={refreshDailyReview}
               disabled={drRefreshing || !drDone}
@@ -1018,6 +1030,7 @@ export function DailyReview() {
               disabled={saveLoading}
               className="inline-flex items-center gap-1.5 rounded-lg bg-muted/40 px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted/60 disabled:opacity-50"
               title="显式保存当前复盘到历史库（不自动保存）"
+              data-testid="daily-review-save"
             >
               {saveLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
               {saveLoading ? "保存中…" : "保存当前复盘"}
@@ -1027,6 +1040,32 @@ export function DailyReview() {
               label="问 AI"
               suggestions={["今天大盘怎么走", "哪些指数领涨领跌", "盘面有什么值得注意"]}
             />
+          </div>
+        </div>
+        {/* 视图切换：只切视图，不重新请求、不自动保存、不自动 AI */}
+        <div
+          className="mt-3 flex flex-wrap gap-1 rounded-xl border border-border/60 bg-muted/20 p-1"
+          role="tablist"
+          aria-label="每日复盘视图"
+        >
+          {TODAY_VIEWS.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              role="tab"
+              aria-selected={todayView === item.key}
+              aria-controls="today-view-tabpanel"
+              id={`today-view-tab-${item.key}`}
+              data-testid={`today-view-tab-${item.key}`}
+              onClick={() => setTodayView(item.key)}
+              className={cn(
+                "rounded-lg px-3 py-1.5 text-sm",
+                todayView === item.key ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
       </section>
 
@@ -1060,50 +1099,6 @@ export function DailyReview() {
         </div>
       )}
 
-      {/* 整体状态 */}
-      <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <span>交易日期：<b className="text-foreground">{tradeDateLabel}</b></span>
-        <span className="text-muted-foreground/40">·</span>
-        <span>生成时间：{generatedAt}</span>
-        <span className="text-muted-foreground/40">·</span>
-        <span>
-          数据截至：
-          <b className="text-foreground">
-            {dr?.data_cutoff ?? generatedAt}
-          </b>
-        </span>
-        {cacheMeta?.source && (cacheMeta.source === "memory" || cacheMeta.source === "persisted") && (
-          <span className="rounded-full bg-slate-500/15 px-2 py-0.5 text-[10px] text-slate-300">
-            缓存结果
-          </span>
-        )}
-        {cacheMeta?.stale && (
-          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
-            数据陈旧
-          </span>
-        )}
-        {cacheMeta?.stale && (
-          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
-            上次成功结果
-          </span>
-        )}
-        {overall === "normal" && !cacheMeta?.stale && (
-          <span className="rounded-full bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground/70">数据正常</span>
-        )}
-        {overall === "partial" && (
-          <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] text-warning">部分数据源不可用</span>
-        )}
-        {overall === "unavailable" && (
-          <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-[10px] text-destructive">每日复盘数据暂不可用</span>
-        )}
-        <Link
-          to="/data-health?module=%E6%AF%8F%E6%97%A5%E5%A4%8D%E7%9B%98"
-          className="text-primary hover:underline"
-        >
-          查看数据健康详情
-        </Link>
-      </div>
-
       {drErr && (
         <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
           <AlertCircle className="h-4 w-4 shrink-0" /> 每日复盘请求失败：{drErr}
@@ -1133,40 +1128,114 @@ export function DailyReview() {
         </div>
       )}
 
-      {/* 1. 大盘指数 */}
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
-          大盘指数
-          {statusBadge(dr?.data_health?.components?.indices) && (
-            <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", statusBadge(dr?.data_health?.components?.indices)!.cls)}>
-              {statusBadge(dr?.data_health?.components?.indices)!.text}
-            </span>
-          )}
-        </h3>
-      </div>
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {!drDone
-          ? [1, 2, 3, 4].map((i) => (
-              <GlassCard key={i} className="p-3">
-                <p className="text-xs text-muted-foreground">加载中…</p>
-                <p className="mt-1 font-mono text-lg font-bold text-muted-foreground/40">—</p>
-              </GlassCard>
-            ))
-          : indices.length === 0
+      {/* 市场摘要指标带：现有指数 / 涨跌家数 / 成交额 / 来源状态（全部来自同一复盘聚合包） */}
+      <section aria-label="市场摘要" className="mb-6">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
+            大盘指数
+            {statusBadge(dr?.data_health?.components?.indices) && (
+              <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", statusBadge(dr?.data_health?.components?.indices)!.cls)}>
+                {statusBadge(dr?.data_health?.components?.indices)!.text}
+              </span>
+            )}
+          </h3>
+        </div>
+        <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {!drDone
             ? [1, 2, 3, 4].map((i) => (
                 <GlassCard key={i} className="p-3">
-                  <p className="text-xs text-muted-foreground">行情未接通</p>
+                  <p className="text-xs text-muted-foreground">加载中…</p>
                   <p className="mt-1 font-mono text-lg font-bold text-muted-foreground/40">—</p>
                 </GlassCard>
               ))
-            : indices.map((i) => (
-                <GlassCard key={i.name} className="p-3">
-                  <p className="truncate text-xs text-muted-foreground">{i.name}</p>
-                  <p className={cn("mt-1 font-mono text-lg font-bold", pctColor(i.change_pct))}>{i.price}</p>
-                  <p className={cn("text-xs", pctColor(i.change_pct))}>{i.change_pct > 0 ? "+" : ""}{i.change_pct}%</p>
-                </GlassCard>
-              ))}
-      </div>
+            : indices.length === 0
+              ? [1, 2, 3, 4].map((i) => (
+                  <GlassCard key={i} className="p-3">
+                    <p className="text-xs text-muted-foreground">行情未接通</p>
+                    <p className="mt-1 font-mono text-lg font-bold text-muted-foreground/40">—</p>
+                  </GlassCard>
+                ))
+              : indices.map((i) => (
+                  <GlassCard key={i.name} className="p-3">
+                    <p className="truncate text-xs text-muted-foreground">{i.name}</p>
+                    <p className={cn("mt-1 font-mono text-lg font-bold", pctColor(i.change_pct))}>{i.price}</p>
+                    <p className={cn("text-xs", pctColor(i.change_pct))}>{i.change_pct > 0 ? "+" : ""}{i.change_pct}%</p>
+                  </GlassCard>
+                ))}
+        </div>
+        {/* 涨跌家数与成交额：直接显示复盘聚合包的现有字段，不做跨来源相加 */}
+        <div className="mb-3 grid grid-cols-3 gap-2">
+          {[
+            { k: "上涨家数", v: numCell(breadth?.up_count), cls: "text-danger" },
+            { k: "下跌家数", v: numCell(breadth?.down_count), cls: "text-success" },
+            { k: "全市场成交额", v: yi(totalAmount), cls: "text-foreground" },
+          ].map((c) => (
+            <div key={c.k} className="rounded-lg bg-muted/20 p-2 text-center">
+              <p className="truncate text-[11px] text-muted-foreground">{c.k}</p>
+              <p className={cn("mt-0.5 font-mono text-sm font-bold", c.cls)}>{c.v}</p>
+            </div>
+          ))}
+        </div>
+        {/* 来源状态：交易日期 / 生成时间 / 数据截至始终可见，不折叠 */}
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span>交易日期：<b className="text-foreground">{tradeDateLabel}</b></span>
+          <span className="text-muted-foreground/40">·</span>
+          <span>生成时间：{generatedAt}</span>
+          <span className="text-muted-foreground/40">·</span>
+          <span>
+            数据截至：
+            <b className="text-foreground">
+              {dr?.data_cutoff ?? generatedAt}
+            </b>
+          </span>
+          {cacheMeta?.source && (cacheMeta.source === "memory" || cacheMeta.source === "persisted") && (
+            <span className="rounded-full bg-slate-500/15 px-2 py-0.5 text-[10px] text-slate-300">
+              缓存结果
+            </span>
+          )}
+          {cacheMeta?.stale && (
+            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
+              数据陈旧
+            </span>
+          )}
+          {cacheMeta?.stale && (
+            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
+              上次成功结果
+            </span>
+          )}
+          {overall === "normal" && !cacheMeta?.stale && (
+            <span className="rounded-full bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground/70">数据正常</span>
+          )}
+          {overall === "partial" && (
+            <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] text-warning">部分数据源不可用</span>
+          )}
+          {overall === "unavailable" && (
+            <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-[10px] text-destructive">每日复盘数据暂不可用</span>
+          )}
+          <Link
+            to="/data-health?module=%E6%AF%8F%E6%97%A5%E5%A4%8D%E7%9B%98"
+            className="text-primary hover:underline"
+          >
+            查看数据健康详情
+          </Link>
+        </div>
+      </section>
+
+      {/* 主区 + 辅区：≥1350px 视口（扣除侧栏与内边距后约 1100px）分两栏，更窄时主区在上、辅区在下 */}
+      <div className="grid min-w-0 gap-4 min-[1350px]:grid-cols-[minmax(0,1fr)_300px] min-[1350px]:items-start">
+        <div
+          id="today-view-tabpanel"
+          role="tabpanel"
+          aria-labelledby={`today-view-tab-${todayView}`}
+          data-testid="today-main"
+          className="min-w-0"
+        >
+          <section data-testid="today-market-surface" className="min-w-0">
+            {todayView === "market" && (
+            <>
+            <div className="mb-6">
+              <MarketCloud embedded />
+            </div>
 
       {/* 1b. 全球市场（可选组件） */}
       {(globalIdx.length > 0 || (drDone && dr?.data_health?.components?.global_indices === "unavailable")) && (
@@ -1622,16 +1691,25 @@ export function DailyReview() {
       </section>) },
       ].sort((a, b) => a.order - b.order).map((item) => item.node)}
       </div>
+            </>
+            )}
 
       {/* 10. 历史复盘（显式保存；只读浏览；不替换当前实时数据） */}
+      {todayView === "history" && (
+      <>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
           <History className="h-4 w-4" /> 历史复盘
         </h3>
         <span className="text-[11px] text-muted-foreground/50">仅展示已保存快照 · 不自动写入</span>
       </div>
+      </>
+      )}
+      {todayView !== "market" && (
       <GlassCard className="mb-6">
-        {/* 快照对比控制区 */}
+        {/* 快照对比控制区（仅对比视图；历史详情永不覆盖当前实时复盘） */}
+        {todayView === "compare" && (
+        <>
         <div className="mb-4 rounded-lg border border-border/50 bg-muted/10 p-3">
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <h4 className="flex items-center gap-1.5 text-sm font-semibold">
@@ -1685,6 +1763,8 @@ export function DailyReview() {
             </div>
           )}
         </div>
+        </>
+        )}
 
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <label className="text-xs text-muted-foreground">
@@ -1838,7 +1918,7 @@ export function DailyReview() {
         )}
 
         {/* 历史详情：页面内只读卡片，不替换当前实时 dr */}
-        {selectedSnapshotId != null && (
+        {todayView === "history" && selectedSnapshotId != null && (
           <div className="mt-4 border-t border-border/40 pt-4">
             <div className="mb-3 flex items-center justify-between">
               <h4 className="text-sm font-semibold">历史快照详情 #{selectedSnapshotId}</h4>
@@ -2007,7 +2087,7 @@ export function DailyReview() {
         )}
 
         {/* 快照对比结果（只读；不替换实时复盘） */}
-        {comparison && (
+        {todayView === "compare" && comparison && (
           <div className="mt-4 border-t border-border/40 pt-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <h4 className="flex items-center gap-1.5 text-sm font-semibold">
@@ -2186,6 +2266,79 @@ export function DailyReview() {
           </div>
         )}
       </GlassCard>
+      )}
+
+            {/* 现有公开资讯摘要（常驻主区末尾，视图切换不重建） */}
+            <MarketIntelPanel embedded />
+          </section>
+        </div>
+
+        {/* 辅区：只放现有入口链接，不做跨来源汇总、不建新数据组件 */}
+        <aside data-testid="today-aux" className="min-w-0 space-y-4">
+          <GlassCard className="p-2">
+            <nav aria-label="继续处理" className="space-y-0.5">
+              <Link
+                to="/decision-inbox"
+                data-testid="today-aux-decision-inbox"
+                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+              >
+                <Inbox className="h-4 w-4 shrink-0" />
+                <span className="min-w-0 flex-1 truncate font-medium">决策待办</span>
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-50" />
+              </Link>
+              <Link
+                to="/decision-performance"
+                data-testid="today-aux-review-due"
+                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+              >
+                <BarChart3 className="h-4 w-4 shrink-0" />
+                <span className="min-w-0 flex-1 truncate font-medium">到期复核</span>
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-50" />
+              </Link>
+              <Link
+                to="/watchlist"
+                data-testid="today-aux-watchlist"
+                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+              >
+                <Star className="h-4 w-4 shrink-0" />
+                <span className="min-w-0 flex-1 truncate font-medium">自选股</span>
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-50" />
+              </Link>
+            </nav>
+          </GlassCard>
+
+          <GlassCard className="p-3">
+            <p className="mb-2 flex items-center gap-1.5 px-1 text-xs font-medium text-muted-foreground">
+              <Gauge className="h-3.5 w-3.5" /> 来源状态
+            </p>
+            <div className="flex flex-wrap gap-1.5 px-1">
+              {overall === "normal" && !cacheMeta?.stale && (
+                <span className="rounded-full bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground/70">数据正常</span>
+              )}
+              {overall === "partial" && (
+                <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] text-warning">部分数据源不可用</span>
+              )}
+              {overall === "unavailable" && (
+                <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-[10px] text-destructive">每日复盘数据暂不可用</span>
+              )}
+              {cacheMeta?.stale && (
+                <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
+                  数据陈旧
+                </span>
+              )}
+            </div>
+            <Link
+              to="/data-health"
+              data-testid="today-aux-data-health"
+              className="mt-2 flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+            >
+              <HeartPulse className="h-4 w-4 shrink-0" />
+              <span className="min-w-0 flex-1 truncate font-medium">数据健康</span>
+              <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-50" />
+            </Link>
+          </GlassCard>
+        </aside>
+      </div>
     </div>
   );
 }
