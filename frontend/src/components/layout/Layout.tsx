@@ -6,20 +6,15 @@ import {
   BookOpen,
   ChevronsLeft,
   ChevronsRight,
-  ChevronDown,
   HeartPulse,
   Inbox,
   LineChart,
   Moon,
-  PieChart,
   ReceiptText,
   Search,
   Settings,
-  Settings2,
-  ShieldCheck,
   Star,
   Sun,
-  Target,
   Wallet,
   X,
   Menu,
@@ -27,98 +22,35 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
+import { NAV_GROUPS, entriesInGroup, matchRoute, navEntry } from "@/lib/navigation";
 import { DailyReviewAiTaskIndicator } from "./DailyReviewAiTaskIndicator";
 import { PortfolioAdviceTaskIndicator } from "./PortfolioAdviceTaskIndicator";
-import { ResearchWorkflowNav } from "./ResearchWorkflowNav";
+import { SectionNav } from "./SectionNav";
 
 /**
- * Sidebar follows user contexts instead of mirroring implementation modules.
- * Primary destinations answer five recurring questions plus the core
- * decision workflow chain (P1-NAV1):
- * - 今天：现在发生了什么？
- * - 自选：我正在关注什么？
- * - 研究：这个标的值不值得继续研究？
- * - 持仓：我现在暴露了什么风险？
- * - 决策：下一步应该做什么？（Decision Inbox 是正式决策主入口）
- * - 交易 / 复盘：Inbox → Formal Decision → Trade → Review/Outcome 主链直达。
+ * 侧栏跟随用户的工作情境，而不是实现模块（TASK = IA-CONVERGENCE-V1）。
+ *
+ * 一级入口固定为 10 个，来自 `navigation.ts` 的单一权威配置：
+ * 工作（今天 / 决策待办）、研究（自选股 / 投资研究 / 研究资料）、
+ * 账户与复盘（我的持仓 / 交易记录 / 决策复盘）、系统（数据健康 / 设置）。
+ *
+ * 分组标题是静态文字，不再是要先点开的折叠层；
+ * 一级入口内部的二级页面由 `<SectionNav>` 呈现。
  */
-/** Today is the canonical entry for the current market and review context. */
-const TODAY_PARENT = { to: "/daily-review", icon: Activity, label: "今天" };
+const NAV_ICONS: Record<string, LucideIcon> = {
+  today: Activity,
+  decision: Inbox,
+  watchlist: Star,
+  research: Search,
+  library: BookOpen,
+  portfolio: Wallet,
+  trades: ReceiptText,
+  review: BarChart3,
+  health: HeartPulse,
+  settings: Settings,
+};
 
-const PRIMARY_NAV = [
-  { to: "/screener", icon: Search, label: "发现" },
-  { to: "/watchlist", icon: Star, label: "自选" },
-  { to: "/stock-data", icon: LineChart, label: "个股" },
-  { to: "/portfolio", icon: Wallet, label: "持仓" },
-  { to: "/decision-inbox", icon: Inbox, label: "决策" },
-  { to: "/trades", icon: ReceiptText, label: "交易" },
-  { to: "/decision-performance", icon: BarChart3, label: "决策复盘" },
-];
-
-/** Research artifacts and market context live in a lower-frequency library. */
-const LIBRARY_NAV = [
-  { to: "/sectors", label: "板块" },
-  { to: "/signals", label: "产业信号" },
-  { to: "/thesis", label: "投资逻辑" },
-  { to: "/evidence", label: "证据库" },
-  { to: "/my-reports", label: "研报" },
-  { to: "/debate", label: "多空辩论" },
-  { to: "/notes", label: "笔记" },
-];
-
-/** Lower-frequency analytical surfaces remain reachable without competing with daily contexts. */
-const ANALYSIS_NAV = [
-  { to: "/cockpit", icon: Target, label: "决策驾驶舱（Legacy）" },
-  { to: "/decision-evidence", icon: ShieldCheck, label: "决策依据" },
-  { to: "/signal-ledger", icon: Activity, label: "信号账本" },
-  { to: "/decision-feedback", icon: BarChart3, label: "决策反馈" },
-  { to: "/performance-attribution", icon: PieChart, label: "收益归因" },
-  { to: "/account-policy", icon: Settings2, label: "执行策略" },
-];
-
-const SYSTEM_NAV = [
-  { to: "/data-health", icon: HeartPulse, label: "数据健康" },
-  { to: "/settings", icon: Settings, label: "设置" },
-];
-
-const RESEARCH_WORKFLOW_PATHS = [
-  "/screener",
-  "/stock-data",
-  "/candidates",
-  "/thesis",
-  "/decision-evidence",
-  "/portfolio",
-  "/decision-feedback",
-];
-
-const SECTOR_PATHS = [
-  "/sectors/humanoid",
-  "/sectors/ai-computing",
-  "/sectors/hbm",
-  "/sectors/cpo",
-  "/sectors/business-space",
-  "/sectors/ai-pharma",
-];
-
-const ALL_NAV = [TODAY_PARENT, ...PRIMARY_NAV, ...LIBRARY_NAV, ...ANALYSIS_NAV, ...SYSTEM_NAV];
 const WIDE_WORKSPACE_PATHS = ["/daily-review", "/market-cloud"];
-
-function isActive(pathname: string, to: string) {
-  if (to === "/") return pathname === "/";
-  return pathname === to || pathname.startsWith(to + "/");
-}
-
-function getCurrentNavPath(pathname: string) {
-  if (isActive(pathname, "/market-cloud") || isActive(pathname, "/intel")) return TODAY_PARENT.to;
-  if (SECTOR_PATHS.some((to) => isActive(pathname, to))) return "/sectors";
-  if (pathname.startsWith("/thesis/")) return "/thesis";
-  if (pathname.startsWith("/campaigns/")) return "/decision-inbox";
-  if (pathname.startsWith("/candidates/")) return "/stock-data";
-  return ALL_NAV.reduce<string | null>((best, item) => {
-    if (!isActive(pathname, item.to)) return best;
-    return !best || item.to.length > best.length ? item.to : best;
-  }, null);
-}
 
 const DESKTOP_QUERY = "(min-width: 768px)";
 
@@ -135,20 +67,12 @@ function focusableIn(container: HTMLElement | null) {
   return Array.from(nodes).filter((el) => el.offsetParent !== null || el.getClientRects().length > 0);
 }
 
-interface IconNavItem {
-  to: string;
-  icon: LucideIcon;
-  label: string;
-}
-
 export function Layout() {
   const { pathname } = useLocation();
   const { dark, toggle } = useDarkMode();
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("vr-sidebar") === "collapsed");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(readDesktop);
-  const [libraryOpen, setLibraryOpen] = useState(false);
-  const [analysisOpen, setAnalysisOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
@@ -159,12 +83,6 @@ export function Layout() {
 
   useEffect(() => {
     setMobileOpen(false);
-    if (LIBRARY_NAV.some(({ to }) => isActive(pathname, to))) {
-      setLibraryOpen(true);
-    }
-    if (ANALYSIS_NAV.some(({ to }) => isActive(pathname, to))) {
-      setAnalysisOpen(true);
-    }
   }, [pathname]);
 
   useEffect(() => {
@@ -240,19 +158,20 @@ export function Layout() {
   }, [mobileOpen]);
 
   const compact = isDesktop && collapsed;
-  const currentNavPath = getCurrentNavPath(pathname);
-  const libraryActive = LIBRARY_NAV.some(({ to }) => currentNavPath === to);
-  const analysisActive = ANALYSIS_NAV.some(({ to }) => currentNavPath === to);
-  const TodayIcon = TODAY_PARENT.icon;
-  const showResearchWorkflow = RESEARCH_WORKFLOW_PATHS.some((to) => isActive(pathname, to));
+  const currentOwner = matchRoute(pathname)?.owner ?? null;
+  const currentTitle = navEntry(currentOwner ?? "")?.label ?? "";
 
-  const iconNavItem = ({ to, icon: Icon, label }: IconNavItem) => {
-    const active = currentNavPath === to;
+  const renderEntry = (id: string) => {
+    const entry = navEntry(id);
+    if (!entry) return null;
+    const Icon = NAV_ICONS[entry.id] ?? Activity;
+    const active = currentOwner === entry.id;
     return (
       <Link
-        key={to}
-        to={to}
-        title={compact ? label : undefined}
+        key={entry.id}
+        to={entry.to}
+        data-nav-entry={entry.id}
+        title={compact ? entry.label : undefined}
         aria-current={active ? "page" : undefined}
         className={cn(
           "flex min-h-9 items-center rounded-lg text-[13px] transition-colors duration-150",
@@ -263,7 +182,7 @@ export function Layout() {
         )}
       >
         <Icon className="h-[17px] w-[17px] shrink-0" />
-        {!compact && <span className="truncate">{label}</span>}
+        {!compact && <span className="truncate">{entry.label}</span>}
       </Link>
     );
   };
@@ -306,7 +225,7 @@ export function Layout() {
           "fixed inset-y-0 left-0 w-[260px]",
           "md:static md:shrink-0",
           mobileOpen ? "flex" : "hidden md:flex",
-          collapsed ? "md:w-14" : "md:w-[260px]",
+          collapsed ? "md:w-14" : "md:w-[200px]",
         )}
       >
         {mobileOpen && (
@@ -341,136 +260,24 @@ export function Layout() {
         </div>
 
         <nav aria-label="主导航" className={cn("flex-1 overflow-y-auto px-2 pb-3 pt-1", compact && "px-1.5")}>
-          <div className="space-y-0.5">
-            <div className="relative">
-              <Link
-                to={TODAY_PARENT.to}
-                title={compact ? TODAY_PARENT.label : undefined}
-                aria-current={currentNavPath === TODAY_PARENT.to ? "page" : undefined}
-                className={cn(
-                  "flex min-h-9 items-center rounded-lg text-[13px] transition-colors duration-150",
-                  compact ? "justify-center px-2" : "gap-2.5 px-2.5",
-                  currentNavPath === TODAY_PARENT.to
-                    ? "bg-sidebar-active font-medium text-foreground"
-                    : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-foreground",
+          {NAV_GROUPS.map((group, index) => {
+            const entries = entriesInGroup(group.id);
+            if (!entries.length) return null;
+            return (
+              <div key={group.id} data-nav-group={group.id} className={cn(index > 0 && "mt-4")}>
+                {!compact && (
+                  <p className="px-2.5 pb-1 text-[11px] font-medium uppercase tracking-wide text-sidebar-muted">
+                    {group.label}
+                  </p>
                 )}
-              >
-                <TodayIcon className="h-[17px] w-[17px] shrink-0" />
-                {!compact && <span className="truncate">{TODAY_PARENT.label}</span>}
-              </Link>
-            </div>
-            {PRIMARY_NAV.map(iconNavItem)}
-          </div>
-
-          <div className="mt-5">
-            <button
-              type="button"
-              onClick={() => {
-                if (compact) {
-                  setCollapsed(false);
-                  setLibraryOpen(true);
-                  return;
-                }
-                setLibraryOpen((v) => !v);
-              }}
-              aria-expanded={libraryOpen}
-              className={cn(
-                "flex min-h-9 w-full items-center rounded-lg text-[13px] transition-colors",
-                compact ? "justify-center px-2" : "gap-2.5 px-2.5",
-                libraryActive
-                  ? "bg-sidebar-active text-foreground"
-                  : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-foreground",
-              )}
-              title={compact ? "资料" : undefined}
-            >
-              <BookOpen className="h-[17px] w-[17px] shrink-0" />
-              {!compact && (
-                <>
-                  <span className="flex-1 text-left">资料</span>
-                  <ChevronDown className={cn("h-4 w-4 transition-transform", libraryOpen && "rotate-180")} />
-                </>
-              )}
-            </button>
-            {libraryOpen && !compact && (
-              <div className="mt-0.5 space-y-0.5 pl-4">
-                {LIBRARY_NAV.map(({ to, label }) => {
-                  const active = currentNavPath === to;
-                  return (
-                    <Link
-                      key={to}
-                      to={to}
-                      aria-current={active ? "page" : undefined}
-                      className={cn(
-                        "block min-h-8 truncate rounded-lg px-2.5 py-1.5 text-[12px] transition-colors",
-                        active
-                          ? "bg-sidebar-active font-medium text-foreground"
-                          : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-foreground",
-                      )}
-                    >
-                      {label}
-                    </Link>
-                  );
-                })}
+                {compact && index > 0 && <div className="mx-2 mb-2 border-t border-border/40" />}
+                <div className="space-y-0.5">{entries.map((entry) => renderEntry(entry.id))}</div>
               </div>
-            )}
-          </div>
-
-          <div className="mt-1">
-            <button
-              type="button"
-              onClick={() => {
-                if (compact) {
-                  setCollapsed(false);
-                  setAnalysisOpen(true);
-                  return;
-                }
-                setAnalysisOpen((v) => !v);
-              }}
-              aria-expanded={analysisOpen}
-              className={cn(
-                "flex min-h-9 w-full items-center rounded-lg text-[13px] transition-colors",
-                compact ? "justify-center px-2" : "gap-2.5 px-2.5",
-                analysisActive
-                  ? "bg-sidebar-active text-foreground"
-                  : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-foreground",
-              )}
-              title={compact ? "分析" : undefined}
-            >
-              <BarChart3 className="h-[17px] w-[17px] shrink-0" />
-              {!compact && (
-                <>
-                  <span className="flex-1 text-left">分析</span>
-                  <ChevronDown className={cn("h-4 w-4 transition-transform", analysisOpen && "rotate-180")} />
-                </>
-              )}
-            </button>
-            {analysisOpen && !compact && (
-              <div className="mt-0.5 space-y-0.5 pl-4">
-                {ANALYSIS_NAV.map(({ to, label }) => {
-                  const active = currentNavPath === to;
-                  return (
-                    <Link
-                      key={to}
-                      to={to}
-                      aria-current={active ? "page" : undefined}
-                      className={cn(
-                        "block min-h-8 truncate rounded-lg px-2.5 py-1.5 text-[12px] transition-colors",
-                        active
-                          ? "bg-sidebar-active font-medium text-foreground"
-                          : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-foreground",
-                      )}
-                    >
-                      {label}
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+            );
+          })}
         </nav>
 
         <div className={cn("space-y-0.5 px-2 pb-2", compact && "flex flex-col items-center px-1.5")}>
-          {SYSTEM_NAV.map(iconNavItem)}
           {compact ? (
             <>
               <button
@@ -508,13 +315,13 @@ export function Layout() {
       <main ref={mainRef} className="flex-1 overflow-auto bg-background">
         <div
           className={cn(
-            "mx-auto w-full px-4 pb-12 pt-16 sm:px-6 md:px-8 md:pt-7 lg:px-10",
+            "mx-auto w-full px-6 pb-12 pt-16 sm:px-6 md:px-6 md:pt-7",
             WIDE_WORKSPACE_PATHS.includes(pathname) ? "max-w-[1760px]" : "max-w-[1320px]",
           )}
         >
           <DailyReviewAiTaskIndicator />
           <PortfolioAdviceTaskIndicator />
-          {showResearchWorkflow ? <ResearchWorkflowNav /> : null}
+          <SectionNav ownerId={currentOwner} pathname={pathname} title={currentTitle} />
           <Outlet />
         </div>
       </main>
