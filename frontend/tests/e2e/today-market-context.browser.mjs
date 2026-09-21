@@ -320,6 +320,41 @@ try {
   assert.equal(await mainNav.locator('a[href="/intel"]').count(), 0, "Intel Radar must not be duplicated in the sidebar");
   assert.equal(await page.getByRole("link", { name: "资讯", exact: true }).count(), 0, "legacy short Intel label must not remain");
 
+  // IA-CONVERGENCE-V1：今天页的主辅区与三视图切换。
+  const todayAux = page.getByTestId("today-aux");
+  await todayAux.waitFor();
+  assert.equal(await page.getByTestId("today-main").count(), 1, "今天页应恰好有一个主区");
+  for (const [testid, href] of [
+    ["today-aux-decision-inbox", "/decision-inbox"],
+    ["today-aux-review-due", "/decision-performance"],
+    ["today-aux-watchlist", "/watchlist"],
+    ["today-aux-data-health", "/data-health"],
+  ]) {
+    assert.equal(
+      await todayAux.getByTestId(testid).getAttribute("href"),
+      href,
+      `辅区入口 ${testid} 应指向 ${href}`,
+    );
+  }
+  for (const key of ["market", "history", "compare"]) {
+    assert.equal(await page.getByTestId(`today-view-tab-${key}`).count(), 1, `应有「${key}」视图页签`);
+  }
+  // 切换视图：不得触发任何写请求、不得自动保存快照或自动生成 AI 复盘。
+  const todayWrites = [];
+  page.on("request", (request) => {
+    const method = request.method();
+    if (method !== "GET" && method !== "OPTIONS" && request.url().includes("/api/")) {
+      todayWrites.push(`${method} ${request.url()}`);
+    }
+  });
+  await page.getByTestId("today-view-tab-history").click();
+  await page.getByTestId("today-view-tab-compare").click();
+  await page.getByTestId("today-view-tab-market").click();
+  assert.deepEqual(todayWrites, [], `切换视图不得产生写请求: ${todayWrites.join("; ")}`);
+  // 切回当前市场后，实时数据与市场云图仍然在位（历史/对比不覆盖实时数据）。
+  await todayCloud.locator("[data-market-cloud-chart]").waitFor({ state: "visible", timeout: 15000 });
+  assert.equal(await todaySurface.getByTestId("market-intel-panel").count(), 1, "切回当前市场后市场情报仍在位");
+
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
   await page.getByTestId("today-market-surface").locator("[data-market-cloud-chart]").waitFor({ state: "visible", timeout: 15000 });
