@@ -108,6 +108,21 @@ function startStaticServer(dir, port) {
   });
 }
 
+/**
+ * IA-CONVERGENCE-V1：/portfolio 是「常驻带 + 四个页签」，只有激活页签的区块挂载，
+ * 且页签是纯视图状态（刷新后回到默认「当前持仓」）。
+ * 断言落在某个页签的内容上时，必须先切到该页签：
+ * - 组合风险：security-exposure-*
+ * - 账户资金：account-authority-status / account-cash-reconciliation
+ * - 持仓建议：生成持仓操作建议 / account-funding-authority-status / portfolio-advice-holding-*
+ */
+async function openPortfolioTab(page, key) {
+  const tab = page.getByTestId(`portfolio-tab-${key}`);
+  await tab.waitFor({ state: "visible", timeout: 15000 });
+  await tab.click();
+  await page.getByTestId(`portfolio-panel-${key}`).waitFor({ state: "visible", timeout: 15000 });
+}
+
 async function jsonRequest(base, pathname, method = "GET", body, expected = 200) {
   const response = await fetch(`${base}${pathname}`, {
     method,
@@ -239,19 +254,23 @@ async function run() {
     });
 
     await page.goto(`${frontend}/portfolio`, { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: /生成持仓操作建议/ }).waitFor({ timeout: 30000 });
 
     // ---- PEX1. 不生成 AI 建议也能读取 Security Exposure ------------------
+    // 敞口卡在「组合风险」页签，逐股敞口表在「当前持仓」页签，两者都与「持仓建议」的生成动作独立。
+    await openPortfolioTab(page, "risk");
     await page.getByTestId("security-exposure-card").waitFor();
     await page.getByTestId("security-exposure-account-basis").getByText("MANUAL_CONFIRMED_TOTAL_ASSETS").waitFor();
     assert.equal((await page.getByTestId("security-exposure-quote-basis").innerText()).trim(), "QUOTE_COVERAGE_COMPLETE");
     assert.equal((await page.getByTestId("security-exposure-account-basis").innerText()).trim(), "MANUAL_CONFIRMED_TOTAL_ASSETS");
     assert.equal((await page.getByTestId("security-exposure-stock-account-pct").innerText()).trim(), "18.03%");
     assert.equal((await page.getByTestId("security-exposure-cash-account-pct").innerText()).trim(), "81.97%");
+    await openPortfolioTab(page, "holdings");
     assert.equal((await page.getByTestId("security-exposure-stock-600519").innerText()).trim(), "54.55%");
     assert.equal((await page.getByTestId("security-exposure-account-600519").innerText()).trim(), "9.84%");
 
     // ---- A. 成功路径：点击生成 → 渲染 Advice -----------------------------
+    // 生成入口与「独立于 Security Exposure」的性质：只为生成建议才切到「持仓建议」页签。
+    await openPortfolioTab(page, "advice");
     await page.route("**/api/portfolio/advice", async (route) => {
       await route.fulfill({
         status: 200,
@@ -354,6 +373,8 @@ async function run() {
 
     writeFileSync(accountRealityPath, JSON.stringify(canonicalReality("confirmation-b")), "utf8");
     await page.reload({ waitUntil: "domcontentloaded" });
+    // 页签是纯视图状态，刷新后回到默认页签：必须重新切到「持仓建议」。
+    await openPortfolioTab(page, "advice");
     await page.getByText("账户事实或确认身份已发生变化，旧建议的加仓数量与金额已失效，请重新生成。").waitFor({ timeout: 15000 });
     const staleAddText = await page.getByTestId("portfolio-advice-holding-600519").innerText();
     assert.ok(staleAddText.includes("暂无具体买入数量与预计金额"));
@@ -396,9 +417,12 @@ async function run() {
       });
     });
     await page.reload({ waitUntil: "domcontentloaded" });
+    await openPortfolioTab(page, "risk");
     await page.getByTestId("security-exposure-account-basis").getByText("MANUAL_CONFIRMED_TOTAL_ASSETS").waitFor();
     assert.equal((await page.getByTestId("security-exposure-quote-basis").innerText()).trim(), "QUOTE_COVERAGE_PARTIAL");
+    await openPortfolioTab(page, "holdings");
     assert.equal((await page.getByTestId("security-exposure-account-600519").innerText()).trim(), "9.84%");
+    await openPortfolioTab(page, "risk");
     assert.equal((await page.getByTestId("security-exposure-cash-account-pct").innerText()).trim(), "—");
 
     const staleReality = canonicalReality("confirmation-b");
@@ -408,10 +432,14 @@ async function run() {
     staleReality.account_total_assets.current_fact.authority_state = "STALE";
     accountRealityOverride = staleReality;
     await page.reload({ waitUntil: "domcontentloaded" });
+    // STALE 权威标识在「账户资金」页签，账户级仓位回退在「组合风险」页签：两处都要看。
+    await openPortfolioTab(page, "funding");
     await page.locator('[data-testid="account-authority-status"][data-authority-state="STALE"]').waitFor();
+    await openPortfolioTab(page, "risk");
     assert.equal((await page.getByTestId("security-exposure-account-basis").innerText()).trim(), "ACCOUNT_BASIS_UNKNOWN");
     assert.equal((await page.getByTestId("security-exposure-stock-account-pct").innerText()).trim(), "—");
     assert.equal((await page.getByTestId("security-exposure-cash-account-pct").innerText()).trim(), "—");
+    await openPortfolioTab(page, "holdings");
     assert.equal((await page.getByTestId("security-exposure-stock-600519").innerText()).trim(), "—");
     assert.equal((await page.getByTestId("security-exposure-account-600519").innerText()).trim(), "—");
 

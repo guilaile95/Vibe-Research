@@ -6,17 +6,23 @@
  *
  * 1. 种子：bootstrap position reality（600519 legacy holding）。
  * 2. /decision-inbox → UNASSIGNED_HOLDING 行 + 「创建 Campaign」按钮。
- * 3. 创建 SWING → 创建表单自动收起，页面定位并高亮新 DRAFT setup card；
- *    同一 card 直接展示 Campaign lifecycle 与 Current Thesis 下一步入口。
+ * 3. 创建 SWING → 创建表单自动收起，选中新 DRAFT setup card；
+ *    同一详情直接展示 Campaign lifecycle 与 Current Thesis 下一步入口。
  * 4. 刷新后 DRAFT 仍持续存在（不依赖 transient focus component）。
- * 5. 同 Security 再创建 MEDIUM DRAFT —— 两个 setup 卡共存。
- * 6. SWING 卡显式点击：开始研究 → 标记待入场；PRE-ENTRY 不提供无交易激活。
+ * 5. 同 Security 再创建 MEDIUM DRAFT —— 两个 setup 计划是工作列表里的两个独立行。
+ * 6. SWING 显式点击：开始研究 → 标记待入场；PRE-ENTRY 不提供无交易激活。
  * 7. 夹具在 store 层种入既有 ACTIVE 历史后：SWING 离开 setup 区域，进入「当前 Campaign」；
- *    MEDIUM DRAFT sibling 仍可见（ACTIVE sibling 不隐藏 DRAFT sibling）；
+ *    MEDIUM DRAFT sibling 仍可达（ACTIVE sibling 不隐藏 DRAFT sibling）；
  *    决策状态为诚实状态（绝不显示 NO_ACTION_REQUIRED）。
  * 8. 刷新后状态保持（backend 权威，无本地伪造）。
  * 9. 非法 transition（MEDIUM DRAFT→ACTIVE 直跳）→ backend 409；
  *    刷新后 MEDIUM 仍「草稿」（状态绝不本地推进）。
+ *
+ * IA-CONVERGENCE-V1：分组由三个页签承载（当前投资计划 / 正在建立的投资计划 /
+ * 尚未建立投资计划的持仓），左侧工作列表一行一个对象（campaign_id 或 security_code），
+ * 右侧只挂载「当前选中对象」的详情 —— 计划不再同时展开。
+ * 因此本测试用 selectInboxGroup / selectInboxItem 显式表达「先选分组、再选对象」，
+ * 被证实的性质（身份唯一、状态以后端为准、草稿不进入 current）都没有放宽。
  */
 import { chromium } from "playwright";
 import { spawn, execSync } from "node:child_process";
@@ -160,9 +166,64 @@ assert result.get("status") == "BOOTSTRAPPED", result
 print("SEED_OK")
 `;
 
+// 新 IA：右侧只挂载「选中对象」的详情，选中对象由工作列表行决定。
+// 下面几个 helper 就是这条规则的显式表达：先落分组页签，再点工作列表行。
+async function selectInboxGroup(page, key) {
+  const tab = page.getByTestId(`decision-inbox-tab-${key}`);
+  await tab.waitFor({ state: "visible", timeout: 15000 });
+  if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click();
+  await page.waitForFunction(
+    (k) =>
+      document.querySelector(`[data-testid="decision-inbox-tab-${k}"]`)?.getAttribute("aria-selected") === "true",
+    key,
+    { timeout: 15000 },
+  );
+}
+
+async function selectInboxItem(page, id) {
+  const item = page.getByTestId(`decision-inbox-item-${id}`);
+  await item.waitFor({ state: "visible", timeout: 15000 });
+  if ((await item.getAttribute("data-selected")) !== "true") await item.click();
+  await page.waitForFunction(
+    (i) =>
+      document.querySelector(`[data-testid="decision-inbox-item-${i}"]`)?.getAttribute("data-selected") === "true",
+    id,
+    { timeout: 15000 },
+  );
+}
+
+/** 持仓条目身份 = security_code（在「尚未建立投资计划的持仓」分组）。 */
+async function selectHoldingItem(page, code) {
+  await selectInboxGroup(page, "unassigned");
+  await selectInboxItem(page, code);
+}
+
+/** 投资计划条目身份 = campaign_id：先定位它所在的分组，再选中它。 */
+async function selectCampaignItem(page, campaignId) {
+  for (const key of ["current", "setup"]) {
+    await selectInboxGroup(page, key);
+    if ((await page.getByTestId(`decision-inbox-item-${campaignId}`).count()) > 0) {
+      await selectInboxItem(page, campaignId);
+      return;
+    }
+  }
+  throw new Error(`Campaign ${campaignId} 不在决策待办工作列表中`);
+}
+
+/** 点击刷新，并等后端快照真正返回，避免读取刷新前的 DOM。 */
+async function clickRefresh(page) {
+  const reloaded = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/decision-inbox",
+  );
+  await page.click("button:has-text('刷新')");
+  await reloaded;
+}
+
 async function createCampaignViaUi(page, strategyLabel) {
-  // 前提：holding 行显示「创建 Campaign」按钮（DRAFT 不算 current，入口持续存在）
-  await page.click("button:has-text('创建投资计划')");
+  // 前提：holding 行显示「创建投资计划」按钮（DRAFT 不算 current，入口持续存在）。
+  // 创建按钮只属于当前选中对象，所以先选中该持仓。
+  await selectHoldingItem(page, "600519");
+  await page.getByTestId("decision-inbox-create-campaign-600519").click();
   await page.waitForSelector("text=不会自动激活");
   await page.click(`label:has-text('${strategyLabel}')`);
   await page.click("button:has-text('确认创建投资计划')");
@@ -249,9 +310,24 @@ async function runE2E() {
       waitUntil: "networkidle",
     });
     await page.waitForSelector("h1:has-text('决策待办')");
+    // 新 IA：三个分组页签常驻；默认落在第一个非空分组（此处只有未建立计划的持仓）。
+    for (const key of ["current", "setup", "unassigned"]) {
+      await page.getByTestId(`decision-inbox-tab-${key}`).waitFor();
+    }
+    assert.equal(
+      await page.getByTestId("decision-inbox-tab-unassigned").getAttribute("aria-selected"),
+      "true",
+      "只有未建立计划的持仓时，默认分组应为「尚未建立投资计划的持仓」",
+    );
     await page.waitForSelector("h2:has-text('尚未建立投资计划的持仓')");
     await page.waitForSelector("text=600519");
     await page.waitForSelector("text=尚无投资计划");
+    // 工作列表一行一个对象，且默认选中第一行（右侧详情随之出现）。
+    await page.getByTestId("decision-inbox-item-600519").waitFor();
+    assert.equal(
+      await page.getByTestId("decision-inbox-item-600519").getAttribute("data-selected"),
+      "true",
+    );
 
     // 2. 创建表单：strategy 必选（未选时提交禁用）+ 显式 DRAFT 确认文案
     console.log("[E2E] 2. CREATE_CAMPAIGN form requires strategy...");
@@ -285,27 +361,58 @@ async function runE2E() {
     assert.equal(await page.getByTestId("create-campaign-form").count(), 0, "create form must auto-close after success");
     assert.equal(await page.getByText("Campaign 已创建（状态：草稿）").count(), 0, "success card must not block setup continuation");
     assert.deepEqual(forbiddenMutationRequests, [], "creation continuation must not mutate lifecycle or Thesis");
-    // DRAFT 不算 current：holding 行仍 UNASSIGNED（创建入口仍在）
-    await page.waitForSelector("text=尚无投资计划");
+    const swingId = await swingCard.getAttribute("data-campaign-id");
+    assert.ok(swingId, "SWING Campaign id must be present on the lifecycle card");
+    // DRAFT 不算 current：切回「尚未建立投资计划的持仓」，holding 行仍在（入口仍在）。
+    // 新 IA 下右侧只展示选中对象，所以必须显式选中该行后才能读它的详情。
+    await selectHoldingItem(page, "600519");
+    await page.getByTestId("decision-inbox-item-600519").getByText("尚无投资计划").waitFor();
+    await page
+      .getByTestId("decision-inbox-actions")
+      .getByTestId("decision-inbox-create-campaign-600519")
+      .waitFor();
 
     // 4. 刷新后 DRAFT 仍持续存在（不依赖 transient focus component）
     console.log("[E2E] 4. refresh keeps DRAFT reachable...");
-    await page.click("button:has-text('刷新')");
+    await clickRefresh(page);
+    await selectCampaignItem(page, swingId);
     await swingCard.getByText("这项投资计划尚未生效", { exact: false }).waitFor();
     assert.equal(await swingCard.getAttribute("data-campaign-status"), "DRAFT");
 
-    // 5. 同 Security 再创建 MEDIUM DRAFT（两个 setup 卡共存）
+    // 5. 同 Security 再创建 MEDIUM DRAFT
     console.log("[E2E] 5. second campaign (MEDIUM DRAFT) coexists...");
     await createCampaignViaUi(page, "中线");
     const mediumCard = page.locator('[data-campaign-strategy="MEDIUM"]');
     await mediumCard.getByText("这项投资计划尚未生效", { exact: false }).waitFor();
     assert.equal(await mediumCard.getAttribute("data-campaign-status"), "DRAFT");
     assert.equal(await mediumCard.getAttribute("data-campaign-role"), "setup");
+    const mediumId = await mediumCard.getAttribute("data-campaign-id");
+    assert.ok(mediumId, "MEDIUM Campaign id must be present on the lifecycle card");
+
+    // 5b. 新 IA 下两个 setup 计划不再同时展开；同一性质改由「工作列表两行 + 选中谁只展示谁」
+    // 证明：两个 campaign_id 都是独立的可选中行，切来切去右侧只出现被选中的那一个。
+    console.log("[E2E] 5b. both setup plans exist as distinct worklist rows...");
+    const setupWorklist = page.getByTestId("decision-inbox-worklist");
+    await setupWorklist.getByTestId(`decision-inbox-item-${swingId}`).waitFor();
+    await setupWorklist.getByTestId(`decision-inbox-item-${mediumId}`).waitFor();
+    await selectInboxItem(page, swingId);
+    await swingCard.waitFor();
+    assert.equal(
+      await page.locator('[data-campaign-strategy="MEDIUM"]').count(),
+      0,
+      "未选中的投资计划不得同时展开",
+    );
+    await selectInboxItem(page, mediumId);
+    await mediumCard.waitFor();
+    assert.equal(
+      await page.locator('[data-campaign-strategy="SWING"]').count(),
+      0,
+      "未选中的投资计划不得同时展开",
+    );
 
     // 6. SWING 显式 lifecycle（每步一次点击，无链式）；PRE-ENTRY 必须等待交易证明。
     console.log("[E2E] 6. explicit SWING lifecycle...");
-    const swingId = await swingCard.getAttribute("data-campaign-id");
-    assert.ok(swingId, "SWING Campaign id must be present on the lifecycle card");
+    await selectInboxItem(page, swingId);
     await swingCard.locator('button:has-text("开始研究")').click();
     await swingCard.locator('button:has-text("标记待入场")').waitFor(); // RESEARCHING
     assert.equal(await swingCard.getAttribute("data-campaign-status"), "RESEARCHING");
@@ -324,21 +431,19 @@ async function runE2E() {
     // Decision Inbox 只验证既有 ACTIVE 的组合读取；直接 store seed 是隔离夹具，
     // 不伪装成生产命令，也不放宽公开 API 的 trade-proven gate。
     seedActiveCampaign(backendDir, env, swingId);
-    await page.click("button:has-text('刷新')");
+    await clickRefresh(page);
 
-    // 7. ACTIVE fixture：SWING 离开 setup，进入决策项；MEDIUM DRAFT sibling 仍可见
+    // 7. ACTIVE fixture：SWING 进入「当前投资计划」；MEDIUM DRAFT sibling 仍可达
     console.log("[E2E] 7. ACTIVE recognized by inbox; DRAFT sibling stays reachable...");
     const swingActiveCard = page.locator(
       '[data-campaign-strategy="SWING"][data-campaign-status="ACTIVE"]',
     );
-    await swingActiveCard.waitFor();
+    // 显式选中 SWING（它会从 setup 分组移到 current 分组）。
+    await selectCampaignItem(page, swingId);
     await page.waitForSelector("h2:has-text('当前投资计划')");
+    await swingActiveCard.waitFor();
     await swingActiveCard.getByText("当前投资计划", { exact: true }).waitFor();
     assert.equal(await swingActiveCard.getAttribute("data-campaign-role"), "current");
-    // MEDIUM DRAFT 仍在 setup section（ACTIVE sibling 不隐藏 DRAFT sibling）
-    await page.waitForSelector("h2:has-text('正在建立的投资计划')");
-    await mediumCard.getByText("这项投资计划尚未生效", { exact: false }).waitFor();
-    assert.equal(await mediumCard.getAttribute("data-campaign-role"), "setup");
     // 诚实状态：绝不显示 NO_ACTION_REQUIRED；reason code 不以调试串作为主解释
     assert.equal(
       await page.locator("text=NO_ACTION_REQUIRED").count(),
@@ -352,12 +457,30 @@ async function runE2E() {
       0,
       "raw reason dump must not be the primary explanation",
     );
+    // ACTIVE sibling 不隐藏 DRAFT sibling：MEDIUM 仍是「正在建立」页签里的独立工作列表行，
+    // 选中它时右侧只展示它自己。
+    await selectCampaignItem(page, mediumId);
+    await page.waitForSelector("h2:has-text('正在建立的投资计划')");
+    await mediumCard.getByText("这项投资计划尚未生效", { exact: false }).waitFor();
+    assert.equal(await mediumCard.getAttribute("data-campaign-role"), "setup");
+    assert.equal(
+      await page.locator('[data-campaign-strategy="SWING"]').count(),
+      0,
+      "未选中的投资计划不得同时展开",
+    );
 
     // 8. 刷新后状态保持（backend 权威）
     console.log("[E2E] 8. refresh preserves backend state...");
-    await page.click("button:has-text('刷新')");
+    await clickRefresh(page);
+    await selectCampaignItem(page, swingId);
     await swingActiveCard.getByText("当前投资计划", { exact: true }).waitFor();
+    await selectCampaignItem(page, mediumId);
     await mediumCard.getByText("这项投资计划尚未生效", { exact: false }).waitFor();
+    assert.equal(
+      await mediumCard.getAttribute("data-campaign-status"),
+      "DRAFT",
+      "MEDIUM must remain DRAFT after refresh",
+    );
 
     // 8b. destructive 需要二次确认，取消后状态不变
     console.log("[E2E] 8b. destructive action requires confirm...");
@@ -373,14 +496,15 @@ async function runE2E() {
       `http://127.0.0.1:${backendPort}/api/campaigns?strategy=MEDIUM`,
     );
     assert.equal(mediumResp.status(), 200);
-    const mediumId = (await mediumResp.json()).data[0].campaign_id;
+    const mediumFromApi = (await mediumResp.json()).data[0].campaign_id;
+    assert.equal(mediumFromApi, mediumId, "UI 上的 Campaign 身份必须与后端一致");
     const illegal = await page.request.post(
-      `http://127.0.0.1:${backendPort}/api/campaigns/${mediumId}/transitions`,
+      `http://127.0.0.1:${backendPort}/api/campaigns/${mediumFromApi}/transitions`,
       { data: { expected_status: "DRAFT", to_status: "ACTIVE" } },
     );
     assert.equal(illegal.status(), 409);
-    await page.click("button:has-text('刷新')");
-    await mediumCard.getByText("这项投资计划尚未生效", { exact: false }).waitFor();
+    await clickRefresh(page);
+    // 刷新后仍停在 MEDIUM（选中对象是它自己），状态以后端为准。
     assert.equal(
       await mediumCard.getAttribute("data-campaign-status"),
       "DRAFT",

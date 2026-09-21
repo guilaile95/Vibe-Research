@@ -201,6 +201,11 @@ astock.kline = _cash1_kline
 
     const openPortfolio = async () => {
       await page.goto(`${frontend}/portfolio`, { waitUntil: "networkidle" });
+      // IA-CONVERGENCE-V1：现金 candidate / 手工快照 authority / 现金对账 / NAV 时点
+      // 都落在「账户资金」页签下，只有激活页签的区块挂载；页签是纯视图状态，
+      // 每次导航（含 reload 语义）后都要重新切过去。
+      await page.getByTestId("portfolio-tab-funding").click();
+      await page.getByTestId("portfolio-panel-funding").waitFor();
     };
 
     // ---- A. pre-bootstrap：诚实空态保持 ----------------------------------

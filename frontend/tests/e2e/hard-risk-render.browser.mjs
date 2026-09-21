@@ -158,6 +158,30 @@ const SNAPSHOT = {
   total_campaign_items: 10,
 };
 
+/**
+ * 研究事件日历：IA-CONVERGENCE-V1 后它常驻决策待办页面底部并独立加载，
+ * fixture 必须给出合法 payload（否则整页会被日历的读取异常带走）。
+ */
+const RESEARCH_EVENT_CALENDAR = {
+  schema_version: "research_event_calendar.v0.1",
+  status: "NORMAL",
+  as_of: AS_OF,
+  fetched_at: AS_OF,
+  window: { date_from: "2026-08-01", date_to: "2026-08-31", semantics: "CALENDAR_DAYS" },
+  universe: {
+    kind: "ACTIVE_RESEARCH_CAMPAIGNS",
+    status: "NORMAL",
+    campaign_count: 0,
+    unique_security_count: 0,
+    max_unique_securities: 20,
+    securities: [],
+  },
+  events: [],
+  sources: [],
+  limitations: [],
+  writes: { campaign: 0, thesis: 0, evidence: 0, decision: 0 },
+};
+
 function startStaticServer(dir, port) {
   const mime = {
     ".html": "text/html; charset=utf-8",
@@ -240,14 +264,43 @@ async function run() {
       }));
     await page.route("**/api/campaigns/*/next-actions", (route) =>
       route.fulfill({ status: 404, body: "{}" }));
+    await page.route("**/api/research-events*", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: RESEARCH_EVENT_CALENDAR }),
+      }));
 
     await page.goto(`http://127.0.0.1:${port}/decision-inbox`, { waitUntil: "networkidle" });
 
+    // IA-CONVERGENCE-V1：右侧只挂载「选中投资计划」的详情；Hard Risk 面板与
+    // Frozen Decision 入口都属于选中对象。因此每段断言前先在工作列表里选中该 campaign
+    // （10 个 fixture campaign 都落在「当前投资计划」分组）。
+    await page.getByRole("heading", { name: "当前投资计划" }).waitFor();
+    const selectCampaign = async (campaignId) => {
+      const row = page.getByTestId(`decision-inbox-item-${campaignId}`);
+      await row.waitFor({ state: "visible", timeout: 15000 });
+      await row.click();
+      await page.waitForFunction(
+        (id) =>
+          document.querySelector(`[data-testid="decision-inbox-item-${id}"]`)?.getAttribute("data-selected") === "true",
+        campaignId,
+        { timeout: 15000 },
+      );
+    };
+
     // 1. CONFIRMED：高优先级可见 + 文案安全（专属 evidence 齐备）
+    await selectCampaign(CONFIRMED_ITEM.campaign_id);
     const confirmedPanel = page.locator(
       `[data-hard-risk-state="CONFIRMED"][data-hard-risk-campaign="${CONFIRMED_ITEM.campaign_id}"]`,
     );
     await confirmedPanel.waitFor();
+    // 只挂载选中对象：其它 fixture campaign 的 Hard Risk 面板不得同时出现。
+    assert.equal(
+      await page.locator("[data-hard-risk-state]").count(),
+      1,
+      "只有选中的投资计划可以挂载 Hard Risk 面板",
+    );
     assert.equal(await confirmedPanel.getAttribute("data-hard-risk-tone"), "danger");
     assert.equal(await confirmedPanel.getAttribute("data-hard-risk-safe"), "false");
     await confirmedPanel.getByText("已确认硬风险", { exact: false }).first().waitFor();
@@ -260,6 +313,7 @@ async function run() {
     }
 
     // 3. CLEAR：显式 positive-proof（CLEAR+EVALUATED+专属 refs）才显示安全
+    await selectCampaign(CLEAR_ITEM.campaign_id);
     const clearPanel = page.locator(
       `[data-hard-risk-state="CLEAR"][data-hard-risk-campaign="${CLEAR_ITEM.campaign_id}"]`,
     );
@@ -267,9 +321,12 @@ async function run() {
     assert.equal(await clearPanel.getAttribute("data-hard-risk-tone"), "safe");
     assert.equal(await clearPanel.getAttribute("data-hard-risk-safe"), "true");
     await clearPanel.getByText("已确认无硬风险", { exact: false }).waitFor();
+    // 专属 authority refs 在折叠的「技术依据」区块里：展开后必须可读。
+    await clearPanel.getByText("技术依据（1）", { exact: false }).click();
     await clearPanel.getByText("hard-risk:fixture-clear", { exact: false }).waitFor();
 
     // BLOCKER 回归：CLEAR 缺少专属 evaluation/refs（generic CLEAN 存在）→ fail closed
+    await selectCampaign(MALFORMED_CLEAR_ITEM.campaign_id);
     const malformedClearPanel = page.locator(
       `[data-hard-risk-state="CLEAR"][data-hard-risk-campaign="${MALFORMED_CLEAR_ITEM.campaign_id}"]`,
     );
@@ -281,6 +338,7 @@ async function run() {
 
     // 污染回归：generic reason 存在（含 HARD_RISK_CONFIRMED）但专属 evidence 缺失
     // → 不得声称已确认，必须 fail closed。
+    await selectCampaign(GENERIC_ONLY_ITEM.campaign_id);
     const genericOnlyPanel = page.locator(
       `[data-hard-risk-state="CONFIRMED"][data-hard-risk-campaign="${GENERIC_ONLY_ITEM.campaign_id}"]`,
     );
@@ -291,12 +349,16 @@ async function run() {
     await genericOnlyPanel.getByText("硬风险状态未知", { exact: false }).first().waitFor();
 
     // 4/5. NOT_EVALUATED / ERROR：一律不绿
-    const notEvaluatedPanel = page.locator(`[data-hard-risk-state="NOT_EVALUATED"]`);
+    await selectCampaign(NOT_EVALUATED_ITEM.campaign_id);
+    const notEvaluatedPanel = page.locator(
+      `[data-hard-risk-state="NOT_EVALUATED"][data-hard-risk-campaign="${NOT_EVALUATED_ITEM.campaign_id}"]`,
+    );
     await notEvaluatedPanel.waitFor();
     assert.equal(await notEvaluatedPanel.getAttribute("data-hard-risk-safe"), "false");
     await notEvaluatedPanel.getByText("尚未完成硬风险评估", { exact: false }).first().waitFor();
 
     // DIUX3：适用 Frozen Decision 只提供两个显式、语义分离的下一步入口。
+    await selectCampaign(EVALUATED_ITEM.campaign_id);
     const evaluatedDecision = page.locator(
       `[data-formal-decision-inbox-evaluation="EVALUATED"]`,
     );
@@ -314,6 +376,7 @@ async function run() {
     await evaluatedDecision.getByText("这不代表需要立刻形成新决策", { exact: false }).waitFor();
     assert.equal(await evaluatedDecision.getByText("进入正式决策", { exact: true }).count(), 0);
 
+    await selectCampaign(NOT_EVALUATED_ITEM.campaign_id);
     const notEvaluatedDecision = page.locator(
       `[data-formal-decision-inbox-evaluation="NOT_EVALUATED"]`,
     );
@@ -326,6 +389,7 @@ async function run() {
       "进入正式决策 →",
     );
 
+    await selectCampaign(UNKNOWN_FORMAL_DECISION_ITEM.campaign_id);
     const unknownFormalDecision = page.locator(
       `[data-formal-decision-inbox-evaluation="UNKNOWN"]`,
     );
@@ -343,6 +407,7 @@ async function run() {
     assert.equal(await unknownFormalDecision.getByTestId("formal-decision-next-step-review").count(), 0);
     assert.equal(await unknownFormalDecision.getByTestId("formal-decision-next-step-new-decision").count(), 0);
 
+    await selectCampaign(ERROR_FORMAL_DECISION_ITEM.campaign_id);
     const errorFormalDecision = page.locator(
       `[data-formal-decision-inbox-evaluation="ERROR"]`,
     );
@@ -360,6 +425,7 @@ async function run() {
     assert.equal(await errorFormalDecision.getByTestId("formal-decision-next-step-review").count(), 0);
     assert.equal(await errorFormalDecision.getByTestId("formal-decision-next-step-new-decision").count(), 0);
 
+    await selectCampaign(MALFORMED_FORMAL_DECISION_ITEM.campaign_id);
     const malformedFormalDecision = page.locator(
       `[data-formal-decision-inbox-evaluation="FUTURE_ENUM"]`,
     );
@@ -368,8 +434,12 @@ async function run() {
       await malformedFormalDecision.getAttribute("data-formal-decision-evaluation-status"),
       "FORMAL_DECISION_EVALUATION_UNKNOWN",
     );
-    await malformedFormalDecision.getByText("FUTURE_ENUM", { exact: true }).waitFor();
-    await malformedFormalDecision.getByText("FORMAL_DECISION_EVALUATION_UNKNOWN", { exact: true }).waitFor();
+    // 原始状态值只在折叠的「技术详情」里，展开后断言（与 CONFIRMED 的区块一致）。
+    // 该行是一行完整文案「常量 · 原始值」，两个事实在同一条里可见。
+    await malformedFormalDecision.getByText("技术详情", { exact: true }).click();
+    await malformedFormalDecision
+      .getByText("FORMAL_DECISION_EVALUATION_UNKNOWN · FUTURE_ENUM", { exact: true })
+      .waitFor();
     assert.equal(await malformedFormalDecision.getByTestId("formal-decision-next-step-proposal").count(), 0);
     assert.equal(await malformedFormalDecision.getByTestId("formal-decision-next-step-review").count(), 0);
     assert.equal(await malformedFormalDecision.getByTestId("formal-decision-next-step-new-decision").count(), 0);
@@ -379,29 +449,46 @@ async function run() {
     );
     assert.equal(page.url().endsWith("/decision-inbox"), true);
 
-    const errorPanel = page.locator(`[data-hard-risk-state="UNKNOWN"]`);
+    await selectCampaign(ERROR_ITEM.campaign_id);
+    const errorPanel = page.locator(
+      `[data-hard-risk-state="UNKNOWN"][data-hard-risk-campaign="${ERROR_ITEM.campaign_id}"]`,
+    );
     await errorPanel.waitFor();
     assert.equal(await errorPanel.getAttribute("data-hard-risk-safe"), "false");
-    await errorPanel.getByText("Hard Risk 评估失败", { exact: false }).first().waitFor();
-    await errorPanel.getByText("ERROR", { exact: true }).waitFor();
+    // UNKNOWN + evaluation ERROR：只表达「读取失败 / 不能视为安全」，绝不给安全绿。
+    await errorPanel.getByText("硬风险读取失败", { exact: false }).first().waitFor();
+    await errorPanel.getByText("读取失败", { exact: true }).waitFor();
+    assert.ok(
+      (await errorPanel.innerText()).includes("不能视为安全"),
+      "UNKNOWN/ERROR 必须明确说明不能视为安全",
+    );
 
     // 7. reason codes 透传可见（CONFIRMED 面板的评估说明，展开后断言）
+    await selectCampaign(CONFIRMED_ITEM.campaign_id);
     await confirmedPanel.getByText("评估说明（2）", { exact: false }).waitFor();
     await confirmedPanel.getByText("评估说明（2）", { exact: false }).click();
     await confirmedPanel.getByText("HARD_RISK_CONFIRMED", { exact: false }).waitFor();
 
-    // 8. provenance 可见
+    // 8. provenance 可见（同样在折叠的「技术依据」区块里，展开后断言）
+    await confirmedPanel.getByText("技术依据（1）", { exact: false }).click();
     await confirmedPanel.getByText("hard-risk:fixture-confirmed", { exact: false }).waitFor();
 
     // anti-D/E：HardRiskPanel 不展示 generic reason / generic refs
     // （CLEAR_ITEM 的 generic reason_codes=["CLEAN"] 只属于 lifecycle card 的
     // Campaign-level explanation，不得进入 Hard Risk 面板）
+    await selectCampaign(CLEAR_ITEM.campaign_id);
     const clearText = await clearPanel.innerText();
     assert.equal(clearText.includes("CLEAN"), false, "generic reason 不得出现在 HardRiskPanel");
 
-    // 9. sibling 隔离：同 security 600519 下 CONFIRMED(SWING) 与 CLEAR(SHORT) 互不影响
+    // 9. sibling 隔离：同 security 600519 下 CONFIRMED(SWING) 与 CLEAR(SHORT) 互不影响。
+    // 新 IA 下一次只挂载一个选中对象，因此改为「分别选中两个 campaign，各自读到的
+    // Hard Risk 判定必须保持独立」。
+    await selectCampaign(CONFIRMED_ITEM.campaign_id);
     assert.equal(await confirmedPanel.getAttribute("data-hard-risk-safe"), "false");
+    assert.equal(await clearPanel.count(), 0, "未选中的 sibling 不得同时挂载");
+    await selectCampaign(CLEAR_ITEM.campaign_id);
     assert.equal(await clearPanel.getAttribute("data-hard-risk-safe"), "true");
+    assert.equal(await confirmedPanel.count(), 0, "未选中的 sibling 不得同时挂载");
 
     // 12. 页面无 console error（next-actions 故意 404 属预期 mock，过滤）
     const unexpectedConsoleErrors = consoleErrors.filter(
