@@ -121,12 +121,15 @@ test("inbox committed card titles identity and keeps decision_id secondary", () 
   assert.doesNotMatch(card, /<p className="font-mono">\{item\.decision_id\}<\/p>/);
   assert.match(card, /decision_id: \{item\.decision_id\}/);
   assert.doesNotMatch(card, /当时结论：\$\{item\.next_best_action\}/);
-  assert.match(
-    inbox,
-    /<CampaignCommittedDecisionsCard[\s\S]*securityCode=\{campaign\.security_code\}[\s\S]*strategy=\{campaign\.strategy\}/,
+  // IA-CONVERGENCE-V1：列表-详情布局后，历史正式决定卡只在「选中对象」的详情里挂载，
+  // 一次且仅一次，并用该对象的真实身份（security + strategy）接线。
+  assert.equal(
+    inbox.match(/<CampaignCommittedDecisionsCard/g)?.length,
+    1,
+    "历史正式决定卡应只挂载一次（不得在多个对象上同时铺开）",
   );
   assert.match(
     inbox,
-    /<CampaignCommittedDecisionsCard[\s\S]*securityCode=\{item\.security_code\}[\s\S]*strategy=\{item\.strategy\}/,
+    /<CampaignCommittedDecisionsCard[\s\S]*securityCode=\{activeEntry\.securityCode\}[\s\S]*strategy=\{activeEntry\.strategy\}/,
   );
 });
