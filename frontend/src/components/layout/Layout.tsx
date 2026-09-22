@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
-import { NAV_GROUPS, entriesInGroup, matchRoute, navEntry } from "@/lib/navigation";
+import { NAV_GROUPS, entriesInGroup, matchRoute, navEntry, pageManagesSectionNav } from "@/lib/navigation";
 import { DailyReviewAiTaskIndicator } from "./DailyReviewAiTaskIndicator";
 import { PortfolioAdviceTaskIndicator } from "./PortfolioAdviceTaskIndicator";
 import { SectionNav } from "./SectionNav";
@@ -158,6 +158,7 @@ export function Layout() {
   }, [mobileOpen]);
 
   const compact = isDesktop && collapsed;
+  const currentPattern = matchRoute(pathname)?.pattern ?? null;
   const currentOwner = matchRoute(pathname)?.owner ?? null;
   const currentTitle = navEntry(currentOwner ?? "")?.label ?? "";
 
@@ -321,7 +322,9 @@ export function Layout() {
         >
           <DailyReviewAiTaskIndicator />
           <PortfolioAdviceTaskIndicator />
-          <SectionNav ownerId={currentOwner} pathname={pathname} title={currentTitle} />
+          {pageManagesSectionNav(currentPattern) ? null : (
+            <SectionNav ownerId={currentOwner} pathname={pathname} title={currentTitle} />
+          )}
           <Outlet />
         </div>
       </main>

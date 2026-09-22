@@ -164,6 +164,17 @@ export interface SectionNavGroup {
 }
 
 /**
+ * 页面自管二级导航的路由：这些页面在选中了具体对象后，用一行紧凑的对象上下文
+ * 取代整条分类横条（分类横条 + 工具横条 + 内容页签同时出现会挤掉研究上下文）。
+ * 未选中对象时页面自己渲染同一套 `<SectionNav>`，分类入口不消失。
+ */
+export const SELF_MANAGED_SECTION_NAV: readonly string[] = ["/stock-data"];
+
+export function pageManagesSectionNav(pattern: string | null | undefined): boolean {
+  return typeof pattern === "string" && SELF_MANAGED_SECTION_NAV.includes(pattern);
+}
+
+/**
  * 一级入口内部的二级入口。未在此声明的入口不显示二级导航。
  * 注：自选股是独立一级入口，不再出现在投资研究的二级导航里。
  */

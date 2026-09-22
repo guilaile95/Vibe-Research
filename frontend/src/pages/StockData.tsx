@@ -5,6 +5,7 @@ import {
   Wallet, Trophy, CalendarClock, Boxes, MessageSquare,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { SectionNav } from "@/components/layout/SectionNav";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
@@ -451,15 +452,20 @@ export function StockData() {
     void run(initialCode);
   }, []);
 
-  const metrics: { k: string; v: string; testId?: string }[] = val ? [
+  // 常驻带只放核心报价与估值：现价 / PE(TTM) / PB / 总市值。
+  const coreMetrics: { k: string; v: string; testId?: string }[] = val ? [
     { k: "现价", v: fmt(val.price) },
     { k: "PE(TTM)", v: fmt(val.pe_ttm), testId: "stock-header-pe-ttm" },
     { k: "PB", v: fmt(val.pb), testId: "stock-header-pb" },
     { k: "总市值", v: fmt(val.mcap_yi, " 亿"), testId: "stock-header-mcap" },
-    { k: "26E EPS", v: fmt(val.eps_26e) },
-    { k: "前向PE", v: fmt(val.pe_26e) },
-    { k: "PEG", v: fmt(val.peg) },
-    { k: "消化年数", v: fmt(val.digest_years, " 年") },
+  ] : [];
+
+  // 次级预测指标挪到「财务与估值」页签：不删除、不补新字段、不换算法。
+  const forecastMetrics: { k: string; v: string; testId: string }[] = val ? [
+    { k: "26E EPS", v: fmt(val.eps_26e), testId: "stock-forecast-eps-26e" },
+    { k: "前向PE", v: fmt(val.pe_26e), testId: "stock-forecast-pe-26e" },
+    { k: "PEG", v: fmt(val.peg), testId: "stock-forecast-peg" },
+    { k: "消化年数", v: fmt(val.digest_years, " 年"), testId: "stock-forecast-digest-years" },
   ] : [];
 
   const aiContext = val
@@ -495,8 +501,47 @@ export function StockData() {
   const financialsTabHasBlocks = !!val || !!gstock?.metrics || !!(cashflow && cashflow.periods.length > 0);
   const tabHasNoBlocks = tab === "financials" ? !financialsTabHasBlocks : !val;
 
+  // 查询框只有一份实现：空状态独占一行；已选中对象时并入常驻身份带。
+  const queryBox = (
+    <>
+      <input
+        value={code}
+        onChange={(e) => setCode(e.target.value.replace(/[^a-zA-Z0-9.]/g, "").toUpperCase().slice(0, 12))}
+        onKeyDown={(e) => e.key === "Enter" && run()}
+        placeholder="A 股 6 位代码，或美股/港股/韩股（AAPL / 00700 / 005930.KS）"
+        className="w-80 min-w-0 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
+      />
+      <button
+        onClick={() => void run()}
+        disabled={loading}
+        className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
+      >
+        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+        查询
+      </button>
+    </>
+  );
+
   return (
     <div data-active-code={activeCode || undefined}>
+      {/* 二级导航：未选中对象时沿用整条分类横条（分类入口、市场发现等集合页照旧）；
+          已选中对象时收成一行对象上下文 + 工具入口，把首屏让给研究上下文。 */}
+      {activeCode ? (
+        <div
+          className="mb-3 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
+          data-testid="stock-compact-context"
+          data-security-code={activeCode}
+        >
+          <span className="truncate">研究 · 个股数据</span>
+          <nav aria-label="个股数据工具" className="ml-auto flex shrink-0 items-center gap-3">
+            <Link to="/debate" className="hover:text-foreground" data-testid="stock-context-link-debate">
+              多空辩论
+            </Link>
+          </nav>
+        </div>
+      ) : (
+        <SectionNav ownerId="research" pathname={location.pathname} title="投资研究" />
+      )}
       <PageHeader
         title="个股数据"
         subtitle="行情 · 估值 · 研报 · 新闻 · 资金面"
@@ -537,24 +582,12 @@ export function StockData() {
         )}
       />
 
-      {/* 查询框 */}
-      <div className="mb-5 flex gap-2">
-        <input
-          value={code}
-          onChange={(e) => setCode(e.target.value.replace(/[^a-zA-Z0-9.]/g, "").toUpperCase().slice(0, 12))}
-          onKeyDown={(e) => e.key === "Enter" && run()}
-          placeholder="A 股 6 位代码，或美股/港股/韩股（AAPL / 00700 / 005930.KS）"
-          className="w-80 min-w-0 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
-        />
-        <button
-          onClick={() => void run()}
-          disabled={loading}
-          className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
-        >
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-          查询
-        </button>
-      </div>
+      {/* 查询框：未选中对象时单独一行；已选中对象时并入常驻身份带，省掉一层常驻行。 */}
+      {!val && (
+        <div className="mb-5 flex gap-2">
+          {queryBox}
+        </div>
+      )}
 
       {err && (
         <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
@@ -597,27 +630,30 @@ export function StockData() {
       {/* 常驻概览带：证券身份 + 报价指标 + 来源日期/状态；切页签始终可见 */}
       {val && (
         <GlassCard glow className="mb-4">
-          <div className="mb-4 flex items-baseline gap-2">
+          <div className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-3">
             <h2 className="text-xl font-bold">{val.name}</h2>
             <span className="font-mono text-sm text-muted-foreground">{val.code}</span>
             {val.analyst_count > 0 && (
-              <span className="ml-auto text-xs text-muted-foreground">机构覆盖 {val.analyst_count} 家</span>
+              <span className="text-xs text-muted-foreground">机构覆盖 {val.analyst_count} 家</span>
             )}
+            <div className="flex w-full gap-2 sm:ml-auto sm:w-auto">{queryBox}</div>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {metrics.map((m) => (
+            {coreMetrics.map((m) => (
               <div key={m.k} className="rounded-lg bg-muted/30 p-3" data-testid={m.testId}>
                 <p className="text-xs text-muted-foreground">{m.k}</p>
                 <p className="mt-0.5 font-mono text-lg font-bold">{m.v}</p>
               </div>
             ))}
           </div>
-          <p className="mt-3 text-[11px] text-muted-foreground/60" data-testid="stock-header-pe-source">
-            PE-TTM 来源 Eastmoney f115；缺失不显示为 0。
-          </p>
-          <p className="mt-1 text-[11px] text-muted-foreground/60" data-testid="stock-header-mcap-source">
-            总市值来源 Eastmoney f20；缺失不显示为 0。
-          </p>
+          <div className="mt-3 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-[11px] text-muted-foreground/60">
+            <p data-testid="stock-header-pe-source">
+              PE-TTM 来源 Eastmoney f115；缺失不显示为 0。
+            </p>
+            <p data-testid="stock-header-mcap-source">
+              总市值来源 Eastmoney f20；缺失不显示为 0。
+            </p>
+          </div>
           {val.forecast_note && (
             <p className="mt-3 text-xs text-warning">{val.forecast_note}</p>
           )}
@@ -801,6 +837,26 @@ export function StockData() {
                 {val && (
                   <>
                     <EarningsSnapshot fin={fin} error={finError} />
+
+                    {/* 原常驻带里的次级预测指标统一放这里：同一次估值读取、同一缺失规则。 */}
+                    {forecastMetrics.length > 0 && (
+                      <GlassCard className="mb-4" data-testid="stock-forecast-metrics">
+                        <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold">
+                          <LineChart className="h-4 w-4 text-primary" /> 预测与估值指标
+                        </h3>
+                        <p className="mb-4 text-[11px] text-muted-foreground/60">
+                          与常驻带的现价 / PE(TTM) / PB / 总市值来自同一次估值读取；预测类字段缺失显示为 —，不按 0 处理。
+                        </p>
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                          {forecastMetrics.map((m) => (
+                            <div key={m.k} className="rounded-lg bg-muted/30 p-3" data-testid={m.testId}>
+                              <p className="text-xs text-muted-foreground">{m.k}</p>
+                              <p className="mt-0.5 font-mono text-lg font-bold">{m.v}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </GlassCard>
+                    )}
 
                     {pctl && (pctl.metrics.pe_ttm || pctl.metrics.pb) && (
                       <>

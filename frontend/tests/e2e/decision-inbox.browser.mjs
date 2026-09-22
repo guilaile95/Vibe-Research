@@ -353,7 +353,9 @@ async function runE2E() {
     await focusedSetupCard.locator('[data-campaign-role="setup"]').waitFor();
     const swingCard = page.locator('[data-campaign-strategy="SWING"][data-campaign-role="setup"]');
     await swingCard.getByText("这项投资计划尚未生效", { exact: false }).waitFor();
-    await swingCard.getByText("600519").waitFor();
+    // IA-FINAL：详情列只保留一处选中对象身份（详情头）；生命周期卡不再重复代码/策略/阶段。
+    const detailIdentity = page.getByTestId("decision-inbox-detail-identity");
+    await detailIdentity.getByText("600519").waitFor();
     await focusedSetupCard.locator('[data-campaign-thesis]').waitFor();
     await focusedSetupCard.getByText("新建正式投资逻辑草稿").waitFor();
     assert.equal(await swingCard.getAttribute("data-campaign-status"), "DRAFT");
@@ -442,7 +444,8 @@ async function runE2E() {
     await selectCampaignItem(page, swingId);
     await page.waitForSelector("h2:has-text('当前投资计划')");
     await swingActiveCard.waitFor();
-    await swingActiveCard.getByText("当前投资计划", { exact: true }).waitFor();
+    // IA-FINAL：ACTIVE 身份与分组名只出现在详情头一处。
+    await detailIdentity.getByText("当前投资计划", { exact: true }).waitFor();
     assert.equal(await swingActiveCard.getAttribute("data-campaign-role"), "current");
     // 诚实状态：绝不显示 NO_ACTION_REQUIRED；reason code 不以调试串作为主解释
     assert.equal(
@@ -473,7 +476,7 @@ async function runE2E() {
     console.log("[E2E] 8. refresh preserves backend state...");
     await clickRefresh(page);
     await selectCampaignItem(page, swingId);
-    await swingActiveCard.getByText("当前投资计划", { exact: true }).waitFor();
+    await detailIdentity.getByText("当前投资计划", { exact: true }).waitFor();
     await selectCampaignItem(page, mediumId);
     await mediumCard.getByText("这项投资计划尚未生效", { exact: false }).waitFor();
     assert.equal(

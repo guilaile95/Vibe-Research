@@ -1964,6 +1964,31 @@ async function main() {
       if (viewportState.documentWidth > viewportState.viewport + 1 || viewportState.bodyWidth > viewportState.viewport + 1) {
         errors.push(`stock-data-smoke narrow: page overflow ${JSON.stringify(viewportState)}`);
       }
+      // 真正承担纵向页面滚动的是应用内层容器（documentElement/body 的 scrollWidth 恒等于视口，
+      // 对「卡片把内层撑宽」这类回归没有判别力）。这里只检查该容器自身的横向滚动；
+      // 表格与二级导航条的内部横滚不在检查范围内。
+      const innerScroller = await page.evaluate(() => {
+        const candidates = [];
+        for (const el of document.querySelectorAll("main, main *")) {
+          const style = getComputedStyle(el);
+          if (!/(auto|scroll)/.test(style.overflowY)) continue;
+          if (el.scrollHeight - el.clientHeight < 8) continue;
+          candidates.push(el);
+        }
+        candidates.sort(
+          (a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight),
+        );
+        const target = candidates[0];
+        if (!target) return null;
+        return { clientWidth: target.clientWidth, scrollWidth: target.scrollWidth };
+      });
+      if (!innerScroller) {
+        errors.push("stock-data-smoke narrow: page scroll container not found");
+      } else if (innerScroller.scrollWidth > innerScroller.clientWidth + 1) {
+        errors.push(
+          `stock-data-smoke narrow: inner page scroller overflows horizontally ${JSON.stringify(innerScroller)}`,
+        );
+      }
     } catch (e) {
       errors.push(`stock-data-smoke narrow: relative/valuation context check failed: ${e.message}`);
     }

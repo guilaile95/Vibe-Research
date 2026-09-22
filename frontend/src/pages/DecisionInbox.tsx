@@ -1288,6 +1288,8 @@ export default function DecisionInbox() {
                                   reason_codes: activeEntry.item.reason_codes,
                                 } : undefined}
                                 onChanged={() => void refresh()}
+                                // 详情头已是本列唯一的选中对象身份，卡片不再重复代码/策略/阶段。
+                                showIdentity={false}
                               />
                               {activeEntry.item && <HardRiskPanel item={activeEntry.item} />}
                             </div>
