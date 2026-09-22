@@ -241,7 +241,7 @@ export function MarketCloud({ embedded = false }: MarketCloudProps) {
       {!loading && error && (
         <div style={{ height: chartHeight }} className="flex flex-col items-center justify-center gap-3 rounded-xl border border-destructive/30 bg-destructive/5">
           <p className="text-sm font-medium text-destructive">市场快照暂不可用</p>
-          <p className="max-w-xl text-center text-xs text-muted-foreground">{error}</p>
+          <p className="max-h-32 w-full min-w-0 max-w-xl overflow-y-auto break-words px-3 text-center text-xs text-muted-foreground">{error}</p>
           <button type="button" onClick={reload} className="rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-muted">
             重试
           </button>
@@ -251,7 +251,7 @@ export function MarketCloud({ embedded = false }: MarketCloudProps) {
       {!loading && !error && status === "unavailable" && (
         <div style={{ height: chartHeight }} className="flex flex-col items-center justify-center gap-3 rounded-xl border border-destructive/30 bg-destructive/5">
           <p className="text-sm font-medium text-destructive">市场快照暂不可用</p>
-          {warnings.length > 0 && <p className="max-w-xl text-center text-xs text-muted-foreground">{warnings[0]}</p>}
+          {warnings.length > 0 && <p className="max-h-32 w-full min-w-0 max-w-xl overflow-y-auto break-words px-3 text-center text-xs text-muted-foreground">{warnings[0]}</p>}
           <button type="button" onClick={reload} className="rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-muted">
             重试
           </button>
