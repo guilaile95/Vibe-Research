@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,7 +62,7 @@ function opportunity(overrides) {
     reason_codes: ["SECTOR_CONTEXT_SUPPORT", "CATALYST_DISCLOSED"],
     supporting_observations: [
       { code: "RETURN_20D", label: "20 日相对表现", value: 0.12, source_ref: "rdp:fixture" },
-      { code: "DISCLOSURE", label: "近期公告线索", value: "AVAILABLE", source_ref: "announcement:fixture" },
+      { code: "DISCLOSURE", label: "近期公告线索", value: { announcement_count: 2, intel_mentions: null, intel_sources: 1, intel_mapping_status: "MAPPED" }, source_ref: "announcement:fixture" },
     ],
     uncertainties: [],
     data_health: "normal",
@@ -95,7 +95,7 @@ const restricted = opportunity({
   themes: [],
   research_priority: "LOW",
   reason_codes: ["RESTRICTED_RESEARCH_ONLY", "ST_NAME_MARKER"],
-  uncertainties: ["Restricted Universe 需要 Candidate Gate 继续约束"],
+  uncertainties: ["受限股票需要继续核对研究资格", "FUNDAMENTAL_FRESHNESS_UNKNOWN"],
   catalyst_status: "PARTIAL",
   evidence_gate: "PARTIAL",
   restricted_universe: { status: "RESTRICTED", reason_codes: ["ST_NAME_MARKER"], listing_age_status: "KNOWN" },
@@ -379,20 +379,64 @@ try {
   assert.equal(await page.getByTestId("full-market-form").count(), 0);
   await page.getByTestId("discovery-summary").getByText(/行情归属 2026-08-28/).waitFor();
   assert.doesNotMatch(await page.getByTestId("discovery-summary").innerText(), /行情归属 2026-08-30/);
-  await page.getByTestId("discovery-item-SWING-600519").getByText("CATALYST_DISCLOSED", { exact: true }).waitFor();
+  const firstCard = page.getByTestId("discovery-item-SWING-600519");
+  await firstCard.getByText("20 日相对表现", { exact: true }).waitFor();
+  await firstCard.getByText("资讯提及：未知", { exact: true }).waitFor();
+  await firstCard.getByRole("link", { name: "进入候选研究" }).waitFor();
+  assert.match(await page.getByTestId("strategy-SWING").innerText(), /波段/);
+  assert.equal(await page.getByTestId("full-market-tab").innerText(), "全市场筛选");
+  const diagnostics = page.getByTestId("discovery-diagnostics");
+  assert.equal(await diagnostics.getAttribute("open"), null);
+  assert.equal(await page.getByTestId("discovery-evidence-600519").getAttribute("open"), null);
+  assert.equal(await firstCard.getByText("CATALYST_DISCLOSED", { exact: true }).isVisible(), false);
+  await firstCard.getByText("完整依据与来源", { exact: true }).click();
+  await firstCard.getByText("CATALYST_DISCLOSED", { exact: true }).waitFor();
+  await firstCard.getByText("完整依据与来源", { exact: true }).click();
+  await diagnostics.locator("summary").click();
+  await diagnostics.getByText("扫描股票池", { exact: true }).waitFor();
+  await diagnostics.getByText("market-snapshot", { exact: true }).waitFor();
+  await diagnostics.locator("summary").click();
+
+  // Results precede diagnostics on desktop and narrow screens; collapsed details do not hide the research entry.
+  const screenshots = process.env.DISCOVERY_SCREENSHOT_DIR;
+  if (screenshots) mkdirSync(screenshots, { recursive: true });
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 568, height: 698 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.getByRole("main").evaluate((element) => element.scrollTo(0, 0));
+    const firstBounds = await firstCard.boundingBox();
+    const diagnosticsBounds = await diagnostics.boundingBox();
+    assert.ok(firstBounds && diagnosticsBounds && firstBounds.y < diagnosticsBounds.y, "candidates must precede diagnostics");
+    assert.ok(firstBounds.y >= 0 && firstBounds.y < viewport.height, `first candidate must enter the initial viewport at ${viewport.width}px`);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `no page horizontal overflow at ${viewport.width}px`);
+    assert.ok(await page.getByRole("main").evaluate((element) => element.scrollWidth <= element.clientWidth), `no content horizontal overflow at ${viewport.width}px`);
+    if (screenshots) await page.screenshot({ path: path.join(screenshots, `discovery-${viewport.width}.png`), fullPage: true });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  // All existing filters operate on the same queue without changing its backend ordering.
+  await page.getByLabel("发现行业或主题").selectOption("消费");
+  assert.equal(await page.getByTestId("discovery-item-SWING-600221").count(), 0);
+  await page.getByLabel("发现行业或主题").selectOption("ALL");
+  await page.getByLabel("研究优先级", { exact: true }).selectOption("LOW");
+  assert.equal(await firstCard.count(), 0);
+  await page.getByLabel("研究优先级", { exact: true }).selectOption("ALL");
   const discoveryText = await workspace.innerText();
   assert.doesNotMatch(discoveryText, /\bBUY\b|Opportunity Score|综合评分/);
   assert.equal(await page.locator('[data-testid*="market-cloud"], [data-testid*="market-intel"]').count(), 0);
   assert.doesNotMatch(discoveryText, /Market Cloud|市场情报/);
 
   // C: Restricted items remain discoverable but visibly carry stricter, research-only semantics.
-  await page.getByLabel("Discovery restricted").selectOption("RESTRICTED");
+  await page.getByLabel("研究资格", { exact: true }).selectOption("RESTRICTED");
   const restrictedCard = page.getByTestId("discovery-item-SWING-600221");
   await restrictedCard.waitFor();
-  await restrictedCard.getByText("Restricted", { exact: true }).waitFor();
+  await restrictedCard.getByText("受限研究：需要进一步核对资格", { exact: true }).waitFor();
+  await page.getByTestId("discovery-gaps-600221").getByText("财务报告期与时效尚未确认", { exact: true }).waitFor();
+  assert.equal(await page.getByTestId("discovery-evidence-600221").getAttribute("open"), null);
+  await restrictedCard.getByText("完整依据与来源", { exact: true }).click();
   await restrictedCard.getByText("RESTRICTED_RESEARCH_ONLY", { exact: true }).waitFor();
+  await restrictedCard.getByText("完整依据与来源", { exact: true }).click();
   assert.equal(await page.getByTestId("discovery-item-SWING-600519").count(), 0);
-  await page.getByLabel("Discovery restricted").selectOption("ALL");
+  await page.getByLabel("研究资格", { exact: true }).selectOption("ALL");
 
   // D: strategy queues differ; there is no unified score forcing one common ranking.
   await page.getByTestId("strategy-SHORT").click();
@@ -417,9 +461,18 @@ try {
   await page.getByTestId("discovery-summary").getByText("部分可用", { exact: true }).first().waitFor();
   const unknownCard = page.getByTestId("discovery-item-SWING-300012");
   await unknownCard.waitFor();
-  await unknownCard.getByText("UNKNOWN", { exact: true }).first().waitFor();
-  await unknownCard.getByText("未知", { exact: true }).waitFor();
-  assert.equal((await unknownCard.getByText("HIGH 优先", { exact: true }).count()), 0);
+  const unknownGaps = page.getByTestId("discovery-gaps-300012");
+  await unknownGaps.getByText("基本面：未知", { exact: true }).waitFor();
+  await unknownGaps.getByText("数据状态：未知", { exact: true }).waitFor();
+  await unknownGaps.getByText("财务事实缺失", { exact: true }).waitFor();
+  assert.equal(await page.getByTestId("discovery-evidence-300012").getAttribute("open"), null);
+  assert.equal((await unknownCard.getByText("研究优先级：高", { exact: true }).count()), 0);
+  await page.getByTestId("discovery-source-warning").getByText("行业背景：不可用", { exact: true }).waitFor();
+  assert.equal(await diagnostics.getAttribute("open"), null);
+  await page.getByLabel("发现数据状态", { exact: true }).selectOption("unknown");
+  assert.equal(await firstCard.count(), 0);
+  await unknownCard.waitFor();
+  await page.getByLabel("发现数据状态", { exact: true }).selectOption("ALL");
   await page.getByTestId("discovery-item-SWING-600519").waitFor();
 
   // Failed refresh keeps the successful snapshot timestamp and labels the separate attempt time.
@@ -431,6 +484,12 @@ try {
   assert.match(staleSummary, /最后成功更新于 2026-08-30 11:00/);
   assert.match(staleSummary, /刷新失败于 2026-08-30 12:00/);
   assert.doesNotMatch(staleSummary, /抓取于 2026-08-30 12:00/);
+
+  if (screenshots) {
+    await page.getByRole("main").evaluate((element) => element.scrollTo(0, 0));
+    await page.screenshot({ path: path.join(screenshots, "discovery-stale.png"), fullPage: true });
+    await unknownCard.screenshot({ path: path.join(screenshots, "discovery-unknown-card.png") });
+  }
 
   // E: explicit handoff preserves identity and loads P1 Candidate without creating formal state.
   await page.getByTestId("discovery-candidate-600519").click();

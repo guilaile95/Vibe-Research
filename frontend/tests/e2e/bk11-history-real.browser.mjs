@@ -118,6 +118,12 @@ function startStaticServer(dir, port, apiBackendPort) {
         },
       );
       r.on("error", () => {
+        if (res.destroyed || res.writableEnded) return;
+        // Navigation/teardown can close an upstream response after headers.
+        if (res.headersSent) {
+          res.destroy();
+          return;
+        }
         res.writeHead(502, { "content-type": "text/plain" });
         res.end("proxy error");
       });
@@ -358,7 +364,8 @@ async function openDailyReview(page, apiUrl, baseUrl) {
     }
   });
   await page.goto(`${baseUrl}/daily-review`, { waitUntil: "load" });
-  await page.waitForSelector("text=短线市场历史", { timeout: 20000 });
+  await page.locator("#market-detail-short-history > summary").click();
+  await page.locator("#market-detail-short-history").getByRole("heading", { name: "短线市场历史", exact: true }).waitFor({ timeout: 20000 });
   return bk11Requests;
 }
 
@@ -466,7 +473,8 @@ async function main() {
         await page.goto(`${baseUrl}/data-health`, { waitUntil: "networkidle" });
         await page.getByText("BK-11 短线历史").first().waitFor({ timeout: 10000 });
         await page.goto(`${baseUrl}/daily-review`, { waitUntil: "load" });
-        await page.waitForSelector("text=短线市场历史", { timeout: 20000 });
+        await page.locator("#market-detail-short-history > summary").click();
+        await page.locator("#market-detail-short-history").getByRole("heading", { name: "短线市场历史", exact: true }).waitFor({ timeout: 20000 });
         const block2 = page.locator("section.order-\\[11\\]");
         await block2.getByText("核心市场事实").waitFor({ timeout: 10000 });
         if (bk11Requests.length !== 2) {
@@ -483,7 +491,8 @@ async function main() {
         const mobilePage = await mobileContext.newPage();
         await mobilePage.route("**/api/market/northbound*", (route) => route.abort());
         await mobilePage.goto(`${baseUrl}/daily-review`, { waitUntil: "load" });
-        await mobilePage.waitForSelector("text=短线市场历史", { timeout: 20000 });
+        await mobilePage.locator("#market-detail-short-history > summary").click();
+        await mobilePage.locator("#market-detail-short-history").getByRole("heading", { name: "短线市场历史", exact: true }).waitFor({ timeout: 20000 });
         const overflow = await mobilePage.evaluate(() => {
           const doc = document.documentElement;
           return { sw: doc.scrollWidth, iw: doc.clientWidth };

@@ -90,7 +90,7 @@ const nativeItem = {
   url: "https://example.test/native",
   source_id: "official",
   source_name: "公开来源",
-  hint: "a-share",
+  hint: "semi",
   published_at: now,
   first_seen_at: now,
   last_seen_at: now,
@@ -244,7 +244,17 @@ async function handleApi(route) {
     return route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ data: { schema_version: "daily-review-v0.1", status: "partial", trade_date: "2026-08-29", generated_at: now, data_cutoff: now, warnings: [] } }),
+      body: JSON.stringify({ data: { schema_version: "daily-review-v0.1", status: "partial", trade_date: "2026-08-29", generated_at: now, data_cutoff: now, warnings: [], ...(scenario === "daily-populated" ? {
+        market_environment: {
+          indices: { status: "normal", data: [{name: "上证指数", price: 3100, change_pct: 1.2}, {name: "深证成指", price: 10000, change_pct: -0.2}, {name: "创业板指", price: 2000, change_pct: 0.6}, {name: "科创50", price: 900, change_pct: 0.3}] },
+          global_indices: {status: "unavailable", data: []},
+          breadth: {status: "normal", data: {up_count: 3200, down_count: 1800, total_amount: 1200000000000}},
+        },
+        sector_rotation: {industry: {status: "partial", data: {top: [], bottom: []}}, highlights: {strongest_industry: {name: "半导体", change_pct: 2.5}, weakest_industry: {name: "银行", change_pct: -0.8}}},
+        capital_activity: {amount_top: [{code: "600519", name: "贵州茅台", amount: 2000000000, change_pct: 1.2}]},
+        short_term_emotion: {status: "normal", data: {date: "2026-08-29", zt_count: 45, dt_count: 3, max_boards: 4, lianban_stocks: []}},
+        data_health: {components: {turnover: "normal", industry_boards: "partial"}},
+      } : {}) } }),
     });
   }
   if (pathName === "/api/daily-review/history") {
@@ -308,6 +318,16 @@ try {
   const todayIntelBox = await todayIntel.boundingBox();
   const dailyReviewBox = await page.locator("#daily-review-section-title").boundingBox();
   assert.ok(todayCloudBox && todayIntelBox && dailyReviewBox && dailyReviewBox.y < todayCloudBox.y && todayCloudBox.y < todayIntelBox.y, "Today should order the review header, the market view, then the intel summary");
+  const leads = page.getByTestId("today-research-leads");
+  await leads.getByText("行业排名暂不可用", { exact: true }).waitFor();
+  const leadsBox = await leads.boundingBox();
+  assert.ok(leadsBox && todayCloudBox && leadsBox.y < todayCloudBox.y, "research leads should precede the heatmap");
+  assert.equal(await page.locator("#market-detail-emotion").getAttribute("open"), null);
+  await leads.getByRole("button", { name: "查看情绪详情", exact: false }).click();
+  assert.notEqual(await page.locator("#market-detail-emotion").getAttribute("open"), null);
+  await page.locator("#market-detail-emotion > summary").click();
+  assert.equal(await todayIntel.getByTestId("market-intel-brief-item").count(), 1);
+  assert.equal(await todayIntel.getByTestId("market-intel-brief-diagnostics").getAttribute("open"), null);
   const mainNav = page.locator('nav[aria-label="主导航"]');
 
   // IA-CONVERGENCE-V1：主侧栏恰为 10 个常驻入口，顺序即分组顺序。
@@ -449,6 +469,7 @@ try {
   scenario = "native-fail";
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
   const failedIntel = page.getByTestId("market-intel-panel");
+  await failedIntel.getByTestId("market-intel-brief-diagnostics").locator("summary").click();
   await failedIntel.getByText("公开资讯：", { exact: false }).waitFor();
   // 公开资讯权威从未读取：计数块必须显示未知，不得把未知渲染成已核实的 0。
   assert.equal(
@@ -479,6 +500,7 @@ try {
   scenario = "native-store-unavailable";
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
   const storeFailedIntel = page.getByTestId("market-intel-panel");
+  await storeFailedIntel.getByTestId("market-intel-brief-diagnostics").locator("summary").click();
   await storeFailedIntel.getByTestId("market-intel-stat-history").waitFor();
   assert.equal(
     await storeFailedIntel.getByTestId("market-intel-stat-history").innerText(),
@@ -502,6 +524,7 @@ try {
   scenario = "native-trending-empty";
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
   const emptyTrendIntel = page.getByTestId("market-intel-panel");
+  await emptyTrendIntel.getByTestId("market-intel-brief-diagnostics").locator("summary").click();
   const emptyTrend = emptyTrendIntel.locator('[data-testid="market-intel-trending-empty"][data-trend-empty-reason="empty"]');
   await emptyTrend.waitFor();
   assert.equal(await emptyTrend.innerText(), "当前窗口暂无可计算的关注趋势。");
@@ -520,9 +543,10 @@ try {
   scenario = "native-unavailable";
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
   const unavailableIntel = page.getByTestId("market-intel-panel");
+  await unavailableIntel.getByTestId("market-intel-brief-diagnostics").locator("summary").click();
   await unavailableIntel.getByText("PARTIAL · 部分可用", { exact: true }).waitFor();
   await unavailableIntel.getByText("公开资讯：", { exact: false }).waitFor();
-  await unavailableIntel.getByRole("button", { name: /AI 人工智能/ }).waitFor();
+  assert.equal(await unavailableIntel.getByRole("button", { name: /AI 人工智能/ }).count(), 0, "Today keeps AI digest actions in the full intel workspace");
   await unavailableIntel
     .locator('[data-testid="market-intel-trending-empty"][data-trend-empty-reason="unavailable"]')
     .waitFor();
@@ -531,6 +555,7 @@ try {
   scenario = "radar-fail";
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
   const radarUnavailableIntel = page.getByTestId("market-intel-panel");
+  await radarUnavailableIntel.getByTestId("market-intel-brief-diagnostics").locator("summary").click();
   await radarUnavailableIntel.getByText("PARTIAL · 部分可用", { exact: true }).waitFor();
   await radarUnavailableIntel.getByText("半导体产业链出现重要进展", { exact: true }).waitFor();
   await radarUnavailableIntel.getByText("赛道摘要：", { exact: false }).waitFor();
@@ -552,6 +577,13 @@ try {
   await page.getByTestId("market-intel-panel").getByText("PARTIAL · 部分可用", { exact: true }).waitFor();
   await page.getByTestId("today-market-surface").locator("[data-market-cloud-chart]").waitFor({ state: "visible" });
 
+  scenario = "daily-populated";
+  await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
+  const populatedLeads = page.getByTestId("today-research-leads");
+  await populatedLeads.getByText("半导体 · +2.5% · 行业涨幅排名居前", { exact: true }).waitFor();
+  await populatedLeads.getByText("数据不完整", { exact: true }).waitFor();
+  assert.equal(await populatedLeads.getByRole("link", {name: "候选研究", exact: false}).getAttribute("href"), "/candidates/600519");
+  await populatedLeads.getByText("涨停 45 家 · 跌停 3 家 · 最高 4 板", {exact: true}).waitFor();
   scenario = "normal";
 
   await page.goto(`http://127.0.0.1:${port}/sectors`, { waitUntil: "domcontentloaded" });
