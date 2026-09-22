@@ -1,30 +1,11 @@
-# Chat Handoff — Minimal Recovery Coordinate
+# Chat Handoff — Recovery Coordinate
 
-Do not hand-copy project history, old SHAs, lane assignments or feature inventories into a new chat.
-They become stale and can override live reality by accident.
-
-Use this handoff verbatim:
+新对话只传递恢复入口，不复制旧 SHA、任务清单或工程状态。
+恢复流程、授权边界与输出格式统一见 [AGENTS.md](../AGENTS.md#recovery-and-source-of-truth)。
 
 ```text
-接管项目
-
-先读 AGENTS.md，
-通过已连接的 GitHub + Notion 自主恢复项目。
-
-不要依赖聊天历史。
-
-恢复后输出 CURRENT ENGINEERING STATE，
-然后继续当前最高优先级且未阻塞的工作。
+接管项目。
+先读 AGENTS.md 和 docs/CURRENT_STAGE.md，按项目恢复规则核对 live GitHub 与本地现场。
+仅在当前决定需要长期产品背景时读取相关 Notion 页面。
+输出 CURRENT ENGINEERING STATE，然后继续当前已授权且未阻塞的最高优先级工作。
 ```
-
-The receiving agent must then:
-
-1. read root `AGENTS.md` and `docs/CURRENT_STAGE.md`;
-2. resolve live stable, exact-head CI, Open Issues and Open/Draft PRs;
-3. read the latest live freeze/override authority and Product Reality state;
-4. inspect the local workspace when available;
-5. read only the Notion pages needed for the current decision;
-6. report source conflicts instead of asking the Owner to reconstruct history.
-
-The former long handoff—containing early P2/BK-11 implementation snapshots, obsolete exceptions and
-old task assignments—is preserved in Git history immediately before this change and is historical only.
