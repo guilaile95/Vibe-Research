@@ -502,6 +502,7 @@ try {
   await page.getByTestId("discovery-open-full-market").waitFor();
   assert.equal(await page.getByTestId("strategy-MEDIUM").getAttribute("aria-selected"), "true");
   await page.getByTestId("discovery-open-full-market").click();
+  await page.locator('[data-testid="full-market-tab"][aria-selected="true"]').waitFor();
   assert.equal(await page.getByTestId("full-market-tab").getAttribute("aria-selected"), "true");
   await page.reload({ waitUntil: "networkidle" });
   assert.equal(await page.getByTestId("full-market-tab").getAttribute("aria-selected"), "true");
