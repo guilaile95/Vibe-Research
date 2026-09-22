@@ -329,7 +329,7 @@ async function runNormalScenario(browser, fixture) {
   try {
     await page.goto(`${baseUrl}/screener`, { waitUntil: "domcontentloaded" });
     await page.getByTestId("full-market-tab").waitFor({ state: "visible" });
-    await assertVisible(page.getByRole("tab", { name: "Full Market" }), "Full Market tab on /screener");
+    await assertVisible(page.getByRole("tab", { name: "全市场筛选", exact: true }), "Full Market tab on /screener");
     await page.screenshot({ path: path.join(screenshotDir, "normal-01-screener.png"), fullPage: true });
 
     await page.getByTestId("full-market-tab").click();
@@ -388,7 +388,7 @@ async function runNormalScenario(browser, fixture) {
 
     await page.getByTestId("full-market-summary").waitFor({ state: "visible" });
     const summaryText = await page.getByTestId("full-market-summary").innerText();
-    for (const expected of ["Full Market 数据", "可用", "2026-01-02", "2026-03-07", "131 行", "3 个代码", "当前横截面 3 个代码", "full-market.csv", fixture.manifest.artifact_sha256]) {
+    for (const expected of ["全市场筛选数据", "可用", "2026-01-02", "2026-03-07", "131 行", "3 个代码", "当前横截面 3 个代码", "full-market.csv", fixture.manifest.artifact_sha256]) {
       if (!summaryText.includes(expected)) throw new Error(`normal summary missing ${expected}`);
     }
     await assertVisible(page.getByTestId("full-market-results"), "normal Full Market results");
@@ -582,7 +582,7 @@ async function runUnavailableScenario(browser, rdpRoot, tempDir, kind, expectedR
     }
     await page.getByTestId("full-market-summary").waitFor({ state: "visible" });
     const summaryText = await page.getByTestId("full-market-summary").innerText();
-    if (!summaryText.includes("不可用") || !summaryText.includes("RDP 不可用")) {
+    if (!summaryText.includes("不可用") || !summaryText.includes("本地研究数据不可用")) {
       throw new Error(`${kind} unavailable state is not visible in the UI: ${summaryText}`);
     }
     if (await page.getByRole("link", { name: "000001" }).count()) throw new Error(`${kind} rendered a result link`);

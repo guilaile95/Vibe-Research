@@ -243,7 +243,7 @@ async function main() {
   try {
     console.log(`[E2E] browser=${label}`);
     await page.goto(`${baseUrl}/screener`, { waitUntil: "networkidle" });
-    for (const name of ["机会发现", "候选筛选", "Full Market", "龙虎榜"]) {
+    for (const name of ["机会发现", "候选筛选", "全市场筛选", "龙虎榜"]) {
       const tab = page.getByRole("tab", { name, exact: true });
       await tab.waitFor({ state: "visible", timeout: 15000 });
     }

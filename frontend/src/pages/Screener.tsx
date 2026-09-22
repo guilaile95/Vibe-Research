@@ -109,7 +109,7 @@ function FullMarketResultTable({ result }: { result: FullMarketResult }) {
   return (
     <GlassCard className="overflow-hidden p-0" data-testid="full-market-results">
       <div className="border-b border-border/50 px-4 py-3 text-sm font-medium">
-        Full Market 结果 <span className="text-muted-foreground">({result.total_rows})</span>
+        全市场筛选结果 <span className="text-muted-foreground">({result.total_rows})</span>
       </div>
       {result.rows.length === 0 ? (
         <p className="px-4 py-6 text-center text-xs text-muted-foreground">暂无可评估结果</p>
@@ -420,27 +420,21 @@ export function Screener() {
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <PageHeader
         title="市场发现"
         subtitle={mode === "discovery"
-          ? "从 Core A 股批量扫描中生成分策略研究队列；只回答先研究谁、为什么。"
+          ? "从市场变化中寻找研究对象，查看依据与仍需确认的信息。"
           : mode === "candidate"
             ? "对候选代码执行技术条件 AND 筛选；结果用于研究，不产生交易建议。"
             : mode === "full-market"
-              ? "基于本地 RDP artifact 的有界全市场横截面；结果用于研究，不产生交易建议。"
+              ? "按行情指标筛选全市场股票，查看符合条件的研究对象。"
               : mode === "patterns"
-                ? "复用本地 RDP 历史 OHLCV 的五类确定性技术事件；结果用于研究，不产生交易建议。"
-                : "读取现有 Eastmoney 龙虎榜报告的市场级公开记录；不产生交易建议。"}
+                ? "从历史行情中查找五类技术形态，查看事件依据。"
+                : "查看龙虎榜公开记录，进一步研究上榜股票。"}
       />
 
-      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <span>{mode === "discovery" ? "Discovery · batch-first · no AI ranking" : mode === "candidate" ? `候选筛选 · 最多 ${MAX_CODES} 个代码` : mode === "full-market" ? "Full Market · set-based · 不回退逐票请求" : mode === "patterns" ? "形态扫描 · RDP-only · deterministic events" : "龙虎榜 · source facts · no ranking"}</span>
-        <span>·</span>
-        <Link className="hover:text-foreground" to="/market-history">查看北向成交历史</Link>
-      </div>
-
-      <div className="flex flex-wrap gap-1 rounded-xl border border-border/60 bg-muted/20 p-1" role="tablist" aria-label="筛选模式">
+      <div className="flex flex-wrap gap-1 rounded-lg border border-border/60 bg-muted/20 p-1" role="tablist" aria-label="筛选模式">
         <button type="button" role="tab" aria-selected={mode === "discovery"} data-testid="discovery-tab" onClick={() => switchMode("discovery")} className={`rounded-lg px-3 py-1.5 text-sm ${mode === "discovery" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
           机会发现
         </button>
@@ -448,7 +442,7 @@ export function Screener() {
           候选筛选
         </button>
         <button type="button" role="tab" aria-selected={mode === "full-market"} data-testid="full-market-tab" onClick={() => switchMode("full-market")} className={`rounded-lg px-3 py-1.5 text-sm ${mode === "full-market" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
-          Full Market
+          全市场筛选
         </button>
         <button type="button" role="tab" aria-selected={mode === "patterns"} data-testid="pattern-discovery-tab" onClick={() => switchMode("patterns")} className={`rounded-lg px-3 py-1.5 text-sm ${mode === "patterns" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
           形态扫描
@@ -583,7 +577,7 @@ export function Screener() {
             </label>
             <button type="button" data-testid="run-full-market" onClick={() => runFullMarket(0)} disabled={loading} className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-foreground px-3 py-1.5 text-sm font-medium text-background disabled:opacity-40">
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-              {loading ? "查询中…" : "运行 Full Market"}
+              {loading ? "查询中…" : "运行全市场筛选"}
             </button>
           </div>
           {error ? <div className="flex items-center gap-2 text-xs text-destructive"><AlertCircle className="h-4 w-4" />{error}</div> : null}
@@ -665,13 +659,13 @@ export function Screener() {
         <>
           <GlassCard className="space-y-3 p-4" data-testid="full-market-summary">
             <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
-              <span>Full Market 数据</span>
+              <span>全市场筛选数据</span>
               <span className={fullMarketResult.status === "normal" ? "text-emerald-600" : "text-destructive"}>{fullMarketResult.status === "normal" ? "可用" : "不可用"}</span>
               <span className="text-xs text-muted-foreground">As of：{fullMarketResult.as_of || "未知"}</span>
             </div>
             {fullMarketResult.coverage ? (
               <p className="text-xs text-muted-foreground">覆盖：{fullMarketResult.coverage.start} 至 {fullMarketResult.coverage.end} · {fullMarketResult.coverage.row_count} 行 · {fullMarketResult.coverage.code_count} 个代码 · 当前横截面 {fullMarketResult.coverage.universe_count} 个代码</p>
-            ) : <p className="text-xs text-destructive">RDP 不可用，Full Market 不可用；没有逐票请求回退。</p>}
+            ) : <p className="text-xs text-destructive">本地研究数据不可用，全市场筛选不可用；没有逐票请求回退。</p>}
             <div className="grid gap-2 text-xs sm:grid-cols-2">
               {(["ma20", "ma60"] as const).map((key) => {
                 const breadth = fullMarketResult.breadth[key];
@@ -728,6 +722,20 @@ export function Screener() {
           </div>
         </>
       ) : null}
+
+      <div className="flex flex-wrap items-start justify-between gap-3 border-t border-border/50 pt-4 text-xs text-muted-foreground">
+        <details className="min-w-0">
+          <summary className="cursor-pointer hover:text-foreground">筛选方式说明</summary>
+          <p className="mt-2 max-w-2xl leading-relaxed">
+            {mode === "discovery" ? "基于核心 A 股股票池批量扫描，按不同策略形成研究队列，不使用 AI 统一排序。"
+              : mode === "candidate" ? `候选筛选最多支持 ${MAX_CODES} 个代码，所有技术条件须同时满足。`
+                : mode === "full-market" ? "仅查询本地 RDP 数据文件的全市场横截面，不回退逐票请求。"
+                  : mode === "patterns" ? "仅使用本地 RDP 历史行情，按固定规则识别技术事件。"
+                    : "仅展示东方财富龙虎榜公开记录，不生成排名建议。"}
+          </p>
+        </details>
+        <Link className="shrink-0 hover:text-foreground" to="/market-history">查看北向成交历史</Link>
+      </div>
     </div>
   );
 }

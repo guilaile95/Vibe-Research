@@ -37,6 +37,7 @@ import {
   TREND_EMPTY_LABELS,
 } from "@/lib/marketIntelStatus";
 import { cn } from "@/lib/utils";
+import { selectResearchSourceItems } from "@/lib/marketIntelBrief";
 import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 
 export type DigestPhase = "idle" | "generating" | "saving" | "saved" | "cancelled" | "error" | "save_failed" | "empty";
@@ -57,9 +58,10 @@ const errorMessage = (cause: unknown, fallback: string) => cause instanceof ApiE
 
 interface MarketIntelPanelProps {
   embedded?: boolean;
+  compact?: boolean;
 }
 
-export default function MarketIntelPanel({ embedded = false }: MarketIntelPanelProps) {
+export default function MarketIntelPanel({ embedded = false, compact = false }: MarketIntelPanelProps) {
   const [radar, setRadar] = useState<RadarData | null>(null);
   const [runtime, setRuntime] = useState<NativeIntelStatus | null>(null);
   const [items, setItems] = useState<NativeIntelItemsResponse | null>(null);
@@ -365,14 +367,61 @@ export default function MarketIntelPanel({ embedded = false }: MarketIntelPanelP
     }[nativeStatus]
     : null;
 
+  const sourceStats = loading && !hasAnyData ? (
+    <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />正在读取市场情报…</p>
+  ) : (
+    <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+      <div data-testid="market-intel-stat-history" className="rounded-lg border border-border/50 bg-background/60 p-2"><Database className="mr-1 inline h-3.5 w-3.5" />历史资讯 {knownCountText(knownHistoryItemCount({ store: runtime?.store, items }))}</div>
+      <div data-testid="market-intel-stat-sources" className="rounded-lg border border-border/50 bg-background/60 p-2">公开来源 {sourceHealthText(runtime?.sources)}</div>
+      <div data-testid="market-intel-stat-radar" className="rounded-lg border border-border/50 bg-background/60 p-2">赛道来源 {knownCountText(radar?.stats.total_sources)} · {knownCountText(radar?.stats.industries)} 赛道</div>
+      <div className="rounded-lg border border-border/50 bg-background/60 p-2"><Clock className="mr-1 inline h-3.5 w-3.5" />{formatShanghaiTime(updatedAt || radar?.generated_at)}</div>
+    </div>
+  );
+  const trendPanel = (
+    <section className="rounded-xl border border-border/60 bg-card/50 p-4">
+      <h3 className="flex items-center gap-1.5 text-sm font-semibold text-foreground"><TrendingUp className="h-4 w-4 text-primary" />近 24 小时关注趋势</h3>
+      {entities.length ? (
+        <div className="mt-3 flex flex-wrap gap-2" aria-label="近 24 小时关注趋势">
+          {entities.slice(0, 20).map((entity) => {
+            const candidateCode = /^\d{6}$/.test(entity.security_code || "") ? entity.security_code : null;
+            return (
+              <span key={`${entity.term_kind}:${entity.security_code || ""}:${entity.term}`} className="rounded-full bg-primary/10 px-2.5 py-1 text-xs text-primary">
+                {entity.term}<span className="ml-1 text-muted-foreground">· {entity.item_count} 条{entity.delta ? ` · ${entity.delta > 0 ? "+" : ""}${entity.delta}` : ""}</span>
+                {candidateCode && (
+                  <Link
+                    to={candidateWorkspaceHref(candidateCode)}
+                    className="ml-2 font-medium hover:underline"
+                    data-testid={`market-intel-candidate-${candidateCode}`}
+                  >
+                    候选研究
+                  </Link>
+                )}
+              </span>
+            );
+          })}
+        </div>
+      ) : (
+        <p
+          className="mt-3 text-xs text-muted-foreground"
+          data-testid="market-intel-trending-empty"
+          data-trend-empty-reason={trendEmpty}
+        >
+          {TREND_EMPTY_LABELS[trendEmpty]}
+        </p>
+      )}
+      <p className="mt-2 text-[10px] text-muted-foreground/70">趋势仅使用本地观察次数、来源数和环比，不补伪造排名。</p>
+    </section>
+  );
+  const researchItems = selectResearchSourceItems(visibleItems);
+
   return (
-    <section className="space-y-5" data-testid="market-intel-panel">
+    <section className={compact ? "space-y-3" : "space-y-5"} data-testid="market-intel-panel">
       <div className="rounded-xl border border-border/60 bg-card/70 p-4 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <Activity className="h-5 w-5 text-primary" />
-              <h2 className="text-lg font-semibold text-foreground">市场情报</h2>
+              <h2 className="text-lg font-semibold text-foreground">{compact ? "研究资讯" : "市场情报"}</h2>
               <span className={cn(
                 "rounded-full px-2 py-0.5 text-[10px] font-medium",
                 overallStatus === "normal" && "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
@@ -385,7 +434,7 @@ export default function MarketIntelPanel({ embedded = false }: MarketIntelPanelP
             <p className="mt-1 text-xs text-muted-foreground">来源状态与本地保存历史 · 更新时间 {formatShanghaiTime(updatedAt || radar?.generated_at)}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {embedded && (
+            {(embedded || compact) && (
               <Link
                 to="/intel"
                 className="text-xs text-primary hover:underline"
@@ -406,16 +455,7 @@ export default function MarketIntelPanel({ embedded = false }: MarketIntelPanelP
           </div>
         </div>
 
-        {loading && !hasAnyData ? (
-          <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />正在读取市场情报…</p>
-        ) : (
-          <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
-            <div data-testid="market-intel-stat-history" className="rounded-lg border border-border/50 bg-background/60 p-2"><Database className="mr-1 inline h-3.5 w-3.5" />历史资讯 {knownCountText(knownHistoryItemCount({ store: runtime?.store, items }))}</div>
-            <div data-testid="market-intel-stat-sources" className="rounded-lg border border-border/50 bg-background/60 p-2">公开来源 {sourceHealthText(runtime?.sources)}</div>
-            <div data-testid="market-intel-stat-radar" className="rounded-lg border border-border/50 bg-background/60 p-2">赛道来源 {knownCountText(radar?.stats.total_sources)} · {knownCountText(radar?.stats.industries)} 赛道</div>
-            <div className="rounded-lg border border-border/50 bg-background/60 p-2"><Clock className="mr-1 inline h-3.5 w-3.5" />{formatShanghaiTime(updatedAt || radar?.generated_at)}</div>
-          </div>
-        )}
+        {!compact && sourceStats}
 
         {(nativeError || radarError || radarFailedSources > 0 || nativeStatusNotice || (!loading && !hasRadarData) || (runtime?.sources?.failing ?? 0) > 0) && (
           <div className="mt-3 space-y-1 rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-warning" role="alert">
@@ -429,40 +469,50 @@ export default function MarketIntelPanel({ embedded = false }: MarketIntelPanelP
         )}
       </div>
 
-      <section className="rounded-xl border border-border/60 bg-card/50 p-4">
-        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-foreground"><TrendingUp className="h-4 w-4 text-primary" />近 24 小时关注趋势</h3>
-        {entities.length ? (
-          <div className="mt-3 flex flex-wrap gap-2" aria-label="近 24 小时关注趋势">
-            {entities.slice(0, 20).map((entity) => {
-              const candidateCode = /^\d{6}$/.test(entity.security_code || "") ? entity.security_code : null;
-              return (
-                <span key={`${entity.term_kind}:${entity.security_code || ""}:${entity.term}`} className="rounded-full bg-primary/10 px-2.5 py-1 text-xs text-primary">
-                  {entity.term}<span className="ml-1 text-muted-foreground">· {entity.item_count} 条{entity.delta ? ` · ${entity.delta > 0 ? "+" : ""}${entity.delta}` : ""}</span>
-                  {candidateCode && (
-                    <Link
-                      to={candidateWorkspaceHref(candidateCode)}
-                      className="ml-2 font-medium hover:underline"
-                      data-testid={`market-intel-candidate-${candidateCode}`}
-                    >
-                      候选研究
-                    </Link>
-                  )}
-                </span>
-              );
-            })}
+      {compact && (
+        <>
+          <div className="rounded-xl border border-border/60 bg-card/50 px-4 py-3" data-testid="market-intel-brief">
+            <p className="text-xs text-muted-foreground">行业来源的近期动态 · 最多 4 条</p>
+            {items?.status === "stale" && <p className="mt-2 text-xs text-warning" role="alert">资讯列表为历史数据：{items.error || "当前来源未提供新鲜资讯"}。</p>}
+            {items?.status === "partial" && <p className="mt-2 text-xs text-warning" role="alert">资讯列表部分可用：{items.error || "可能缺少部分来源结果"}。</p>}
+            {(items?.status === "unavailable" || items?.error && items.status === "normal") && <p className="mt-2 text-xs text-warning" role="alert">资讯列表当前不可用或读取异常：{items.error || "不能判断是否有匹配资讯"}。</p>}
+            {loading && !items ? (
+              <p className="mt-3 text-xs text-muted-foreground"><Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />正在读取资讯…</p>
+            ) : researchItems.length > 0 ? (
+              <ul className="mt-2 divide-y divide-border/40">
+                {researchItems.map((item) => (
+                  <li key={item.item_id} className="py-2.5" data-testid="market-intel-brief-item">
+                    <a href={item.url} target="_blank" rel="noreferrer noopener" className="group flex items-start gap-1.5 text-sm leading-relaxed hover:text-primary hover:underline">
+                      <span className="min-w-0 break-words">{item.title}</span><ExternalLink className="mt-1 h-3 w-3 shrink-0 text-muted-foreground" />
+                    </a>
+                    <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      <span>{item.source_name || item.hint}</span>
+                      <span>{item.published_at ? "发布于" : "最近收录"} {formatShanghaiTime(item.published_at || item.last_seen_at)}</span>
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-3 text-sm text-muted-foreground" data-testid="market-intel-brief-empty">
+                {!items || items.status === "unavailable" || items.error
+                  ? "资讯尚未成功读取，暂不能判断是否有匹配的行业资讯。"
+                  : "本次资讯中暂无行业来源动态，可前往完整资讯中心查看全部。"}
+              </p>
+            )}
           </div>
-        ) : (
-          <p
-            className="mt-3 text-xs text-muted-foreground"
-            data-testid="market-intel-trending-empty"
-            data-trend-empty-reason={trendEmpty}
-          >
-            {TREND_EMPTY_LABELS[trendEmpty]}
-          </p>
-        )}
-        <p className="mt-2 text-[10px] text-muted-foreground/70">趋势仅使用本地观察次数、来源数和环比，不补伪造排名。</p>
-      </section>
+          {trending && (trending.status !== "normal" || trending.error) && (
+            <p className="text-xs text-warning" role="alert">关注趋势{trending.status === "stale" ? "为历史数据" : trending.status === "unavailable" ? "暂不可用" : "部分可用或读取异常"}{trending.error ? `：${trending.error}` : "，可展开来源与趋势查看详情"}。</p>
+          )}
+          <details className="rounded-xl border border-border/60 px-4 py-3" data-testid="market-intel-brief-diagnostics">
+            <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">来源与关注趋势</summary>
+            <div className="space-y-3">{sourceStats}{trendPanel}</div>
+          </details>
+        </>
+      )}
 
+      {!compact && trendPanel}
+
+      {!compact && <>
       <section className="rounded-xl border border-border/60 bg-card/50 p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -572,6 +622,7 @@ export default function MarketIntelPanel({ embedded = false }: MarketIntelPanelP
           </ul>
         )}
       </section>
+      </>}
     </section>
   );
 }

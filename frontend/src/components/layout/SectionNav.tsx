@@ -16,16 +16,16 @@ export function SectionNav({ ownerId, pathname, title }: { ownerId: string | nul
   const active = activeSectionItem(pathname, groups);
 
   return (
-    <div className="mb-6 space-y-2" data-testid="section-nav" data-section-owner={ownerId ?? ""}>
+    <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2" data-testid="section-nav" data-section-owner={ownerId ?? ""}>
       {groups.map((group, index) => (
         <div
           key={group.label ?? `primary-${index}`}
           className={cn(
-            "flex min-w-0 items-center gap-3",
-            index > 0 && "border-t border-border/40 pt-2",
+            "flex min-w-0 max-w-full items-center gap-2",
+            index > 0 && "lg:ml-auto",
           )}
         >
-          <span className="hidden shrink-0 text-[11px] font-medium text-muted-foreground lg:inline">
+          <span className="sr-only">
             {group.label ?? title}
           </span>
           <nav
