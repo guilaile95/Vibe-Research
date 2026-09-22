@@ -13,6 +13,38 @@ def test_health():
     assert r.json()["ok"] is True
 
 
+@pytest.mark.parametrize("failure_stage,exception,status", [
+    ("snapshot", RuntimeError, 200),
+    ("projection", RuntimeError, 502),
+    ("projection", ValueError, 400),
+])
+def test_market_cloud_public_errors_do_not_expose_provider_details(
+    monkeypatch, failure_stage, exception, status,
+):
+    """真实 UI 曾把 provider 异常中的请求 URL 原样展示；覆盖信封和 HTTP 错误。"""
+    raw = "ProxyError: https://provider.invalid/quote?token=private-token SQL traceback"
+
+    def fail(*args, **kwargs):
+        raise exception(raw)
+
+    target = "get_a_share_snapshot" if failure_stage == "snapshot" else "get_market_cloud"
+    monkeypatch.setattr(app_module.market, target, fail)
+    response = client.get("/api/market/cloud")
+    assert response.status_code == status
+    assert "市场热力" in response.text or "市场范围或周期无效" in response.text
+    for internal in ("ProxyError", "https://", "provider.invalid", "private-token", "SQL", "traceback"):
+        assert internal not in response.text
+    if failure_stage == "snapshot":
+        envelope = response.json()["data"]
+        assert envelope["status"] == "unavailable"
+        assert envelope["data"] is None
+
+
+@pytest.mark.parametrize("query", ["scope=unsupported", "period=unsupported"])
+def test_market_cloud_invalid_selection_remains_400(query):
+    assert client.get(f"/api/market/cloud?{query}").status_code == 400
+
+
 @pytest.mark.parametrize("path", [
     "/api/quote?codes=abc",
     "/api/valuation?code=12",

@@ -1459,9 +1459,9 @@ def market_cloud(
     try:
         return {"data": market.get_market_cloud(scope, period)}
     except ValueError as e:
-        raise HTTPException(400, str(e)) from e
+        raise HTTPException(400, "市场范围或周期无效，请重新选择") from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"市场云图异常：{e}") from e
+        raise HTTPException(502, "市场热力数据暂不可用，请稍后重试") from e
 
 
 @app.get("/api/market/northbound")
