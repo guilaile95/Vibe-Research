@@ -1308,44 +1308,8 @@ export default function DecisionInbox() {
                           )}
                         </DetailSection>
 
-                        {activeEntry.kind === "campaign" && activeEntry.item && (
-                          <DetailSection title="研究连续性" testId="decision-inbox-detail-continuity">
-                            <ResearchContinuityCard
-                              campaignId={activeEntry.campaignId}
-                              prefetched={continuityByCampaign[activeEntry.campaignId]}
-                              awaitingPrefetch={!Object.prototype.hasOwnProperty.call(
-                                continuityByCampaign,
-                                activeEntry.campaignId,
-                              )}
-                            />
-                          </DetailSection>
-                        )}
-
-                        {activeEntry.kind === "campaign" && (
-                          <DetailSection title="投资逻辑" testId="decision-inbox-detail-thesis">
-                            <CampaignThesisActivationCard
-                              campaignId={activeEntry.campaignId}
-                              securityCode={activeEntry.securityCode}
-                              strategy={activeEntry.strategy}
-                              reloadEpoch={thesisReloadEpoch}
-                            />
-                          </DetailSection>
-                        )}
-
-                        {activeEntry.kind === "campaign" && (
-                          <DetailSection title="历史正式决定" testId="decision-inbox-detail-history">
-                            <div className="space-y-3">
-                              {activeEntry.item && <DecisionActionPanel item={activeEntry.item} />}
-                              <CampaignCommittedDecisionsCard
-                                campaignId={activeEntry.campaignId}
-                                securityCode={activeEntry.securityCode}
-                                strategy={activeEntry.strategy}
-                              />
-                            </div>
-                          </DetailSection>
-                        )}
-
-                        {/* 原操作入口：只呈现当前选中对象的入口，全部需要你明确点击。 */}
+                        {/* 原操作入口：只呈现当前选中对象的入口，全部需要你明确点击。
+                            位置在「已有状态与限制」之后、「研究连续性 / 投资逻辑 / 历史正式决定」之前。 */}
                         <section
                           className="space-y-3 rounded-lg border border-primary/30 bg-primary/5 p-4"
                           data-testid="decision-inbox-actions"
@@ -1394,6 +1358,43 @@ export default function DecisionInbox() {
                             </p>
                           )}
                         </section>
+
+                        {activeEntry.kind === "campaign" && activeEntry.item && (
+                          <DetailSection title="研究连续性" testId="decision-inbox-detail-continuity">
+                            <ResearchContinuityCard
+                              campaignId={activeEntry.campaignId}
+                              prefetched={continuityByCampaign[activeEntry.campaignId]}
+                              awaitingPrefetch={!Object.prototype.hasOwnProperty.call(
+                                continuityByCampaign,
+                                activeEntry.campaignId,
+                              )}
+                            />
+                          </DetailSection>
+                        )}
+
+                        {activeEntry.kind === "campaign" && (
+                          <DetailSection title="投资逻辑" testId="decision-inbox-detail-thesis">
+                            <CampaignThesisActivationCard
+                              campaignId={activeEntry.campaignId}
+                              securityCode={activeEntry.securityCode}
+                              strategy={activeEntry.strategy}
+                              reloadEpoch={thesisReloadEpoch}
+                            />
+                          </DetailSection>
+                        )}
+
+                        {activeEntry.kind === "campaign" && (
+                          <DetailSection title="历史正式决定" testId="decision-inbox-detail-history">
+                            <div className="space-y-3">
+                              {activeEntry.item && <DecisionActionPanel item={activeEntry.item} />}
+                              <CampaignCommittedDecisionsCard
+                                campaignId={activeEntry.campaignId}
+                                securityCode={activeEntry.securityCode}
+                                strategy={activeEntry.strategy}
+                              />
+                            </div>
+                          </DetailSection>
+                        )}
                       </>
                     )}
                   </div>

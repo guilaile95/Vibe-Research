@@ -25,7 +25,7 @@
  * 被证实的性质（身份唯一、状态以后端为准、草稿不进入 current）都没有放宽。
  */
 import { chromium } from "playwright";
-import { spawn, execSync } from "node:child_process";
+import { spawn, spawnSync, execSync } from "node:child_process";
 import {
   mkdtempSync,
   rmSync,
@@ -228,6 +228,59 @@ async function createCampaignViaUi(page, strategyLabel) {
   await page.click(`label:has-text('${strategyLabel}')`);
   await page.click("button:has-text('确认创建投资计划')");
   await page.waitForSelector("text=这项投资计划尚未生效");
+}
+
+/**
+ * 夹具：为已绑定正式投资逻辑的 Campaign 冻结一条正式决定。
+ * 形状与 trade-attribution-reconciliation / formal-outcome 的合成夹具一致；
+ * 身份三元组（campaign_id / security_code / strategy）与 Thesis 锚点必须与后端一致。
+ */
+function freezeDecisionForCampaign(env, { campaignId, securityCode, strategy, thesisId, thesisRevision }) {
+  const payload = {
+    security_code: securityCode,
+    strategy,
+    campaign_id: campaignId,
+    thesis_id: thesisId,
+    thesis_revision: thesisRevision,
+    asset_view: {},
+    trade_view: {},
+    portfolio_view: {},
+    next_best_action: "BUY SMALL",
+    action_envelope: {},
+    maintain_conditions: [],
+    upgrade_conditions: [],
+    downgrade_conditions: [],
+    invalidation_conditions: [],
+    strategy_horizon: "2w",
+    review_by: "2099-01-01T00:00:00Z",
+    key_assumptions: [],
+    event_invalidation_conditions: [],
+    risk_policy_version: "inbox-e2e-risk",
+    opportunity_policy_version: "inbox-e2e-opportunity",
+    decision_policy_version: "inbox-e2e-decision",
+    behavior_model_version: "inbox-e2e-behavior",
+    data_quality: {},
+    evidence_confidence: null,
+    inference_confidence: null,
+    decision_confidence: null,
+    evidence_refs: [],
+    risk_refs: [],
+    source_refs: ["decision-inbox-e2e"],
+    user_confirmed: true,
+  };
+  const script =
+    "import json, os; import frozen_decision_service as s; print(json.dumps(s.freeze_decision(json.loads(os.environ['INBOX_E2E_DECISION_PAYLOAD']))))";
+  const py = getPythonConfig();
+  const args = py.cmd === "py" ? ["-3", "-c", script] : ["-c", script];
+  const result = spawnSync(py.cmd, args, {
+    cwd: backendDir,
+    env: { ...env, INBOX_E2E_DECISION_PAYLOAD: JSON.stringify(payload) },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const frozen = JSON.parse(result.stdout.trim());
+  assert.equal(typeof frozen.decision_id, "string", "冻结必须返回 decision_id");
+  return frozen.decision_id;
 }
 
 async function runE2E() {
@@ -529,6 +582,133 @@ async function runE2E() {
     await mediumCard.locator('button[data-action-kind="advance"]:has-text("开始研究")').click();
     await mediumCard.getByText("未能变更状态").waitFor();
     assert.equal(await mediumCard.getAttribute("data-campaign-status"), "DRAFT");
+
+    // 10. 正式提案入口排在「历史正式决定」之前（NOT_EVALUATED：现有「进入正式决策」入口）
+    console.log("[E2E] 10. formal proposal entry precedes history (NOT_EVALUATED)...");
+    const backend = `http://127.0.0.1:${backendPort}`;
+    const actionsSection = page.getByTestId("decision-inbox-actions");
+    const statusSection = page.getByTestId("decision-inbox-detail-status");
+    const continuitySection = page.getByTestId("decision-inbox-detail-continuity");
+    const thesisSection = page.getByTestId("decision-inbox-detail-thesis");
+    const historySection = page.getByTestId("decision-inbox-detail-history");
+
+    await selectCampaignItem(page, swingId);
+    await actionsSection.waitFor();
+    assert.equal(await actionsSection.count(), 1, "操作区必须只渲染一处，不得复制第二份");
+    const notEvaluatedLink = page.getByTestId("formal-decision-next-step-proposal");
+    await notEvaluatedLink.waitFor();
+    assert.equal(await notEvaluatedLink.count(), 1, "NOT_EVALUATED 只应有一个正式提案入口");
+    assert.equal(await page.getByTestId("formal-decision-next-step-new-decision").count(), 0);
+    assert.ok((await notEvaluatedLink.innerText()).trim().startsWith("进入正式决策"), "NOT_EVALUATED 文案应为「进入正式决策」");
+    assert.equal(await notEvaluatedLink.getAttribute("href"), `/campaigns/${swingId}/decision-proposal`);
+    assert.equal(
+      await page.locator("[data-formal-decision-evaluation-status]").getAttribute("data-formal-decision-evaluation-status"),
+      "NOT_EVALUATED",
+    );
+
+    const order = {};
+    for (const [name, locator] of [
+      ["identity", page.getByTestId("decision-inbox-detail-identity")],
+      ["status", statusSection],
+      ["actions", actionsSection],
+      ["continuity", continuitySection],
+      ["thesis", thesisSection],
+      ["history", historySection],
+    ]) {
+      order[name] = await locator.boundingBox();
+      assert.ok(order[name], `${name} 区块必须可见`);
+    }
+    assert.ok(order.identity.y < order.status.y, "身份 → 已有状态与限制");
+    assert.ok(order.status.y < order.actions.y, "已有状态与限制 → 操作入口");
+    assert.ok(order.actions.y < order.continuity.y, "操作入口 → 研究连续性");
+    assert.ok(order.continuity.y < order.thesis.y, "研究连续性 → 投资逻辑");
+    assert.ok(order.thesis.y < order.history.y, "投资逻辑 → 历史正式决定");
+
+    // 选择对象 / 切分组不得产生业务写入（风险与状态限制仍在操作区之前）。
+    const writesBeforeSwitch = forbiddenMutationRequests.length;
+    await selectCampaignItem(page, mediumId);
+    await selectInboxGroup(page, "current");
+    await selectCampaignItem(page, swingId);
+    assert.equal(forbiddenMutationRequests.length, writesBeforeSwitch, "选择对象或切分组不得产生业务写入");
+
+    // 11. 正式提案入口排在「历史正式决定」之前（EVALUATED：现有「形成新的正式决策」入口）
+    console.log("[E2E] 11. formal proposal entry precedes history (EVALUATED)...");
+    const thesisCreated = await page.request.post(`${backend}/api/thesis`, {
+      data: {
+        subject_type: "stock",
+        subject_id: "600519",
+        title: "决策待办操作区顺序夹具",
+        summary: "只用于验证正式提案入口排在历史正式决定之前。",
+        core_claims: [],
+        catalysts: [],
+        risks: [],
+        invalidation_conditions: [],
+        change_summary: "创建顺序夹具",
+      },
+    });
+    assert.equal(thesisCreated.status(), 200, await thesisCreated.text());
+    const thesisId = (await thesisCreated.json()).data.thesis.id;
+    const formalized = await page.request.post(`${backend}/api/thesis/${thesisId}/begin-formalization`);
+    assert.equal(formalized.status(), 200, await formalized.text());
+    const draftThesis = (await formalized.json()).data.thesis;
+    // 正式化内容：confirm 要求 3-5 条 core_claims，且 strategy / expected_horizon 齐备。
+    const formalContent = await page.request.put(`${backend}/api/thesis/${thesisId}`, {
+      data: {
+        title: draftThesis.title,
+        summary: draftThesis.summary,
+        status: "active",
+        core_claims: ["顺序夹具论点一", "顺序夹具论点二", "顺序夹具论点三"],
+        catalysts: [],
+        risks: [],
+        invalidation_conditions: [],
+        strategy: "SWING",
+        expected_horizon: { unit: "TRADING_DAY", min: 5, max: 20, anchor: "FREEZE_AT" },
+        free_notes: null,
+        expected_revision: draftThesis.current_revision,
+        change_summary: "构造决策待办操作区顺序夹具",
+      },
+    });
+    assert.equal(formalContent.status(), 200, await formalContent.text());
+    const confirmedThesis = await page.request.post(`${backend}/api/thesis/${thesisId}/confirm`, {
+      data: { expected_revision: (await formalContent.json()).data.thesis.current_revision },
+    });
+    assert.equal(confirmedThesis.status(), 200, await confirmedThesis.text());
+    const frozenThesis = await page.request.post(`${backend}/api/thesis/${thesisId}/freeze`, {
+      data: { expected_revision: (await confirmedThesis.json()).data.thesis.current_revision },
+    });
+    assert.equal(frozenThesis.status(), 200, await frozenThesis.text());
+    assert.equal((await frozenThesis.json()).data.thesis.formal_state, "frozen");
+    const bound = await page.request.post(`${backend}/api/campaigns/${swingId}/thesis-binding`, {
+      data: { thesis_id: thesisId },
+    });
+    assert.equal(bound.status(), 201, await bound.text());
+    freezeDecisionForCampaign(env, {
+      campaignId: swingId,
+      securityCode: "600519",
+      strategy: "SWING",
+      thesisId,
+      thesisRevision: (await bound.json()).data.thesis_revision_at_bind,
+    });
+
+    await clickRefresh(page);
+    await selectCampaignItem(page, swingId);
+    const evaluatedLink = page.getByTestId("formal-decision-next-step-new-decision");
+    await evaluatedLink.waitFor();
+    assert.equal(
+      await page.locator("[data-formal-decision-evaluation-status]").getAttribute("data-formal-decision-evaluation-status"),
+      "EVALUATED",
+    );
+    assert.equal(await evaluatedLink.count(), 1, "EVALUATED 只应有一个「形成新的正式决策」入口");
+    assert.equal(await page.getByTestId("formal-decision-next-step-proposal").count(), 0);
+    assert.ok((await evaluatedLink.innerText()).trim().startsWith("形成新的正式决策"), "EVALUATED 文案应为「形成新的正式决策」");
+    assert.equal(await evaluatedLink.getAttribute("href"), `/campaigns/${swingId}/decision-proposal`);
+    assert.equal(await actionsSection.count(), 1, "操作区仍然只有一处");
+    const evaluatedActionsBox = await actionsSection.boundingBox();
+    const evaluatedHistoryBox = await historySection.boundingBox();
+    assert.ok(
+      evaluatedActionsBox && evaluatedHistoryBox && evaluatedActionsBox.y < evaluatedHistoryBox.y,
+      "正式提案入口必须在历史正式决定之前",
+    );
 
     console.log("[E2E] Decision Inbox E2E test passed successfully!");
   } finally {
