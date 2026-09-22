@@ -87,9 +87,9 @@ export function TopRiskAnalysisCard({
   const decisionRunId = env.decision_run_id ?? null;
 
   return (
-    <GlassCard className={cn("mb-6 space-y-4", className)}>
+    <GlassCard className={cn("mb-4 space-y-3", className)}>
       {/* 头部：标题、影子模式标识、状态徽标、元信息 */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 pb-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 pb-2">
         <div className="flex items-center gap-2">
           <h3 className="flex items-center gap-1.5 text-base font-semibold text-foreground">
             <ShieldAlert className="h-4 w-4 text-primary" /> 顶部风险分析
@@ -113,8 +113,8 @@ export function TopRiskAnalysisCard({
 
       {/* 宽屏两栏：左=评分与结论，右=明细入口、限制与追踪。
           所有字段仍在同一张卡内可见，只是不再各占一整行。 */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="space-y-4">
+      <div className="grid gap-3 lg:grid-cols-2">
+        <div className="space-y-3">
           {/* 核心指标网格 */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="rounded-lg border border-border/50 bg-muted/20 p-3">
@@ -153,7 +153,7 @@ export function TopRiskAnalysisCard({
           )}
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-3">
           {/* 风险证据 / 安全证据：默认折叠为一行明细入口，结论与限制始终在折叠之外。 */}
           {(data?.risk_drivers?.length ?? 0) > 0 || (data?.safety_signals?.length ?? 0) > 0 ? (
             <details className="rounded-lg border border-border/40 bg-muted/5 p-3 text-xs" data-testid="top-risk-evidence">

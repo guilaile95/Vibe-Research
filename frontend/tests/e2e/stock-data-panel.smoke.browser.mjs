@@ -1973,6 +1973,8 @@ async function main() {
           const style = getComputedStyle(el);
           if (!/(auto|scroll)/.test(style.overflowY)) continue;
           if (el.scrollHeight - el.clientHeight < 8) continue;
+          // 页面滚动容器横跨内容区；卡内表格外框之类的合法局部横滚容器不在候选中。
+          if (el.clientWidth < window.innerWidth * 0.9) continue;
           candidates.push(el);
         }
         candidates.sort(

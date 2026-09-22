@@ -629,8 +629,8 @@ export function StockData() {
 
       {/* 常驻概览带：证券身份 + 报价指标 + 来源日期/状态；切页签始终可见 */}
       {val && (
-        <GlassCard glow className="mb-4">
-          <div className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-3">
+        <GlassCard glow className="mb-3">
+          <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-3">
             <h2 className="text-xl font-bold">{val.name}</h2>
             <span className="font-mono text-sm text-muted-foreground">{val.code}</span>
             {val.analyst_count > 0 && (
@@ -663,7 +663,7 @@ export function StockData() {
       {(val || gstock) && (
         <>
           {/* 页签栏：纯视图状态。切页签不加载其他页签的数据，也不写任何业务状态。 */}
-          <div className="mb-4 flex flex-wrap gap-1 rounded-xl border border-border/60 bg-muted/20 p-1" role="tablist" aria-label="个股数据分区">
+          <div className="mb-3 flex flex-wrap gap-1 rounded-xl border border-border/60 bg-muted/20 p-1" role="tablist" aria-label="个股数据分区">
             {STOCK_DATA_TABS.map((item) => (
               <button
                 key={item.key}
