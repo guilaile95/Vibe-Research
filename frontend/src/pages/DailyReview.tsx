@@ -1032,11 +1032,11 @@ export function DailyReview() {
         {watchCodes.length === 0 ? (
           <p className="text-sm text-muted-foreground/60">加上你关注的股票，随时看它们的实时价格与涨跌。数据存本地，不上传。</p>
         ) : (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2" data-testid="today-watch-manager-quotes">
             {watchCodes.map((c) => {
               const q = watchQuotes[c];
               return (
-                <div key={c} className="group relative rounded-lg bg-muted/25 p-3">
+                <div key={c} className="group relative min-w-0 rounded-lg bg-muted/25 p-3">
                   <button onClick={() => removeWatch(c)} title="移除"
                     className="absolute right-1.5 top-1.5 text-muted-foreground/40 opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100">
                     <X className="h-3.5 w-3.5" />
@@ -1678,7 +1678,7 @@ export function DailyReview() {
         </div>
       </section>
 
-      {/* 主区 + 辅区：≥1350px 视口（扣除侧栏与内边距后约 1100px）分两栏，更窄时主区在上、辅区在下 */}
+      {/* 市场与研究主区；辅助任务入口收在页尾。 */}
       <div className="min-w-0">
         <div
           id="today-view-tabpanel"
@@ -1708,15 +1708,16 @@ export function DailyReview() {
                   })}</ul> : <p className="py-3 text-xs text-muted-foreground">还没有关注股票，可从市场发现挑选研究对象。</p>}
                   <details className="mt-2 border-t border-border/40 pt-2"><summary className="cursor-pointer text-xs text-muted-foreground">管理关注股票</summary><div className="mt-3">{marketSections.find((item) => item.order === 9)?.node}</div></details>
                 </section>
-                <details className="rounded-xl border border-border/60 bg-card/40 p-4" data-testid="today-ai-review">
-                  <summary className="cursor-pointer text-sm font-medium">AI 当日复盘 <span className="ml-2 text-xs text-muted-foreground">{taskStatus === "running" ? "生成中" : taskError || taskRestoreError ? "读取或生成失败" : taskContent ? "已有复盘" : "按需生成"}</span></summary>
-                  <div className="mt-3">{marketSections.find((item) => item.order === 10)?.node}</div>
-                </details>
+
               </div>
             </div>
             </>
             )}
             <div hidden={todayView !== "market"}><MarketIntelPanel embedded compact /></div>
+            {todayView === "market" && (                <details className="rounded-xl border border-border/60 bg-card/40 p-4 mb-6" data-testid="today-ai-review">
+                  <summary className="cursor-pointer text-sm font-medium">AI 当日复盘 <span className="ml-2 text-xs text-muted-foreground">{taskStatus === "running" ? "生成中" : taskError || taskRestoreError ? "读取或生成失败" : taskContent ? "已有复盘" : "按需生成"}</span></summary>
+                  <div className="mt-3">{marketSections.find((item) => item.order === 10)?.node}</div>
+                </details>)}
             {todayView === "market" && (
             <>
             <section aria-label="更多市场数据" className="mt-6 space-y-2">

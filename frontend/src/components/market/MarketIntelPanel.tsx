@@ -472,7 +472,7 @@ export default function MarketIntelPanel({ embedded = false, compact = false }: 
       {compact && (
         <>
           <div className="rounded-xl border border-border/60 bg-card/50 px-4 py-3" data-testid="market-intel-brief">
-            <p className="text-xs text-muted-foreground">按行业来源分类摘录最近读取资讯，最多 4 条；未逐条判断与个股的关联。</p>
+            <p className="text-xs text-muted-foreground">行业来源的近期动态 · 最多 4 条</p>
             {items?.status === "stale" && <p className="mt-2 text-xs text-warning" role="alert">资讯列表为历史数据：{items.error || "当前来源未提供新鲜资讯"}。</p>}
             {items?.status === "partial" && <p className="mt-2 text-xs text-warning" role="alert">资讯列表部分可用：{items.error || "可能缺少部分来源结果"}。</p>}
             {(items?.status === "unavailable" || items?.error && items.status === "normal") && <p className="mt-2 text-xs text-warning" role="alert">资讯列表当前不可用或读取异常：{items.error || "不能判断是否有匹配资讯"}。</p>}
@@ -496,7 +496,7 @@ export default function MarketIntelPanel({ embedded = false, compact = false }: 
               <p className="mt-3 text-sm text-muted-foreground" data-testid="market-intel-brief-empty">
                 {!items || items.status === "unavailable" || items.error
                   ? "资讯尚未成功读取，暂不能判断是否有匹配的行业资讯。"
-                  : "本次读取的资讯中暂无明确行业来源分类的条目；泛资讯可在完整资讯中心查看。"}
+                  : "本次资讯中暂无行业来源动态，可前往完整资讯中心查看全部。"}
               </p>
             )}
           </div>

@@ -261,7 +261,10 @@ async function handleApi(route) {
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [], count: 0, limit: 20, offset: 0 }) });
   }
   if (pathName === "/api/watchlist") {
-    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ codes: [], etag: "today-e2e" }) });
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: {status: "valid", data: {codes: scenario === "daily-populated" ? ["600519", "000001", "000002", "300750"] : [], updated_at: now}, etag: "today-e2e"} }) });
+  }
+  if (pathName === "/api/quote") {
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: Object.fromEntries(["600519", "000001", "000002", "300750"].map((code) => [code, {code, name: `样本 ${code}`, price: 1456.78, change_pct: 1.25}])) }) });
   }
   if (pathName === "/api/intel-digests/latest") {
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ digest: null }) });
@@ -371,6 +374,13 @@ try {
   await page.getByTestId("today-view-tab-compare").click();
   await page.getByTestId("today-view-tab-market").click();
   assert.deepEqual(todayWrites, [], `切换视图不得产生写请求: ${todayWrites.join("; ")}`);
+  await page.getByTestId("today-ai-review").locator("summary").click();
+  await page.getByRole("button", {name: "让 AI 复盘今天", exact: true}).waitFor();
+  const aiBox = await page.getByTestId("today-ai-review").boundingBox();
+  const mainBox = await page.getByTestId("today-main").boundingBox();
+  assert.ok(aiBox && mainBox && aiBox.width >= mainBox.width - 2, "expanded AI review should use the full reading width");
+  await page.getByTestId("today-ai-review").locator("summary").click();
+  assert.deepEqual(todayWrites, [], "opening the saved AI review must not automatically generate a new one");
   // 切回当前市场后，实时数据与市场云图仍然在位（历史/对比不覆盖实时数据）。
   await todayCloud.locator("[data-market-cloud-chart]").waitFor({ state: "visible", timeout: 15000 });
   assert.equal(await todaySurface.getByTestId("market-intel-panel").count(), 1, "切回当前市场后市场情报仍在位");
@@ -578,12 +588,19 @@ try {
   await page.getByTestId("today-market-surface").locator("[data-market-cloud-chart]").waitFor({ state: "visible" });
 
   scenario = "daily-populated";
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
   const populatedLeads = page.getByTestId("today-research-leads");
   await populatedLeads.getByText("半导体 · +2.5% · 行业涨幅排名居前", { exact: true }).waitFor();
   await populatedLeads.getByText("数据不完整", { exact: true }).waitFor();
   assert.equal(await populatedLeads.getByRole("link", {name: "候选研究", exact: false}).getAttribute("href"), "/candidates/600519");
   await populatedLeads.getByText("涨停 45 家 · 跌停 3 家 · 最高 4 板", {exact: true}).waitFor();
+  await page.getByText("管理关注股票", {exact: true}).click();
+  const watchCards = page.getByTestId("today-watch-manager-quotes");
+  await watchCards.getByText("1456.78", {exact: true}).first().waitFor();
+  assert.equal(await watchCards.locator(":scope > div").count(), 4);
+  assert.equal(await watchCards.locator(":scope > div").evaluateAll((cards) => cards.every((card) => card.scrollWidth <= card.clientWidth)), true, "expanded watch quotes must fit the 300px side column");
+  assert.equal(await watchCards.locator("p.font-mono").evaluateAll((prices) => prices.every((price) => price.scrollWidth <= price.clientWidth)), true, "quote prices must not overlap adjacent cards");
   scenario = "normal";
 
   await page.goto(`http://127.0.0.1:${port}/sectors`, { waitUntil: "domcontentloaded" });

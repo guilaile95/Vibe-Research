@@ -1309,7 +1309,10 @@ async function runSmoke(page, mock, errors) {
       "官方 RSS",
       "authority_ref：vibe:native_intel:v0.1",
     ]) {
-      if (!(await attention.getByText(text, { exact: false }).first().isVisible().catch(() => false))) {
+      // The attention panel mounts before its separate context request settles.
+      // Wait for the asserted content, rather than sampling the loading frame.
+      if (!(await attention.getByText(text, { exact: false }).first()
+        .waitFor({ state: "visible", timeout: 10000 }).then(() => true, () => false))) {
         errors.push(`${label}: attention context text not visible: ${text}`);
       }
     }
