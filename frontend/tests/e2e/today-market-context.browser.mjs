@@ -155,7 +155,10 @@ async function handleApi(route) {
     requestedScopes.push(scope);
     marketCloudAuthorization.push(request.headers()["authorization"] || null);
     if (scenario === "cloud-fail") {
-      return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "market cloud unavailable" }) });
+      return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "market-cloud-unavailable-".repeat(40) }) });
+    }
+    if (scenario === "cloud-unavailable-long") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({data: {status: "unavailable", data: null, warnings: ["market-source-unavailable-".repeat(40)]}}) });
     }
     const cloudStatus = scenario === "cloud-partial" || scenario === "both-partial" ? "partial" : "normal";
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: marketCloud(scope, cloudStatus) }) });
@@ -544,6 +547,19 @@ try {
   await page.getByText("市场快照暂不可用", { exact: true }).first().waitFor();
   await page.getByTestId("market-intel-panel").getByText("半导体产业链出现重要进展", { exact: true }).waitFor();
   await page.locator("#daily-review-section-title").waitFor();
+
+  // Long source failures must fit both the embedded column and a narrow screen.
+  for (const failureScenario of ["cloud-fail", "cloud-unavailable-long"]) {
+    scenario = failureScenario;
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({width, height: 900});
+      await page.goto(`http://127.0.0.1:${port}/daily-review`, {waitUntil: "domcontentloaded"});
+      await page.getByText("市场快照暂不可用", {exact: true}).waitFor();
+      assert.equal(await page.locator("main").evaluate((main) => main.scrollWidth <= main.clientWidth), true, `${failureScenario} must fit main at ${width}px`);
+      await page.locator("[data-market-cloud]").getByRole("button", {name: "重试", exact: true}).waitFor();
+    }
+  }
+  await page.setViewportSize({width: 1920, height: 1080});
 
   scenario = "cloud-partial";
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
