@@ -735,11 +735,11 @@ def get_market_cloud(scope: str = "all", period: str = "today") -> dict:
 
     try:
         snapshot = get_a_share_snapshot()
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return _breadth_envelope(
             "unavailable",
             data=None,
-            warnings=[f"全市场快照不可用：{type(e).__name__}: {e}"],
+            warnings=["全市场快照获取失败，市场热力暂不可用，请稍后重试。"],
             is_stale=False,
         )
 
