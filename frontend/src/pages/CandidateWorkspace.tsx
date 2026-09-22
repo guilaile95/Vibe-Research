@@ -15,7 +15,8 @@ import {
   type CandidatePositionPresentation,
 } from "@/lib/candidateCampaign";
 import { api, ApiError, type EvidenceRecord, type StockRelativeContext, type StockValuationContext } from "@/lib/api";
-import { safeInternalReturnTo } from "@/lib/internalReturnTo";
+import { candidateEntryContext } from "@/lib/candidateEntryContext";
+import { CAMPAIGN_STRATEGY_LABELS } from "@/lib/decisionInbox";
 
 type LoadState<T> =
   | { status: "loading"; value: null; error: "" }
@@ -40,6 +41,18 @@ function errorMessage(cause: unknown, fallback: string): string {
   return cause instanceof ApiError ? cause.message : fallback;
 }
 
+const researchSections = [
+  { id: "candidate-public-info", label: "查看公开资讯" },
+  { id: "candidate-evidence-gap", label: "查看证据缺口" },
+  { id: "candidate-existing-research", label: "继续已有研究" },
+] as const;
+
+function focusResearchSection(id: string) {
+  const target = document.getElementById(id);
+  target?.focus({ preventScroll: true });
+  target?.scrollIntoView({ block: "start" });
+}
+
 export function CandidateWorkspace() {
   const { code = "" } = useParams();
   const location = useLocation();
@@ -53,6 +66,13 @@ export function CandidateWorkspace() {
   const [valuationContext, setValuationContext] = useState<StockValuationContext | null>(null);
   const [valuationLoading, setValuationLoading] = useState(false);
   const [valuationError, setValuationError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const section = researchSections.find(({ id }) => location.hash === `#${id}`);
+    if (!validCode || !section) return;
+    const frame = requestAnimationFrame(() => focusResearchSection(section.id));
+    return () => cancelAnimationFrame(frame);
+  }, [code, validCode, location.hash]);
 
   useEffect(() => {
     let cancelled = false;
@@ -129,7 +149,7 @@ export function CandidateWorkspace() {
   }
 
   const evidenceGap = evidence.value ? buildCandidateEvidenceGap(evidence.value.records) : null;
-  const sourceReturnTo = safeInternalReturnTo(searchParams.get("return_to"), "");
+  const { returnTo: sourceReturnTo, discoveryStrategy } = candidateEntryContext(searchParams);
   const returnTo = `${location.pathname}${location.search}${location.hash}`;
 
   return (
@@ -143,16 +163,41 @@ export function CandidateWorkspace() {
             className="inline-flex items-center gap-1.5 rounded border border-border/60 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
             data-testid="candidate-stock-data-entry"
           >
-            <ArrowLeft className="h-3.5 w-3.5" /> {sourceReturnTo ? "返回来源" : "个股数据"}
+            <ArrowLeft className="h-3.5 w-3.5" /> {discoveryStrategy ? "返回市场发现队列" : sourceReturnTo ? "返回来源" : "个股数据"}
           </Link>
         )}
       />
+
+      <GlassCard data-testid="candidate-research-entry">
+        {discoveryStrategy && (
+          <div className="mb-3 border-b border-border/40 pb-3" data-testid="candidate-discovery-context">
+            <p className="text-sm font-medium">来自市场发现 · {CAMPAIGN_STRATEGY_LABELS[discoveryStrategy]}策略队列</p>
+            <p className="mt-1 text-xs text-muted-foreground">这里只保留浏览来源；是否值得继续研究，需要核对下方资讯和证据。</p>
+          </div>
+        )}
+        <h2 className="text-sm font-semibold">从待验证项开始</h2>
+        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+          先看此股公开资讯与证据缺口，再接续已有研究计划；没有计划时由你决定是否创建。
+        </p>
+        <nav className="mt-3 flex flex-wrap gap-2" aria-label="候选研究快速接续">
+          {researchSections.map(({ id, label }) => (
+            <Link
+              key={id}
+              to={{ pathname: location.pathname, search: location.search, hash: `#${id}` }}
+              onClick={() => focusResearchSection(id)}
+              className="rounded border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-primary hover:bg-primary/10"
+            >
+              {label}
+            </Link>
+          ))}
+        </nav>
+      </GlassCard>
 
       <section className="space-y-4" aria-labelledby="candidate-step-context">
         <div>
           <h2 id="candidate-step-context" className="text-base font-semibold">步骤 1 · 核对事实、来源与缺口</h2>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            先确认当前持仓、公开资讯和证据记录是否完整。任何无法证明的信息都会明确保留为“信息不足”。
+            核对公开资讯、证据缺口及当前持仓背景。任何无法证明的信息都会明确保留为“信息不足”。
           </p>
         </div>
 
@@ -193,14 +238,16 @@ export function CandidateWorkspace() {
           error={valuationError}
         />
 
-        <NativeIntelSecurityContext
-          code={code}
-          evidenceCapture={{ returnTo, records: evidence.value?.records }}
-        />
+        <div id="candidate-public-info" tabIndex={-1} className="scroll-mt-6">
+          <NativeIntelSecurityContext
+            code={code}
+            evidenceCapture={{ returnTo, records: evidence.value?.records }}
+          />
+        </div>
 
         <ResearchEventCalendar key={code} securityCode={code} />
 
-        <GlassCard data-testid="candidate-evidence-gap">
+        <GlassCard id="candidate-evidence-gap" tabIndex={-1} className="scroll-mt-6" data-testid="candidate-evidence-gap">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h3 className="flex items-center gap-1.5 text-sm font-semibold"><FileSearch className="h-4 w-4 text-primary" />还缺什么信息</h3>
@@ -290,7 +337,9 @@ export function CandidateWorkspace() {
         </GlassCard>
       </section>
 
-      <CandidateCampaignPanel code={code} workspace returnTo={returnTo} />
+      <div id="candidate-existing-research" tabIndex={-1} className="scroll-mt-6">
+        <CandidateCampaignPanel code={code} workspace returnTo={returnTo} />
+      </div>
     </div>
   );
 }

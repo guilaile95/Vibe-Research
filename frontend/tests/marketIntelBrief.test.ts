@@ -32,3 +32,12 @@ test("general or unclassified feeds do not masquerade as research selections", (
   assert.deepEqual(selectResearchSourceItems([]), []);
   assert.deepEqual(selectResearchSourceItems([item(1, "macro"), item(2, "rss"), item(3, "AI")]), []);
 });
+
+test("repeated canonical URLs do not crowd out distinct stories; matching titles alone do not merge events", () => {
+  const first = {...item(1, "semi"), canonical_url: "https://example.test/story#headline"};
+  const repeat = {...item(2, "tech"), canonical_url: "https://example.test/story#body"};
+  const differentStory = item(3, "semi", first.title);
+  const input = [first, repeat, differentStory, item(4, "ai"), item(5, "robot")];
+  assert.deepEqual(selectResearchSourceItems(input).map((entry) => entry.item_id), [1, 3, 4, 5]);
+  assert.equal(first.canonical_url, "https://example.test/story#headline");
+});

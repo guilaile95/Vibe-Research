@@ -240,23 +240,29 @@ async function handleApi(route) {
     if (scenario === "radar-fail") return route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ detail: "radar refresh failed" }) });
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(radar) });
   }
-  if (pathName === "/api/daily-review") {
+  if (pathName === "/api/daily-review/refresh" && scenario === "truth-refresh-fail") {
+    return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "新结果部分缺失，未替换较完整的上次结果" }) });
+  }
+  if (pathName === "/api/daily-review/refresh" && scenario === "daily-fail") {
+    return route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ detail: "市场数据刷新失败" }) });
+  }
+  if (pathName === "/api/daily-review" || pathName === "/api/daily-review/refresh") {
     if (scenario === "daily-fail") {
       return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "daily review unavailable" }) });
     }
     return route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ data: { schema_version: "daily-review-v0.1", status: "partial", trade_date: "2026-08-29", generated_at: now, data_cutoff: now, warnings: [], ...(scenario === "daily-populated" ? {
+      body: JSON.stringify({ cache_meta: {source: "persisted", stale: scenario === "truth-old", refreshing: false, refresh_failed: scenario === "truth-old", refresh_error: scenario === "truth-old" ? "新结果部分缺失，未替换较完整的上次结果" : null}, data: { schema_version: "daily-review-v0.1", status: "partial", trade_date: "2026-08-29", generated_at: now, data_cutoff: scenario.startsWith("truth-") ? null : now, warnings: [], ...(scenario === "daily-populated" || scenario.startsWith("truth-") ? {
         market_environment: {
           indices: { status: "normal", data: [{name: "上证指数", price: 3100, change_pct: 1.2}, {name: "深证成指", price: 10000, change_pct: -0.2}, {name: "创业板指", price: 2000, change_pct: 0.6}, {name: "科创50", price: 900, change_pct: 0.3}] },
           global_indices: {status: "unavailable", data: []},
-          breadth: {status: "normal", data: {up_count: 3200, down_count: 1800, total_amount: 1200000000000}},
+          breadth: {status: scenario === "truth-breadth-missing" ? "unavailable" : "normal", data: {up_count: 3200, down_count: 1800, total_amount: 1200000000000}},
         },
         sector_rotation: {industry: {status: "partial", data: {top: [], bottom: []}}, highlights: {strongest_industry: {name: "半导体", change_pct: 2.5}, weakest_industry: {name: "银行", change_pct: -0.8}}},
-        capital_activity: {amount_top: [{code: "600519", name: "贵州茅台", amount: 2000000000, change_pct: 1.2}]},
+        capital_activity: {amount_top: scenario === "truth-breadth-missing" ? [] : [{code: "600519", name: "贵州茅台", amount: 2000000000, change_pct: 1.2}]},
         short_term_emotion: {status: "normal", data: {date: "2026-08-29", zt_count: 45, dt_count: 3, max_boards: 4, lianban_stocks: []}},
-        data_health: {components: {turnover: "normal", industry_boards: "partial"}},
+        data_health: {components: {indices: "normal", turnover: scenario === "truth-current" ? "unavailable" : "normal", industry_boards: "partial"}},
       } : {}) } }),
     });
   }
@@ -594,6 +600,9 @@ try {
   scenario = "daily-fail";
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
   await page.getByText("每日复盘请求失败：", { exact: false }).waitFor();
+  await page.getByTestId("daily-review-refresh").click();
+  await page.getByText("暂无可展示的结果", {exact: false}).waitFor();
+  assert.equal(await page.getByText("上次成功结果", {exact: false}).count(), 0, "no previous snapshot must not claim it is showing one");
   await page.getByTestId("today-market-surface").locator("[data-market-cloud-chart]").waitFor({ state: "visible" });
   await page.getByTestId("market-intel-panel").getByText("半导体产业链出现重要进展", { exact: true }).waitFor();
 
@@ -609,7 +618,9 @@ try {
   const populatedLeads = page.getByTestId("today-research-leads");
   await populatedLeads.getByText("半导体 · +2.5% · 行业涨幅排名居前", { exact: true }).waitFor();
   await populatedLeads.getByText("数据不完整", { exact: true }).waitFor();
-  assert.equal(await populatedLeads.getByRole("link", {name: "候选研究", exact: false}).getAttribute("href"), "/candidates/600519");
+  const leadHref = new URL(await populatedLeads.getByRole("link", {name: "候选研究", exact: false}).getAttribute("href"), "http://local.test");
+  assert.equal(leadHref.pathname, "/candidates/600519");
+  assert.equal(leadHref.searchParams.get("return_to"), "/daily-review#research-leads-title");
   await populatedLeads.getByText("涨停 45 家 · 跌停 3 家 · 最高 4 板", {exact: true}).waitFor();
   await page.getByText("管理关注股票", {exact: true}).click();
   const watchCards = page.getByTestId("today-watch-manager-quotes");
@@ -617,6 +628,37 @@ try {
   assert.equal(await watchCards.locator(":scope > div").count(), 4);
   assert.equal(await watchCards.locator(":scope > div").evaluateAll((cards) => cards.every((card) => card.scrollWidth <= card.clientWidth)), true, "expanded watch quotes must fit the 300px side column");
   assert.equal(await watchCards.locator("p.font-mono").evaluateAll((prices) => prices.every((price) => price.scrollWidth <= price.clientWidth)), true, "quote prices must not overlap adjacent cards");
+  scenario = "truth-current";
+  await page.goto(`http://127.0.0.1:${port}/daily-review`, {waitUntil: "domcontentloaded"});
+  const marketSummary = page.getByRole("region", {name: "市场摘要", exact: true});
+  await marketSummary.getByText("未提供（不能以生成时间代替）", {exact: true}).waitFor();
+  const amountLead = page.getByTestId("today-lead-成交活跃");
+  await amountLead.getByText("贵州茅台 · 成交额 20.00 亿元 · 成交榜首位", {exact: true}).waitFor();
+  assert.equal(await amountLead.getByText("数据暂不可用", {exact: true}).count(), 0, "legacy turnover failure must not mark snapshot amount facts unavailable");
+  await amountLead.getByText("全 A 快照 · 行情时间 未提供", {exact: true}).waitFor();
+  await page.locator("#market-detail-turnover > summary").getByText("正常", {exact: true}).waitFor();
+
+  scenario = "truth-refresh-fail";
+  await page.getByTestId("daily-review-refresh").click();
+  await page.getByText("新结果部分缺失，未替换较完整的上次结果；当前显示上次成功结果", {exact: true}).waitFor();
+  await marketSummary.getByText("上次结果 · 正常", {exact: true}).waitFor();
+  await amountLead.getByText("上次结果 · 时效待核验", {exact: true}).waitFor();
+
+  scenario = "truth-recovered";
+  await page.getByTestId("daily-review-refresh").click();
+  await amountLead.getByText("上次结果 · 时效待核验", {exact: true}).waitFor({state: "hidden"});
+  assert.equal(await marketSummary.getByText("上次结果 · 正常", {exact: true}).count(), 0, "successful refresh clears fallback markers");
+
+  scenario = "truth-old";
+  await page.reload({waitUntil: "domcontentloaded"});
+  await amountLead.getByText("上次结果 · 时效待核验", {exact: true}).waitFor();
+  await page.locator("#market-detail-emotion > summary").getByText("上次结果 · 正常", {exact: true}).waitFor();
+  assert.equal(await page.locator("[data-market-cloud]").getByText("上次结果", {exact: false}).count(), 0, "independent market cloud must retain its own freshness");
+
+  scenario = "truth-breadth-missing";
+  await page.reload({waitUntil: "domcontentloaded"});
+  await amountLead.getByText("数据暂不可用", {exact: true}).waitFor();
+  await page.locator("#market-detail-turnover > summary").getByText("不可用", {exact: true}).waitFor();
   scenario = "normal";
 
   await page.goto(`http://127.0.0.1:${port}/sectors`, { waitUntil: "domcontentloaded" });

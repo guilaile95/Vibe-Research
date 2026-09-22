@@ -61,8 +61,10 @@ function opportunity(overrides) {
     research_priority: "HIGH",
     reason_codes: ["SECTOR_CONTEXT_SUPPORT", "CATALYST_DISCLOSED"],
     supporting_observations: [
-      { code: "RETURN_20D", label: "20 日相对表现", value: 0.12, source_ref: "rdp:fixture" },
-      { code: "DISCLOSURE", label: "近期公告线索", value: { announcement_count: 2, intel_mentions: null, intel_sources: 1, intel_mapping_status: "MAPPED" }, source_ref: "announcement:fixture" },
+      { code: "POSITIVE_RETURN_20D", label: "20 日相对表现", value: 0.12, source_ref: "research-data-plane:return_20d" },
+      { code: "LIQUIDITY_AT_OR_ABOVE_MARKET_MEDIAN", label: "成交额位于市场中位数以上", value: 1_250_000_000, source_ref: "market:a-share-snapshot:amount" },
+      { code: "SECTOR_CONTEXT_SUPPORTIVE", label: "行业相对市场状态", value: 1.25, source_ref: "market:a-share-snapshot:industry" },
+      { code: "CATALYST_CLUE_AVAILABLE", label: "近期公告线索", value: { announcement_count: 2, intel_mentions: null, intel_sources: 1, intel_mapping_status: "MAPPED" }, source_ref: "announcement:fixture" },
     ],
     uncertainties: [],
     data_health: "normal",
@@ -85,6 +87,10 @@ const shortOnly = opportunity({
   themes: ["高流动性"],
   research_priority: "MEDIUM",
   reason_codes: ["SHORT_VOLUME_ACTIVITY", "SHORT_MARKET_LIQUIDITY"],
+  supporting_observations: [
+    { code: "POSITIVE_SESSION_MOMENTUM", label: "当日价格动量为正", value: 2.5, source_ref: "market:a-share-snapshot:change_pct" },
+    { code: "TURNOVER_IN_ACTIVE_MARKET_QUARTILE", label: "换手率位于活跃区间", value: 8.25, source_ref: "market:a-share-snapshot:turnover_pct" },
+  ],
 });
 const swing = opportunity({});
 const restricted = opportunity({
@@ -107,6 +113,12 @@ const mediumOnly = opportunity({
   sector: "电力设备",
   themes: ["新能源"],
   reason_codes: ["MEDIUM_FUNDAMENTAL_AVAILABLE", "MEDIUM_SECTOR_SUPPORT"],
+  supporting_observations: [
+    { code: "POSITIVE_RETURN_60D", label: "60 日收益为正", value: 0.25, source_ref: "research-data-plane:return_60d" },
+    { code: "BASIC_VALUATION_AVAILABLE", label: "基础估值", value: { pe_ttm: 18.5, pb: null }, source_ref: "market:a-share-snapshot:pe_pb" },
+    { code: "FUNDAMENTAL_FACT_AVAILABLE", label: "财务事实", value: { revenue_yoy: 12.5, operating_cash_flow: -250_000_000, roe: null }, source_ref: "astock.financials" },
+    { code: "UNRECOGNIZED_METRIC", label: "原始观察值", value: 0.123456, source_ref: "fixture:unknown" },
+  ],
 });
 const unknown = opportunity({
   security_code: "300012",
@@ -380,8 +392,14 @@ try {
   await page.getByTestId("discovery-summary").getByText(/行情归属 2026-08-28/).waitFor();
   assert.doesNotMatch(await page.getByTestId("discovery-summary").innerText(), /行情归属 2026-08-30/);
   const firstCard = page.getByTestId("discovery-item-SWING-600519");
-  await firstCard.getByText("20 日相对表现", { exact: true }).waitFor();
-  await firstCard.getByText("资讯提及：未知", { exact: true }).waitFor();
+  const firstSummary = page.getByTestId("discovery-summary-observations-600519");
+  await firstSummary.getByText("20 日相对表现", { exact: true }).waitFor();
+  assert.equal(await firstSummary.locator("div").filter({ hasText: "20 日相对表现" }).locator("dd").innerText(), "+12.00%");
+  assert.equal(await firstSummary.locator("div").filter({ hasText: "成交额位于市场中位数以上" }).locator("dd").innerText(), "12.50 亿元");
+  assert.equal(await firstSummary.locator("div").filter({ hasText: "行业相对市场状态" }).locator("dd").innerText(), "+1.25%");
+  assert.equal(await firstSummary.locator("dt").count(), 3);
+  assert.equal(await firstSummary.getByText("资讯提及：未知", { exact: true }).count(), 0);
+  assert.match(await page.getByTestId("discovery-queue-boundary").innerText(), /仅筛选本次候选队列，每策略最多12条，同优先级顺序非价值排名/);
   await firstCard.getByRole("link", { name: "进入候选研究" }).waitFor();
   assert.match(await page.getByTestId("strategy-SWING").innerText(), /波段/);
   assert.equal(await page.getByTestId("full-market-tab").innerText(), "全市场筛选");
@@ -390,6 +408,7 @@ try {
   assert.equal(await page.getByTestId("discovery-evidence-600519").getAttribute("open"), null);
   assert.equal(await firstCard.getByText("CATALYST_DISCLOSED", { exact: true }).isVisible(), false);
   await firstCard.getByText("完整依据与来源", { exact: true }).click();
+  await firstCard.getByText("资讯提及：未知", { exact: true }).waitFor();
   await firstCard.getByText("CATALYST_DISCLOSED", { exact: true }).waitFor();
   await firstCard.getByText("完整依据与来源", { exact: true }).click();
   await diagnostics.locator("summary").click();
@@ -429,10 +448,11 @@ try {
   await page.getByLabel("研究资格", { exact: true }).selectOption("RESTRICTED");
   const restrictedCard = page.getByTestId("discovery-item-SWING-600221");
   await restrictedCard.waitFor();
-  await restrictedCard.getByText("受限研究：需要进一步核对资格", { exact: true }).waitFor();
-  await page.getByTestId("discovery-gaps-600221").getByText("财务报告期与时效尚未确认", { exact: true }).waitFor();
+  await page.getByTestId("discovery-gaps-600221").getByText("受限研究：需要进一步核对资格", { exact: true }).waitFor();
+  assert.equal(await page.getByTestId("discovery-gaps-600221").getByText("财务报告期与时效尚未确认", { exact: true }).count(), 0);
   assert.equal(await page.getByTestId("discovery-evidence-600221").getAttribute("open"), null);
   await restrictedCard.getByText("完整依据与来源", { exact: true }).click();
+  await page.getByTestId("discovery-evidence-600221").getByText("财务报告期与时效尚未确认", { exact: true }).waitFor();
   await restrictedCard.getByText("RESTRICTED_RESEARCH_ONLY", { exact: true }).waitFor();
   await restrictedCard.getByText("完整依据与来源", { exact: true }).click();
   assert.equal(await page.getByTestId("discovery-item-SWING-600519").count(), 0);
@@ -440,12 +460,59 @@ try {
 
   // D: strategy queues differ; there is no unified score forcing one common ranking.
   await page.getByTestId("strategy-SHORT").click();
-  await page.getByTestId("discovery-item-SHORT-000001").waitFor();
+  const shortCard = page.getByTestId("discovery-item-SHORT-000001");
+  await shortCard.waitFor();
+  const shortSummary = page.getByTestId("discovery-summary-observations-000001");
+  assert.equal(await shortSummary.locator("div").filter({ hasText: "当日价格动量为正" }).locator("dd").innerText(), "+2.50%");
+  assert.equal(await shortSummary.locator("div").filter({ hasText: "换手率位于活跃区间" }).locator("dd").innerText(), "+8.25%");
   assert.equal(await page.getByTestId("discovery-item-MEDIUM-300750").count(), 0);
   await page.getByTestId("strategy-MEDIUM").click();
-  await page.getByTestId("discovery-item-MEDIUM-300750").waitFor();
+  const mediumCard = page.getByTestId("discovery-item-MEDIUM-300750");
+  await mediumCard.waitFor();
+  const mediumSummary = page.getByTestId("discovery-summary-observations-300750");
+  assert.equal(await mediumSummary.locator("div").filter({ hasText: "60 日收益为正" }).locator("dd").innerText(), "+25.00%");
+  await mediumSummary.getByText("市盈率（TTM）：18.50 倍", { exact: true }).waitFor();
+  await mediumSummary.getByText("市净率：未知", { exact: true }).waitFor();
+  await mediumSummary.getByText("营收同比：+12.50%", { exact: true }).waitFor();
+  await mediumSummary.getByText("经营现金流：-2.50 亿元", { exact: true }).waitFor();
+  await mediumSummary.getByText("净资产收益率：未知", { exact: true }).waitFor();
+  await mediumCard.getByText("完整依据与来源", { exact: true }).click();
+  assert.equal(await page.getByTestId("discovery-evidence-300750").locator("dl > div").filter({ hasText: "原始观察值" }).locator("dd").first().innerText(), "0.123456");
   assert.equal(await page.getByTestId("discovery-item-SHORT-000001").count(), 0);
   await page.getByTestId("strategy-SWING").click();
+
+  // URL is the single source of filter/mode state: refresh, history and mode toggle retain it.
+  const persisted = new URLSearchParams({ mode: "discovery", strategy: "SWING", sector: "交通运输", priority: "LOW", restricted: "RESTRICTED", health: "normal" });
+  await page.goto(`http://127.0.0.1:${port}/screener?${persisted}#discovery-item-SWING-600221`, { waitUntil: "networkidle" });
+  await restrictedCard.waitFor();
+  await page.reload({ waitUntil: "networkidle" });
+  await restrictedCard.waitFor();
+  assert.equal(await page.getByLabel("发现行业或主题").inputValue(), "交通运输");
+  assert.equal(await page.getByLabel("研究优先级", { exact: true }).inputValue(), "LOW");
+  assert.equal(await page.getByLabel("研究资格", { exact: true }).inputValue(), "RESTRICTED");
+  assert.equal(await page.getByLabel("发现数据状态", { exact: true }).inputValue(), "normal");
+  assert.equal(await page.getByTestId("strategy-SWING").getAttribute("aria-selected"), "true");
+  assert.equal(await restrictedCard.getAttribute("data-return-selected"), "true");
+  await page.getByTestId("strategy-MEDIUM").click();
+  await page.getByTestId("discovery-open-full-market").waitFor();
+  await page.goBack();
+  await restrictedCard.waitFor();
+  assert.equal(await page.getByTestId("strategy-SWING").getAttribute("aria-selected"), "true");
+  await page.goForward();
+  await page.getByTestId("discovery-open-full-market").waitFor();
+  assert.equal(await page.getByTestId("strategy-MEDIUM").getAttribute("aria-selected"), "true");
+  await page.getByTestId("discovery-open-full-market").click();
+  await page.locator('[data-testid="full-market-tab"][aria-selected="true"]').waitFor();
+  assert.equal(await page.getByTestId("full-market-tab").getAttribute("aria-selected"), "true");
+  await page.reload({ waitUntil: "networkidle" });
+  assert.equal(await page.getByTestId("full-market-tab").getAttribute("aria-selected"), "true");
+  assert.equal(new URL(page.url()).searchParams.get("sector"), "交通运输");
+  await page.getByTestId("discovery-tab").click();
+  await page.getByTestId("discovery-open-full-market").waitFor();
+  assert.equal(await page.getByTestId("strategy-MEDIUM").getAttribute("aria-selected"), "true");
+  assert.equal(await page.getByLabel("研究优先级", { exact: true }).inputValue(), "LOW");
+  await page.goto(`http://127.0.0.1:${port}/screener`, { waitUntil: "networkidle" });
+  await firstCard.waitFor();
 
   // Light and dark both keep the same Discovery workspace mounted.
   assert.equal(await page.locator("html").evaluate((element) => element.classList.contains("dark")), true);
@@ -462,10 +529,13 @@ try {
   const unknownCard = page.getByTestId("discovery-item-SWING-300012");
   await unknownCard.waitFor();
   const unknownGaps = page.getByTestId("discovery-gaps-300012");
-  await unknownGaps.getByText("基本面：未知", { exact: true }).waitFor();
   await unknownGaps.getByText("数据状态：未知", { exact: true }).waitFor();
-  await unknownGaps.getByText("财务事实缺失", { exact: true }).waitFor();
+  assert.equal(await unknownGaps.getByText("财务事实缺失", { exact: true }).count(), 0);
   assert.equal(await page.getByTestId("discovery-evidence-300012").getAttribute("open"), null);
+  await unknownCard.getByText("完整依据与来源", { exact: true }).click();
+  await page.getByTestId("discovery-evidence-300012").getByText("基本面：未知", { exact: true }).waitFor();
+  await page.getByTestId("discovery-evidence-300012").getByText("财务事实缺失", { exact: true }).waitFor();
+  await unknownCard.getByText("完整依据与来源", { exact: true }).click();
   assert.equal((await unknownCard.getByText("研究优先级：高", { exact: true }).count()), 0);
   await page.getByTestId("discovery-source-warning").getByText("行业背景：不可用", { exact: true }).waitFor();
   assert.equal(await diagnostics.getAttribute("open"), null);
@@ -492,13 +562,42 @@ try {
   }
 
   // E: explicit handoff preserves identity and loads P1 Candidate without creating formal state.
+  await page.getByLabel("发现行业或主题").selectOption("消费");
+  await page.getByLabel("研究优先级", { exact: true }).selectOption("HIGH");
+  await page.getByLabel("研究资格", { exact: true }).selectOption("CLEAR");
+  await page.getByLabel("发现数据状态", { exact: true }).selectOption("normal");
+  const candidateHref = await page.getByTestId("discovery-candidate-600519").getAttribute("href");
+  const handoff = new URL(candidateHref, page.url());
+  assert.deepEqual([...handoff.searchParams.keys()].sort(), ["return_to", "source", "strategy"]);
+  assert.equal(handoff.searchParams.get("source"), "discovery");
+  assert.equal(handoff.searchParams.get("strategy"), "SWING");
+  const returnTo = handoff.searchParams.get("return_to");
+  assert.equal(new URL(returnTo, page.url()).hash, "#discovery-item-SWING-600519");
   await page.getByTestId("discovery-candidate-600519").click();
-  await page.waitForURL(/\/candidates\/600519$/);
+  await page.waitForURL((url) => url.pathname === "/candidates/600519");
   const candidate = page.getByTestId("candidate-workspace");
   await candidate.waitFor();
   assert.equal(await candidate.getAttribute("data-security-code"), "600519");
   await candidate.locator('[data-position-state="NOT_HELD"]').waitFor();
   await candidate.getByTestId("candidate-campaign-panel").getByText("暂无候选投资计划", { exact: true }).waitFor();
+  assert.equal(await page.getByTestId("candidate-stock-data-entry").getAttribute("href"), returnTo);
+  await page.goBack();
+  await firstCard.waitFor();
+  assert.equal(await firstCard.getAttribute("data-return-selected"), "true");
+  await page.goForward();
+  await candidate.waitFor();
+  await page.getByTestId("candidate-stock-data-entry").click();
+  await firstCard.waitFor();
+  assert.equal(await page.getByLabel("发现行业或主题").inputValue(), "消费");
+  assert.equal(await page.getByLabel("研究优先级", { exact: true }).inputValue(), "HIGH");
+  assert.equal(await page.getByLabel("研究资格", { exact: true }).inputValue(), "CLEAR");
+  assert.equal(await page.getByLabel("发现数据状态", { exact: true }).inputValue(), "normal");
+  await page.waitForFunction(() => {
+    const card = document.getElementById("discovery-item-SWING-600519");
+    const bounds = card?.getBoundingClientRect();
+    return bounds && document.activeElement === card && bounds.top < innerHeight && bounds.bottom > 0;
+  });
+  assert.equal(await firstCard.getAttribute("data-return-selected"), "true");
   assert.equal(
     apiRequests.filter(({ method, pathname }) => method !== "GET" && ["/api/campaigns", "/api/evidence", "/api/thesis"].includes(pathname)).length,
     0,

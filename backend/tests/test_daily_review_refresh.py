@@ -141,6 +141,54 @@ def test_true_single_flight_four_overlapping_builds_once(monkeypatch):
     gens = {r["data"]["generated_at"] for r in results}
     assert len(gens) == 1
     assert results[0]["cache_meta"]["source"] == "refresh"
+    assert all(result["cache_meta"]["refresh_failed"] is False for result in results)
+    assert all(result["cache_meta"]["refresh_error"] is None for result in results)
+
+
+def test_waiter_timeout_during_success_payload_does_not_taint_published_result(monkeypatch):
+    """在成功清标记和读取 meta 之间，让同轮 waiter 确定性超时。"""
+    monkeypatch.setattr(daily_review, "_build_daily_review", lambda: _packet())
+    original_payload = daily_review._success_payload_for_display
+    flights = []
+
+    def payload_after_timeout(data, *, source):
+        assert daily_review._refresh_failure_state() == (False, None)
+        flight = daily_review._explicit_refresh_current
+        flights.append(flight)
+        waiter_errors = []
+
+        def waiter():
+            try:
+                daily_review.refresh_daily_review_for_display()
+            except Exception as exc:
+                waiter_errors.append(exc)
+
+        # 仅控制该轮 Event 的超时结果；仍执行真实 waiter 路径和锁，不等待 120 秒。
+        with monkeypatch.context() as timeout_patch:
+            timeout_patch.setattr(flight.event, "wait", lambda timeout: False)
+            thread = threading.Thread(target=waiter)
+            thread.start()
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+        assert len(waiter_errors) == 1
+        assert isinstance(waiter_errors[0], daily_review.DailyReviewRefreshError)
+        assert waiter_errors[0].reason == "flight_timeout"
+        assert daily_review._refresh_failure_state()[0] is True
+        return original_payload(data, source=source)
+
+    monkeypatch.setattr(daily_review, "_success_payload_for_display", payload_after_timeout)
+    response = client.post("/api/daily-review/refresh")
+    assert response.status_code == 200
+    leader = response.json()
+    shared = daily_review._await_explicit_refresh_flight(flights[0])
+    reloaded = client.get("/api/daily-review").json()
+    assert leader["cache_meta"]["source"] == "refresh"
+    assert leader["cache_meta"]["stale"] is False
+    assert leader["data"] == shared["data"] == reloaded["data"]
+    assert {
+        name: (payload["cache_meta"]["refresh_failed"], payload["cache_meta"]["refresh_error"])
+        for name, payload in (("leader", leader), ("shared", shared), ("reload", reloaded))
+    } == {"leader": (False, None), "shared": (False, None), "reload": (False, None)}
 
 
 def test_sequential_independent_refreshes_build_twice(monkeypatch):
@@ -323,6 +371,7 @@ def test_round1_waiter_gets_round1_error_not_round2_success(monkeypatch):
         r1_waiter_err[0], daily_review.DailyReviewRefreshError
     )
     assert r1_err[0].reason == r1_waiter_err[0].reason == "build_exception"
+    assert daily_review._refresh_failure_state() == (False, None)
     assert r2_ok and isinstance(r2_ok[0], dict)
     assert r2_ok[0]["data"]["generated_at"] == "2026-07-24 22:00:02"
     # old success memory retained through round1 failure
@@ -614,3 +663,68 @@ def test_persist_failure_keeps_old_normal_and_returns_503(monkeypatch):
     assert daily_review._cached_review()["generated_at"] == "2026-07-25 01:00:00"
     disk, _ = daily_review_cache.load_latest_review()
     assert disk["generated_at"] == "2026-07-25 01:00:00"
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        ("critical", "关键市场数据暂不可用，本次刷新未完成"),
+        ("partial", "本次市场数据不完整，暂未更新"),
+        ("persist", "市场数据保存失败，本次刷新未完成"),
+    ],
+)
+def test_refresh_reason_survives_memory_and_disk_reload_until_success(monkeypatch, failure, expected):
+    old_gen = "2026-07-25 01:00:00"
+    _seed_memory_normal(old_gen)
+    _seed_disk_normal(old_gen)
+    save_latest = daily_review_cache.save_latest_review
+    candidate = _packet("2026-07-25 01:30:00")
+    if failure == "critical":
+        candidate = _packet("2026-07-25 01:30:00", status="partial", critical_bad=True)
+    elif failure == "partial":
+        candidate = _non_critical_partial("2026-07-25 01:30:00")
+    else:
+        def fail_save(*args, **kwargs):
+            raise OSError("private/path/cache.json test-token")
+
+        monkeypatch.setattr(daily_review_cache, "save_latest_review", fail_save)
+    monkeypatch.setattr(daily_review, "_build_daily_review", lambda: candidate)
+
+    response = client.post("/api/daily-review/refresh")
+    assert response.status_code == 503
+    assert response.json() == {"detail": expected}
+    for source in ("memory", "persisted"):
+        if source == "persisted":
+            daily_review._clear_review_cache()
+        displayed = client.get("/api/daily-review").json()
+        assert displayed["data"]["generated_at"] == old_gen
+        assert displayed["cache_meta"]["source"] == source
+        assert displayed["cache_meta"]["refresh_failed"] is True
+        assert displayed["cache_meta"]["refresh_error"] == expected
+        assert displayed["cache_meta"]["refreshing"] is False
+
+    monkeypatch.setattr(daily_review_cache, "save_latest_review", save_latest)
+    monkeypatch.setattr(daily_review, "_build_daily_review", lambda: _packet("2026-07-25 02:00:00"))
+    success = client.post("/api/daily-review/refresh")
+    assert success.status_code == 200
+    assert success.json()["cache_meta"]["refresh_failed"] is False
+    assert success.json()["cache_meta"]["refresh_error"] is None
+
+
+@pytest.mark.parametrize("reason", ["unavailable", "build_exception", "flight_timeout", "unknown_reason"])
+def test_refresh_error_api_ignores_raw_message_even_without_old_data(monkeypatch, reason):
+    def fail():
+        raise daily_review.DailyReviewRefreshError(
+            "ProxyError https://test-user:test-password@provider.example/?token=test-token Traceback",
+            reason=reason,
+        )
+
+    monkeypatch.setattr(daily_review, "_run_explicit_refresh_build", fail)
+    response = client.post("/api/daily-review/refresh")
+    assert response.status_code in (502, 503)
+    detail = response.json()["detail"]
+    assert isinstance(detail, str)
+    for marker in ("ProxyError", "https://", "test-password", "test-token", "Traceback", "provider.example"):
+        assert marker not in detail
+    assert "上次" not in detail  # 无旧数据时不能宣称正在展示上次结果。
+    assert daily_review._refresh_failure_state() == (True, detail)

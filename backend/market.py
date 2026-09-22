@@ -11,6 +11,7 @@ from collections import Counter
 from datetime import datetime, timezone, timedelta
 
 import astock
+import daily_review_errors
 import gstock
 
 BEIJING = timezone(timedelta(hours=8))
@@ -626,6 +627,7 @@ def get_board_ranking(board_type: str = "industry", top_n: int = 20) -> dict:
     if not isinstance(top_n, int) or isinstance(top_n, bool) or not (1 <= top_n <= 100):
         raise ValueError(f"top_n 必须在 1..100 之间，收到：{top_n!r}")
 
+    component_label = {"industry": "行业板块", "concept": "概念板块", "region": "地域板块"}[board_type]
     try:
         raw = get_cached_board_ranking(board_type)
     except ValueError:
@@ -634,7 +636,9 @@ def get_board_ranking(board_type: str = "industry", top_n: int = 20) -> dict:
         return _breadth_envelope(
             "unavailable",
             data=None,
-            warnings=[f"板块排名数据不可用：{type(e).__name__}: {e}"],
+            warnings=[daily_review_errors.sanitize_public_message(
+                f"板块排名数据不可用：{type(e).__name__}: {e}", component_label=component_label,
+            )],
             is_stale=False,
         )
 
@@ -656,7 +660,9 @@ def get_board_ranking(board_type: str = "industry", top_n: int = 20) -> dict:
         return _breadth_envelope(
             "unavailable",
             data=None,
-            warnings=[f"板块排名数据不可用：{type(e).__name__}: {e}"],
+            warnings=[daily_review_errors.sanitize_public_message(
+                f"板块排名数据不可用：{type(e).__name__}: {e}", component_label=component_label,
+            )],
             is_stale=False,
         )
 

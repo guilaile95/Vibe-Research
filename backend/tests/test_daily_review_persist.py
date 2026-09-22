@@ -11,6 +11,7 @@ import pytest
 
 import daily_review
 import daily_review_cache
+import daily_review_errors
 import portfolio_advice_service as advice_svc
 
 
@@ -287,6 +288,59 @@ def test_refresh_failure_keeps_old(monkeypatch):
     assert payload["cache_meta"]["refreshing"] is False
     assert payload["cache_meta"]["refresh_failed"] is True
     assert "ProxyError" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_old_cache_fixed_breadth_labels_are_corrected_only_on_read(monkeypatch):
+    """新刷新失败后读回旧 fixture：只纠正已知错归属，不改原始缓存。"""
+    old_message = daily_review_errors.SAFE_BREADTH_UNAVAILABLE
+    legacy = _packet("partial", generated_at="keep-legacy-snapshot")
+    components = [
+        ("sector_rotation", "industry", "行业板块"),
+        ("sector_rotation", "concept", "概念板块"),
+        ("sector_rotation", "region", "地域板块"),
+        ("capital_activity", "turnover_top", "成交额榜"),
+        ("market_environment", "global_indices", "全球指数"),
+    ]
+    for group, key, label in components:
+        legacy[group][key] = {"status": "unavailable", "data": None, "warnings": [old_message]}
+        legacy["warnings"].append(f"[{label}] {old_message}")
+    legacy["data_health"]["components"].update({
+        "breadth": "partial", "industry_boards": "unavailable", "concept_boards": "unavailable",
+        "region_boards": "unavailable", "turnover": "unavailable", "global_indices": "unavailable",
+    })
+    legacy["market_environment"]["breadth"] = {
+        "status": "partial", "data": {"up_count": 100}, "warnings": [old_message],
+    }
+    unchanged = [
+        old_message,
+        f"[市场广度] {old_message}",
+        f"[自定义来源] {old_message}",
+        f"[行业板块] {old_message}（历史备注）",
+    ]
+    legacy["warnings"].extend(unchanged)
+    legacy["sector_rotation"]["industry"]["warnings"].append(unchanged[-1])
+    assert daily_review_cache.save_latest_review(legacy, saved_at="2026-07-20 15:00:00")
+    cache_file = Path(daily_review_cache.cache_path())
+    original_bytes = cache_file.read_bytes()
+
+    def fail_build():
+        raise RuntimeError("fixture refresh failure")
+
+    monkeypatch.setattr(daily_review, "_build_daily_review", fail_build)
+    with pytest.raises(daily_review.DailyReviewRefreshError):
+        daily_review.refresh_daily_review_for_display()
+    displayed = daily_review.get_daily_review_for_display()
+    assert displayed["cache_meta"]["source"] == "persisted"
+    assert displayed["cache_meta"]["refresh_failed"] is True
+    # 原 fixture 的状态、数据与时间不变，只替换允许纠正的固定文案。
+    expected = json.loads(json.dumps(legacy, ensure_ascii=False))
+    for group, key, label in components:
+        expected[group][key]["warnings"][0] = f"{label}数据获取失败，暂不可用。"
+    expected["warnings"] = [f"[{label}] {label}数据获取失败，暂不可用。" for _, _, label in components] + unchanged
+    assert displayed["data"] == expected
+    assert daily_review_errors.sanitize_review_public_fields(displayed["data"]) == expected
+    assert daily_review.get_daily_review_for_display()["data"] == expected
+    assert cache_file.read_bytes() == original_bytes
 
 
 def test_store_degraded_partial_does_not_replace_memory_normal(monkeypatch):

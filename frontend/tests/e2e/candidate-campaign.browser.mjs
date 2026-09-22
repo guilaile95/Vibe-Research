@@ -717,6 +717,7 @@ try {
     releaseOldNextAction: null,
     releaseOldContinuity: null,
     apiPaths: [],
+    writeRequests: [],
     relativeContextMode: "ok",
     valuationContextMode: "ok",
     valuationMode: "ok",
@@ -728,6 +729,9 @@ try {
     const url = new URL(request.url());
     const pathname = url.pathname;
     state.apiPaths.push(pathname);
+    if (!["GET", "HEAD"].includes(request.method())) {
+      state.writeRequests.push({ method: request.method(), pathname });
+    }
 
     if (pathname === "/api/valuation" && request.method() === "GET") {
       if (state.valuationMode === "fail") {
@@ -1114,6 +1118,69 @@ try {
 
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
+
+  const discoveryReturnTo = "/screener?mode=discovery&strategy=SWING&sector=%E7%99%BD%E9%85%92&priority=HIGH&health=partial#discovery-item-SWING-600519";
+  const discoverySearch = new URLSearchParams({
+    source: "discovery", strategy: "SWING", return_to: discoveryReturnTo,
+    rating: "UNTRUSTED_BUY_RATING", reason: "UNTRUSTED_SELECTION_REASON",
+  });
+  const discoveryCandidateUrl = `http://127.0.0.1:${port}/candidates/600519?${discoverySearch}`;
+  await page.goto(discoveryCandidateUrl, { waitUntil: "networkidle" });
+  const researchEntry = page.getByTestId("candidate-research-entry");
+  await researchEntry.getByText("来自市场发现 · 波段策略队列", { exact: true }).waitFor();
+  assert.doesNotMatch(await page.getByTestId("candidate-workspace").innerText(), /UNTRUSTED_BUY_RATING|UNTRUSTED_SELECTION_REASON/);
+  assert.equal(await page.getByTestId("candidate-stock-data-entry").innerText(), "返回市场发现队列");
+  assert.equal(await page.getByTestId("candidate-stock-data-entry").getAttribute("href"), discoveryReturnTo);
+  assert.equal(await researchEntry.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const position = document.querySelector('[data-testid="candidate-position-card"]');
+    return bounds.top >= 0 && bounds.bottom <= window.innerHeight
+      && position && bounds.bottom <= position.getBoundingClientRect().top;
+  }), true, "quick continuation must be visible before the position modules");
+  const readsBeforeSectionNavigation = state.apiPaths.length;
+  for (const [label, id] of [
+    ["查看公开资讯", "candidate-public-info"],
+    ["查看证据缺口", "candidate-evidence-gap"],
+    ["继续已有研究", "candidate-existing-research"],
+  ]) {
+    await page.getByRole("navigation", { name: "候选研究快速接续" }).getByRole("link", { name: label }).click();
+    await page.waitForURL(`${discoveryCandidateUrl}#${id}`);
+    await page.waitForFunction((targetId) => document.activeElement?.id === targetId, id);
+    assert.equal(await page.locator(`#${id}`).evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.top >= 0 && bounds.top < window.innerHeight;
+    }), true, "section navigation must actually reveal its target");
+  }
+  assert.equal(state.apiPaths.length, readsBeforeSectionNavigation, "section navigation must reuse mounted read-only components");
+  assert.equal(await page.getByTestId("create-candidate-campaign").isDisabled(), true, "source strategy must not preselect a new Campaign strategy");
+  assert.equal(await page.getByTestId("candidate-campaign-panel").getByRole("radio", { checked: true }).count(), 0);
+
+  await page.getByRole("navigation", { name: "候选研究快速接续" }).getByRole("link", { name: "查看证据缺口" }).click();
+  const candidateEvidenceUrl = `${discoveryCandidateUrl}#candidate-evidence-gap`;
+  await page.waitForURL(candidateEvidenceUrl);
+  await page.getByTestId("candidate-existing-evidence").first().click();
+  await page.waitForURL(/\/evidence\/evidence_/);
+  await page.getByTestId("evidence-detail-back").click();
+  await page.waitForURL(candidateEvidenceUrl);
+  await page.getByTestId("candidate-stock-data-entry").click();
+  await page.waitForURL(`http://127.0.0.1:${port}${discoveryReturnTo}`);
+
+  const todayReturnTo = "/daily-review#research-leads-title";
+  for (const returnTo of [todayReturnTo, "/screener?mode=full-market&strategy=SWING#market"]) {
+    await page.goto(`http://127.0.0.1:${port}/candidates/600519?${new URLSearchParams({
+      source: "discovery", strategy: "SWING", return_to: returnTo,
+    })}`, { waitUntil: "networkidle" });
+    assert.equal(await page.getByTestId("candidate-discovery-context").count(), 0, "an unrelated return route must not claim Discovery provenance");
+    assert.equal(await page.getByTestId("candidate-stock-data-entry").innerText(), "返回来源");
+    assert.equal(await page.getByTestId("candidate-stock-data-entry").getAttribute("href"), returnTo);
+  }
+  await page.goto(`http://127.0.0.1:${port}/candidates/600519?${new URLSearchParams({ return_to: todayReturnTo })}`, { waitUntil: "networkidle" });
+  assert.equal(await page.getByTestId("candidate-discovery-context").count(), 0);
+  await page.getByTestId("candidate-stock-data-entry").click();
+  await page.waitForURL(`http://127.0.0.1:${port}${todayReturnTo}`);
+  await page.waitForLoadState("networkidle");
+  assert.deepEqual(state.writeRequests, [], "Discovery, section, evidence and Today return navigation must issue no POST or other writes");
+
   const sectorReturnTo = "/sectors/pcb/overview?view=dynamic#company-002463";
   await page.goto(`http://127.0.0.1:${port}/stock-data?code=600519&return_to=${encodeURIComponent(sectorReturnTo)}`, { waitUntil: "networkidle" });
   await page.locator('[data-active-code="600519"]').waitFor();
@@ -1357,6 +1424,12 @@ try {
   await panel.locator('[data-campaign-status="DRAFT"]').waitFor();
   assert.deepEqual(state.createdPayloads, [{ security_code: "600519", strategy: "SHORT" }]);
   assert.equal(state.transitionPayloads.length, 0, "creation must not auto-transition beyond DRAFT");
+  const writesBeforeResume = state.writeRequests.length;
+  await page.getByRole("navigation", { name: "候选研究快速接续" }).getByRole("link", { name: "继续已有研究" }).click();
+  await page.waitForURL(/#candidate-existing-research$/);
+  await page.waitForFunction(() => document.activeElement?.id === "candidate-existing-research");
+  assert.equal(await panel.locator('[data-campaign-status="DRAFT"]').count(), 1);
+  assert.equal(state.writeRequests.length, writesBeforeResume, "continuation must reveal the existing Campaign without creating or transitioning it");
   const continuity = panel.getByTestId("research-continuity");
   await continuity.getByTestId("research-change-added").getByText("新增订单事实", { exact: true }).waitFor();
   await continuity.getByTestId("research-change-added").getByText("来源：交易所公告", { exact: true }).waitFor();

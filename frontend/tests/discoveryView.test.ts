@@ -5,8 +5,14 @@ import test from "node:test";
 import { candidateWorkspaceHref } from "../src/lib/candidateCampaign.ts";
 import {
   discoverySectors,
+  discoveryCandidateHref,
+  discoveryCardAnchor,
+  discoveryFiltersFromSearch,
+  discoverySearchWithFilters,
+  discoverySummaryObservations,
   discoveryTimeSummary,
   filterDiscoveryItems,
+  screenerModeFromSearch,
   type DiscoveryFilters,
 } from "../src/lib/discoveryView.ts";
 import type {
@@ -123,8 +129,67 @@ test("Discovery only links into Candidate Research and exposes no BUY or hidden 
     new URL("../src/components/discovery/DiscoveryWorkspace.tsx", import.meta.url),
     "utf8",
   );
-  assert.match(source, /candidateWorkspaceHref\(item\.security_code\)/);
+  assert.match(source, /discoveryCandidateHref\(item, searchParams\)/);
   assert.doesNotMatch(source, /\/api\/campaigns|\b(?:score|ranking|BUY NOW|BUY SMALL|SCALE IN)\b/i);
+});
+
+test("Discovery query restores every filter and validates enum values without dropping an absent sector", () => {
+  const search = new URLSearchParams({ strategy: "MEDIUM", sector: "消费 & 医药", priority: "LOW", restricted: "RESTRICTED", health: "unknown" });
+  assert.deepEqual(discoveryFiltersFromSearch(search), filters("MEDIUM", {
+    sector: "消费 & 医药", priority: "LOW", restricted: "RESTRICTED", health: "unknown",
+  }));
+  assert.deepEqual(discoveryFiltersFromSearch(new URLSearchParams("strategy=bad&priority=bad&restricted=bad&health=bad")), filters("SWING"));
+  assert.deepEqual(discoveryFiltersFromSearch(new URLSearchParams()), filters("SWING"));
+});
+
+test("Discovery query updates keep all other conditions and Screener mode across URL round trips", () => {
+  const initial = new URLSearchParams("mode=full-market&strategy=SHORT&sector=银行&priority=HIGH&restricted=CLEAR&health=normal&view=compact");
+  const next = discoverySearchWithFilters(initial, { priority: "LOW" });
+  assert.equal(initial.get("priority"), "HIGH", "do not mutate router state");
+  assert.equal(next.get("mode"), "full-market");
+  assert.equal(next.get("view"), "compact");
+  assert.deepEqual(discoveryFiltersFromSearch(new URLSearchParams(next.toString())), filters("SHORT", {
+    sector: "银行", priority: "LOW", restricted: "CLEAR", health: "normal",
+  }));
+  for (const mode of ["discovery", "candidate", "full-market", "patterns", "dragon-tiger"] as const) {
+    next.set("mode", mode);
+    assert.equal(screenerModeFromSearch(next), mode);
+    assert.equal(discoveryFiltersFromSearch(next).priority, "LOW");
+  }
+  assert.equal(screenerModeFromSearch(new URLSearchParams("mode=https://example.org")), "discovery");
+});
+
+test("Discovery candidate context carries only source, strategy and a same-origin return to the exact card", () => {
+  const search = new URLSearchParams("strategy=SWING&sector=红利&priority=MEDIUM&restricted=ALL&health=ALL");
+  const candidate = new URL(discoveryCandidateHref(swingA, search), "http://localhost");
+  assert.equal(candidate.pathname, "/candidates/600003");
+  assert.deepEqual([...candidate.searchParams.keys()].sort(), ["return_to", "source", "strategy"]);
+  assert.equal(candidate.searchParams.get("source"), "discovery");
+  assert.equal(candidate.searchParams.get("strategy"), "SWING");
+  const returnTo = new URL(candidate.searchParams.get("return_to")!, candidate.origin);
+  assert.equal(returnTo.origin, candidate.origin);
+  assert.equal(returnTo.pathname, "/screener");
+  assert.equal(returnTo.hash, `#${discoveryCardAnchor(swingA)}`);
+  assert.equal(returnTo.searchParams.get("mode"), "discovery");
+  assert.deepEqual(discoveryFiltersFromSearch(returnTo.searchParams), discoveryFiltersFromSearch(search));
+  const suspiciousSector = new URLSearchParams({ sector: "//outside.example/?x=1#fragment", return_to: "https://outside.example" });
+  const bounded = new URL(discoveryCandidateHref(swingA, suspiciousSector), candidate.origin);
+  assert.equal(new URL(bounded.searchParams.get("return_to")!, candidate.origin).pathname, "/screener");
+});
+
+test("Discovery summary selects actual observations without changing source values or queue order", () => {
+  const observations = [
+    { code: "LIQUIDITY_AT_OR_ABOVE_MARKET_MEDIAN", label: "成交额", value: 1e8, source_ref: "market" },
+    { code: "POSITIVE_RETURN_20D", label: "20 日收益", value: 0.12, source_ref: "rdp" },
+    { code: "SECTOR_SUPPORTIVE", label: "行业", value: 1.2, source_ref: "market" },
+    { code: "CATALYST_CLUE_AVAILABLE", label: "公告", value: { announcement_count: 2 }, source_ref: "announcements" },
+  ];
+  const item = opportunity("600003", "SWING", { supporting_observations: observations });
+  assert.deepEqual(discoverySummaryObservations(item), [observations[1], observations[0], observations[2]]);
+  assert.equal(item.supporting_observations[0], observations[0]);
+  assert.equal(discoverySummaryObservations(item)[0].value, 0.12);
+  assert.deepEqual(discoverySummaryObservations(swingA), []);
+  assert.deepEqual(discoverySummaryObservations({ ...item, supporting_observations: [observations[3]] }), [observations[3]]);
 });
 
 test("Discovery stale summary preserves the last successful timestamp", () => {

@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Filter, Loader2, Play, Plus, Trash2 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import type {
   FullMarketFilter,
@@ -40,6 +40,7 @@ import {
 import { loadWatchAuthoritative } from "@/lib/watchlist";
 import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 import { DiscoveryWorkspace } from "@/components/discovery/DiscoveryWorkspace";
+import { screenerModeFromSearch, type ScreenerMode } from "@/lib/discoveryView";
 import { DragonTigerDiscoveryPanel } from "@/components/discovery/DragonTigerDiscoveryPanel";
 
 type FullMarketValueMetric = Exclude<FullMarketMetric, "code" | "latest_date">;
@@ -210,7 +211,10 @@ function ResultGroup({ title, items }: { title: string; items: ScreenerStockResu
 }
 
 export function Screener() {
-  const [mode, setMode] = useState<"discovery" | "candidate" | "full-market" | "patterns" | "dragon-tiger">("discovery");
+  const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const mode = screenerModeFromSearch(searchParams);
   const [codeText, setCodeText] = useState("");
   const [conditions, setConditions] = useState<ScreenerCondition[]>([
     defaultCondition("price_gt_sma20"),
@@ -408,15 +412,21 @@ export function Screener() {
     }
   };
 
-  const switchMode = (nextMode: "discovery" | "candidate" | "full-market" | "patterns" | "dragon-tiger") => {
+  useEffect(() => {
     controllerRef.current?.abort();
     controllerRef.current = null;
     setLoading(false);
     setFullMarketResult(null);
     setPatternResult(null);
-    setMode(nextMode);
     setError(null);
     setHint(null);
+    return () => { controllerRef.current?.abort(); };
+  }, [mode]);
+
+  const switchMode = (nextMode: ScreenerMode) => {
+    const next = new URLSearchParams(searchParams);
+    next.set("mode", nextMode);
+    navigate({ pathname: location.pathname, search: `?${next}`, hash: location.hash });
   };
 
   return (

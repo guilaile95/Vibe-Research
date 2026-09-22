@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal, Loader2, RefreshCw, Rss, Plus, SlidersHorizontal, Tag, Globe, Layers, ArrowUp, ArrowDown } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { BackendRuntimeCard } from "@/components/settings/BackendRuntimeCard";
 import { toast } from "sonner";
 import {
   clearLlm,
@@ -164,6 +165,8 @@ export function Settings() {
   return (
     <div>
       <PageHeader title="接入 AI" subtitle="配置一次，全站所有 AI 功能统一使用 Codex Subscription 或 API Compatible" />
+
+      <BackendRuntimeCard />
 
       <div className="mb-4 flex items-start gap-2 rounded-lg border border-success/25 bg-success/5 p-3 text-xs text-muted-foreground">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
