@@ -307,32 +307,53 @@ try {
   const todayCloudBox = await todayCloud.boundingBox();
   const todayIntelBox = await todayIntel.boundingBox();
   const dailyReviewBox = await page.locator("#daily-review-section-title").boundingBox();
-  assert.ok(todayCloudBox && todayIntelBox && dailyReviewBox && todayCloudBox.y < todayIntelBox.y && todayIntelBox.y < dailyReviewBox.y, "Today should order Market Cloud, market intel, then Daily Review");
+  assert.ok(todayCloudBox && todayIntelBox && dailyReviewBox && dailyReviewBox.y < todayCloudBox.y && todayCloudBox.y < todayIntelBox.y, "Today should order the review header, the market view, then the intel summary");
   const mainNav = page.locator('nav[aria-label="主导航"]');
-  const todayGroup = mainNav.locator(':scope > div[class~="space-y-0.5"] > div.relative').first();
-  const todayLink = todayGroup.locator(':scope > a');
-  const todayChildren = todayGroup.locator(':scope > div[class*="pl-4"] > a');
 
-  // Final IA: 今天 is the canonical entry; full Market Cloud and Intel routes remain in-page links.
-  assert.equal(await todayLink.getAttribute("href"), "/daily-review");
-  assert.equal(await todayChildren.count(), 0, "Today must not duplicate Market Cloud or Intel in the sidebar");
-  const navOrder = await mainNav.locator(':scope > div[class~="space-y-0.5"]').evaluate((container) => (
-    Array.from(container.children).flatMap((entry) => {
-      if (entry.matches(".relative")) {
-        const parent = entry.querySelector(":scope > a");
-        const children = entry.querySelector(':scope > div[class*="pl-4"]');
-        return [parent, ...(children ? Array.from(children.children) : [])];
-      }
-      return entry.matches("a") ? [entry] : [];
-    })
-      .filter((link) => link instanceof HTMLAnchorElement)
-      .map((link) => link.textContent.trim())
-  ));
-  assert.deepEqual(navOrder.slice(0, 5), ["今天", "发现", "自选", "个股", "持仓"]);
+  // IA-CONVERGENCE-V1：主侧栏恰为 10 个常驻入口，顺序即分组顺序。
+  assert.deepEqual(
+    await mainNav.locator("a").evaluateAll((links) => links.map((link) => link.textContent.trim())),
+    ["今天", "决策待办", "自选股", "投资研究", "研究资料", "我的持仓", "交易记录", "决策复盘", "数据健康", "设置"],
+  );
   assert.equal(await mainNav.locator('a[href="/daily-review"]').count(), 1, "Today must have one primary-nav entry");
   assert.equal(await mainNav.locator('a[href="/market-cloud"]').count(), 0, "Market Heat must not be duplicated in the sidebar");
   assert.equal(await mainNav.locator('a[href="/intel"]').count(), 0, "Intel Radar must not be duplicated in the sidebar");
   assert.equal(await page.getByRole("link", { name: "资讯", exact: true }).count(), 0, "legacy short Intel label must not remain");
+
+  // IA-CONVERGENCE-V1：今天页的主辅区与三视图切换。
+  const todayAux = page.getByTestId("today-aux");
+  await todayAux.waitFor();
+  assert.equal(await page.getByTestId("today-main").count(), 1, "今天页应恰好有一个主区");
+  for (const [testid, href] of [
+    ["today-aux-decision-inbox", "/decision-inbox"],
+    ["today-aux-review-due", "/decision-performance"],
+    ["today-aux-watchlist", "/watchlist"],
+    ["today-aux-data-health", "/data-health"],
+  ]) {
+    assert.equal(
+      await todayAux.getByTestId(testid).getAttribute("href"),
+      href,
+      `辅区入口 ${testid} 应指向 ${href}`,
+    );
+  }
+  for (const key of ["market", "history", "compare"]) {
+    assert.equal(await page.getByTestId(`today-view-tab-${key}`).count(), 1, `应有「${key}」视图页签`);
+  }
+  // 切换视图：不得触发任何写请求、不得自动保存快照或自动生成 AI 复盘。
+  const todayWrites = [];
+  page.on("request", (request) => {
+    const method = request.method();
+    if (method !== "GET" && method !== "OPTIONS" && request.url().includes("/api/")) {
+      todayWrites.push(`${method} ${request.url()}`);
+    }
+  });
+  await page.getByTestId("today-view-tab-history").click();
+  await page.getByTestId("today-view-tab-compare").click();
+  await page.getByTestId("today-view-tab-market").click();
+  assert.deepEqual(todayWrites, [], `切换视图不得产生写请求: ${todayWrites.join("; ")}`);
+  // 切回当前市场后，实时数据与市场云图仍然在位（历史/对比不覆盖实时数据）。
+  await todayCloud.locator("[data-market-cloud-chart]").waitFor({ state: "visible", timeout: 15000 });
+  assert.equal(await todaySurface.getByTestId("market-intel-panel").count(), 1, "切回当前市场后市场情报仍在位");
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
@@ -381,7 +402,16 @@ try {
   await page.reload({ waitUntil: "domcontentloaded" });
   await marketPanel.waitFor({ state: "visible", timeout: 15000 });
   assert.equal(new URL(page.url()).pathname, "/intel");
-  assert.equal(await mainNav.locator('a[href="/daily-review"]').getAttribute("aria-current"), "page");
+  // IA-CONVERGENCE-V1：/intel 归「投资研究·资讯中心」，不再挂在「今天」下。
+  await page.waitForFunction(() => {
+    const el = document.querySelector('nav[aria-label="主导航"] a[href="/screener"]');
+    return !!el && el.getAttribute("aria-current") === "page";
+  });
+  assert.equal(
+    await page.locator('[data-testid="section-nav"] a[href="/intel"]').getAttribute("aria-current"),
+    "page",
+    "/intel 应在二级导航点亮资讯中心",
+  );
   assert.equal(await page.getByRole("heading", { name: "市场情报", exact: true }).count(), 1);
   assert.equal(await page.locator("[data-market-cloud]").count(), 0, "Intel must not embed Market Cloud");
   // normal：trending 读取成功且有数据 → 保持真实趋势展示，不出现「空窗口」提示。

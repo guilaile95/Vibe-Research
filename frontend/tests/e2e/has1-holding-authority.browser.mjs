@@ -266,7 +266,10 @@ async function run() {
     assert.equal(Number(portfolioApi.holdings[0].shares), inboxShares);
 
     await page.goto(`${frontend}/decision-inbox`, { waitUntil: "networkidle" });
-    await page.getByText("尚未建立投资计划的持仓").waitFor();
+    // IA-CONVERGENCE-V1：分组标题同时出现在页签、页签正文 heading 与详情徽标上，
+    // 按 heading 角色定位分组正文，避免同文案多元素。
+    await page.getByRole("heading", { name: "尚未建立投资计划的持仓" }).waitFor();
+    await page.getByTestId("decision-inbox-item-600519").waitFor();
     assert.ok(await page.getByText("600519").first().isVisible());
 
     // ---- F. trade propagation to both surfaces ---------------------------
@@ -414,7 +417,9 @@ ai_result_service.save_portfolio_advice(
     assert.ok(mismatchText.includes("000001"));
     assert.ok(mismatchText.includes("MISSING_IN_LEDGER"));
     assert.ok(mismatchText.includes("MISMATCH"));
-    assert.ok(mismatchText.includes("Ledger 180 股"));
+    // 账本在该点已是 200（G 的 correction 后为 180，PAA1 又补录 20 股买入），
+    // 下方 mismatchView 断言同一点也是 200；这里必须与账本同源，不能停在 180。
+    assert.ok(mismatchText.includes("Ledger 200 股"), JSON.stringify(mismatchText));
     assert.ok(mismatchText.includes("archive 999 股"));
     assert.equal(mismatchText.includes("持仓对账不一致"), false);
     assert.equal(mismatchText.includes("不要为了消除 archive 差异而修改当前账本"), true);

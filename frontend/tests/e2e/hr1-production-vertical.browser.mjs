@@ -325,7 +325,29 @@ async function runE2E() {
 
     await page.goto(`http://127.0.0.1:${frontendPort}/decision-inbox`, { waitUntil: "networkidle" });
 
+    // IA-CONVERGENCE-V1：列表-详情布局下，先选中对象，其详情（含 HardRiskPanel）才挂载。
+    // 不知道对象在哪个分组时逐个切换页签并轮询实际条件，不使用固定 sleep。
+    const selectInboxCampaign = async (campaignId) => {
+      const item = page.locator(`[data-testid="decision-inbox-item-${campaignId}"]`);
+      if (!(await item.count())) {
+        const tabs = page.locator('[data-testid^="decision-inbox-tab-"]');
+        const tabCount = await tabs.count();
+        for (let index = 0; index < tabCount; index += 1) {
+          await tabs.nth(index).click();
+          try {
+            await item.first().waitFor({ state: "attached", timeout: 3000 });
+            break;
+          } catch {
+            // 该分组不含此对象，继续下一个分组
+          }
+        }
+      }
+      await item.first().click();
+      await page.locator(`[data-hard-risk-campaign="${campaignId}"]`).waitFor();
+    };
+
     const panelA = page.locator(`[data-hard-risk-campaign="${campaignA.campaign_id}"]`);
+    await selectInboxCampaign(campaignA.campaign_id);
     await panelA.waitFor();
     assert.equal(await panelA.getAttribute("data-hard-risk-state"), "CONFIRMED");
     assert.equal(await panelA.getAttribute("data-hard-risk-safe"), "false");
@@ -342,22 +364,24 @@ async function runE2E() {
       assert.equal(panelAText.includes(token), false, `panel A 不得含「${token}」`);
     }
 
+    await selectInboxCampaign(campaignB.campaign_id);
     const panelB = page.locator(`[data-hard-risk-campaign="${campaignB.campaign_id}"]`);
     await panelB.waitFor();
     assert.equal(await panelB.getAttribute("data-hard-risk-state"), "UNKNOWN");
     assert.equal(await panelB.getAttribute("data-hard-risk-safe"), "false");
     await panelB.getByText("硬风险状态未知", { exact: false }).first().waitFor();
 
-    // sibling 隔离：A 面板不含 B 的 provenance，B 面板不含 A 的 provenance
-    const panelBText = await panelB.innerText();
+    // sibling 隔离（列表-详情布局下逐个选中后断言）：
+    // A 面板不得出现 B 的 provenance；B 面板不得出现 A 的 provenance。
     assert.equal(panelAText.includes(`current_thesis:${campaignB.campaign_id}:`), false,
       "panel A 不得出现 Campaign B 的 provenance");
+    const panelBText = await panelB.innerText();
     assert.equal(panelBText.includes(`current_thesis:${campaignA.campaign_id}:`), false,
       "panel B 不得出现 Campaign A 的 provenance");
 
-    // refresh 后仍来自 backend authority（面板状态不变）
+    // refresh 后仍来自 backend authority（重新选中后面板状态不变）
     await page.reload({ waitUntil: "networkidle" });
-    await page.locator(`[data-hard-risk-campaign="${campaignA.campaign_id}"]`).waitFor();
+    await selectInboxCampaign(campaignA.campaign_id);
     assert.equal(
       await page.locator(`[data-hard-risk-campaign="${campaignA.campaign_id}"]`)
         .getAttribute("data-hard-risk-state"),

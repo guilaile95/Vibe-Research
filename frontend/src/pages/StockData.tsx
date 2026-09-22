@@ -5,6 +5,7 @@ import {
   Wallet, Trophy, CalendarClock, Boxes, MessageSquare,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { SectionNav } from "@/components/layout/SectionNav";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
@@ -63,6 +64,17 @@ const round2 = (v: number | null | undefined, suffix = "") =>
 const pct = (v: number | null | undefined) =>
   v === null || v === undefined || !Number.isFinite(Number(v)) ? "—" : `${Number(v).toFixed(2)}%`;
 
+// 页面分区（纯视图状态）：常驻区 + 五个页签，只决定已有区块的挂载位置，不改变任何数据语义
+type StockDataTab = "overview" | "market" | "financials" | "events" | "capital";
+
+const STOCK_DATA_TABS: { key: StockDataTab; label: string }[] = [
+  { key: "overview", label: "概览" },
+  { key: "market", label: "行情与技术" },
+  { key: "financials", label: "财务与估值" },
+  { key: "events", label: "事件与资讯" },
+  { key: "capital", label: "资金与筹码" },
+];
+
 // 小指标块（复用于资金面/筹码卡）
 function Metric({ k, v, sub }: { k: string; v: string; sub?: string }) {
   return (
@@ -105,6 +117,8 @@ function ValBand({ label, m }: { label: string; m: ValMetric }) {
 export function StockData() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
+  /** 当前页签；默认概览。切换页签只改视图，不写任何状态、不改 activeCode。 */
+  const [tab, setTab] = useState<StockDataTab>("overview");
   const [code, setCode] = useState("");
   /** 已提交查询的代码；面板请求只读此值，输入框改动不改 activeCode */
   const [activeCode, setActiveCode] = useState("");
@@ -438,15 +452,20 @@ export function StockData() {
     void run(initialCode);
   }, []);
 
-  const metrics: { k: string; v: string; testId?: string }[] = val ? [
+  // 常驻带只放核心报价与估值：现价 / PE(TTM) / PB / 总市值。
+  const coreMetrics: { k: string; v: string; testId?: string }[] = val ? [
     { k: "现价", v: fmt(val.price) },
     { k: "PE(TTM)", v: fmt(val.pe_ttm), testId: "stock-header-pe-ttm" },
     { k: "PB", v: fmt(val.pb), testId: "stock-header-pb" },
     { k: "总市值", v: fmt(val.mcap_yi, " 亿"), testId: "stock-header-mcap" },
-    { k: "26E EPS", v: fmt(val.eps_26e) },
-    { k: "前向PE", v: fmt(val.pe_26e) },
-    { k: "PEG", v: fmt(val.peg) },
-    { k: "消化年数", v: fmt(val.digest_years, " 年") },
+  ] : [];
+
+  // 次级预测指标挪到「财务与估值」页签：不删除、不补新字段、不换算法。
+  const forecastMetrics: { k: string; v: string; testId: string }[] = val ? [
+    { k: "26E EPS", v: fmt(val.eps_26e), testId: "stock-forecast-eps-26e" },
+    { k: "前向PE", v: fmt(val.pe_26e), testId: "stock-forecast-pe-26e" },
+    { k: "PEG", v: fmt(val.peg), testId: "stock-forecast-peg" },
+    { k: "消化年数", v: fmt(val.digest_years, " 年"), testId: "stock-forecast-digest-years" },
   ] : [];
 
   const aiContext = val
@@ -475,8 +494,54 @@ export function StockData() {
     ? `${candidateWorkspaceHref(activeCode)}${stockReturnPath ? `?${new URLSearchParams({ return_to: stockReturnPath }).toString()}` : ""}`
     : "";
 
+  // 资金 / 筹码两张卡的可见条件（与卡内原有条件一致，改为具名常量以便空页签占位复用）
+  const capitalCardVisible = margin.length > 0 || holders.length > 0 || fundFlow.length > 0 || dividend.length > 0;
+  const dragonTigerVisible = !!dt && dt.records.length > 0;
+  // 页签正文是否有块可渲染；仅用于正文为空时给一句占位说明，不加载任何数据
+  const financialsTabHasBlocks = !!val || !!gstock?.metrics || !!(cashflow && cashflow.periods.length > 0);
+  const tabHasNoBlocks = tab === "financials" ? !financialsTabHasBlocks : !val;
+
+  // 查询框只有一份实现：空状态独占一行；已选中对象时并入常驻身份带。
+  const queryBox = (
+    <>
+      <input
+        value={code}
+        onChange={(e) => setCode(e.target.value.replace(/[^a-zA-Z0-9.]/g, "").toUpperCase().slice(0, 12))}
+        onKeyDown={(e) => e.key === "Enter" && run()}
+        placeholder="A 股 6 位代码，或美股/港股/韩股（AAPL / 00700 / 005930.KS）"
+        className="w-80 min-w-0 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
+      />
+      <button
+        onClick={() => void run()}
+        disabled={loading}
+        className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
+      >
+        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+        查询
+      </button>
+    </>
+  );
+
   return (
     <div data-active-code={activeCode || undefined}>
+      {/* 二级导航：未选中对象时沿用整条分类横条（分类入口、市场发现等集合页照旧）；
+          已选中对象时收成一行对象上下文 + 工具入口，把首屏让给研究上下文。 */}
+      {activeCode ? (
+        <div
+          className="mb-3 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
+          data-testid="stock-compact-context"
+          data-security-code={activeCode}
+        >
+          <span className="truncate">研究 · 个股数据</span>
+          <nav aria-label="个股数据工具" className="ml-auto flex shrink-0 items-center gap-3">
+            <Link to="/debate" className="hover:text-foreground" data-testid="stock-context-link-debate">
+              多空辩论
+            </Link>
+          </nav>
+        </div>
+      ) : (
+        <SectionNav ownerId="research" pathname={location.pathname} title="投资研究" />
+      )}
       <PageHeader
         title="个股数据"
         subtitle="行情 · 估值 · 研报 · 新闻 · 资金面"
@@ -517,24 +582,12 @@ export function StockData() {
         )}
       />
 
-      {/* 查询框 */}
-      <div className="mb-5 flex gap-2">
-        <input
-          value={code}
-          onChange={(e) => setCode(e.target.value.replace(/[^a-zA-Z0-9.]/g, "").toUpperCase().slice(0, 12))}
-          onKeyDown={(e) => e.key === "Enter" && run()}
-          placeholder="A 股 6 位代码，或美股/港股/韩股（AAPL / 00700 / 005930.KS）"
-          className="w-80 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
-        />
-        <button
-          onClick={() => void run()}
-          disabled={loading}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
-        >
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-          查询
-        </button>
-      </div>
+      {/* 查询框：未选中对象时单独一行；已选中对象时并入常驻身份带，省掉一层常驻行。 */}
+      {!val && (
+        <div className="mb-5 flex gap-2">
+          {queryBox}
+        </div>
+      )}
 
       {err && (
         <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
@@ -542,419 +595,513 @@ export function StockData() {
         </div>
       )}
 
-      {/* 港股现金流量表（仅港股；美股 404 → cashflow 为 null 不渲染） */}
-      {cashflow && cashflow.periods.length > 0 && (
-        <GlassCard className="mb-4">
-          <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold">
-            <BarChart3 className="h-4 w-4 text-primary" /> 现金流量表
-            <span className="text-xs font-normal text-muted-foreground/60">· 单位：亿{cashflow.currency ?? ""}</span>
-          </h3>
-          <p className="mb-3 text-[11px] text-muted-foreground/60">东财 RPT_HKSK_FN_CASHFLOW · 季度为年初至今累计 · 负数（现金流出）标绿。</p>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[520px] text-sm">
-              <thead>
-                <tr className="text-xs text-muted-foreground">
-                  <th className="py-1 pr-3 text-left font-normal">科目</th>
-                  {cashflow.periods.slice(0, 5).map((p) => (
-                    <th key={p.report_date} className="px-2 py-1 text-right font-normal">{p.report_date.slice(0, 7)}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {cashflow.item_order.map((it) => (
-                  <tr key={it} className="border-t border-border/40">
-                    <td className="py-1.5 pr-3 text-muted-foreground">{it}</td>
-                    {cashflow.periods.slice(0, 5).map((p) => {
-                      const amt = p.items[it]?.amount ?? null;
-                      return (
-                        <td key={p.report_date} className={cn("px-2 py-1.5 text-right font-mono", amt != null && amt < 0 ? "text-success" : "")}>
-                          {amt == null ? "—" : (amt / 1e8).toFixed(1)}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {/* 常驻概览带（美股 / 港股）：证券身份 + 报价指标 + 来源说明；切页签始终可见 */}
+      {gstock && (
+        <GlassCard glow className="mb-4">
+          <div className="mb-4 flex items-baseline gap-2">
+            <h2 className="text-xl font-bold">{gstock.name}</h2>
+            <span className="font-mono text-sm text-muted-foreground">{gstock.code}</span>
+            <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary">{gstock.market}</span>
+            <span className="ml-auto text-xs text-muted-foreground">{mktName(gstock.market)}</span>
           </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[
+              { k: "现价", v: fmt(gstock.quote.price), cls: pctColor(gstock.quote.change_pct) },
+              { k: "涨跌幅", v: pctStr(gstock.quote.change_pct), cls: pctColor(gstock.quote.change_pct) },
+              { k: "总市值", v: bigMoney(gstock.quote.mcap, gstock.market), cls: "" },
+              { k: "成交额", v: bigMoney(gstock.quote.amount, gstock.market), cls: "" },
+              { k: "开盘", v: fmt(gstock.quote.open), cls: "" },
+              { k: "最高", v: fmt(gstock.quote.high), cls: "" },
+              { k: "最低", v: fmt(gstock.quote.low), cls: "" },
+              { k: "昨收", v: fmt(gstock.quote.prev_close), cls: "" },
+            ].map((m) => (
+              <div key={m.k} className="rounded-lg bg-muted/30 p-3">
+                <p className="text-xs text-muted-foreground">{m.k}</p>
+                <p className={cn("mt-0.5 font-mono text-base font-bold", m.cls)}>{m.v}</p>
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground/60">
+            美股 / 港股数据由仓库内置的 global-stock-data 模块提供（东财域内源）· 金额为原生币种。
+          </p>
         </GlassCard>
       )}
 
-      {/* 美股 / 港股视图（global-stock-data，东财域内源） */}
-      {gstock && (
-        <>
-          <GlassCard glow className="mb-4">
-            <div className="mb-4 flex items-baseline gap-2">
-              <h2 className="text-xl font-bold">{gstock.name}</h2>
-              <span className="font-mono text-sm text-muted-foreground">{gstock.code}</span>
-              <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary">{gstock.market}</span>
-              <span className="ml-auto text-xs text-muted-foreground">{mktName(gstock.market)}</span>
-            </div>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {[
-                { k: "现价", v: fmt(gstock.quote.price), cls: pctColor(gstock.quote.change_pct) },
-                { k: "涨跌幅", v: pctStr(gstock.quote.change_pct), cls: pctColor(gstock.quote.change_pct) },
-                { k: "总市值", v: bigMoney(gstock.quote.mcap, gstock.market), cls: "" },
-                { k: "成交额", v: bigMoney(gstock.quote.amount, gstock.market), cls: "" },
-                { k: "开盘", v: fmt(gstock.quote.open), cls: "" },
-                { k: "最高", v: fmt(gstock.quote.high), cls: "" },
-                { k: "最低", v: fmt(gstock.quote.low), cls: "" },
-                { k: "昨收", v: fmt(gstock.quote.prev_close), cls: "" },
-              ].map((m) => (
-                <div key={m.k} className="rounded-lg bg-muted/30 p-3">
-                  <p className="text-xs text-muted-foreground">{m.k}</p>
-                  <p className={cn("mt-0.5 font-mono text-base font-bold", m.cls)}>{m.v}</p>
-                </div>
-              ))}
-            </div>
-          </GlassCard>
-
-          {gstock.metrics && (
-            <GlassCard className="mb-4">
-              <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold">
-                <BarChart3 className="h-4 w-4 text-primary" /> 关键财务指标
-                <span className="text-xs font-normal text-muted-foreground/60">· {gstock.metrics.report_date}</span>
-              </h3>
-              <p className="mb-3 text-[11px] text-muted-foreground/60">东财 GMAININDICATOR，最新报告期。金额为原生币种。</p>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                {[
-                  { k: "营业收入", v: bigMoney(gstock.metrics.revenue, gstock.market), yoy: gstock.metrics.revenue_yoy != null ? round2(gstock.metrics.revenue_yoy, "%") : "" },
-                  { k: "归母净利", v: bigMoney(gstock.metrics.net_profit, gstock.market), yoy: "" },
-                  { k: "每股收益 EPS", v: round2(gstock.metrics.eps), yoy: "" },
-                  { k: "ROE", v: round2(gstock.metrics.roe, "%"), yoy: "" },
-                  { k: "毛利率", v: round2(gstock.metrics.gross_margin, "%"), yoy: "" },
-                  { k: "净利率", v: round2(gstock.metrics.net_margin, "%"), yoy: "" },
-                  { k: "资产负债率", v: round2(gstock.metrics.debt_ratio, "%"), yoy: "" },
-                ].map((m) => (
-                  <div key={m.k} className="rounded-lg bg-muted/30 p-3">
-                    <p className="text-xs text-muted-foreground">{m.k}</p>
-                    <p className="mt-0.5 font-mono text-base font-bold">{m.v}</p>
-                    {m.yoy && <p className="text-[11px] text-muted-foreground">同比 {m.yoy}</p>}
-                  </div>
-                ))}
-              </div>
-            </GlassCard>
-          )}
-
-          <p className="text-xs text-muted-foreground/60">
-            美股 / 港股数据由仓库内置的 global-stock-data 模块提供（东财域内源）· 金额为原生币种。
-          </p>
-        </>
-      )}
-
+      {/* 常驻概览带：证券身份 + 报价指标 + 来源日期/状态；切页签始终可见 */}
       {val && (
-        <>
-          <GlassCard glow className="mb-4">
-            <div className="mb-4 flex items-baseline gap-2">
-              <h2 className="text-xl font-bold">{val.name}</h2>
-              <span className="font-mono text-sm text-muted-foreground">{val.code}</span>
-              {val.analyst_count > 0 && (
-                <span className="ml-auto text-xs text-muted-foreground">机构覆盖 {val.analyst_count} 家</span>
-              )}
-            </div>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {metrics.map((m) => (
-                <div key={m.k} className="rounded-lg bg-muted/30 p-3" data-testid={m.testId}>
-                  <p className="text-xs text-muted-foreground">{m.k}</p>
-                  <p className="mt-0.5 font-mono text-lg font-bold">{m.v}</p>
-                </div>
-              ))}
-            </div>
-            <p className="mt-3 text-[11px] text-muted-foreground/60" data-testid="stock-header-pe-source">
+        <GlassCard glow className="mb-3">
+          <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-3">
+            <h2 className="text-xl font-bold">{val.name}</h2>
+            <span className="font-mono text-sm text-muted-foreground">{val.code}</span>
+            {val.analyst_count > 0 && (
+              <span className="text-xs text-muted-foreground">机构覆盖 {val.analyst_count} 家</span>
+            )}
+            <div className="flex w-full gap-2 sm:ml-auto sm:w-auto">{queryBox}</div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {coreMetrics.map((m) => (
+              <div key={m.k} className="rounded-lg bg-muted/30 p-3" data-testid={m.testId}>
+                <p className="text-xs text-muted-foreground">{m.k}</p>
+                <p className="mt-0.5 font-mono text-lg font-bold">{m.v}</p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-[11px] text-muted-foreground/60">
+            <p data-testid="stock-header-pe-source">
               PE-TTM 来源 Eastmoney f115；缺失不显示为 0。
             </p>
-            <p className="mt-1 text-[11px] text-muted-foreground/60" data-testid="stock-header-mcap-source">
+            <p data-testid="stock-header-mcap-source">
               总市值来源 Eastmoney f20；缺失不显示为 0。
             </p>
-            {val.forecast_note && (
-              <p className="mt-3 text-xs text-warning">{val.forecast_note}</p>
+          </div>
+          {val.forecast_note && (
+            <p className="mt-3 text-xs text-warning">{val.forecast_note}</p>
+          )}
+        </GlassCard>
+      )}
+
+      {(val || gstock) && (
+        <>
+          {/* 页签栏：纯视图状态。切页签不加载其他页签的数据，也不写任何业务状态。 */}
+          <div className="mb-3 flex flex-wrap gap-1 rounded-xl border border-border/60 bg-muted/20 p-1" role="tablist" aria-label="个股数据分区">
+            {STOCK_DATA_TABS.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                role="tab"
+                aria-selected={tab === item.key}
+                id={`stock-data-tab-${item.key}`}
+                data-testid={`stock-data-tab-${item.key}`}
+                onClick={() => setTab(item.key)}
+                className={cn(
+                  "rounded-lg px-3 py-1.5 text-sm",
+                  tab === item.key ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          <div id="stock-data-tabpanel" role="tabpanel" aria-labelledby={`stock-data-tab-${tab}`}>
+            {/* 概览：风险提示 → 相对表现 / 当前行业估值 → 近期事件 / 投资逻辑入口 / 板块归属 */}
+            {tab === "overview" && val && (
+              <>
+                <TopRiskAnalysisCard env={topRisk} loading={topRiskLoading} error={topRiskErr} />
+
+                {/* min-w-0：两张卡内部都有可横向滚动的宽表，网格项必须允许收缩，
+                    否则窄视口下卡片按表格最小宽度撑开，整页会出现横向滚动。 */}
+                <div className="grid gap-4 lg:grid-cols-2 [&>*]:min-w-0">
+                  <StockRelativeContextCard
+                    data={stockRelativeContext}
+                    loading={stockRelativeLoading}
+                    error={stockRelativeError}
+                  />
+
+                  <StockValuationContextCard
+                    data={stockValuationContext}
+                    loading={stockValuationLoading}
+                    error={stockValuationError}
+                  />
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-3">
+                  {/^\d{6}$/.test(activeCode) && (
+                    <div className="mb-4">
+                      <ResearchEventCalendar key={activeCode} securityCode={activeCode} />
+                    </div>
+                  )}
+
+                  <StockThesisPanel code={activeCode} />
+
+                  {/* 板块归属 · 概念 */}
+                  {((blocks && blocks.concept_tags.length > 0) || hotCon.length > 0) && (
+                    <GlassCard className="mb-4">
+                      <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Boxes className="h-4 w-4 text-primary" /> 板块归属 · 概念</h3>
+                      {blocks && blocks.concept_tags.length > 0 && (
+                        <div className="mb-3 flex flex-wrap gap-1.5">
+                          {blocks.concept_tags.slice(0, 24).map((t, i) => (
+                            <span key={i} className="rounded-full border border-border/70 px-2 py-0.5 text-xs text-muted-foreground">{t}</span>
+                          ))}
+                        </div>
+                      )}
+                      {hotCon.length > 0 && (
+                        <div>
+                          <p className="mb-1.5 text-xs text-muted-foreground">当下热门概念命中</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {hotCon.slice(0, 12).map((h, i) => (
+                              <span key={i} className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">{h.concept}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </GlassCard>
+                  )}
+                </div>
+              </>
             )}
-          </GlassCard>
 
-          <TopRiskAnalysisCard env={topRisk} loading={topRiskLoading} error={topRiskErr} />
+            {/* 行情与技术：K 线（可选依赖，显式展开才加载）与技术指标 */}
+            {tab === "market" && val && (
+              <>
+                {/* 扩展数据（可选依赖）：按需展开，避免每次查询都触发 mootdx/akshare 请求 */}
+                <OptionalDataPanel
+                  panelStates={panelStates}
+                  onToggle={togglePanel}
+                  onRetry={retryPanel}
+                  kline={kline}
+                  klineErr={klineErr}
+                  finance={finance}
+                  financeErr={financeErr}
+                  info={info}
+                  infoErr={infoErr}
+                  disc={disc}
+                  discErr={discErr}
+                  technicalIndicators={tiEnv}
+                />
 
-          <StockRelativeContextCard
-            data={stockRelativeContext}
-            loading={stockRelativeLoading}
-            error={stockRelativeError}
-          />
+                {/* 技术指标与价格触发（独立 fetch，与 K 线面板解耦） */}
+                <TechnicalIndicatorsCard env={tiEnv} loading={tiLoading} error={tiError} />
+              </>
+            )}
 
-          <StockValuationContextCard
-            data={stockValuationContext}
-            loading={stockValuationLoading}
-            error={stockValuationError}
-          />
+            {/* 财务与估值：财务快照、财报、基本面、估值详情 */}
+            {tab === "financials" && (
+              <>
+                {/* 港股现金流量表（仅港股；美股 404 → cashflow 为 null 不渲染） */}
+                {cashflow && cashflow.periods.length > 0 && (
+                  <GlassCard className="mb-4">
+                    <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold">
+                      <BarChart3 className="h-4 w-4 text-primary" /> 现金流量表
+                      <span className="text-xs font-normal text-muted-foreground/60">· 单位：亿{cashflow.currency ?? ""}</span>
+                    </h3>
+                    <p className="mb-3 text-[11px] text-muted-foreground/60">东财 RPT_HKSK_FN_CASHFLOW · 季度为年初至今累计 · 负数（现金流出）标绿。</p>
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[520px] text-sm">
+                        <thead>
+                          <tr className="text-xs text-muted-foreground">
+                            <th className="py-1 pr-3 text-left font-normal">科目</th>
+                            {cashflow.periods.slice(0, 5).map((p) => (
+                              <th key={p.report_date} className="px-2 py-1 text-right font-normal">{p.report_date.slice(0, 7)}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cashflow.item_order.map((it) => (
+                            <tr key={it} className="border-t border-border/40">
+                              <td className="py-1.5 pr-3 text-muted-foreground">{it}</td>
+                              {cashflow.periods.slice(0, 5).map((p) => {
+                                const amt = p.items[it]?.amount ?? null;
+                                return (
+                                  <td key={p.report_date} className={cn("px-2 py-1.5 text-right font-mono", amt != null && amt < 0 ? "text-success" : "")}>
+                                    {amt == null ? "—" : (amt / 1e8).toFixed(1)}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </GlassCard>
+                )}
 
-          {/^\d{6}$/.test(activeCode) && (
-            <div className="mb-4">
-              <ResearchEventCalendar key={activeCode} securityCode={activeCode} />
-            </div>
-          )}
+                {/* 美股 / 港股关键财务指标（东财 GMAININDICATOR） */}
+                {gstock && gstock.metrics && (
+                  <GlassCard className="mb-4">
+                    <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold">
+                      <BarChart3 className="h-4 w-4 text-primary" /> 关键财务指标
+                      <span className="text-xs font-normal text-muted-foreground/60">· {gstock.metrics.report_date}</span>
+                    </h3>
+                    <p className="mb-3 text-[11px] text-muted-foreground/60">东财 GMAININDICATOR，最新报告期。金额为原生币种。</p>
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      {[
+                        { k: "营业收入", v: bigMoney(gstock.metrics.revenue, gstock.market), yoy: gstock.metrics.revenue_yoy != null ? round2(gstock.metrics.revenue_yoy, "%") : "" },
+                        { k: "归母净利", v: bigMoney(gstock.metrics.net_profit, gstock.market), yoy: "" },
+                        { k: "每股收益 EPS", v: round2(gstock.metrics.eps), yoy: "" },
+                        { k: "ROE", v: round2(gstock.metrics.roe, "%"), yoy: "" },
+                        { k: "毛利率", v: round2(gstock.metrics.gross_margin, "%"), yoy: "" },
+                        { k: "净利率", v: round2(gstock.metrics.net_margin, "%"), yoy: "" },
+                        { k: "资产负债率", v: round2(gstock.metrics.debt_ratio, "%"), yoy: "" },
+                      ].map((m) => (
+                        <div key={m.k} className="rounded-lg bg-muted/30 p-3">
+                          <p className="text-xs text-muted-foreground">{m.k}</p>
+                          <p className="mt-0.5 font-mono text-base font-bold">{m.v}</p>
+                          {m.yoy && <p className="text-[11px] text-muted-foreground">同比 {m.yoy}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  </GlassCard>
+                )}
 
-          <NativeIntelSecurityContext code={activeCode} />
+                {val && (
+                  <>
+                    <EarningsSnapshot fin={fin} error={finError} />
 
-          <EarningsSnapshot fin={fin} error={finError} />
-
-          {pctl && (pctl.metrics.pe_ttm || pctl.metrics.pb) && (
-            <GlassCard glow className="mb-4">
-              <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold"><LineChart className="h-4 w-4 text-primary" /> 估值历史分位 · {pctl.period}</h3>
-              <p className="mb-4 text-[11px] text-muted-foreground/60">绿=低估区 / 灰=合理区 / 红=高估区（相对近 5 年分位）。</p>
-              <div className="space-y-4">
-                {pctl.metrics.pe_ttm && <ValBand label="PE-TTM" m={pctl.metrics.pe_ttm} />}
-                {pctl.metrics.pb && <ValBand label="市净率 PB" m={pctl.metrics.pb} />}
-              </div>
-            </GlassCard>
-          )}
-
-          {reports.length > 0 && (
-            <GlassCard className="mb-4">
-              <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><FileText className="h-4 w-4 text-primary" /> 近期研报（{reports.length}）</h3>
-              <div className="space-y-2">
-                {reports.slice(0, 12).map((r, i) => (
-                  <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
-                    <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground">{(r.publishDate || "").slice(0, 10)}</span>
-                    <span className="w-24 shrink-0 truncate text-xs text-muted-foreground">{r.orgSName}</span>
-                    {r.pdfUrl ? (
-                      <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-primary">{r.title}</a>
-                    ) : (
-                      <span className="flex-1 truncate">{r.title}</span>
+                    {/* 原常驻带里的次级预测指标统一放这里：同一次估值读取、同一缺失规则。 */}
+                    {forecastMetrics.length > 0 && (
+                      <GlassCard className="mb-4" data-testid="stock-forecast-metrics">
+                        <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold">
+                          <LineChart className="h-4 w-4 text-primary" /> 预测与估值指标
+                        </h3>
+                        <p className="mb-4 text-[11px] text-muted-foreground/60">
+                          与常驻带的现价 / PE(TTM) / PB / 总市值来自同一次估值读取；预测类字段缺失显示为 —，不按 0 处理。
+                        </p>
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                          {forecastMetrics.map((m) => (
+                            <div key={m.k} className="rounded-lg bg-muted/30 p-3" data-testid={m.testId}>
+                              <p className="text-xs text-muted-foreground">{m.k}</p>
+                              <p className="mt-0.5 font-mono text-lg font-bold">{m.v}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </GlassCard>
                     )}
-                    {r.emRatingName && <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">{r.emRatingName}</span>}
-                  </div>
-                ))}
-              </div>
-            </GlassCard>
-          )}
 
-          {anns.length > 0 && (
-            <GlassCard className="mb-4">
-              <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Megaphone className="h-4 w-4 text-primary" /> 近期公告（{anns.length}）</h3>
-              <div className="space-y-2">
-                {anns.slice(0, 12).map((a, i) => {
-                  const title = a.title.replace(/^[^:：]*[:：]/, "") || a.title;
-                  const canCapture = /^\d{6}$/.test(activeCode);
-                  return (
-                    <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
-                      <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground">{a.date}</span>
-                      {a.type && <span className="w-24 shrink-0 truncate text-xs text-muted-foreground">{a.type}</span>}
-                      {a.url ? (
-                        <a href={a.url} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-primary">{title}</a>
-                      ) : (
-                        <span className="flex-1 truncate">{a.title}</span>
-                      )}
-                      {canCapture && (
-                        <Link
-                          to={buildEvidenceNewHref({
-                            subjectType: "stock",
-                            subjectId: activeCode,
-                            returnTo: `/stock-data?code=${activeCode}`,
-                            evidenceType: "announcement",
-                            sourceTitle: title,
-                            sourceUrl: a.url,
-                            sourceDate: a.date,
-                          })}
-                          className="shrink-0 text-[11px] text-primary hover:underline"
-                          data-testid="stock-data-capture-evidence"
-                        >
-                          记为证据
-                        </Link>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </GlassCard>
-          )}
-
-          <GlassCard>
-            <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Newspaper className="h-4 w-4 text-primary" /> 个股新闻</h3>
-            {depNote ? (
-              <p className="text-xs text-warning">{depNote}（安装后新闻/公告即可用）</p>
-            ) : news.length === 0 ? (
-              <p className="text-xs text-muted-foreground/60">暂无新闻</p>
-            ) : (
-              <div className="space-y-2">
-                {news.slice(0, 10).map((n, i) => {
-                  const canCapture = /^\d{6}$/.test(activeCode);
-                  return (
-                    <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
-                      <span className="w-28 shrink-0 font-mono text-xs text-muted-foreground">{(n.发布时间 || "").slice(0, 16)}</span>
-                      {n.新闻链接 ? (
-                        <a href={n.新闻链接} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-primary">{n.新闻标题}</a>
-                      ) : (
-                        <span className="flex-1 truncate">{n.新闻标题}</span>
-                      )}
-                      {canCapture && (
-                        <Link
-                          to={buildEvidenceNewHref({
-                            subjectType: "stock",
-                            subjectId: activeCode,
-                            returnTo: `/stock-data?code=${activeCode}`,
-                            evidenceType: "news",
-                            sourceTitle: n.新闻标题,
-                            sourceUrl: n.新闻链接,
-                            sourceDate: n.发布时间,
-                          })}
-                          className="shrink-0 text-[11px] text-primary hover:underline"
-                          data-testid="stock-data-capture-evidence"
-                        >
-                          记为证据
-                        </Link>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                    {pctl && (pctl.metrics.pe_ttm || pctl.metrics.pb) && (
+                      <>
+                        {/* 口径说明：历史分位（个股自身时间序列）与当前行业估值快照是两个口径，图上不混用 */}
+                        <p className="mb-2 text-[11px] text-muted-foreground/60">
+                          口径说明：本页签的「估值历史分位」是个股自身近 5 年的 PE-TTM / PB 分位；同行业当期快照口径的「相对行业估值」在「概览」页签单独展示，两者口径不同。
+                        </p>
+                        <GlassCard glow className="mb-4">
+                          <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold"><LineChart className="h-4 w-4 text-primary" /> 估值历史分位 · {pctl.period}</h3>
+                          <p className="mb-4 text-[11px] text-muted-foreground/60">绿=低估区 / 灰=合理区 / 红=高估区（相对近 5 年分位）。</p>
+                          <div className="space-y-4">
+                            {pctl.metrics.pe_ttm && <ValBand label="PE-TTM" m={pctl.metrics.pe_ttm} />}
+                            {pctl.metrics.pb && <ValBand label="市净率 PB" m={pctl.metrics.pb} />}
+                          </div>
+                        </GlassCard>
+                      </>
+                    )}
+                  </>
+                )}
+              </>
             )}
-          </GlassCard>
 
-          {/* 资金面 · 筹码（融资融券 / 股东户数 / 主力资金流 / 分红 / 大宗交易） */}
-          {(margin.length > 0 || holders.length > 0 || fundFlow.length > 0 || dividend.length > 0) && (
-            <GlassCard className="mb-4">
-              <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Wallet className="h-4 w-4 text-primary" /> 资金面 · 筹码</h3>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                {margin[0] && <Metric k="融资余额" v={yi(margin[0].rzye)} sub={margin[0].date} />}
-                {margin[0] && <Metric k="融券余额" v={yi(margin[0].rqye)} />}
-                {holders[0] && <Metric k="股东户数" v={Number(holders[0].holder_num).toLocaleString()} sub={`环比 ${pct(holders[0].change_ratio)}`} />}
-                {fundFlow.length > 0 && <Metric k="近20日主力净流入" v={yi(fundFlow.slice(-20).reduce((s, r) => s + r.main_net, 0))} />}
-                {dividend[0] && <Metric k="最近派息(每10股)" v={`${dividend[0].bonus_rmb} 元`} sub={dividend[0].date} />}
-              </div>
-              {blockT.length > 0 && (
-                <div className="mt-3 border-t border-border/40 pt-3">
-                  <p className="mb-2 text-xs text-muted-foreground">近期大宗交易（{blockT.length}）</p>
-                  <div className="space-y-1.5">
-                    {blockT.slice(0, 5).map((b, i) => (
-                      <div key={i} className="flex items-center gap-3 text-xs">
-                        <span className="w-20 shrink-0 font-mono text-muted-foreground">{b.date}</span>
-                        <span className="w-14 shrink-0">{b.price} 元</span>
-                        <span className={cn("w-20 shrink-0", b.premium_pct >= 0 ? "text-danger" : "text-success")}>折溢 {b.premium_pct}%</span>
-                        <span className="flex-1 truncate text-muted-foreground">买 {b.buyer} · 卖 {b.seller}</span>
+            {/* 事件与资讯：公开资讯上下文、研报、公告、新闻、限售解禁、投资者互动 */}
+            {tab === "events" && val && (
+              <>
+                <NativeIntelSecurityContext code={activeCode} />
+
+                {reports.length > 0 && (
+                  <GlassCard className="mb-4">
+                    <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><FileText className="h-4 w-4 text-primary" /> 近期研报（{reports.length}）</h3>
+                    <div className="space-y-2">
+                      {reports.slice(0, 12).map((r, i) => (
+                        <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
+                          <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground">{(r.publishDate || "").slice(0, 10)}</span>
+                          <span className="w-24 shrink-0 truncate text-xs text-muted-foreground">{r.orgSName}</span>
+                          {r.pdfUrl ? (
+                            <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-primary">{r.title}</a>
+                          ) : (
+                            <span className="flex-1 truncate">{r.title}</span>
+                          )}
+                          {r.emRatingName && <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">{r.emRatingName}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  </GlassCard>
+                )}
+
+                {anns.length > 0 && (
+                  <GlassCard className="mb-4">
+                    <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Megaphone className="h-4 w-4 text-primary" /> 近期公告（{anns.length}）</h3>
+                    <div className="space-y-2">
+                      {anns.slice(0, 12).map((a, i) => {
+                        const title = a.title.replace(/^[^:：]*[:：]/, "") || a.title;
+                        const canCapture = /^\d{6}$/.test(activeCode);
+                        return (
+                          <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
+                            <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground">{a.date}</span>
+                            {a.type && <span className="w-24 shrink-0 truncate text-xs text-muted-foreground">{a.type}</span>}
+                            {a.url ? (
+                              <a href={a.url} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-primary">{title}</a>
+                            ) : (
+                              <span className="flex-1 truncate">{a.title}</span>
+                            )}
+                            {canCapture && (
+                              <Link
+                                to={buildEvidenceNewHref({
+                                  subjectType: "stock",
+                                  subjectId: activeCode,
+                                  returnTo: `/stock-data?code=${activeCode}`,
+                                  evidenceType: "announcement",
+                                  sourceTitle: title,
+                                  sourceUrl: a.url,
+                                  sourceDate: a.date,
+                                })}
+                                className="shrink-0 text-[11px] text-primary hover:underline"
+                                data-testid="stock-data-capture-evidence"
+                              >
+                                记为证据
+                              </Link>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </GlassCard>
+                )}
+
+                <GlassCard>
+                  <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Newspaper className="h-4 w-4 text-primary" /> 个股新闻</h3>
+                  {depNote ? (
+                    <p className="text-xs text-warning">{depNote}（安装后新闻/公告即可用）</p>
+                  ) : news.length === 0 ? (
+                    <p className="text-xs text-muted-foreground/60">暂无新闻</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {news.slice(0, 10).map((n, i) => {
+                        const canCapture = /^\d{6}$/.test(activeCode);
+                        return (
+                          <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
+                            <span className="w-28 shrink-0 font-mono text-xs text-muted-foreground">{(n.发布时间 || "").slice(0, 16)}</span>
+                            {n.新闻链接 ? (
+                              <a href={n.新闻链接} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-primary">{n.新闻标题}</a>
+                            ) : (
+                              <span className="flex-1 truncate">{n.新闻标题}</span>
+                            )}
+                            {canCapture && (
+                              <Link
+                                to={buildEvidenceNewHref({
+                                  subjectType: "stock",
+                                  subjectId: activeCode,
+                                  returnTo: `/stock-data?code=${activeCode}`,
+                                  evidenceType: "news",
+                                  sourceTitle: n.新闻标题,
+                                  sourceUrl: n.新闻链接,
+                                  sourceDate: n.发布时间,
+                                })}
+                                className="shrink-0 text-[11px] text-primary hover:underline"
+                                data-testid="stock-data-capture-evidence"
+                              >
+                                记为证据
+                              </Link>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </GlassCard>
+
+                {/* 限售解禁 */}
+                {lockup && (lockup.upcoming.length > 0 || lockup.history.length > 0) && (
+                  <GlassCard className="mb-4">
+                    <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><CalendarClock className="h-4 w-4 text-primary" /> 限售解禁</h3>
+                    {lockup.upcoming.length > 0 ? (
+                      <div className="mb-3 rounded-lg border border-warning/30 bg-warning/5 p-3">
+                        <p className="mb-1.5 text-xs font-medium text-warning">未来 90 天待解禁（{lockup.upcoming.length}）</p>
+                        {lockup.upcoming.slice(0, 4).map((h, i) => (
+                          <div key={i} className="flex items-center gap-3 text-xs"><span className="w-20 shrink-0 font-mono text-muted-foreground">{h.date}</span><span className="flex-1 truncate">{h.type}</span><span className="shrink-0 text-muted-foreground">占比 {pct(h.ratio)}</span></div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </GlassCard>
-          )}
+                    ) : (
+                      <p className="mb-2 text-xs text-muted-foreground/70">未来 90 天无待解禁。</p>
+                    )}
+                    {lockup.history.length > 0 && (
+                      <div>
+                        <p className="mb-1.5 text-xs text-muted-foreground">历史解禁（近 {Math.min(lockup.history.length, 5)}）</p>
+                        {lockup.history.slice(0, 5).map((h, i) => (
+                          <div key={i} className="flex items-center gap-3 text-xs"><span className="w-20 shrink-0 font-mono text-muted-foreground">{h.date}</span><span className="flex-1 truncate text-muted-foreground">{h.type}</span></div>
+                        ))}
+                      </div>
+                    )}
+                  </GlassCard>
+                )}
 
-          {/* 龙虎榜 */}
-          {dt && dt.records.length > 0 && (
-            <GlassCard className="mb-4">
-              <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Trophy className="h-4 w-4 text-primary" /> 龙虎榜（近30日 {dt.records.length} 次）</h3>
-              <div className="space-y-2">
-                {dt.records.slice(0, 6).map((r, i) => (
-                  <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
-                    <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground">{r.date}</span>
-                    <span className="flex-1 truncate">{r.reason}</span>
-                    <span className={cn("shrink-0 font-mono text-xs", r.net_buy >= 0 ? "text-danger" : "text-success")}>净买 {r.net_buy} 万</span>
-                  </div>
-                ))}
-              </div>
-              {(dt.seats.buy.length > 0 || dt.seats.sell.length > 0) && (
-                <div className="mt-3 grid gap-4 border-t border-border/40 pt-3 sm:grid-cols-2">
-                  <div>
-                    <p className="mb-1.5 text-xs font-medium text-danger">买入席位 TOP</p>
-                    {dt.seats.buy.map((s, i) => (
-                      <div key={i} className="flex justify-between gap-2 text-xs text-muted-foreground"><span className="truncate">{s.name}</span><span className="shrink-0 font-mono">净{s.net}万</span></div>
-                    ))}
-                  </div>
-                  <div>
-                    <p className="mb-1.5 text-xs font-medium text-success">卖出席位 TOP</p>
-                    {dt.seats.sell.map((s, i) => (
-                      <div key={i} className="flex justify-between gap-2 text-xs text-muted-foreground"><span className="truncate">{s.name}</span><span className="shrink-0 font-mono">净{s.net}万</span></div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </GlassCard>
-          )}
+                {/* 投资者互动（互动易） */}
+                {qa.filter((q) => q.answer).length > 0 && (
+                  <GlassCard className="mb-4">
+                    <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><MessageSquare className="h-4 w-4 text-primary" /> 投资者互动（互动易）</h3>
+                    <div className="space-y-3">
+                      {qa.filter((q) => q.answer).slice(0, 5).map((q, i) => (
+                        <div key={i} className="border-b border-border/40 pb-3 text-sm last:border-0">
+                          <p className="text-muted-foreground"><span className="mr-1.5 rounded bg-muted/50 px-1.5 py-0.5 text-[10px]">问</span>{q.question}</p>
+                          <p className="mt-1"><span className="mr-1.5 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary">答</span>{q.answer}</p>
+                          <p className="mt-1 text-[11px] text-muted-foreground/60">{q.ask_time}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </GlassCard>
+                )}
+              </>
+            )}
 
-          {/* 限售解禁 */}
-          {lockup && (lockup.upcoming.length > 0 || lockup.history.length > 0) && (
-            <GlassCard className="mb-4">
-              <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><CalendarClock className="h-4 w-4 text-primary" /> 限售解禁</h3>
-              {lockup.upcoming.length > 0 ? (
-                <div className="mb-3 rounded-lg border border-warning/30 bg-warning/5 p-3">
-                  <p className="mb-1.5 text-xs font-medium text-warning">未来 90 天待解禁（{lockup.upcoming.length}）</p>
-                  {lockup.upcoming.slice(0, 4).map((h, i) => (
-                    <div key={i} className="flex items-center gap-3 text-xs"><span className="w-20 shrink-0 font-mono text-muted-foreground">{h.date}</span><span className="flex-1 truncate">{h.type}</span><span className="shrink-0 text-muted-foreground">占比 {pct(h.ratio)}</span></div>
-                  ))}
-                </div>
-              ) : (
-                <p className="mb-2 text-xs text-muted-foreground/70">未来 90 天无待解禁。</p>
-              )}
-              {lockup.history.length > 0 && (
-                <div>
-                  <p className="mb-1.5 text-xs text-muted-foreground">历史解禁（近 {Math.min(lockup.history.length, 5)}）</p>
-                  {lockup.history.slice(0, 5).map((h, i) => (
-                    <div key={i} className="flex items-center gap-3 text-xs"><span className="w-20 shrink-0 font-mono text-muted-foreground">{h.date}</span><span className="flex-1 truncate text-muted-foreground">{h.type}</span></div>
-                  ))}
-                </div>
-              )}
-            </GlassCard>
-          )}
+            {/* 资金与筹码：资金面 / 融资融券 / 股东信息 / 分红 / 大宗交易、龙虎榜 */}
+            {tab === "capital" && val && (
+              <>
+                {capitalCardVisible && (
+                  <GlassCard className="mb-4">
+                    <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Wallet className="h-4 w-4 text-primary" /> 资金面 · 筹码</h3>
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      {margin[0] && <Metric k="融资余额" v={yi(margin[0].rzye)} sub={margin[0].date} />}
+                      {margin[0] && <Metric k="融券余额" v={yi(margin[0].rqye)} />}
+                      {holders[0] && <Metric k="股东户数" v={Number(holders[0].holder_num).toLocaleString()} sub={`环比 ${pct(holders[0].change_ratio)}`} />}
+                      {fundFlow.length > 0 && <Metric k="近20日主力净流入" v={yi(fundFlow.slice(-20).reduce((s, r) => s + r.main_net, 0))} />}
+                      {dividend[0] && <Metric k="最近派息(每10股)" v={`${dividend[0].bonus_rmb} 元`} sub={dividend[0].date} />}
+                    </div>
+                    {blockT.length > 0 && (
+                      <div className="mt-3 border-t border-border/40 pt-3">
+                        <p className="mb-2 text-xs text-muted-foreground">近期大宗交易（{blockT.length}）</p>
+                        <div className="space-y-1.5">
+                          {blockT.slice(0, 5).map((b, i) => (
+                            <div key={i} className="flex items-center gap-3 text-xs">
+                              <span className="w-20 shrink-0 font-mono text-muted-foreground">{b.date}</span>
+                              <span className="w-14 shrink-0">{b.price} 元</span>
+                              <span className={cn("w-20 shrink-0", b.premium_pct >= 0 ? "text-danger" : "text-success")}>折溢 {b.premium_pct}%</span>
+                              <span className="flex-1 truncate text-muted-foreground">买 {b.buyer} · 卖 {b.seller}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </GlassCard>
+                )}
 
-          {/* 板块归属 · 概念 */}
-          {((blocks && blocks.concept_tags.length > 0) || hotCon.length > 0) && (
-            <GlassCard className="mb-4">
-              <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Boxes className="h-4 w-4 text-primary" /> 板块归属 · 概念</h3>
-              {blocks && blocks.concept_tags.length > 0 && (
-                <div className="mb-3 flex flex-wrap gap-1.5">
-                  {blocks.concept_tags.slice(0, 24).map((t, i) => (
-                    <span key={i} className="rounded-full border border-border/70 px-2 py-0.5 text-xs text-muted-foreground">{t}</span>
-                  ))}
-                </div>
-              )}
-              {hotCon.length > 0 && (
-                <div>
-                  <p className="mb-1.5 text-xs text-muted-foreground">当下热门概念命中</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {hotCon.slice(0, 12).map((h, i) => (
-                      <span key={i} className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">{h.concept}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </GlassCard>
-          )}
+                {/* 龙虎榜 */}
+                {dragonTigerVisible && (
+                  <GlassCard className="mb-4">
+                    <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Trophy className="h-4 w-4 text-primary" /> 龙虎榜（近30日 {dt.records.length} 次）</h3>
+                    <div className="space-y-2">
+                      {dt.records.slice(0, 6).map((r, i) => (
+                        <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
+                          <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground">{r.date}</span>
+                          <span className="flex-1 truncate">{r.reason}</span>
+                          <span className={cn("shrink-0 font-mono text-xs", r.net_buy >= 0 ? "text-danger" : "text-success")}>净买 {r.net_buy} 万</span>
+                        </div>
+                      ))}
+                    </div>
+                    {(dt.seats.buy.length > 0 || dt.seats.sell.length > 0) && (
+                      <div className="mt-3 grid gap-4 border-t border-border/40 pt-3 sm:grid-cols-2">
+                        <div>
+                          <p className="mb-1.5 text-xs font-medium text-danger">买入席位 TOP</p>
+                          {dt.seats.buy.map((s, i) => (
+                            <div key={i} className="flex justify-between gap-2 text-xs text-muted-foreground"><span className="truncate">{s.name}</span><span className="shrink-0 font-mono">净{s.net}万</span></div>
+                          ))}
+                        </div>
+                        <div>
+                          <p className="mb-1.5 text-xs font-medium text-success">卖出席位 TOP</p>
+                          {dt.seats.sell.map((s, i) => (
+                            <div key={i} className="flex justify-between gap-2 text-xs text-muted-foreground"><span className="truncate">{s.name}</span><span className="shrink-0 font-mono">净{s.net}万</span></div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </GlassCard>
+                )}
 
-          {/* 投资者互动（互动易） */}
-          {qa.filter((q) => q.answer).length > 0 && (
-            <GlassCard className="mb-4">
-              <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><MessageSquare className="h-4 w-4 text-primary" /> 投资者互动（互动易）</h3>
-              <div className="space-y-3">
-                {qa.filter((q) => q.answer).slice(0, 5).map((q, i) => (
-                  <div key={i} className="border-b border-border/40 pb-3 text-sm last:border-0">
-                    <p className="text-muted-foreground"><span className="mr-1.5 rounded bg-muted/50 px-1.5 py-0.5 text-[10px]">问</span>{q.question}</p>
-                    <p className="mt-1"><span className="mr-1.5 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary">答</span>{q.answer}</p>
-                    <p className="mt-1 text-[11px] text-muted-foreground/60">{q.ask_time}</p>
-                  </div>
-                ))}
-              </div>
-            </GlassCard>
-          )}
+                {!capitalCardVisible && !dragonTigerVisible && (
+                  <p className="text-xs text-muted-foreground/60">当前没有可展示的资金面 / 筹码数据。</p>
+                )}
+              </>
+            )}
 
-          {/* 扩展数据（可选依赖）：按需展开，避免每次查询都触发 mootdx/akshare 请求 */}
-          <OptionalDataPanel
-            panelStates={panelStates}
-            onToggle={togglePanel}
-            onRetry={retryPanel}
-            kline={kline}
-            klineErr={klineErr}
-            finance={finance}
-            financeErr={financeErr}
-            info={info}
-            infoErr={infoErr}
-            disc={disc}
-            discErr={discErr}
-            technicalIndicators={tiEnv}
-          />
-
-          {/* 技术指标与价格触发（独立 fetch，与 K 线面板解耦） */}
-          <TechnicalIndicatorsCard env={tiEnv} loading={tiLoading} error={tiError} />
-
-          {/* 投资逻辑面板（独立、可折叠、懒加载） */}
-          <StockThesisPanel code={activeCode} />
+            {tabHasNoBlocks && (
+              <p className="text-xs text-muted-foreground/60">该页签当前没有可展示的数据。</p>
+            )}
+          </div>
         </>
       )}
 

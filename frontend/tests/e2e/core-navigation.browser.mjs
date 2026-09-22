@@ -1,11 +1,11 @@
 /**
- * 核心工作流导航 smoke（纯前端，无后端依赖）。
+ * 核心工作流导航 smoke（纯前端，无后端依赖）。TASK = IA-CONVERGENCE-V1
  *
- * 验证每条核心路由在主侧栏和研究链路使用同一个用户名称；
- * - 主导航「决策」指向 Decision Inbox；
- * - 「交易」「决策复盘」在主导航直接可达；
- * - legacy Cockpit 降级到「分析」折叠区且带 Legacy 标识；
- * - Inbox → Formal Decision 的 campaign 提案页归属「决策」高亮。
+ * 验证已批准的信息架构：
+ * - 侧栏恰为 10 个常驻一级入口，分组标题是静态文字而不是折叠层；
+ * - 一级入口内部的二级页面由 SectionNav 呈现，且不再有重复的「研究链路」横条；
+ * - 旧版分析工具（含 Cockpit）保留在研究资料的「旧版分析工具」目录里并带（旧版）标识；
+ * - 决策链主入口 → 交易 → 决策复盘 全程直达，campaign 提案页归属「决策待办」高亮。
  */
 
 import assert from "node:assert/strict";
@@ -61,21 +61,68 @@ async function freePort() {
   return port;
 }
 
-const PRIMARY_WORKFLOW_LINKS = [
-  { label: "决策", href: "/decision-inbox" },
-  { label: "交易", href: "/trades" },
-  { label: "决策复盘", href: "/decision-performance" },
+/** 10 个常驻一级入口，按分组与顺序。 */
+const PERMANENT_ENTRIES = [
+  { group: "工作", label: "今天", href: "/daily-review" },
+  { group: "工作", label: "决策待办", href: "/decision-inbox" },
+  { group: "研究", label: "自选股", href: "/watchlist" },
+  { group: "研究", label: "投资研究", href: "/screener" },
+  { group: "研究", label: "研究资料", href: "/thesis" },
+  { group: "账户与复盘", label: "我的持仓", href: "/portfolio" },
+  { group: "账户与复盘", label: "交易记录", href: "/trades" },
+  { group: "账户与复盘", label: "决策复盘", href: "/decision-performance" },
+  { group: "系统", label: "数据健康", href: "/data-health" },
+  { group: "系统", label: "设置", href: "/settings" },
 ];
 
-const CANONICAL_ROUTE_LABELS = [
-  { label: "今天", href: "/daily-review" },
-  { label: "发现", href: "/screener" },
-  { label: "个股", href: "/stock-data" },
-  { label: "投资逻辑", href: "/thesis" },
-  { label: "决策依据", href: "/decision-evidence" },
-  { label: "持仓", href: "/portfolio" },
-  { label: "决策反馈", href: "/decision-feedback" },
-  { label: "决策复盘", href: "/decision-performance" },
+/** 一级入口内部的二级入口（含旧版目录），含统一名称。 */
+const SECTION_EXPECTATIONS = [
+  {
+    owner: "research",
+    visit: "/stock-data",
+    primary: [
+      { href: "/screener", label: "市场发现" },
+      { href: "/sectors", label: "板块研究" },
+      { href: "/stock-data", label: "个股数据" },
+      { href: "/intel", label: "资讯中心" },
+      { href: "/signals", label: "产业信号" },
+    ],
+    tools: [{ href: "/debate", label: "多空辩论" }],
+  },
+  {
+    owner: "library",
+    visit: "/thesis",
+    primary: [
+      { href: "/thesis", label: "投资逻辑" },
+      { href: "/evidence", label: "证据库" },
+      { href: "/my-reports", label: "我的研报" },
+      { href: "/notes", label: "研究笔记" },
+    ],
+    tools: [
+      { href: "/decision-evidence", label: "建议依据追踪（旧版）" },
+      { href: "/decision-feedback", label: "建议采纳反馈（旧版）" },
+      { href: "/signal-ledger", label: "建议信号账本（旧版）" },
+      { href: "/cockpit", label: "决策驾驶舱（旧版）" },
+    ],
+  },
+  {
+    owner: "trades",
+    visit: "/trades",
+    primary: [
+      { href: "/trades", label: "交易记录" },
+      { href: "/performance-attribution", label: "收益归因" },
+    ],
+    tools: [],
+  },
+  {
+    owner: "settings",
+    visit: "/settings",
+    primary: [
+      { href: "/settings", label: "设置" },
+      { href: "/account-policy", label: "执行参数" },
+    ],
+    tools: [],
+  },
 ];
 
 let server;
@@ -96,48 +143,83 @@ try {
 
   await page.goto(frontend, { waitUntil: "networkidle" });
   const sidebar = page.getByTestId("app-sidebar");
-
-  // 1) 主导航包含核心工作流直达入口，且「决策」指向 Decision Inbox。
-  for (const { label, href } of PRIMARY_WORKFLOW_LINKS) {
-    const link = sidebar.getByRole("link", { name: label, exact: true });
-    assert.equal(await link.count(), 1, `主导航应恰好有一个「${label}」入口`);
-    assert.equal(await link.getAttribute("href"), href, `「${label}」应指向 ${href}`);
-  }
-
-  // 2) 展开两个低频分组后，主侧栏每条核心路由都使用唯一名称。
-  await sidebar.getByRole("button", { name: "资料" }).click();
-  await sidebar.getByRole("button", { name: "分析" }).click();
   const mainNav = sidebar.getByRole("navigation", { name: "主导航" });
-  for (const { label, href } of CANONICAL_ROUTE_LABELS) {
+
+  // 1) 侧栏恰为 10 个常驻入口，名称与落点唯一。
+  // 断言限定在「主导航」容器内：品牌 logo 也指向 /daily-review，不属于入口。
+  for (const { label, href } of PERMANENT_ENTRIES) {
     const link = mainNav.locator(`a[href="${href}"]`);
-    assert.equal(await link.count(), 1, `主侧栏应恰好有一个 ${href} 入口`);
+    assert.equal(await link.count(), 1, `主导航应恰好有一个 ${href} 入口`);
     assert.equal((await link.innerText()).trim(), label, `${href} 应显示为「${label}」`);
   }
+  assert.equal(await mainNav.locator("a").count(), 10, "主导航链接总数应为 10");
 
-  const discoveryIcon = await mainNav.locator('a[href="/screener"] svg').getAttribute("class");
-  const stockIcon = await mainNav.locator('a[href="/stock-data"] svg').getAttribute("class");
-  assert.match(discoveryIcon || "", /lucide-search/, "发现应继续使用 Search 图标");
-  assert.doesNotMatch(stockIcon || "", /lucide-search/, "个股不得与发现重复使用 Search 图标");
-
-  // 3) 研究链路复用同一组用户名称与路由。
-  await page.goto(`${frontend}/stock-data`, { waitUntil: "networkidle" });
-  const workflowNav = page.getByRole("navigation", { name: "研究链路" });
-  for (const { label, href } of CANONICAL_ROUTE_LABELS.filter(({ href }) =>
-    ["/screener", "/stock-data", "/thesis", "/decision-evidence", "/portfolio", "/decision-feedback"].includes(href)
-  )) {
-    const link = workflowNav.locator(`a[href="${href}"]`);
-    assert.equal(await link.count(), 1, `研究链路应恰好有一个 ${href} 入口`);
-    assert.equal((await link.innerText()).trim(), label, `研究链路 ${href} 应显示为「${label}」`);
+  // 2) 分组是静态标题，不是需要先点开的折叠层。
+  for (const group of ["工作", "研究", "账户与复盘", "系统"]) {
+    assert.equal(
+      await mainNav.getByText(group, { exact: true }).count(),
+      1,
+      `分组标题「${group}」应静态可见`,
+    );
   }
+  assert.equal(await sidebar.getByRole("button", { name: "资料" }).count(), 0, "不应再有「资料」折叠按钮");
+  assert.equal(await sidebar.getByRole("button", { name: "分析" }).count(), 0, "不应再有「分析」折叠按钮");
 
-  // 4) legacy Cockpit 不再出现在主导航顶层。
+  // 3) 每个入口图标不重复（图标是入口身份的一部分）。
+  const iconClasses = [];
+  for (const { href } of PERMANENT_ENTRIES) {
+    const cls = await mainNav.locator(`a[href="${href}"] svg`).getAttribute("class");
+    assert.ok(cls, `${href} 应带图标`);
+    iconClasses.push(cls);
+  }
+  assert.equal(new Set(iconClasses).size, iconClasses.length, "一级入口不得重复使用同一图标");
+
+  // 4) 旧的分析工具不再占用一级入口，但仍在二级目录里可达（下面第 6 项验证）。
   assert.equal(
-    await sidebar.locator(`nav[aria-label="主导航"] > div:first-child a[href="/cockpit"]`).count(),
+    await mainNav.locator('a[href="/cockpit"]').count(),
     0,
-    "主导航第一分区不应再有 /cockpit 入口",
+    "一级导航不应再有 /cockpit 入口",
+  );
+  assert.equal(
+    await page.getByRole("navigation", { name: "研究链路" }).count(),
+    0,
+    "重复的研究链路横条应已撤下",
   );
 
-  // 5) 点击主链：决策 → 交易 → 决策复盘，全程不需要打开任何折叠菜单。
+  // 5) 二级入口按一级归属呈现，名称与落点唯一。
+  for (const expectation of SECTION_EXPECTATIONS) {
+    await page.goto(`${frontend}${expectation.visit}`, { waitUntil: "networkidle" });
+    const section = page.getByTestId("section-nav");
+    assert.equal(await section.count(), 1, `${expectation.visit} 应显示二级导航`);
+    assert.equal(
+      await section.getAttribute("data-section-owner"),
+      expectation.owner,
+      `${expectation.visit} 的二级导航应属于 ${expectation.owner}`,
+    );
+    for (const item of [...expectation.primary, ...expectation.tools]) {
+      const link = section.locator(`a[href="${item.href}"]`);
+      assert.equal(await link.count(), 1, `二级导航应恰好有一个 ${item.href} 入口`);
+      assert.equal((await link.innerText()).trim(), item.label, `${item.href} 应显示为「${item.label}」`);
+    }
+  }
+
+  // 6) 旧版分析工具带（旧版）标识，且直接访问旧链接仍能定位。
+  await page.goto(`${frontend}/cockpit`, { waitUntil: "networkidle" });
+  const legacySection = page.getByTestId("section-nav");
+  const legacyLink = legacySection.locator('a[href="/cockpit"]');
+  assert.equal(await legacyLink.count(), 1, "旧版目录应保留 Cockpit 入口");
+  assert.match(await legacyLink.innerText(), /（旧版）/, "Cockpit 应带（旧版）标识");
+  await page.waitForFunction(() => {
+    const el = document.querySelector('[data-testid="section-nav"] a[href="/cockpit"]');
+    return !!el && el.getAttribute("aria-current") === "page";
+  });
+  assert.equal(
+    await sidebar.locator('a[href="/thesis"]').getAttribute("aria-current"),
+    "page",
+    "旧版工具页仍归属「研究资料」",
+  );
+
+  // 7) 点击主链：决策待办 → 交易记录 → 决策复盘，全程不需要展开任何折叠层。
   // aria-current 由 React 提交渲染；waitForURL 先于 commit 返回，直接读会偶发 null，
   // 因此轮询等待属性就位（断言仍是严格 "page"，只是允许渲染提交的时差）。
   const expectAriaCurrent = async (selector) => {
@@ -153,27 +235,31 @@ try {
     assert.equal(await sidebar.locator(selector).getAttribute("aria-current"), "page");
   };
 
-  await sidebar.getByRole("link", { name: "决策", exact: true }).click();
+  await sidebar.getByRole("link", { name: "决策待办", exact: true }).click();
   await page.waitForURL("**/decision-inbox");
   await expectAriaCurrent('a[href="/decision-inbox"]');
 
-  await sidebar.getByRole("link", { name: "交易", exact: true }).click();
+  await sidebar.getByRole("link", { name: "交易记录", exact: true }).click();
   await page.waitForURL("**/trades");
 
   await sidebar.getByRole("link", { name: "决策复盘", exact: true }).click();
   await page.waitForURL("**/decision-performance");
 
-  // 6) campaign Formal Decision 提案页归属「决策」高亮。
+  // 8) campaign Formal Decision 提案页归属「决策待办」高亮。
   await page.goto(`${frontend}/campaigns/c-smoke/decision-proposal`, { waitUntil: "networkidle" });
   await expectAriaCurrent('a[href="/decision-inbox"]');
 
-  // 7) legacy Cockpit 保留在「分析」折叠区并带 Legacy 标识。
-  if (!(await sidebar.locator('a[href="/cockpit"]').isVisible())) {
-    await sidebar.getByRole("button", { name: "分析" }).click();
-  }
-  const legacyLink = sidebar.locator('a[href="/cockpit"]');
-  assert.equal(await legacyLink.count(), 1, "分析菜单应保留 Cockpit 入口");
-  assert.match(await legacyLink.innerText(), /Legacy/, "Cockpit 应带 Legacy 标识");
+  // 9) 二级选中态与真实路由一致，动态详情不会点亮错误项。
+  await page.goto(`${frontend}/sectors`, { waitUntil: "networkidle" });
+  await page.waitForFunction(() => {
+    const el = document.querySelector('[data-testid="section-nav"] a[href="/sectors"]');
+    return !!el && el.getAttribute("aria-current") === "page";
+  });
+  assert.equal(
+    await sidebar.locator('a[href="/screener"]').getAttribute("aria-current"),
+    "page",
+    "板块研究仍归属「投资研究」",
+  );
 
   console.log("core workflow navigation smoke: PASS");
 } finally {

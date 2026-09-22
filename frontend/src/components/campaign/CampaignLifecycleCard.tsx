@@ -35,6 +35,7 @@ export function CampaignLifecycleCard({
   researchContext = false,
   decision,
   onChanged,
+  showIdentity = true,
 }: {
   campaignId: string;
   securityCode: string;
@@ -47,6 +48,11 @@ export function CampaignLifecycleCard({
   researchContext?: boolean;
   decision?: { visible_state: string; reason_codes: string[] } | null;
   onChanged: () => void;
+  /**
+   * false：调用方已经在同一列提供选中对象身份（如决策待办的详情头），
+   * 本卡不再重复代码 / 策略 / 阶段与技术详情。默认 true，其他调用处行为不变。
+   */
+  showIdentity?: boolean;
 }) {
   const [busy, setBusy] = useState<CampaignStatus | null>(null);
   const [error, setError] = useState("");
@@ -104,41 +110,45 @@ export function CampaignLifecycleCard({
       data-campaign-strategy={strategy}
       data-campaign-role={setupContext ? "setup" : "current"}
     >
-      <header className="flex flex-wrap items-start gap-2">
-        <div className="min-w-0 flex-1 space-y-1.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-sm font-semibold tracking-tight">
-              {securityCode}
-            </span>
-            <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium text-foreground">
-              {CAMPAIGN_STRATEGY_LABELS[strategy]}
-            </span>
-            <span
-              className={`rounded-md px-1.5 py-0.5 text-xs font-medium ${
-                setupContext
-                  ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
-                  : "bg-foreground/10 text-foreground"
-              }`}
-            >
-              {CAMPAIGN_STATUS_LABELS[status]}
-            </span>
-            <span
-              className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
-                setupContext
-                  ? "border border-amber-500/30 text-amber-700 dark:text-amber-400"
-                  : "border border-foreground/25 text-foreground"
-              }`}
-            >
-              {setupContext ? "建立中" : "当前投资计划"}
-            </span>
-          </div>
-        </div>
-      </header>
+      {showIdentity && (
+        <>
+          <header className="flex flex-wrap items-start gap-2">
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-sm font-semibold tracking-tight">
+                  {securityCode}
+                </span>
+                <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium text-foreground">
+                  {CAMPAIGN_STRATEGY_LABELS[strategy]}
+                </span>
+                <span
+                  className={`rounded-md px-1.5 py-0.5 text-xs font-medium ${
+                    setupContext
+                      ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                      : "bg-foreground/10 text-foreground"
+                  }`}
+                >
+                  {CAMPAIGN_STATUS_LABELS[status]}
+                </span>
+                <span
+                  className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
+                    setupContext
+                      ? "border border-amber-500/30 text-amber-700 dark:text-amber-400"
+                      : "border border-foreground/25 text-foreground"
+                  }`}
+                >
+                  {setupContext ? "建立中" : "当前投资计划"}
+                </span>
+              </div>
+            </div>
+          </header>
 
-      <details className="text-[10px] text-muted-foreground">
-        <summary className="cursor-pointer select-none hover:text-foreground">技术详情</summary>
-        <p className="mt-1 font-mono">campaign_id：{campaignId}</p>
-      </details>
+          <details className="text-[10px] text-muted-foreground">
+            <summary className="cursor-pointer select-none hover:text-foreground">技术详情</summary>
+            <p className="mt-1 font-mono">campaign_id：{campaignId}</p>
+          </details>
+        </>
+      )}
 
       {setupContext ? (
         <p className="text-xs leading-5 text-amber-700 dark:text-amber-400">

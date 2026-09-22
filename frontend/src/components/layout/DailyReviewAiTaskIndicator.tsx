@@ -38,11 +38,13 @@ export function DailyReviewAiTaskIndicator() {
     };
   }, [status]);
 
-  if (status === "idle") return null;
-
   const isRunning = status === "running";
   const isSuccess = status === "success";
   const isError = status === "error";
+
+  // 只有这三种状态有内容可显示：restoring / empty / restored / restore_error 没有对应文案，
+  // 渲染出来就是一条空边框栏，占住首屏顶部。没有内容就不占位。
+  if (!isRunning && !isSuccess && !isError) return null;
 
   let remainingMs = 0;
   let overTimeMs = 0;

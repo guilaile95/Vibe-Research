@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import {
   PlusCircle,
   AlertCircle,
@@ -12,7 +12,9 @@ import { api } from "@/lib/api";
 import type {
   CampaignNextActions,
   CampaignRecord,
+  CampaignStatus,
   CampaignStrategy,
+  DecisionInboxCampaignItem,
   DecisionInboxHoldingSetupItem,
   DecisionInboxSnapshot,
   PositionBootstrapInput,
@@ -20,6 +22,7 @@ import type {
   ResearchContinuity,
 } from "@/lib/api/types";
 import {
+  CAMPAIGN_STATUS_LABELS,
   CAMPAIGN_STRATEGIES,
   CAMPAIGN_STRATEGY_LABELS,
   collectHoldingUniverseSecurityCodes,
@@ -28,6 +31,7 @@ import {
   createCampaignPayload,
   errorMessage,
   reasonCodeLabel,
+  visibleStateLabel,
   formalDecisionEvaluationStatus,
   formalDecisionNextSteps,
   FORMAL_DECISION_EVALUATION_UNKNOWN,
@@ -57,6 +61,7 @@ import { CampaignCommittedDecisionsCard } from "@/components/campaign/CampaignCo
 import { HardRiskPanel } from "@/components/campaign/HardRiskPanel";
 import { DecisionActionPanel } from "@/components/campaign/DecisionActionPanel";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { storageGet, storageSet } from "@/lib/storage";
 
 function DecisionCommitInboxStatus({
   campaignId,
@@ -613,7 +618,151 @@ function BootstrapActivationCard({ onBootstrapped }: { onBootstrapped: () => voi
   );
 }
 
+// ---------------------------------------------------------------------------
+// IA 收敛（v1）：左侧紧凑工作列表 + 右侧当前选中对象。
+//
+// 铁律：
+// - 列表身份按 Campaign（campaign_id），不是证券代码：同一证券的多个投资计划
+//   各占一行，绝不合并；未建立投资计划的持仓沿用持仓身份（security_code），
+//   不为它伪造 Campaign。
+// - 分组恒为既有三类，标题与说明逐字保留；页签只是视图分区。
+// - 选中只决定「右侧展示谁」，不产生任何写入；创建 / transition / Thesis /
+//   正式决策仍走原有组件与原有页面入口。
+// ---------------------------------------------------------------------------
+
+/** 分组 key（纯视图分区，不是业务分类）。 */
+type InboxGroupKey = "current" | "setup" | "unassigned";
+
+/** 既有三个分组及其原文说明。 */
+const INBOX_GROUPS: readonly {
+  key: InboxGroupKey;
+  label: string;
+  description: string;
+}[] = [
+  {
+    key: "current",
+    label: "当前投资计划",
+    description: "仅进行中或减仓中属于当前期。这里不表示买卖建议已批准。",
+  },
+  {
+    key: "setup",
+    label: "正在建立的投资计划",
+    description: "草稿、研究中和待入场计划尚未生效，需要你逐步明确推进。",
+  },
+  {
+    key: "unassigned",
+    label: "尚未建立投资计划的持仓",
+    description: "这些持仓还没有当前投资计划，需要你明确创建。",
+  },
+];
+
+/** current / setup 投资计划条目：列表身份 = campaign_id。 */
+interface CampaignEntry {
+  kind: "campaign";
+  group: "current" | "setup";
+  campaignId: string;
+  securityCode: string;
+  strategy: CampaignStrategy;
+  status: CampaignStatus;
+  /** current 分组的 inbox 项；setup 分组为 null（阶段来自 campaigns 列表）。 */
+  item: DecisionInboxCampaignItem | null;
+}
+
+/** 未建立投资计划的持仓条目：列表身份 = security_code（不伪造 Campaign）。 */
+interface HoldingEntry {
+  kind: "holding";
+  group: "unassigned";
+  securityCode: string;
+  securityName: string;
+  holding: DecisionInboxHoldingSetupItem;
+}
+
+type InboxEntry = CampaignEntry | HoldingEntry;
+
+/** 右侧当前选中对象（只做展示选择）。 */
+type InboxSelection = { kind: "campaign" | "holding"; id: string };
+
+const INBOX_SELECTION_STORAGE_KEY = "vr-decision-inbox-selection";
+
+/** 列表条目身份（用于 testid 与选中判定）。 */
+function entryIdentity(entry: InboxEntry): string {
+  return entry.kind === "campaign" ? entry.campaignId : entry.securityCode;
+}
+
+function entryKey(entry: InboxEntry): string {
+  return entry.kind === "campaign"
+    ? `campaign:${entry.campaignId}`
+    : `holding:${entry.securityCode}`;
+}
+
+function selectionKey(selection: InboxSelection): string {
+  return `${selection.kind}:${selection.id}`;
+}
+
+function selectionFor(entry: InboxEntry): InboxSelection {
+  return entry.kind === "campaign"
+    ? { kind: "campaign", id: entry.campaignId }
+    : { kind: "holding", id: entry.securityCode };
+}
+
+/** 读取上次选中的对象；条目已不存在时由调用方回落到既有数据顺序。 */
+function readStoredSelection(): InboxSelection | null {
+  const raw = storageGet(INBOX_SELECTION_STORAGE_KEY);
+  if (!raw) return null;
+  const separator = raw.indexOf(":");
+  if (separator <= 0) return null;
+  const kind = raw.slice(0, separator);
+  const id = raw.slice(separator + 1);
+  if (!id || (kind !== "campaign" && kind !== "holding")) return null;
+  return { kind, id };
+}
+
+/**
+ * hash 深链（保持既有行为，命中后先选中再定位）：
+ * - `#campaign-<campaign_id>`：事件日历的 Campaign 上下文入口。
+ * - `#committed-decision-<campaign_id>-<decision_id>`：已提交决定详情的返回入口。
+ */
+function entryFromHash(hash: string, entries: readonly InboxEntry[]): InboxEntry | null {
+  if (!hash.startsWith("#")) return null;
+  let raw = hash.slice(1);
+  try {
+    raw = decodeURIComponent(raw);
+  } catch {
+    /* 非法百分号编码：按原样匹配 */
+  }
+  const prefix = raw.startsWith("committed-decision-")
+    ? "committed-decision-"
+    : raw.startsWith("campaign-")
+      ? "campaign-"
+      : null;
+  if (!prefix) return null;
+  const rest = raw.slice(prefix.length);
+  const campaigns = entries.filter((entry): entry is CampaignEntry => entry.kind === "campaign");
+  return campaigns.find(
+    (entry) => rest === entry.campaignId || rest.startsWith(`${entry.campaignId}-`),
+  ) ?? null;
+}
+
+/** 右侧小节标题：只新增小节标题，不替换任何组件内文案。 */
+function DetailSection({
+  title,
+  testId,
+  children,
+}: {
+  title: string;
+  testId: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="space-y-2" data-testid={testId}>
+      <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
 export default function DecisionInbox() {
+  const location = useLocation();
   const [snapshot, setSnapshot] = useState<DecisionInboxSnapshot | null>(null);
   const [setupCampaigns, setSetupCampaigns] = useState<CampaignRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -624,6 +773,13 @@ export default function DecisionInbox() {
   const [focusedSetupCampaignId, setFocusedSetupCampaignId] = useState<string | null>(null);
   const [formGeneration, setFormGeneration] = useState(0);
   const [thesisReloadEpoch, setThesisReloadEpoch] = useState(0);
+  /** 显式切换过的分组；null = 尚未切换，按选中项或既有数据顺序落位。 */
+  const [activeGroup, setActiveGroup] = useState<InboxGroupKey | null>(null);
+  /** 选中对象：跨刷新保留；条目消失时回落到当前分组的既有数据顺序。 */
+  const [selection, setSelection] = useState<InboxSelection | null>(readStoredSelection);
+  /** 深链定位请求：先选中，再滚动到工作列表中的该条目。 */
+  const [locateEntryId, setLocateEntryId] = useState<string | null>(null);
+  const handledHashRef = useRef<string | null>(null);
   const refreshGenerationRef = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -696,6 +852,13 @@ export default function DecisionInbox() {
   const handleCreated = useCallback((campaign: CampaignRecord) => {
     setCreatingFor(null);
     setFocusedSetupCampaignId(campaign.campaign_id);
+    // 创建后直接选中新计划：右侧与工作列表都落在同一个对象上。
+    setActiveGroup("setup");
+    setSelection({ kind: "campaign", id: campaign.campaign_id });
+    storageSet(
+      INBOX_SELECTION_STORAGE_KEY,
+      selectionKey({ kind: "campaign", id: campaign.campaign_id }),
+    );
     void refresh();
   }, [refresh]);
 
@@ -712,6 +875,100 @@ export default function DecisionInbox() {
     return () => window.clearTimeout(timeout);
   }, [focusedSetupCampaignId, setupCampaigns]);
 
+  // 工作列表条目：current / setup 按 campaign_id，holding 按 security_code；
+  // 顺序沿用既有数据顺序，不做任何「优先级」排序或证券代码合并。
+  const entriesByGroup = useMemo<Record<InboxGroupKey, InboxEntry[]>>(() => ({
+    current: (snapshot?.campaign_items ?? []).map((item): CampaignEntry => ({
+      kind: "campaign",
+      group: "current",
+      campaignId: item.campaign_id,
+      securityCode: item.security_code,
+      strategy: item.strategy,
+      status: item.campaign_status,
+      item,
+    })),
+    setup: setupCampaigns.map((campaign): CampaignEntry => ({
+      kind: "campaign",
+      group: "setup",
+      campaignId: campaign.campaign_id,
+      securityCode: campaign.security_code,
+      strategy: campaign.strategy,
+      status: campaign.status,
+      item: null,
+    })),
+    unassigned: (snapshot?.holding_setup_items ?? []).map((holding): HoldingEntry => ({
+      kind: "holding",
+      group: "unassigned",
+      securityCode: holding.security_code,
+      securityName: holding.security_name,
+      holding,
+    })),
+  }), [snapshot, setupCampaigns]);
+
+  const allEntries = useMemo(
+    () => [...entriesByGroup.current, ...entriesByGroup.setup, ...entriesByGroup.unassigned],
+    [entriesByGroup],
+  );
+
+  // 默认落位：优先「上次选中的对象仍存在」，否则按既有数据顺序取第一个非空分组。
+  const defaultGroup = useMemo(
+    () => INBOX_GROUPS.find((group) => entriesByGroup[group.key].length > 0)?.key ?? "current",
+    [entriesByGroup],
+  );
+  const storedEntry = useMemo(() => {
+    const key = selection ? selectionKey(selection) : "";
+    return key ? allEntries.find((entry) => entryKey(entry) === key) ?? null : null;
+  }, [allEntries, selection]);
+  const resolvedGroup = activeGroup ?? storedEntry?.group ?? defaultGroup;
+  const groupEntries = entriesByGroup[resolvedGroup];
+  const activeEntry = useMemo<InboxEntry | null>(() => {
+    const key = selection ? selectionKey(selection) : "";
+    return (key ? groupEntries.find((entry) => entryKey(entry) === key) : undefined)
+      ?? groupEntries[0]
+      ?? null;
+  }, [groupEntries, selection]);
+
+  // 选中对象跨分组变化（例如草稿 → 进行中）时页签跟随它，
+  // 避免刷新后停在已不再包含它的分组。
+  const selectionGroupRef = useRef<InboxGroupKey | null>(null);
+  useEffect(() => {
+    if (!storedEntry) return;
+    const previous = selectionGroupRef.current;
+    selectionGroupRef.current = storedEntry.group;
+    if (previous !== null && previous !== storedEntry.group) {
+      setActiveGroup(storedEntry.group);
+    }
+  }, [storedEntry]);
+
+  /** 切换选中对象：只改展示选择，不触发任何请求或写入。 */
+  const selectEntry = useCallback((entry: InboxEntry) => {
+    const next = selectionFor(entry);
+    setSelection(next);
+    setActiveGroup(entry.group);
+    storageSet(INBOX_SELECTION_STORAGE_KEY, selectionKey(next));
+  }, []);
+
+  // hash 深链：命中时先选中对应投资计划（并切到它所在分组），再定位。
+  useEffect(() => {
+    const hash = location.hash;
+    if (!snapshot || !hash || handledHashRef.current === hash) return;
+    const target = entryFromHash(hash, allEntries);
+    if (!target) return;
+    handledHashRef.current = hash;
+    selectEntry(target);
+    setLocateEntryId(entryIdentity(target));
+  }, [location.hash, snapshot, allEntries, selectEntry]);
+
+  useEffect(() => {
+    if (!locateEntryId) return;
+    const target = document.querySelector<HTMLElement>(
+      `[data-testid="decision-inbox-item-${locateEntryId}"]`,
+    );
+    if (!target) return;
+    setLocateEntryId(null);
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [locateEntryId, activeEntry]);
+
   const isEmpty =
     snapshot?.canonical
     && snapshot.holding_setup_items.length === 0
@@ -719,6 +976,28 @@ export default function DecisionInbox() {
     && setupCampaigns.length === 0;
 
   const snapshotReasons = snapshot ? presentReasonCodes(snapshot.reason_codes) : null;
+  const groupMeta = INBOX_GROUPS.find((group) => group.key === resolvedGroup) ?? INBOX_GROUPS[0];
+  const focusedEntry =
+    focusedSetupCampaignId !== null
+    && activeEntry?.kind === "campaign"
+    && activeEntry.campaignId === focusedSetupCampaignId;
+  const detailAnchorId =
+    activeEntry?.kind === "campaign" ? `campaign-${activeEntry.campaignId}` : undefined;
+  const activeHoldingReasonLabels =
+    activeEntry?.kind === "holding"
+      ? presentReasonCodes(activeEntry.holding.reason_codes ?? []).details.map((item) => item.label)
+      : [];
+
+  /** 左列表的「已有原因摘要」：只摘既有 visible_state 与 reason code 文案。 */
+  const reasonSummaryFor = (entry: InboxEntry): string => {
+    const codes = entry.kind === "campaign"
+      ? entry.item?.reason_codes ?? []
+      : entry.holding.reason_codes ?? [];
+    const stateLabel = entry.kind === "campaign" && entry.item
+      ? visibleStateLabel(entry.item.visible_state)
+      : "";
+    return [stateLabel, ...presentReasonCodes(codes).primary].filter(Boolean).join(" · ");
+  };
 
   return (
     <div className="space-y-6">
@@ -736,8 +1015,6 @@ export default function DecisionInbox() {
           </button>
         }
       />
-
-      <ResearchEventCalendar reloadEpoch={thesisReloadEpoch} />
 
       {loading ? (
         <div
@@ -789,7 +1066,8 @@ export default function DecisionInbox() {
             )
           )}
 
-          {isEmpty && (
+          {/* 真实空列表：只有 canonical 且三类都为 0 才是空，绝不用它掩盖初始化状态 */}
+          {snapshot.canonical && isEmpty && (
             <div className="rounded-lg border border-dashed border-border/60 bg-card/50 px-6 py-10 text-center">
               <ClipboardList className="mx-auto h-5 w-5 text-muted-foreground" />
               <p className="mt-2 text-sm font-medium">暂无待办</p>
@@ -799,165 +1077,357 @@ export default function DecisionInbox() {
             </div>
           )}
 
-          {snapshot.holding_setup_items.length > 0 && (
-            <section className="space-y-3">
-              <div>
-                <h2 className="text-sm font-semibold">尚未建立投资计划的持仓</h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  这些持仓还没有当前投资计划，需要你明确创建。
-                </p>
-              </div>
-              {snapshot.holding_setup_items.map((holding) => (
-                <div
-                  key={holding.security_code}
-                  className="rounded-lg border border-border/60 border-l-2 border-l-amber-500/80 bg-card p-4 space-y-3"
-                >
-                  <div className="flex flex-wrap items-center gap-2 text-sm">
-                    <span className="font-mono font-semibold">{holding.security_code}</span>
-                    <span className="text-muted-foreground">{holding.security_name}</span>
-                    <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-xs text-amber-700 dark:text-amber-400">
-                      尚无投资计划
-                    </span>
-                    {holding.next_workflow_action === "CREATE_CAMPAIGN"
-                      && creatingFor !== holding.security_code && (
-                      <button
-                        type="button"
-                        data-testid={`decision-inbox-create-campaign-${holding.security_code}`}
-                        onClick={() => {
-                          setCreatingFor(holding.security_code);
-                          setFormGeneration((n) => n + 1);
-                        }}
-                        className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
-                      >
-                        <PlusCircle className="h-3.5 w-3.5" />
-                        创建投资计划
-                      </button>
-                    )}
-                  </div>
-                  {creatingFor === holding.security_code && (
-                    <CreateCampaignForm
-                      key={`${holding.security_code}-${formGeneration}`}
-                      holding={holding}
-                      onCreated={handleCreated}
-                      onClose={() => setCreatingFor(null)}
-                    />
-                  )}
-                </div>
-              ))}
-            </section>
-          )}
-
-          {setupCampaigns.length > 0 && (
-            <section className="space-y-3">
-              <div>
-                <h2 className="text-sm font-semibold">正在建立的投资计划</h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  草稿、研究中和待入场计划尚未生效，需要你逐步明确推进。
-                </p>
-              </div>
-              {setupCampaigns.map((campaign) => {
-                const focused = focusedSetupCampaignId === campaign.campaign_id;
-                return (
-                  <div
-                    key={campaign.campaign_id}
-                    id={`campaign-${campaign.campaign_id}`}
-                    className={`space-y-2 rounded-lg transition-shadow ${focused ? "ring-2 ring-primary/60 ring-offset-2 ring-offset-background" : ""}`}
-                    data-campaign-setup-card={campaign.campaign_id}
-                    data-campaign-setup-focused={focused ? "true" : "false"}
-                  >
-                    {focused && (
-                      <p
-                        className="rounded-md bg-primary/10 px-3 py-2 text-xs font-medium text-primary"
-                        data-testid="campaign-setup-continuation"
-                      >
-                        下一步从这里继续
-                      </p>
-                    )}
-                  <CampaignLifecycleCard
-                    campaignId={campaign.campaign_id}
-                    securityCode={campaign.security_code}
-                    strategy={campaign.strategy}
-                    status={campaign.status}
-                    nextActions={nextActions[campaign.campaign_id] ?? null}
-                    setupContext
-                    onChanged={() => void refresh()}
-                  />
-                    <CampaignThesisActivationCard
-                      campaignId={campaign.campaign_id}
-                      securityCode={campaign.security_code}
-                      strategy={campaign.strategy}
-                      reloadEpoch={thesisReloadEpoch}
-                    />
-                    <CampaignCommittedDecisionsCard
-                      campaignId={campaign.campaign_id}
-                      securityCode={campaign.security_code}
-                      strategy={campaign.strategy}
-                    />
-                  </div>
-                );
-              })}
-            </section>
-          )}
-
-          {snapshot.campaign_items.length > 0 && (
-            <section className="space-y-3">
-              <div>
-                <h2 className="text-sm font-semibold">当前投资计划</h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  仅进行中或减仓中属于当前期。这里不表示买卖建议已批准。
-                </p>
-              </div>
-              {snapshot.campaign_items.map((item) => (
-                <div key={item.campaign_id} id={`campaign-${item.campaign_id}`} className="space-y-2">
-                  <CampaignLifecycleCard
-                    campaignId={item.campaign_id}
-                    securityCode={item.security_code}
-                    strategy={item.strategy}
-                    status={item.campaign_status}
-                    nextActions={nextActions[item.campaign_id] ?? null}
-                    setupContext={false}
-                    decision={{
-                      visible_state: item.visible_state,
-                      reason_codes: item.reason_codes,
+          {snapshot.canonical && !isEmpty && (
+            <>
+              {/* 分组页签：纯视图切换，不写业务状态、不触发任何动作。 */}
+              <div
+                className="flex flex-wrap gap-1 rounded-xl border border-border/60 bg-muted/20 p-1"
+                role="tablist"
+                aria-label="决策待办分组"
+              >
+                {INBOX_GROUPS.map((group) => (
+                  <button
+                    key={group.key}
+                    type="button"
+                    role="tab"
+                    id={`decision-inbox-tab-${group.key}`}
+                    aria-selected={resolvedGroup === group.key}
+                    aria-controls="decision-inbox-tabpanel"
+                    data-testid={`decision-inbox-tab-${group.key}`}
+                    onClick={() => {
+                      // 页签只切换视图；同时把选中对象落到该分组既有顺序的第一个，
+                      // 让「列表高亮 = 右侧预览 = 刷新后落点」保持一致。
+                      setActiveGroup(group.key);
+                      const first = entriesByGroup[group.key][0];
+                      if (first) selectEntry(first);
                     }}
-                    onChanged={() => void refresh()}
-                  />
-                  <ResearchContinuityCard
-                    campaignId={item.campaign_id}
-                    prefetched={continuityByCampaign[item.campaign_id]}
-                    awaitingPrefetch={!Object.prototype.hasOwnProperty.call(continuityByCampaign, item.campaign_id)}
-                  />
-                  <HardRiskPanel item={item} />
-                  <DecisionActionPanel item={item} />
-                  <DecisionCommitInboxStatus
-                    campaignId={item.campaign_id}
-                    evaluation={item.formal_decision_evaluation}
-                  />
-                  <CampaignThesisActivationCard
-                    campaignId={item.campaign_id}
-                    securityCode={item.security_code}
-                    strategy={item.strategy}
-                    reloadEpoch={thesisReloadEpoch}
-                  />
-                  <CampaignCommittedDecisionsCard
-                    campaignId={item.campaign_id}
-                    securityCode={item.security_code}
-                    strategy={item.strategy}
-                  />
+                    className={`rounded-lg px-3 py-1.5 text-sm ${
+                      resolvedGroup === group.key
+                        ? "bg-background font-medium shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {group.label}
+                  </button>
+                ))}
+              </div>
+
+              <div
+                id="decision-inbox-tabpanel"
+                role="tabpanel"
+                aria-labelledby={`decision-inbox-tab-${resolvedGroup}`}
+                className="space-y-4"
+              >
+                <div>
+                  <h2 className="text-sm font-semibold">{groupMeta.label}</h2>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{groupMeta.description}</p>
                 </div>
-              ))}
-            </section>
+
+                {/* 视口 ≥1350px（扣除展开侧栏与页面内边距后仍有 ~1100px）才分两栏；
+                    更窄时单栏堆叠：工作列表在上、选中对象在下。 */}
+                <div className="grid min-w-0 gap-4 min-[1350px]:grid-cols-[360px_minmax(0,1fr)] min-[1350px]:items-start">
+                  <div
+                    role="listbox"
+                    aria-label={`${groupMeta.label}工作列表`}
+                    data-testid="decision-inbox-worklist"
+                    className="min-w-0 space-y-2"
+                  >
+                    {groupEntries.length === 0 ? (
+                      <p className="rounded-lg border border-dashed border-border/60 px-3 py-6 text-center text-xs text-muted-foreground">
+                        该分组当前没有对象。
+                      </p>
+                    ) : groupEntries.map((entry) => {
+                      const selected = activeEntry !== null
+                        && entryKey(activeEntry) === entryKey(entry);
+                      const summary = reasonSummaryFor(entry);
+                      return (
+                        <button
+                          key={entryKey(entry)}
+                          type="button"
+                          role="option"
+                          aria-selected={selected}
+                          data-testid={`decision-inbox-item-${entryIdentity(entry)}`}
+                          data-item-kind={entry.kind}
+                          data-item-group={entry.group}
+                          data-selected={selected ? "true" : "false"}
+                          onClick={() => selectEntry(entry)}
+                          className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+                            selected
+                              ? "border-primary/60 bg-primary/5"
+                              : "border-border/60 bg-card hover:border-primary/40"
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-mono text-sm font-semibold">
+                              {entry.securityCode}
+                            </span>
+                            {entry.kind === "campaign" ? (
+                              <>
+                                <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium">
+                                  {CAMPAIGN_STRATEGY_LABELS[entry.strategy]}
+                                </span>
+                                <span
+                                  className={`rounded-md px-1.5 py-0.5 text-xs font-medium ${
+                                    entry.group === "setup"
+                                      ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                                      : "bg-foreground/10 text-foreground"
+                                  }`}
+                                >
+                                  {CAMPAIGN_STATUS_LABELS[entry.status]}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-xs text-amber-700 dark:text-amber-400">
+                                尚无投资计划
+                              </span>
+                            )}
+                          </div>
+                          {entry.kind === "holding" && entry.securityName && (
+                            <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                              {entry.securityName}
+                            </span>
+                          )}
+                          {summary && (
+                            <span className="mt-1 block truncate text-xs text-muted-foreground">
+                              {summary}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* 右：当前选中对象（只读预览；正式决策仍走原有页面入口） */}
+                  <div
+                    data-testid="decision-inbox-detail"
+                    id={detailAnchorId}
+                    data-campaign-setup-card={focusedEntry ? (focusedSetupCampaignId ?? undefined) : undefined}
+                    data-campaign-setup-focused={focusedEntry ? "true" : "false"}
+                    className={`min-w-0 space-y-4 ${
+                      focusedEntry
+                        ? "rounded-lg ring-2 ring-primary/60 ring-offset-2 ring-offset-background"
+                        : ""
+                    }`}
+                  >
+                    {activeEntry === null ? (
+                      <p className="rounded-lg border border-dashed border-border/60 px-3 py-10 text-center text-xs text-muted-foreground">
+                        当前没有选中的对象。
+                      </p>
+                    ) : (
+                      <>
+                        <section
+                          className="space-y-2 rounded-lg border border-border/60 bg-card p-4"
+                          data-testid="decision-inbox-detail-identity"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-mono text-sm font-semibold">
+                              {activeEntry.securityCode}
+                            </span>
+                            {activeEntry.kind === "holding" && activeEntry.securityName && (
+                              <span className="min-w-0 truncate text-sm text-muted-foreground">
+                                {activeEntry.securityName}
+                              </span>
+                            )}
+                            {activeEntry.kind === "campaign" ? (
+                              <>
+                                <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium">
+                                  {CAMPAIGN_STRATEGY_LABELS[activeEntry.strategy]}
+                                </span>
+                                <span
+                                  className={`rounded-md px-1.5 py-0.5 text-xs font-medium ${
+                                    activeEntry.group === "setup"
+                                      ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                                      : "bg-foreground/10 text-foreground"
+                                  }`}
+                                >
+                                  {CAMPAIGN_STATUS_LABELS[activeEntry.status]}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-xs text-amber-700 dark:text-amber-400">
+                                尚无投资计划
+                              </span>
+                            )}
+                            <span className="rounded-md border border-border/60 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                              {groupMeta.label}
+                            </span>
+                          </div>
+                          {activeEntry.kind === "campaign" && (
+                            <details className="text-[10px] text-muted-foreground">
+                              <summary className="cursor-pointer select-none hover:text-foreground">
+                                技术详情
+                              </summary>
+                              <p className="mt-1 font-mono">campaign_id：{activeEntry.campaignId}</p>
+                            </details>
+                          )}
+                          {focusedEntry && (
+                            <p
+                              className="rounded-md bg-primary/10 px-3 py-2 text-xs font-medium text-primary"
+                              data-testid="campaign-setup-continuation"
+                            >
+                              下一步从这里继续
+                            </p>
+                          )}
+                        </section>
+
+                        <DetailSection
+                          title="已有状态与限制"
+                          testId="decision-inbox-detail-status"
+                        >
+                          {activeEntry.kind === "campaign" ? (
+                            <div className="space-y-3">
+                              <CampaignLifecycleCard
+                                campaignId={activeEntry.campaignId}
+                                securityCode={activeEntry.securityCode}
+                                strategy={activeEntry.strategy}
+                                status={activeEntry.status}
+                                nextActions={nextActions[activeEntry.campaignId] ?? null}
+                                setupContext={activeEntry.group === "setup"}
+                                decision={activeEntry.item ? {
+                                  visible_state: activeEntry.item.visible_state,
+                                  reason_codes: activeEntry.item.reason_codes,
+                                } : undefined}
+                                onChanged={() => void refresh()}
+                                // 详情头已是本列唯一的选中对象身份，卡片不再重复代码/策略/阶段。
+                                showIdentity={false}
+                              />
+                              {activeEntry.item && <HardRiskPanel item={activeEntry.item} />}
+                            </div>
+                          ) : (
+                            <div className="space-y-1.5 rounded-lg border border-border/60 border-l-2 border-l-amber-500/80 bg-card p-4 text-xs leading-5 text-muted-foreground">
+                              {activeHoldingReasonLabels.length > 0 ? (
+                                <ul className="space-y-0.5">
+                                  {activeHoldingReasonLabels.map((label) => (
+                                    <li key={label}>{label}</li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p>尚无投资计划</p>
+                              )}
+                            </div>
+                          )}
+                        </DetailSection>
+
+                        {/* 原操作入口：只呈现当前选中对象的入口，全部需要你明确点击。
+                            位置在「已有状态与限制」之后、「研究连续性 / 投资逻辑 / 历史正式决定」之前。 */}
+                        <section
+                          className="space-y-3 rounded-lg border border-primary/30 bg-primary/5 p-4"
+                          data-testid="decision-inbox-actions"
+                        >
+                          <div>
+                            <h3 className="text-sm font-semibold">操作入口</h3>
+                            <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                              只呈现当前选中对象的入口；切换对象或分组不会执行任何操作，
+                              创建、状态变更与激活都需要你明确点击。
+                            </p>
+                          </div>
+                          {activeEntry.kind === "holding" ? (
+                            <>
+                              {activeEntry.holding.next_workflow_action === "CREATE_CAMPAIGN"
+                                && creatingFor !== activeEntry.securityCode && (
+                                <button
+                                  type="button"
+                                  data-testid={`decision-inbox-create-campaign-${activeEntry.securityCode}`}
+                                  onClick={() => {
+                                    setCreatingFor(activeEntry.securityCode);
+                                    setFormGeneration((n) => n + 1);
+                                  }}
+                                  className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                                >
+                                  <PlusCircle className="h-3.5 w-3.5" />
+                                  创建投资计划
+                                </button>
+                              )}
+                              {creatingFor === activeEntry.securityCode && (
+                                <CreateCampaignForm
+                                  key={`${activeEntry.securityCode}-${formGeneration}`}
+                                  holding={activeEntry.holding}
+                                  onCreated={handleCreated}
+                                  onClose={() => setCreatingFor(null)}
+                                />
+                              )}
+                            </>
+                          ) : activeEntry.item ? (
+                            <DecisionCommitInboxStatus
+                              campaignId={activeEntry.campaignId}
+                              evaluation={activeEntry.item.formal_decision_evaluation}
+                            />
+                          ) : (
+                            <p className="text-xs leading-5 text-muted-foreground">
+                              这项投资计划尚未生效，当前没有可执行的正式决策入口。
+                            </p>
+                          )}
+                        </section>
+
+                        {activeEntry.kind === "campaign" && activeEntry.item && (
+                          <DetailSection title="研究连续性" testId="decision-inbox-detail-continuity">
+                            <ResearchContinuityCard
+                              campaignId={activeEntry.campaignId}
+                              prefetched={continuityByCampaign[activeEntry.campaignId]}
+                              awaitingPrefetch={!Object.prototype.hasOwnProperty.call(
+                                continuityByCampaign,
+                                activeEntry.campaignId,
+                              )}
+                            />
+                          </DetailSection>
+                        )}
+
+                        {activeEntry.kind === "campaign" && (
+                          <DetailSection title="投资逻辑" testId="decision-inbox-detail-thesis">
+                            <CampaignThesisActivationCard
+                              campaignId={activeEntry.campaignId}
+                              securityCode={activeEntry.securityCode}
+                              strategy={activeEntry.strategy}
+                              reloadEpoch={thesisReloadEpoch}
+                            />
+                          </DetailSection>
+                        )}
+
+                        {activeEntry.kind === "campaign" && (
+                          <DetailSection title="历史正式决定" testId="decision-inbox-detail-history">
+                            <div className="space-y-3">
+                              {activeEntry.item && <DecisionActionPanel item={activeEntry.item} />}
+                              <CampaignCommittedDecisionsCard
+                                campaignId={activeEntry.campaignId}
+                                securityCode={activeEntry.securityCode}
+                                strategy={activeEntry.strategy}
+                              />
+                            </div>
+                          </DetailSection>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
           )}
 
-          <p className="text-xs text-muted-foreground">
-            数据更新时间：{snapshot.as_of}（{snapshot.total_holdings} 个持仓 / {snapshot.total_campaign_items} 个投资计划）
-          </p>
         </>
       ) : (
         <div className="flex min-h-[20vh] items-center justify-center gap-2 text-sm text-muted-foreground">
           <ClipboardList className="h-4 w-4" />
           暂无数据
         </div>
+      )}
+
+      {/* 研究事件日历：保持可达但排在待办工作区之后；它独立加载，
+          读取失败只在本区域呈现，不代表决策待办整体不可用。 */}
+      <section
+        data-testid="decision-inbox-research-calendar"
+        aria-label="研究事件日历"
+        className="space-y-3 border-t border-border/60 pt-4"
+      >
+        <p className="text-xs text-muted-foreground">
+          研究事件日历独立加载，读取失败只影响本区域，不代表决策待办不可用。
+        </p>
+        <ResearchEventCalendar reloadEpoch={thesisReloadEpoch} />
+      </section>
+
+      {snapshot && (
+        <p className="text-xs text-muted-foreground">
+          数据更新时间：{snapshot.as_of}（{snapshot.total_holdings} 个持仓 / {snapshot.total_campaign_items} 个投资计划）
+        </p>
       )}
     </div>
   );

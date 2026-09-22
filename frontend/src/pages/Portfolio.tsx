@@ -499,7 +499,19 @@ function HoldingAdviceCard({ h }: { h: PortfolioAdviceHoldingAdvice }) {
   );
 }
 
+// 页面分区（纯视图状态）：常驻带 + 四个页签，只决定已有区块的挂载位置，不改变任何数据语义
+type PortfolioTab = "holdings" | "funding" | "risk" | "advice";
+
+const PORTFOLIO_TABS: { key: PortfolioTab; label: string }[] = [
+  { key: "holdings", label: "当前持仓" },
+  { key: "funding", label: "账户资金" },
+  { key: "risk", label: "组合风险" },
+  { key: "advice", label: "持仓建议" },
+];
+
 export function Portfolio() {
+  /** 当前页签；默认「当前持仓」。切换页签只改视图，不加载数据、不写状态、不触发生成建议。 */
+  const [tab, setTab] = useState<PortfolioTab>("holdings");
   const [data, setData] = useState<PortfolioData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   // 账户资金（手工填写）
@@ -928,8 +940,39 @@ export function Portfolio() {
         </div>
       )}
 
-      {/* 账户资金 */}
-      <GlassCard className="mb-4">
+      {/* 页面级错误提示（常驻带：加载 / 录入 / 清仓 / 生成建议失败，切页签始终可见） */}
+      {err && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+          <AlertCircle className="h-4 w-4 shrink-0" /> {err}
+        </div>
+      )}
+
+      {/* 页签栏：纯视图状态。切页签不加载其他页签的数据，也不写任何业务状态。 */}
+      <div className="mb-4 flex flex-wrap gap-1 rounded-xl border border-border/60 bg-muted/20 p-1" role="tablist" aria-label="我的持仓分区">
+        {PORTFOLIO_TABS.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            role="tab"
+            aria-selected={tab === item.key}
+            id={`portfolio-tab-${item.key}`}
+            data-testid={`portfolio-tab-${item.key}`}
+            onClick={() => setTab(item.key)}
+            className={cn(
+              "rounded-lg px-3 py-1.5 text-sm",
+              tab === item.key ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      {/* 账户资金页签正文：账户资金（手工快照 / ledger candidate）与账户现实门禁入口 */}
+      {tab === "funding" && (
+        <div id="portfolio-panel-funding" role="tabpanel" aria-labelledby="portfolio-tab-funding" data-testid="portfolio-panel-funding">
+          {/* 账户资金 */}
+          <GlassCard className="mb-4">
         <h3 className="mb-3 text-sm font-semibold">账户资金</h3>
         {acctLoading ? (
           <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground">
@@ -1098,8 +1141,18 @@ export function Portfolio() {
         <p className="mt-2 text-[11px] text-muted-foreground/60">手工填写、存在本地，不上传、不进仓库。用于后续持仓建议参考（本轮仅维护展示）。</p>
       </GlassCard>
 
-      {data && <SecurityExposureCard portfolio={data} basis={exposureBasis} />}
-      <PortfolioRiskContextCard context={riskContext} error={riskContextError} />
+          {/* 建议可用性（数据健康轻量入口，不替代实时 gate） */}
+          <PortfolioGateHealthEntry />
+        </div>
+      )}
+
+      {/* 组合风险页签正文 */}
+      {tab === "risk" && (
+        <div id="portfolio-panel-risk" role="tabpanel" aria-labelledby="portfolio-tab-risk" data-testid="portfolio-panel-risk">
+          {data && <SecurityExposureCard portfolio={data} basis={exposureBasis} />}
+          <PortfolioRiskContextCard context={riskContext} error={riskContextError} />
+        </div>
+      )}
 
       {/* 账户资金填写窗口 */}
       {acctOpen && (
@@ -1233,6 +1286,9 @@ export function Portfolio() {
         </div>
       )}
 
+      {/* 当前持仓页签正文：持仓明细表（整宽，保留原有列与行内操作）+ 录入入口 + 清仓记录 + 已清仓表 */}
+      {tab === "holdings" && (
+      <div id="portfolio-panel-holdings" role="tabpanel" aria-labelledby="portfolio-tab-holdings" data-testid="portfolio-panel-holdings">
       {/* 录入（HAS1：canonical 模式下停用 legacy 手动录入） */}
       {canonicalHoldings ? (
         <GlassCard className="mb-4" data-testid="portfolio-legacy-entry-disabled">
@@ -1266,12 +1322,6 @@ export function Portfolio() {
         </div>
         <p className="mt-2 text-[11px] text-muted-foreground/60">同一代码再次添加会按加权平均成本合并（加仓）。</p>
       </GlassCard>
-      )}
-
-      {err && (
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-          <AlertCircle className="h-4 w-4 shrink-0" /> {err}
-        </div>
       )}
 
       {/* 持仓表 */}
@@ -1338,9 +1388,99 @@ export function Portfolio() {
         )}
       </GlassCard>
 
-      {/* 建议可用性（数据健康轻量入口，不替代实时 gate） */}
-      <PortfolioGateHealthEntry />
+      {/* 清仓录入（HAS1：canonical 模式下停用，卖出请走 Trades） */}
+      {!canonicalHoldings && (
+      <GlassCard className="mb-4 mt-6">
+        <h3 className="mb-3 text-sm font-semibold">添加清仓记录</h3>
+        <div className="flex flex-wrap items-end gap-2">
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">股票代码</label>
+            <input value={cCode} onChange={(e) => setCCode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6 位代码"
+              className="w-24 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">清仓日期</label>
+            <input type="date" value={cDate} onChange={(e) => setCDate(e.target.value)}
+              className="rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">清仓价</label>
+            <input value={cPrice} onChange={(e) => setCPrice(e.target.value.replace(/[^\d.]/g, ""))} placeholder="卖出价"
+              className="w-24 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">股数</label>
+            <input value={cShares} onChange={(e) => setCShares(e.target.value.replace(/\D/g, ""))} placeholder="如 100"
+              className="w-24 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">买入成本</label>
+            <input value={cCost} onChange={(e) => setCCost(e.target.value.replace(/[^\d.-]/g, "").replace(/(?!^)-/g, ""))} placeholder="成本价，可负"
+              className="w-24 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
+          </div>
+          <button onClick={addClose} disabled={closing}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
+            {closing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} 记录
+          </button>
+        </div>
+      </GlassCard>
+      )}
 
+      {/* 已清仓列表 */}
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-muted-foreground">已清仓</h3>
+        {closed.length > 0 && data && (
+          <span className="text-sm">
+            已实现盈亏合计 <b className={cn("font-mono", pnlColor(data.realized_pnl))}>{fmtSigned(data.realized_pnl)}</b>
+          </span>
+        )}
+      </div>
+      <GlassCard>
+        {closed.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground/60">还没有清仓记录。卖出后在上面记一笔，作为已实现盈亏的历史。</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
+                  {["名称", "清仓日期", "清仓价", "股数", "成本", "已实现盈亏", "盈亏%", ""].map((h) => (
+                    <th key={h} className="whitespace-nowrap px-2 py-2 font-medium">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {closed.map((c, i) => (
+                  <tr key={i} className="border-b border-border/30">
+                    <td className="px-2 py-2.5">
+                      <span className="font-medium">{c.name}</span>
+                      <span className="ml-1.5 font-mono text-xs text-muted-foreground/60">{c.code}</span>
+                    </td>
+                    <td className="px-2 py-2.5 font-mono text-muted-foreground">{c.date}</td>
+                    <td className="px-2 py-2.5 font-mono">{fmtPx(c.price)}</td>
+                    <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmt(c.shares)}</td>
+                    <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmtPx(c.cost)}</td>
+                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(c.pnl))}>{fmtSigned(c.pnl)}</td>
+                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(c.pnl))}>{fmtPct(c.pnl_pct)}</td>
+                    <td className="px-2 py-2.5">
+                      {!canonicalHoldings && (
+                        <button onClick={() => removeClosed(i)} className="text-muted-foreground/50 hover:text-destructive" title="删除">
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </GlassCard>
+      </div>
+      )}
+
+      {/* 持仓建议页签正文：持仓操作建议整块（总体摘要 / 账户资金参考 / 账户级建议 / 逐股建议） */}
+      {tab === "advice" && (
+      <div id="portfolio-panel-advice" role="tabpanel" aria-labelledby="portfolio-tab-advice" data-testid="portfolio-panel-advice">
       {/* 持仓操作建议（结构化 API） */}
       <GlassCard className="mb-4 mt-6">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -1529,94 +1669,8 @@ export function Portfolio() {
           </div>
         )}
       </GlassCard>
-
-      {/* 清仓录入（HAS1：canonical 模式下停用，卖出请走 Trades） */}
-      {!canonicalHoldings && (
-      <GlassCard className="mb-4 mt-6">
-        <h3 className="mb-3 text-sm font-semibold">添加清仓记录</h3>
-        <div className="flex flex-wrap items-end gap-2">
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">股票代码</label>
-            <input value={cCode} onChange={(e) => setCCode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6 位代码"
-              className="w-24 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">清仓日期</label>
-            <input type="date" value={cDate} onChange={(e) => setCDate(e.target.value)}
-              className="rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">清仓价</label>
-            <input value={cPrice} onChange={(e) => setCPrice(e.target.value.replace(/[^\d.]/g, ""))} placeholder="卖出价"
-              className="w-24 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">股数</label>
-            <input value={cShares} onChange={(e) => setCShares(e.target.value.replace(/\D/g, ""))} placeholder="如 100"
-              className="w-24 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">买入成本</label>
-            <input value={cCost} onChange={(e) => setCCost(e.target.value.replace(/[^\d.-]/g, "").replace(/(?!^)-/g, ""))} placeholder="成本价，可负"
-              className="w-24 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
-          </div>
-          <button onClick={addClose} disabled={closing}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
-            {closing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} 记录
-          </button>
-        </div>
-      </GlassCard>
-      )}
-
-      {/* 已清仓列表 */}
-      <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-muted-foreground">已清仓</h3>
-        {closed.length > 0 && data && (
-          <span className="text-sm">
-            已实现盈亏合计 <b className={cn("font-mono", pnlColor(data.realized_pnl))}>{fmtSigned(data.realized_pnl)}</b>
-          </span>
-        )}
       </div>
-      <GlassCard>
-        {closed.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground/60">还没有清仓记录。卖出后在上面记一笔，作为已实现盈亏的历史。</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
-                  {["名称", "清仓日期", "清仓价", "股数", "成本", "已实现盈亏", "盈亏%", ""].map((h) => (
-                    <th key={h} className="whitespace-nowrap px-2 py-2 font-medium">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {closed.map((c, i) => (
-                  <tr key={i} className="border-b border-border/30">
-                    <td className="px-2 py-2.5">
-                      <span className="font-medium">{c.name}</span>
-                      <span className="ml-1.5 font-mono text-xs text-muted-foreground/60">{c.code}</span>
-                    </td>
-                    <td className="px-2 py-2.5 font-mono text-muted-foreground">{c.date}</td>
-                    <td className="px-2 py-2.5 font-mono">{fmtPx(c.price)}</td>
-                    <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmt(c.shares)}</td>
-                    <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmtPx(c.cost)}</td>
-                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(c.pnl))}>{fmtSigned(c.pnl)}</td>
-                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(c.pnl))}>{fmtPct(c.pnl_pct)}</td>
-                    <td className="px-2 py-2.5">
-                      {!canonicalHoldings && (
-                        <button onClick={() => removeClosed(i)} className="text-muted-foreground/50 hover:text-destructive" title="删除">
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </GlassCard>
+      )}
     </div>
   );
 }

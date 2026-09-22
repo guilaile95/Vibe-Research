@@ -56,6 +56,17 @@ function chromiumExecutable() {
   return undefined;
 }
 
+/**
+ * IA-CONVERGENCE-V1：/portfolio 是「常驻带 + 四个页签」，只有激活页签的区块挂载。
+ * 断言落在某个页签的内容上时，必须先切到该页签。
+ */
+async function openPortfolioTab(page, key) {
+  const tab = page.getByTestId(`portfolio-tab-${key}`);
+  await tab.waitFor({ state: "visible", timeout: 15000 });
+  await tab.click();
+  await page.getByTestId(`portfolio-panel-${key}`).waitFor({ state: "visible", timeout: 15000 });
+}
+
 function freePort() {
   return new Promise((resolve, reject) => {
     const server = createServer();
@@ -290,12 +301,14 @@ async function main() {
           }
         });
         await page.goto(`${frontendOrigin}/portfolio`, { waitUntil: "networkidle" });
+        // IA-CONVERGENCE-V1：/portfolio 改为「常驻带 + 四个页签」，只有激活页签的区块挂载。
+        // 组合风险卡与敞口卡在「组合风险」页签，持仓操作建议在「持仓建议」页签。
+        await openPortfolioTab(page, "risk");
         const card = page.getByTestId("portfolio-risk-context-card");
         await card.waitFor();
         await page.getByTestId("portfolio-risk-context-cash-buffer").waitFor();
         assert.equal(await page.getByTestId("portfolio-risk-context-cash-buffer").innerText(), "50.00%");
         await page.getByTestId("security-exposure-card").waitFor();
-        await page.getByRole("heading", { name: "持仓操作建议" }).waitFor();
         const dimensions = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
         assert.ok(dimensions.scroll <= dimensions.client + 2, `${evidenceName} document overflow: ${JSON.stringify(dimensions)}`);
         if (scenario === "legacy") {
@@ -330,6 +343,12 @@ async function main() {
           await page.getByTestId("portfolio-risk-context-industry-empty").waitFor();
           assert.match(await page.getByTestId("portfolio-risk-context-industry-empty").innerText(), /行业分类暂不可用/);
         }
+        // 既有 Security Exposure / Portfolio Advice 仍可见：敞口卡已在上面的风险页签验证，
+        // 持仓建议现在位于「持仓建议」页签，必须显式切过去才算证明它仍可达。
+        await openPortfolioTab(page, "advice");
+        await page.getByRole("heading", { name: "持仓操作建议" }).waitFor();
+        // 截图证据仍是组合风险页签的主题内容。
+        await openPortfolioTab(page, "risk");
         await page.screenshot({ path: path.join(screenshotDir, `${evidenceName}.png`), fullPage: true });
         await browserContext.close();
       }

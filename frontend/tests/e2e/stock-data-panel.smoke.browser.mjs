@@ -1101,6 +1101,16 @@ async function collapseKline(page) {
   await btn.click();
 }
 
+/**
+ * 个股页已改为「常驻概览带 + 页签」；页签是纯视图状态（默认概览）。
+ * 断言落在某个页签的区块上时，必须先切到该页签，否则区块根本没挂载。
+ */
+async function openTab(page, key) {
+  const tab = page.getByTestId(`stock-data-tab-${key}`);
+  await tab.waitFor({ state: "visible", timeout: 10000 });
+  await tab.click();
+}
+
 async function runSmoke(page, mock, errors) {
   const label = "stock-data-smoke";
 
@@ -1134,6 +1144,13 @@ async function runSmoke(page, mock, errors) {
     const mcapDisclosure = page.getByTestId("stock-header-mcap-source");
     if (!(await mcapDisclosure.getByText("总市值来源 Eastmoney f20；缺失不显示为 0。").isVisible().catch(() => false))) {
       errors.push(`${label}: f20 mcap disclosure not visible`);
+    }
+    // 默认页签是概览（纯视图状态），且非激活页签的区块不挂载。
+    if ((await page.getByTestId("stock-data-tab-overview").getAttribute("aria-selected")) !== "true") {
+      errors.push(`${label}: default tab is not 概览`);
+    }
+    if (await page.getByText("扩展数据（可选依赖 · 按需加载）").isVisible().catch(() => false)) {
+      errors.push(`${label}: 行情与技术 block is mounted while 概览 is active`);
     }
   } catch (e) {
     errors.push(`${label}: 000001 PE(TTM)/f115 disclosure assertion failed: ${e.message}`);
@@ -1278,6 +1295,8 @@ async function runSmoke(page, mock, errors) {
   }
 
   // Attention Context 只读面板：绑定已提交代码，展示映射、观察和 provenance。
+  // 该面板现在属于「事件与资讯」页签，先切页签（纯视图状态，不影响 activeCode）。
+  await openTab(page, "events");
   try {
     const attention = page.getByTestId("native-intel-security-context");
     await attention.waitFor({ state: "visible", timeout: 10000 });
@@ -1305,6 +1324,8 @@ async function runSmoke(page, mock, errors) {
     errors.push(`${label}: attention context success scenario failed: ${e.message}`);
   }
 
+  // 事件日历属于「概览」页签。
+  await openTab(page, "overview");
   try {
     const calendar = page.getByTestId("research-event-calendar");
     await calendar.waitFor({ state: "visible", timeout: 10000 });
@@ -1370,11 +1391,14 @@ async function runSmoke(page, mock, errors) {
     } catch (e) {
       errors.push(`${label}: 000002 PE(TTM) dash assertion failed: ${e.message}`);
     }
+    await openTab(page, "events");
     const unavailableAttention = page.getByTestId("native-intel-security-context");
     await unavailableAttention.getByText(/Native Intel 暂不可用/).waitFor({ state: "visible", timeout: 10000 });
     if ((await unavailableAttention.getAttribute("data-security-code")) !== "000002") {
       errors.push(`${label}: unavailable attention context is not bound to 000002`);
     }
+    // 主数据与估值内容仍要在概览页签可见（Native Intel 降级只影响自己那一块）。
+    await openTab(page, "overview");
     if (!(await page.getByRole("heading", { name: "万科A" }).isVisible().catch(() => false))) {
       errors.push(`${label}: Native Intel unavailable broke formal StockData header`);
     }
@@ -1491,6 +1515,8 @@ async function runSmoke(page, mock, errors) {
   mock.resetAttentionContextCalls();
   await sleep(300);
 
+  // 财务体检属于「财务与估值」页签。
+  await openTab(page, "financials");
   const health = page.getByTestId("fundamental-health");
   if (!(await health.isVisible().catch(() => false))) errors.push(`${label}: fundamental health module not visible`);
   for (const text of [
@@ -1514,6 +1540,8 @@ async function runSmoke(page, mock, errors) {
     if (healthText.includes(forbidden)) errors.push(`${label}: forbidden health wording present: ${forbidden}`);
   }
 
+  // 扩展数据（K 线 / 季报财务 / 基本面 / 巨潮公告）与技术指标属于「行情与技术」页签。
+  await openTab(page, "market");
   // Ensure 扩展数据 section is present
   const ext = page.getByText("扩展数据（可选依赖 · 按需加载）");
   if (!(await ext.isVisible().catch(() => false))) {
@@ -1550,6 +1578,13 @@ async function runSmoke(page, mock, errors) {
   }
 
   // 2) Change input to 000002 without clicking query: activeCode must remain 000001
+  // 公开资讯面板挂在「事件与资讯」页签。先切过去，等这次挂载发出的请求落表后再清零计数，
+  // 否则「编辑未提交代码不发请求」会被这次挂载请求污染成假失败。
+  await openTab(page, "events");
+  const eventsMountDeadline = Date.now() + 5000;
+  while (Date.now() < eventsMountDeadline && mock.state.attentionContextCalls.length === 0) {
+    await sleep(30);
+  }
   mock.resetAttentionContextCalls();
   await fillCode(page, "000002");
   await sleep(300);
@@ -1614,6 +1649,16 @@ async function runSmoke(page, mock, errors) {
   mock.resetAttentionContextCalls();
 
   // 3) Expand K-line → request still uses 000001
+  // K 线面板属于「行情与技术」页签。切页签只切视图：在概览 / 事件与资讯停留期间
+  // 不得为未激活的 K 线面板发请求。
+  mock.resetKlineCalls();
+  await openTab(page, "overview");
+  await openTab(page, "events");
+  await sleep(300);
+  if (mock.state.klineCalls.length !== 0) {
+    errors.push(`${label}: tab switching fired /api/kline for an inactive tab`);
+  }
+  await openTab(page, "market");
   mock.resetKlineCalls();
   mock.setKlineDelay(800);
   mock.setKlineError(false);
@@ -1899,6 +1944,8 @@ async function main() {
     await runSmoke(page, mock, errors);
     await page.setViewportSize({ width: 390, height: 844 });
     try {
+      // 相对表现 / 当前行业估值在「概览」页签（上一个步骤停在行情与技术）。
+      await openTab(page, "overview");
       const narrowRelative = page.getByTestId("stock-relative-context");
       await narrowRelative.waitFor({ state: "visible", timeout: 10000 });
       if (!(await narrowRelative.getByText("市场 / 行业相对表现", { exact: true }).isVisible())) {
@@ -1916,6 +1963,33 @@ async function main() {
       }));
       if (viewportState.documentWidth > viewportState.viewport + 1 || viewportState.bodyWidth > viewportState.viewport + 1) {
         errors.push(`stock-data-smoke narrow: page overflow ${JSON.stringify(viewportState)}`);
+      }
+      // 真正承担纵向页面滚动的是应用内层容器（documentElement/body 的 scrollWidth 恒等于视口，
+      // 对「卡片把内层撑宽」这类回归没有判别力）。这里只检查该容器自身的横向滚动；
+      // 表格与二级导航条的内部横滚不在检查范围内。
+      const innerScroller = await page.evaluate(() => {
+        const candidates = [];
+        for (const el of document.querySelectorAll("main, main *")) {
+          const style = getComputedStyle(el);
+          if (!/(auto|scroll)/.test(style.overflowY)) continue;
+          if (el.scrollHeight - el.clientHeight < 8) continue;
+          // 页面滚动容器横跨内容区；卡内表格外框之类的合法局部横滚容器不在候选中。
+          if (el.clientWidth < window.innerWidth * 0.9) continue;
+          candidates.push(el);
+        }
+        candidates.sort(
+          (a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight),
+        );
+        const target = candidates[0];
+        if (!target) return null;
+        return { clientWidth: target.clientWidth, scrollWidth: target.scrollWidth };
+      });
+      if (!innerScroller) {
+        errors.push("stock-data-smoke narrow: page scroll container not found");
+      } else if (innerScroller.scrollWidth > innerScroller.clientWidth + 1) {
+        errors.push(
+          `stock-data-smoke narrow: inner page scroller overflows horizontally ${JSON.stringify(innerScroller)}`,
+        );
       }
     } catch (e) {
       errors.push(`stock-data-smoke narrow: relative/valuation context check failed: ${e.message}`);
