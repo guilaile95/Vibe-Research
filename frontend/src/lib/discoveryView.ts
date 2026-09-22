@@ -4,6 +4,8 @@ import type {
   DiscoverySnapshot,
   DiscoveryStrategy,
 } from "./recoveredMarketTypes.ts";
+import { candidateWorkspaceHref } from "./candidateCampaign.ts";
+import { safeInternalReturnTo } from "./internalReturnTo.ts";
 
 export type DiscoveryFilters = {
   strategy: DiscoveryStrategy;
@@ -12,6 +14,63 @@ export type DiscoveryFilters = {
   restricted: "ALL" | "CLEAR" | "RESTRICTED" | "UNKNOWN";
   health: "ALL" | DiscoveryOpportunityItem["data_health"];
 };
+
+export type ScreenerMode = "discovery" | "candidate" | "full-market" | "patterns" | "dragon-tiger";
+
+export function screenerModeFromSearch(search: URLSearchParams): ScreenerMode {
+  const mode = search.get("mode");
+  return mode === "candidate" || mode === "full-market" || mode === "patterns" || mode === "dragon-tiger"
+    ? mode : "discovery";
+}
+
+export function discoveryFiltersFromSearch(search: URLSearchParams): DiscoveryFilters {
+  const strategy = search.get("strategy");
+  const priority = search.get("priority");
+  const restricted = search.get("restricted");
+  const health = search.get("health");
+  return {
+    strategy: strategy === "SHORT" || strategy === "MEDIUM" ? strategy : "SWING",
+    sector: search.get("sector") || "ALL",
+    priority: priority === "HIGH" || priority === "MEDIUM" || priority === "LOW" ? priority : "ALL",
+    restricted: restricted === "CLEAR" || restricted === "RESTRICTED" || restricted === "UNKNOWN" ? restricted : "ALL",
+    health: health === "normal" || health === "partial" || health === "unknown" || health === "error" ? health : "ALL",
+  };
+}
+
+export function discoverySearchWithFilters(search: URLSearchParams, patch: Partial<DiscoveryFilters>): URLSearchParams {
+  const next = new URLSearchParams(search);
+  const filters = { ...discoveryFiltersFromSearch(search), ...patch };
+  for (const [key, value] of Object.entries(filters)) next.set(key, value);
+  return next;
+}
+
+export function discoveryCardAnchor(item: Pick<DiscoveryOpportunityItem, "security_code" | "strategy">): string {
+  return `discovery-item-${item.strategy}-${item.security_code}`;
+}
+
+/** Navigation context only: observations and authority-bearing facts stay out of the URL. */
+export function discoveryCandidateHref(
+  item: Pick<DiscoveryOpportunityItem, "security_code" | "strategy">,
+  search: URLSearchParams,
+): string {
+  const returnSearch = discoverySearchWithFilters(search, { strategy: item.strategy });
+  returnSearch.set("mode", "discovery");
+  const returnTo = safeInternalReturnTo(`/screener?${returnSearch}#${discoveryCardAnchor(item)}`, "/screener");
+  return `${candidateWorkspaceHref(item.security_code)}?${new URLSearchParams({
+    source: "discovery", strategy: item.strategy, return_to: returnTo,
+  })}`;
+}
+
+/** Surface the supplied strategy observation, then at most two more; never invent an explanation. */
+export function discoverySummaryObservations(item: DiscoveryOpportunityItem) {
+  const primaryCodes = item.strategy === "SHORT" ? ["POSITIVE_SESSION_MOMENTUM", "CHANGE_PCT"]
+    : item.strategy === "SWING" ? ["POSITIVE_RETURN_20D", "RETURN_20D"]
+      : ["POSITIVE_RETURN_60D", "RETURN_60D"];
+  const primary = item.supporting_observations.find((observation) => primaryCodes.includes(observation.code.toUpperCase()));
+  return (primary
+    ? [primary, ...item.supporting_observations.filter((observation) => observation !== primary)]
+    : item.supporting_observations).slice(0, 3);
+}
 
 export function filterDiscoveryItems(snapshot: DiscoverySnapshot, filters: DiscoveryFilters) {
   return (snapshot.queues[filters.strategy] || []).filter((item) => (

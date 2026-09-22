@@ -170,6 +170,42 @@ def _install_all_ok(monkeypatch, *, emotion_date="2026-07-21"):
 
 # ── 1 全部正常 ──────────────────────────────────────────────────────
 
+def test_component_network_failures_do_not_become_breadth_failures(monkeypatch):
+    from requests.exceptions import ProxyError
+
+    board_ranking = market.get_board_ranking
+    _install_all_ok(monkeypatch)
+
+    def fail(*args, **kwargs):
+        raise ProxyError(
+            "HTTPSConnectionPool: /api/qt/clist/get?token=test-token "
+            "https://test-user:test-password@127.0.0.1:7890/ Traceback"
+        )
+
+    monkeypatch.setattr(market, "_CACHE", {})
+    monkeypatch.setattr(market, "get_board_ranking", board_ranking)
+    monkeypatch.setattr(market.astock, "board_ranking", fail)
+    monkeypatch.setattr(market, "get_global_indices", fail)
+    monkeypatch.setattr(market, "get_turnover_top", fail)
+    review = daily_review._build_daily_review()
+
+    assert review["status"] == "partial"
+    assert review["market_environment"]["breadth"]["status"] == "normal"
+    for envelope, label in (
+        (review["market_environment"]["global_indices"], "全球指数"),
+        (review["capital_activity"]["turnover_top"], "成交额榜"),
+        (review["sector_rotation"]["industry"], "行业板块"),
+        (review["sector_rotation"]["concept"], "概念板块"),
+        (review["sector_rotation"]["region"], "地域板块"),
+    ):
+        expected = f"{label}数据获取失败，暂不可用。"
+        assert envelope["status"] == "unavailable"
+        assert envelope["data"] is None
+        assert envelope["warnings"] == [expected]
+        assert f"[{label}] {expected}" in review["warnings"]
+    assert not any("市场广度暂不可用" in warning for warning in review["warnings"])
+
+
 def test_daily_review_all_normal(monkeypatch):
     counts = _install_all_ok(monkeypatch)
     out = daily_review.generate_daily_review()

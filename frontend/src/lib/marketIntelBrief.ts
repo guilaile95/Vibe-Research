@@ -7,7 +7,21 @@ const INDUSTRY_SOURCE_HINTS = new Set([
   "security", "tech", "consumer", "science",
 ]);
 
-/** Keep the API's order; source classification is not article-level relevance. */
+/** Keep the API's order. Deduplicate known article URLs, never infer a shared event from titles. */
 export function selectResearchSourceItems(items: readonly NativeIntelItem[]): NativeIntelItem[] {
-  return items.filter((item) => INDUSTRY_SOURCE_HINTS.has(item.hint)).slice(0, 4);
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (!INDUSTRY_SOURCE_HINTS.has(item.hint)) return false;
+    let key = "";
+    try {
+      const url = new URL(item.canonical_url || item.url);
+      if (url.protocol === "https:" || url.protocol === "http:") {
+        url.hash = "";
+        key = url.href;
+      }
+    } catch { /* An unknown URL is not proof of duplication. */ }
+    if (key && seen.has(key)) return false;
+    if (key) seen.add(key);
+    return true;
+  }).slice(0, 4);
 }

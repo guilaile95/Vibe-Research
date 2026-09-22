@@ -127,15 +127,14 @@ def test_daily_review_api_unavailable_still_200(monkeypatch):
 
 def test_daily_review_api_unexpected_error_502(monkeypatch):
     def boom():
-        raise RuntimeError("unexpected")
+        raise RuntimeError("ProxyError https://test-user:test-password@provider.example/?token=test-token Traceback")
 
     # 展示路径走 get_daily_review_for_display；mock 其同步 live 分支
     monkeypatch.setattr(daily_review, "get_daily_review_for_display", boom)
     r = client.get("/api/daily-review")
     assert r.status_code == 502
     detail = r.json().get("detail", "")
-    assert "每日复盘聚合异常" in detail
-    assert "unexpected" in detail
+    assert detail == "每日复盘暂时无法加载，请稍后重试"
     assert "data" not in r.json() or r.json().get("data") is None
 
 

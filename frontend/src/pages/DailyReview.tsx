@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import {
   Sparkles, Loader2, AlertCircle, RefreshCw, Gauge, TrendingUp, TrendingDown,
   Plus, X, Flame, BarChart3, Globe, Layers, Save, History, Eye, ChevronLeft, ChevronRight,
@@ -129,7 +129,11 @@ const formatUpRatio = (r: number | null | undefined): string => {
   return "—";
 };
 
-const statusBadge = (status: string | undefined) => {
+const statusBadge = (status: string | undefined, previousResult = false): { text: string; cls: string } | null => {
+  if (previousResult) {
+    const original = statusBadge(status);
+    return { text: `上次结果 · ${original?.text ?? "状态未知"}`, cls: "bg-warning/15 text-warning" };
+  }
   if (status === "error") return { text: "读取失败", cls: "text-destructive" };
   if (status === "stale") return { text: "历史数据", cls: "text-warning" };
   if (status === "empty") return { text: "暂无记录", cls: "text-muted-foreground" };
@@ -140,6 +144,7 @@ const statusBadge = (status: string | undefined) => {
 };
 
 export function DailyReview() {
+  const location = useLocation();
   const [needConfig, setNeedConfig] = useState(false);
 
   // 统一聚合包
@@ -263,9 +268,9 @@ export function DailyReview() {
     setCacheMeta(meta ?? null);
     setDrErr(null);
     if (meta?.refresh_failed) {
-      setStaleRefreshNote("最新数据刷新失败，当前继续显示上次成功结果。");
+      setStaleRefreshNote(`${meta.refresh_error || "最新数据刷新失败"}；当前显示上次成功结果。`);
     } else if (meta?.stale) {
-      setStaleRefreshNote("当前显示上次成功结果，后台正在刷新");
+      setStaleRefreshNote(meta.refreshing ? "当前显示上次成功结果，后台正在刷新" : "当前显示上次成功结果，时效待核验");
     } else {
       setStaleRefreshNote(null);
     }
@@ -341,13 +346,14 @@ export function DailyReview() {
         applyDailyReviewPayload(res.data, res.cache_meta);
         setStaleRefreshNote(null);
       })
-      .catch(() => {
+      .catch((error) => {
+        const reason = error instanceof ApiError ? error.message : "最新数据刷新失败";
         setDr((prev) => {
           if (prev) {
-            setStaleRefreshNote("最新数据刷新失败，当前继续显示上次成功结果");
+            setStaleRefreshNote(`${reason}；当前显示上次成功结果`);
             return prev;
           }
-          setDrErr("最新数据刷新失败，当前继续显示上次成功结果");
+          setDrErr(`${reason}；暂无可展示的结果`);
           return null;
         });
       })
@@ -917,6 +923,14 @@ export function DailyReview() {
   const today = new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
   const tradeDateLabel = dr?.trade_date ?? "—";
   const generatedAt = dr?.generated_at ?? "—";
+  const showingPreviousResult = Boolean(dr && (cacheMeta?.stale || staleRefreshNote));
+  const reviewBadge = (status: string | undefined, sourceStale = false) => statusBadge(status, showingPreviousResult || sourceStale);
+
+  useEffect(() => {
+    if (!drDone || location.hash !== "#research-leads-title") return;
+    const frame = requestAnimationFrame(() => document.getElementById("research-leads-title")?.scrollIntoView({block: "start"}));
+    return () => cancelAnimationFrame(frame);
+  }, [drDone, location.hash]);
 
   // 顶栏「问 AI」仍用页面指数摘要作通用聊天上下文；AI 当日复盘不再拼装提示词/市场数据。
   const dataSummary = indices.length
@@ -1145,9 +1159,9 @@ export function DailyReview() {
       { order: 3, node: (<section key="breadth" className="order-[3]">
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Gauge className="h-4 w-4" /> 市场广度</h3>
-        {statusBadge(breadthEnv?.status || dr?.data_health?.components?.breadth) && (
-          <span className={cn("rounded-full px-2 py-0.5 text-[10px]", statusBadge(breadthEnv?.status || dr?.data_health?.components?.breadth)!.cls)}>
-            {statusBadge(breadthEnv?.status || dr?.data_health?.components?.breadth)!.text}
+        {reviewBadge(breadthEnv?.status || dr?.data_health?.components?.breadth, breadthEnv?.is_stale) && (
+          <span className={cn("rounded-full px-2 py-0.5 text-[10px]", reviewBadge(breadthEnv?.status || dr?.data_health?.components?.breadth, breadthEnv?.is_stale)!.cls)}>
+            {reviewBadge(breadthEnv?.status || dr?.data_health?.components?.breadth, breadthEnv?.is_stale)!.text}
           </span>
         )}
       </div>
@@ -1189,9 +1203,9 @@ export function DailyReview() {
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Flame className="h-4 w-4" /> 短线情绪</h3>
         <span className="text-[11px] text-muted-foreground/50">连板股 · 打板情绪</span>
         {emotion?.date && <span className="ml-auto text-[11px] text-muted-foreground/50">{emotion.date}</span>}
-        {statusBadge(emotionEnv?.status) && (
-          <span className={cn("rounded-full px-2 py-0.5 text-[10px]", statusBadge(emotionEnv?.status)!.cls)}>
-            {statusBadge(emotionEnv?.status)!.text}
+        {reviewBadge(emotionEnv?.status) && (
+          <span className={cn("rounded-full px-2 py-0.5 text-[10px]", reviewBadge(emotionEnv?.status)!.cls)}>
+            {reviewBadge(emotionEnv?.status)!.text}
           </span>
         )}
       </div>
@@ -1365,9 +1379,9 @@ export function DailyReview() {
             </button>
           ))}
         </div>
-        {statusBadge(activeBoard.status) && (
-          <span className={cn("rounded-full px-2 py-0.5 text-[10px]", statusBadge(activeBoard.status)!.cls)}>
-            {statusBadge(activeBoard.status)!.text}
+        {reviewBadge(activeBoard.status, activeBoard.env?.is_stale) && (
+          <span className={cn("rounded-full px-2 py-0.5 text-[10px]", reviewBadge(activeBoard.status, activeBoard.env?.is_stale)!.cls)}>
+            {reviewBadge(activeBoard.status, activeBoard.env?.is_stale)!.text}
           </span>
         )}
       </div>
@@ -1544,7 +1558,7 @@ export function DailyReview() {
       {(cacheMeta?.stale || staleRefreshNote) && (
         <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
           <p className="font-medium">
-            {staleRefreshNote || "当前显示上次成功结果，后台正在刷新"}
+            {staleRefreshNote || "当前显示上次成功结果，时效待核验"}
           </p>
           <p className="mt-1 text-xs opacity-90">
             交易日期：{tradeDateLabel}
@@ -1575,7 +1589,7 @@ export function DailyReview() {
           )}
         >
           <p className="font-medium">
-            {overall === "unavailable" ? "每日复盘数据暂不可用" : "部分数据源不可用"}
+            {overall === "unavailable" ? "每日复盘数据暂不可用" : "部分数据缺失或时间待核验"}
           </p>
           <details className="mt-1"><summary className="cursor-pointer">查看 {topWarnings.length} 条来源提示</summary><ul className="mt-1.5 list-inside list-disc space-y-0.5 text-[11px] opacity-90">
             {topWarnings.map((w, i) => (
@@ -1590,9 +1604,9 @@ export function DailyReview() {
         <div className="mb-3 flex items-center justify-between">
           <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
             大盘指数
-            {statusBadge(dr?.data_health?.components?.indices) && (
-              <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", statusBadge(dr?.data_health?.components?.indices)!.cls)}>
-                {statusBadge(dr?.data_health?.components?.indices)!.text}
+            {reviewBadge(dr?.market_environment?.indices?.status ?? dr?.data_health?.components?.indices) && (
+              <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", reviewBadge(dr?.market_environment?.indices?.status ?? dr?.data_health?.components?.indices)!.cls)}>
+                {reviewBadge(dr?.market_environment?.indices?.status ?? dr?.data_health?.components?.indices)!.text}
               </span>
             )}
           </h3>
@@ -1642,7 +1656,7 @@ export function DailyReview() {
           <span>
             数据截至：
             <b className="text-foreground">
-              {dr?.data_cutoff ?? generatedAt}
+              {dr?.data_cutoff?.trim() || "未提供（不能以生成时间代替）"}
             </b>
           </span>
           {cacheMeta?.source && (cacheMeta.source === "memory" || cacheMeta.source === "persisted") && (
@@ -1650,21 +1664,21 @@ export function DailyReview() {
               缓存结果
             </span>
           )}
-          {cacheMeta?.stale && (
+          {showingPreviousResult && (
             <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
-              数据陈旧
+              时效待核验
             </span>
           )}
-          {cacheMeta?.stale && (
+          {showingPreviousResult && (
             <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
               上次成功结果
             </span>
           )}
-          {overall === "normal" && !cacheMeta?.stale && (
-            <span className="rounded-full bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground/70">数据正常</span>
+          {overall === "normal" && !showingPreviousResult && (
+            <span className="rounded-full bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground/70">数值可用 · 时点以来源为准</span>
           )}
           {overall === "partial" && (
-            <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] text-warning">部分数据源不可用</span>
+            <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] text-warning">部分数据缺失或时间待核验</span>
           )}
           {overall === "unavailable" && (
             <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-[10px] text-destructive">每日复盘数据暂不可用</span>
@@ -1690,7 +1704,7 @@ export function DailyReview() {
           <section data-testid="today-market-surface" className="min-w-0">
             {todayView === "market" && (
             <>
-            <TodayResearchLeads review={dr} loading={!drDone} onOpenDetail={(id) => {
+            <TodayResearchLeads review={dr} loading={!drDone} previousResult={showingPreviousResult} onOpenDetail={(id) => {
               const element = document.getElementById(`market-detail-${id}`);
               if (element instanceof HTMLDetailsElement) {
                 element.open = true;
@@ -1723,18 +1737,21 @@ export function DailyReview() {
             <section aria-label="更多市场数据" className="mt-6 space-y-2">
               <h2 className="mb-3 text-sm font-semibold text-muted-foreground">更多市场数据</h2>
               {[
-                { id: "breadth", title: "市场广度", order: 3, status: breadthEnv?.status },
+                { id: "breadth", title: "市场广度", order: 3, status: breadthEnv?.status, sourceStale: breadthEnv?.is_stale },
                 { id: "emotion", title: "短线情绪与连板明细", order: 4, status: emotionEnv?.status },
-                { id: "turnover", title: "成交额与高换手榜", order: 5, status: dr?.data_health?.components?.turnover },
+                { id: "turnover", title: "成交额与高换手榜", order: 5, status: breadthEnv?.status ?? dr?.data_health?.components?.breadth, sourceStale: breadthEnv?.is_stale },
                 { id: "northbound", title: "北向资金", order: 6, status: northboundError ? "error" : northboundEnv?.status },
-                { id: "highlights", title: "板块强弱亮点", order: 7, status: sector?.industry?.status },
-                { id: "rankings", title: "行业、概念与地域排名", order: 8, status: activeBoard.status },
+                { id: "highlights", title: "板块强弱亮点", order: 7, status: sector?.industry?.status, sourceStale: sector?.industry?.is_stale },
+                { id: "rankings", title: "行业、概念与地域排名", order: 8, status: activeBoard.status, sourceStale: activeBoard.env?.is_stale },
                 { id: "short-history", title: "短线市场历史", order: 11, status: bk11Error ? "error" : bk11Env?.status },
-              ].map((item) => <details key={item.id} id={`market-detail-${item.id}`} className="rounded-lg border border-border/60 px-4 py-3">
-                <summary className="cursor-pointer text-sm"><span>{item.title}</span>{statusBadge(item.status) && <span className={cn("ml-3 text-xs", statusBadge(item.status)!.cls)}>{statusBadge(item.status)!.text}</span>}</summary>
+              ].map((item) => {
+                const badge = statusBadge(item.status, item.sourceStale || (showingPreviousResult && ![6, 11].includes(item.order)));
+                return <details key={item.id} id={`market-detail-${item.id}`} className="rounded-lg border border-border/60 px-4 py-3">
+                <summary className="cursor-pointer text-sm"><span>{item.title}</span>{badge && <span className={cn("ml-3 text-xs", badge.cls)}>{badge.text}</span>}</summary>
                 <div className="mt-4">{marketSections.find((section) => section.order === item.order)?.node}</div>
-              </details>)}
-              <details className="rounded-lg border border-border/60 px-4 py-3"><summary className="cursor-pointer text-sm">全球市场 <span className="ml-3 text-xs text-muted-foreground">{globalIdx.length ? `${globalIdx.length} 个指数` : "数据暂不可用"}</span></summary><div className="mt-4">{globalMarket}</div></details>
+              </details>;
+              })}
+              <details className="rounded-lg border border-border/60 px-4 py-3"><summary className="cursor-pointer text-sm">全球市场 <span className="ml-3 text-xs text-muted-foreground">{showingPreviousResult ? "上次结果 · " : ""}{globalIdx.length ? `${globalIdx.length} 个指数` : "数据暂不可用"}</span></summary><div className="mt-4">{globalMarket}</div></details>
             </section>
             </>
             )}

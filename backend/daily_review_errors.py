@@ -14,6 +14,12 @@ SAFE_MARKET_COMPONENT_UNAVAILABLE = "外部行情数据获取失败，部分市�
 SAFE_REFRESH_FAILED = "市场数据刷新失败，请稍后重试"
 SAFE_ADVICE_MARKET_UNAVAILABLE = "市场核心数据暂不可用，无法生成可靠的持仓操作建议"
 
+# 旧缓存可能已丢失原始异常；只纠正固定组件前缀与旧固定文案的完整匹配。
+_LEGACY_BREADTH_WARNING_REPLACEMENTS = {
+    f"[{label}] {SAFE_BREADTH_UNAVAILABLE}": f"[{label}] {label}数据获取失败，暂不可用。"
+    for label in ("大盘指数", "全球指数", "短线情绪", "成交额榜", "行业板块", "概念板块", "地域板块")
+}
+
 _LEAK_HINTS = (
     "httpsconnectionpool",
     "httpconnectionpool",
@@ -69,14 +75,24 @@ def _is_breadth_related(text: str) -> bool:
     ) or "a_share_snapshot" in text
 
 
-def sanitize_public_message(text: Any, *, default: str = SAFE_MARKET_COMPONENT_UNAVAILABLE) -> str:
-    """清洗单条对外文案；网络/代理类异常替换为安全固定句。"""
+def sanitize_public_message(
+    text: Any,
+    *,
+    default: str = SAFE_MARKET_COMPONENT_UNAVAILABLE,
+    component_label: str = "",
+) -> str:
+    """清洗单条文案；显式组件归属优先，无标签时保留旧的广度推断。"""
     if text is None:
         return default
     s = str(text).strip()
     if not s:
         return default
-    if looks_like_leaky_error(s):
+    if looks_like_leaky_error(s) or (component_label and s == SAFE_BREADTH_UNAVAILABLE):
+        # clist / snapshot 等端点由多个组件共用，不能覆盖调用方已知的归属。
+        if component_label:
+            if component_label in ("市场广度", "breadth"):
+                return SAFE_BREADTH_UNAVAILABLE
+            return f"{component_label}数据获取失败，暂不可用。"
         if _is_breadth_related(s):
             return SAFE_BREADTH_UNAVAILABLE
         return default
@@ -94,10 +110,7 @@ def sanitize_warning_list(warnings: Any, *, component_label: str = "") -> list[s
     for w in warnings if isinstance(warnings, list) else []:
         if not isinstance(w, str):
             continue
-        msg = sanitize_public_message(w)
-        # 组件前缀场景：若原文带 [市场广度] 且被替换为全市场句，保持可读
-        if component_label and msg == SAFE_BREADTH_UNAVAILABLE and "广度" in component_label:
-            msg = SAFE_BREADTH_UNAVAILABLE
+        msg = sanitize_public_message(w, component_label=component_label)
         if msg and msg not in seen:
             seen.add(msg)
             out.append(msg)
@@ -109,24 +122,27 @@ def sanitize_review_public_fields(review: dict) -> dict:
     if not isinstance(review, dict):
         return review
     if isinstance(review.get("warnings"), list):
-        review["warnings"] = sanitize_warning_list(review["warnings"])
+        review["warnings"] = sanitize_warning_list([
+            _LEGACY_BREADTH_WARNING_REPLACEMENTS.get(w, w) if isinstance(w, str) else w
+            for w in review["warnings"]
+        ])
 
-    def _walk_envelope(env: Any) -> None:
+    def _walk_envelope(env: Any, component_label: str) -> None:
         if not isinstance(env, dict):
             return
         if isinstance(env.get("warnings"), list):
-            env["warnings"] = sanitize_warning_list(env["warnings"])
+            env["warnings"] = sanitize_warning_list(env["warnings"], component_label=component_label)
 
     me = review.get("market_environment")
     if isinstance(me, dict):
-        for k in ("indices", "global_indices", "breadth"):
-            _walk_envelope(me.get(k))
-    _walk_envelope(review.get("short_term_emotion"))
+        for k, label in (("indices", "大盘指数"), ("global_indices", "全球指数"), ("breadth", "市场广度")):
+            _walk_envelope(me.get(k), label)
+    _walk_envelope(review.get("short_term_emotion"), "短线情绪")
     ca = review.get("capital_activity")
     if isinstance(ca, dict):
-        _walk_envelope(ca.get("turnover_top"))
+        _walk_envelope(ca.get("turnover_top"), "成交额榜")
     sr = review.get("sector_rotation")
     if isinstance(sr, dict):
-        for k in ("industry", "concept", "region"):
-            _walk_envelope(sr.get(k))
+        for k, label in (("industry", "行业板块"), ("concept", "概念板块"), ("region", "地域板块")):
+            _walk_envelope(sr.get(k), label)
     return review

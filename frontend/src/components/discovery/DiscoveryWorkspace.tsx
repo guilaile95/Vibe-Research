@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ChevronRight, Database, Loader2, RefreshCw } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { GlassCard } from "@/components/ui/GlassCard";
-import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
+import { formatDiscoveryObservationValue } from "@/lib/discoveryObservation";
 import {
+  discoveryCandidateHref,
+  discoveryCardAnchor,
+  discoveryFiltersFromSearch,
+  discoverySearchWithFilters,
   discoverySectors,
+  discoverySummaryObservations,
   discoveryTimeSummary,
   filterDiscoveryItems,
   statusLabel,
@@ -77,7 +82,7 @@ function Badge({ children, tone }: { children: React.ReactNode; tone: string }) 
 
 function ObservationValue({ value }: { value: unknown }) {
   if (value == null) return <span>未知</span>;
-  if (typeof value === "number") return <span>{Number.isInteger(value) ? value.toLocaleString("zh-CN") : value.toFixed(3)}</span>;
+  if (typeof value === "number") return <span>{String(value)}</span>;
   if (typeof value === "string") return <span>{value === "MAPPED" ? "已关联" : COVERAGE_LABELS[value as keyof typeof COVERAGE_LABELS] ?? value}</span>;
   if (typeof value === "object" && !Array.isArray(value)) return (
     <span className="inline-flex flex-wrap justify-end gap-x-3 gap-y-1">
@@ -88,14 +93,25 @@ function ObservationValue({ value }: { value: unknown }) {
 }
 
 function OpportunityCard({ item }: { item: DiscoveryOpportunityItem }) {
-  const hasGaps = item.uncertainties.length > 0
-    || item.fundamental_status !== "AVAILABLE"
-    || item.catalyst_status !== "AVAILABLE"
-    || item.data_health !== "normal"
-    || item.evidence_gate !== "SUFFICIENT_FOR_RESEARCH"
-    || item.restricted_universe.status !== "CLEAR";
+  const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const anchor = discoveryCardAnchor(item);
+  const selected = location.hash === `#${anchor}`;
+  const observations = discoverySummaryObservations(item);
+  const gaps = [...new Set([
+    ...(item.restricted_universe.status === "RESTRICTED" ? ["受限研究：需要进一步核对资格"] : []),
+    ...(item.restricted_universe.status === "UNKNOWN" ? ["研究资格未知"] : []),
+    ...(["error", "unknown"].includes(item.data_health) ? [`数据状态：${statusLabel(item.data_health)}`] : []),
+    ...(["ERROR", "INSUFFICIENT"].includes(item.evidence_gate) ? [EVIDENCE_LABELS[item.evidence_gate]] : []),
+    ...item.uncertainties.map((line) => GAP_LABELS[line] ?? line),
+    ...(item.fundamental_status !== "AVAILABLE" ? [`基本面：${COVERAGE_LABELS[item.fundamental_status]}`] : []),
+    ...(item.catalyst_status !== "AVAILABLE" ? [`催化线索：${COVERAGE_LABELS[item.catalyst_status]}`] : []),
+    ...(item.data_health !== "normal" ? [`数据状态：${statusLabel(item.data_health)}`] : []),
+    ...(item.evidence_gate !== "SUFFICIENT_FOR_RESEARCH" ? [EVIDENCE_LABELS[item.evidence_gate]] : []),
+  ])];
   return (
-    <GlassCard className="space-y-4 p-4 sm:p-5" data-testid={`discovery-item-${item.strategy}-${item.security_code}`}>
+    <GlassCard id={anchor} tabIndex={-1} data-return-selected={selected || undefined} className={`scroll-mt-4 space-y-4 p-4 sm:p-5 ${selected ? "ring-2 ring-primary/50" : ""}`} data-testid={anchor}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -107,7 +123,12 @@ function OpportunityCard({ item }: { item: DiscoveryOpportunityItem }) {
           </p>
         </div>
         <Link
-          to={candidateWorkspaceHref(item.security_code)}
+          to={discoveryCandidateHref(item, searchParams)}
+          onClick={(event) => {
+            if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+              navigate({ pathname: location.pathname, search: location.search, hash: `#${anchor}` }, { replace: true });
+            }
+          }}
           className="inline-flex shrink-0 items-center gap-1 py-1 text-sm font-medium text-primary hover:underline"
           data-testid={`discovery-candidate-${item.security_code}`}
         >
@@ -115,14 +136,14 @@ function OpportunityCard({ item }: { item: DiscoveryOpportunityItem }) {
         </Link>
       </div>
 
-      <div className={`grid gap-4 border-t border-border/50 pt-4 ${hasGaps ? "lg:grid-cols-2" : ""}`}>
+      <div className={`grid gap-4 border-t border-border/50 pt-4 ${gaps.length ? "lg:grid-cols-2" : ""}`}>
         <div className="min-w-0">
           <p className="text-xs font-medium">进入{STRATEGY_LABELS[item.strategy]}研究队列的依据</p>
-          <dl className="mt-2 max-w-xl space-y-2 text-xs">
-            {item.supporting_observations.map((observation) => (
+          <dl className="mt-2 max-w-xl space-y-2 text-xs" data-testid={`discovery-summary-observations-${item.security_code}`}>
+            {observations.map((observation) => (
               <div key={`${observation.code}-${observation.source_ref}`} className="flex items-start justify-between gap-3">
                 <dt className="min-w-0 break-words">{observation.label}</dt>
-                <dd className="max-w-[50%] break-words text-right text-muted-foreground"><ObservationValue value={observation.value} /></dd>
+                <dd className="max-w-[50%] break-words text-right font-medium tabular-nums"><ObservationValue value={formatDiscoveryObservationValue(observation.code, observation.value)} /></dd>
               </div>
             ))}
           </dl>
@@ -133,18 +154,11 @@ function OpportunityCard({ item }: { item: DiscoveryOpportunityItem }) {
           </div>
         </div>
 
-        {hasGaps ? (
+        {gaps.length ? (
           <div className="min-w-0 border-l-2 border-amber-500/30 pl-3 text-xs" data-testid={`discovery-gaps-${item.security_code}`}>
             <p className="flex items-center gap-1.5 font-medium text-amber-700 dark:text-amber-300"><AlertCircle className="h-3.5 w-3.5 shrink-0" />仍需确认</p>
-            <ul className="mt-2 space-y-1.5 break-words text-muted-foreground">
-              {item.restricted_universe.status === "RESTRICTED" ? <li className="font-medium text-destructive">受限研究：需要进一步核对资格</li> : null}
-              {item.restricted_universe.status === "UNKNOWN" ? <li>研究资格未知</li> : null}
-              {item.fundamental_status !== "AVAILABLE" ? <li>基本面：{COVERAGE_LABELS[item.fundamental_status]}</li> : null}
-              {item.catalyst_status !== "AVAILABLE" ? <li>催化线索：{COVERAGE_LABELS[item.catalyst_status]}</li> : null}
-              {item.data_health !== "normal" ? <li>数据状态：{statusLabel(item.data_health)}</li> : null}
-              {item.evidence_gate !== "SUFFICIENT_FOR_RESEARCH" ? <li>{EVIDENCE_LABELS[item.evidence_gate]}</li> : null}
-              {item.uncertainties.map((line) => <li key={line}>{GAP_LABELS[line] ?? line}</li>)}
-            </ul>
+            <p className="mt-2 break-words text-muted-foreground">{gaps[0]}</p>
+            {gaps.length > 1 ? <p className="mt-2 text-muted-foreground">另有 {gaps.length - 1} 项，见完整依据与来源。</p> : null}
           </div>
         ) : null}
       </div>
@@ -162,9 +176,18 @@ function OpportunityCard({ item }: { item: DiscoveryOpportunityItem }) {
             {item.reason_codes.map((reason) => <span key={reason} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">{reason}</span>)}
           </div>
           <p>证据状态：{item.evidence_gate} · 研究资格：{item.restricted_universe.status}</p>
+          {gaps.length ? <ul className="space-y-1" aria-label="全部待确认项">{gaps.map((gap) => <li key={gap}>{gap}</li>)}</ul> : null}
           {item.restricted_universe.reason_codes.length ? <p>资格依据：{item.restricted_universe.reason_codes.join(" · ")}</p> : null}
           {item.uncertainties.length ? <p>待确认项原文：{item.uncertainties.join(" · ")}</p> : null}
-          {item.supporting_observations.map((observation) => <p key={`${observation.code}-${observation.source_ref}`}>{observation.label} · {observation.code} · {JSON.stringify(observation.value)} · {observation.source_ref}</p>)}
+          <dl className="space-y-2" aria-label="全部观察依据">
+            {item.supporting_observations.map((observation) => (
+              <div key={`${observation.code}-${observation.source_ref}`}>
+                <dt>{observation.label}</dt>
+                <dd><ObservationValue value={formatDiscoveryObservationValue(observation.code, observation.value)} /></dd>
+                <dd className="mt-1 text-[10px]">{observation.code} · 原始值 {JSON.stringify(observation.value)} · {observation.source_ref}</dd>
+              </div>
+            ))}
+          </dl>
           <p>来源：{item.provenance_refs.join(" · ") || "未提供"}</p>
         </div>
       </details>
@@ -177,13 +200,10 @@ export function DiscoveryWorkspace() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<DiscoveryFilters>({
-    strategy: "SWING",
-    sector: "ALL",
-    priority: "ALL",
-    restricted: "ALL",
-    health: "ALL",
-  });
+  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  const filters = useMemo(() => discoveryFiltersFromSearch(searchParams), [searchParams]);
+  const setFilters = (patch: Partial<DiscoveryFilters>) => setSearchParams(discoverySearchWithFilters(searchParams, patch));
   const controllerRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async (refresh: boolean, background = false) => {
@@ -217,6 +237,18 @@ export function DiscoveryWorkspace() {
 
   const sectors = useMemo(() => snapshot ? discoverySectors(snapshot) : [], [snapshot]);
   const items = useMemo(() => snapshot ? filterDiscoveryItems(snapshot, filters) : [], [snapshot, filters]);
+  const selectedAnchor = items.map(discoveryCardAnchor).find((anchor) => location.hash === `#${anchor}`);
+  useEffect(() => {
+    if (!selectedAnchor) return;
+    const frame = requestAnimationFrame(() => {
+      const card = document.getElementById(selectedAnchor);
+      card?.scrollIntoView({ block: "center" });
+      card?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selectedAnchor, location.key]);
+  const fullMarketSearch = new URLSearchParams(searchParams);
+  fullMarketSearch.set("mode", "full-market");
 
   if (loading && !snapshot) {
     return <GlassCard className="flex min-h-52 items-center justify-center gap-2 p-6 text-sm text-muted-foreground" data-testid="discovery-loading"><Loader2 className="h-4 w-4 animate-spin" />正在寻找 A 股研究线索…</GlassCard>;
@@ -262,32 +294,37 @@ export function DiscoveryWorkspace() {
       <div className="space-y-3 border-y border-border/50 py-3" data-testid="discovery-filters">
         <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="发现策略">
           {STRATEGIES.map((strategy) => (
-            <button key={strategy} type="button" role="tab" aria-selected={filters.strategy === strategy} onClick={() => setFilters((current) => ({ ...current, strategy }))} className={`rounded-md px-3 py-1.5 text-sm ${filters.strategy === strategy ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`} data-testid={`strategy-${strategy}`}>
+            <button key={strategy} type="button" role="tab" aria-selected={filters.strategy === strategy} onClick={() => setFilters({ strategy })} className={`rounded-md px-3 py-1.5 text-sm ${filters.strategy === strategy ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`} data-testid={`strategy-${strategy}`}>
               {STRATEGY_LABELS[strategy]} <span className="ml-1 text-[10px] text-muted-foreground">{snapshot.queues[strategy].length}</span>
             </button>
           ))}
         </div>
         <div className="grid grid-cols-2 gap-2 lg:grid-cols-4 [&>select]:min-w-0">
-          <select aria-label="发现行业或主题" value={filters.sector} onChange={(event) => setFilters((current) => ({ ...current, sector: event.target.value }))} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
+          <select aria-label="发现行业或主题" value={filters.sector} onChange={(event) => setFilters({ sector: event.target.value })} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
             <option value="ALL">全部行业 / 主题</option>
+            {filters.sector !== "ALL" && !sectors.includes(filters.sector) ? <option value={filters.sector}>{filters.sector}（本次队列暂无）</option> : null}
             {sectors.map((sector) => <option key={sector} value={sector}>{sector}</option>)}
           </select>
-          <select aria-label="研究优先级" value={filters.priority} onChange={(event) => setFilters((current) => ({ ...current, priority: event.target.value as DiscoveryFilters["priority"] }))} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
+          <select aria-label="研究优先级" value={filters.priority} onChange={(event) => setFilters({ priority: event.target.value as DiscoveryFilters["priority"] })} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
             {PRIORITIES.map((priority) => <option key={priority} value={priority}>{priority === "ALL" ? PRIORITY_LABELS[priority] : `${PRIORITY_LABELS[priority]}优先级`}</option>)}
           </select>
-          <select aria-label="研究资格" value={filters.restricted} onChange={(event) => setFilters((current) => ({ ...current, restricted: event.target.value as DiscoveryFilters["restricted"] }))} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
+          <select aria-label="研究资格" value={filters.restricted} onChange={(event) => setFilters({ restricted: event.target.value as DiscoveryFilters["restricted"] })} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
             <option value="ALL">全部资格</option><option value="CLEAR">普通</option><option value="RESTRICTED">受限研究</option><option value="UNKNOWN">资格未知</option>
           </select>
-          <select aria-label="发现数据状态" value={filters.health} onChange={(event) => setFilters((current) => ({ ...current, health: event.target.value as DiscoveryFilters["health"] }))} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
+          <select aria-label="发现数据状态" value={filters.health} onChange={(event) => setFilters({ health: event.target.value as DiscoveryFilters["health"] })} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
             <option value="ALL">全部数据状态</option><option value="normal">可用</option><option value="partial">部分可用</option><option value="unknown">未知</option><option value="error">错误</option>
           </select>
         </div>
       </div>
 
       <p className="text-sm text-muted-foreground">当前显示 <span className="font-medium text-foreground">{items.length}</span> 个{STRATEGY_LABELS[filters.strategy]}研究候选</p>
+      <p className="text-xs text-muted-foreground" data-testid="discovery-queue-boundary">仅筛选本次候选队列，每策略最多12条，同优先级顺序非价值排名。</p>
       <div className="space-y-3" data-testid={`discovery-queue-${filters.strategy}`}>
         {items.length ? items.map((item) => <OpportunityCard key={`${item.strategy}-${item.security_code}`} item={item} />) : (
-          <GlassCard className="p-8 text-center text-sm text-muted-foreground">{["unavailable", "error"].includes(snapshot.status) ? "当前发现数据不可用，暂时无法提供研究候选。" : "当前筛选下没有研究候选；信息缺失的对象不会被补成机会。"}</GlassCard>
+          <GlassCard className="space-y-3 p-8 text-center text-sm text-muted-foreground">
+            <p>{["unavailable", "error"].includes(snapshot.status) ? "当前发现数据不可用，暂时无法提供研究候选。" : "当前筛选下没有研究候选；信息缺失的对象不会被补成机会。"}</p>
+            <Link to={{ pathname: location.pathname, search: `?${fullMarketSearch}` }} className="inline-block text-primary hover:underline" data-testid="discovery-open-full-market">进入全市场筛选</Link>
+          </GlassCard>
         )}
       </div>
 

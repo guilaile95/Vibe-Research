@@ -472,7 +472,8 @@ export default function MarketIntelPanel({ embedded = false, compact = false }: 
       {compact && (
         <>
           <div className="rounded-xl border border-border/60 bg-card/50 px-4 py-3" data-testid="market-intel-brief">
-            <p className="text-xs text-muted-foreground">行业来源的近期动态 · 最多 4 条</p>
+              <p className="text-xs text-muted-foreground">行业来源的近期动态 · 同链接去重 · 最多 4 条</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">按来源类别选取，文章与具体公司的关联仍需核对。</p>
             {items?.status === "stale" && <p className="mt-2 text-xs text-warning" role="alert">资讯列表为历史数据：{items.error || "当前来源未提供新鲜资讯"}。</p>}
             {items?.status === "partial" && <p className="mt-2 text-xs text-warning" role="alert">资讯列表部分可用：{items.error || "可能缺少部分来源结果"}。</p>}
             {(items?.status === "unavailable" || items?.error && items.status === "normal") && <p className="mt-2 text-xs text-warning" role="alert">资讯列表当前不可用或读取异常：{items.error || "不能判断是否有匹配资讯"}。</p>}
@@ -487,7 +488,8 @@ export default function MarketIntelPanel({ embedded = false, compact = false }: 
                     </a>
                     <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                       <span>{item.source_name || item.hint}</span>
-                      <span>{item.published_at ? "发布于" : "最近收录"} {formatShanghaiTime(item.published_at || item.last_seen_at)}</span>
+                      <span>发布于 {item.published_at ? formatShanghaiTime(item.published_at) : "未提供"}</span>
+                      <span>首次发现 {formatShanghaiTime(item.first_seen_at)}</span>
                     </p>
                   </li>
                 ))}

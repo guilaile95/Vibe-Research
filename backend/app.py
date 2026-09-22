@@ -63,6 +63,7 @@ import watchlist_store
 import evidence_thesis_router
 import evidence_temporal_authority_router
 import data_health_router
+import runtime_info_router
 import trade_ledger_router
 import trade_attribution_router
 import decision_feedback_router
@@ -396,6 +397,8 @@ app.include_router(evidence_thesis_router.router)
 app.include_router(evidence_temporal_authority_router.router)
 # 数据健康中心：只读聚合 API
 app.include_router(data_health_router.router)
+# 本机运行信息沿用私有 API 边界，不加入匿名 health 白名单。
+app.include_router(runtime_info_router.create_router(__version__))
 # 交易流水：独立存储与 API
 app.include_router(trade_ledger_router.router)
 # P0-TAR1: explicit Frozen Decision attribution / explicit UNPLANNED origin.
@@ -1782,7 +1785,7 @@ def daily_review_snapshot():
             out["cache_meta"] = meta
         return out
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"每日复盘聚合异常：{e}") from e
+        raise HTTPException(502, "每日复盘暂时无法加载，请稍后重试") from e
 
 
 @app.post("/api/daily-review/refresh")

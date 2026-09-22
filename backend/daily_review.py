@@ -109,15 +109,12 @@ def _safe_call(fn, *, source: str, empty_check=None, label: str = ""):
     try:
         raw = fn()
     except Exception as e:  # noqa: BLE001
-        _log.warning("daily_review component failed source=%s: %s", source, e, exc_info=False)
+        _log.warning("daily_review component failed source=%s: %s", source, type(e).__name__, exc_info=False)
         safe = daily_review_errors.sanitize_public_message(
             f"{type(e).__name__}: {e}",
             default=daily_review_errors.SAFE_MARKET_COMPONENT_UNAVAILABLE,
+            component_label=_PREFIX.get(label, label),
         )
-        if "eastmoney" in source or "snapshot" in source or source == "eastmoney_push2":
-            # 广度/东财类优先统一广度文案
-            if "breadth" in label or "市场广度" in label or "clist" in str(e).lower() or "a_share" in str(e).lower():
-                safe = daily_review_errors.SAFE_BREADTH_UNAVAILABLE
         return _wrap(
             "unavailable",
             source=source,
@@ -217,7 +214,7 @@ def _collect_warnings(
     for label, warns in labeled:
         prefix = _PREFIX.get(label, label)
         for w in warns or []:
-            text = daily_review_errors.sanitize_public_message(str(w))
+            text = daily_review_errors.sanitize_public_message(str(w), component_label=prefix)
             # 已带前缀则不再套一层
             full = text if text.startswith("[") else f"[{prefix}] {text}"
             add(full)
@@ -476,6 +473,7 @@ def _build_daily_review() -> dict:
         astock.index_quote,
         source="tencent_quote",
         empty_check=lambda x: not x,
+        label="indices",
     )
     labeled_warns.append(("indices", indices.get("warnings") or []))
 
@@ -484,6 +482,7 @@ def _build_daily_review() -> dict:
         market.get_global_indices,
         source="eastmoney_global_indices",
         empty_check=lambda x: not x,
+        label="global_indices",
     )
     labeled_warns.append(("global_indices", global_indices.get("warnings") or []))
 
@@ -504,7 +503,9 @@ def _build_daily_review() -> dict:
         }
     breadth = _pass_envelope(breadth_raw)
     if isinstance(breadth, dict) and isinstance(breadth.get("warnings"), list):
-        breadth["warnings"] = daily_review_errors.sanitize_warning_list(breadth["warnings"])
+        breadth["warnings"] = daily_review_errors.sanitize_warning_list(
+            breadth["warnings"], component_label=_PREFIX["breadth"],
+        )
     labeled_warns.append(("breadth", breadth.get("warnings") or []))
 
     # —— 短线情绪 ——
@@ -554,6 +555,7 @@ def _build_daily_review() -> dict:
         market.get_turnover_top,
         source="eastmoney_market_snapshot",
         empty_check=lambda x: not isinstance(x, dict) or not x.get("stocks"),
+        label="turnover",
     )
     labeled_warns.append(("turnover", turnover.get("warnings") or []))
 
@@ -696,13 +698,26 @@ def generate_daily_review() -> dict:
 class DailyReviewRefreshError(RuntimeError):
     """显式刷新失败（保留上次成功结果；由 API 映射为非 2xx）。"""
 
+    _PUBLIC_MESSAGES = {
+        "unavailable": "市场数据暂不可用，本次刷新未完成",
+        "critical_unavailable": "关键市场数据暂不可用，本次刷新未完成",
+        "partial_with_existing_normal": "本次市场数据不完整，暂未更新",
+        "persist_failed": "市场数据保存失败，本次刷新未完成",
+        "store_rejected": "本次市场数据未能更新，请稍后重试",
+        "invalid_result": "市场数据格式异常，本次刷新未完成",
+        "invalid_status": "市场数据状态异常，本次刷新未完成",
+        "build_exception": "市场数据整理失败，请稍后重试",
+        "flight_timeout": "等待市场数据刷新超时，请稍后重试",
+    }
+
     def __init__(
         self,
         message: str | None = None,
         *,
         reason: str = "refresh_failed",
     ):
-        super().__init__(message or daily_review_errors.SAFE_REFRESH_FAILED)
+        # 保留 message 参数兼容调用；对外只采用白名单原因，不透传异常原文。
+        super().__init__(self._PUBLIC_MESSAGES.get(reason, daily_review_errors.SAFE_REFRESH_FAILED))
         self.reason = reason
 
 
@@ -731,45 +746,25 @@ def _run_explicit_refresh_build() -> dict:
     try:
         result = _build_daily_review()
     except Exception as exc:  # noqa: BLE001
-        _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
-        raise DailyReviewRefreshError(
-            daily_review_errors.SAFE_REFRESH_FAILED,
-            reason="build_exception",
-        ) from exc
+        raise DailyReviewRefreshError(reason="build_exception") from exc
 
     if not isinstance(result, dict):
-        _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
-        raise DailyReviewRefreshError(
-            daily_review_errors.SAFE_REFRESH_FAILED,
-            reason="invalid_result",
-        )
+        raise DailyReviewRefreshError(reason="invalid_result")
 
     daily_review_errors.sanitize_review_public_fields(result)
 
     # 统一质量判定：同时检查新鲜内存、过期内存与磁盘最近成功
     accepted, reason = _refresh_accepts_result(result)
     if not accepted:
-        _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
-        raise DailyReviewRefreshError(
-            daily_review_errors.SAFE_REFRESH_FAILED,
-            reason=reason,
-        )
+        raise DailyReviewRefreshError(reason=reason)
 
     # 原子替换：先写磁盘，成功再写内存；磁盘失败则保持旧成功（避免状态分裂）
     with _review_lock:
         if not _store_review_on_refresh(result):
-            _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
-            raise DailyReviewRefreshError(
-                daily_review_errors.SAFE_REFRESH_FAILED,
-                reason="persist_failed",
-            )
+            raise DailyReviewRefreshError(reason="persist_failed")
         stored = _cached_review()
         if stored is None:
-            _set_refresh_failure(daily_review_errors.SAFE_REFRESH_FAILED)
-            raise DailyReviewRefreshError(
-                daily_review_errors.SAFE_REFRESH_FAILED,
-                reason="store_rejected",
-            )
+            raise DailyReviewRefreshError(reason="store_rejected")
         _clear_refresh_failure()
         return _success_payload_for_display(stored, source="refresh")
 
@@ -777,17 +772,11 @@ def _run_explicit_refresh_build() -> dict:
 def _await_explicit_refresh_flight(flight: _ExplicitRefreshFlight) -> dict:
     """等待已捕获的 flight；只读该对象，不受后续轮次 current 替换影响。"""
     if not flight.event.wait(timeout=120):
-        raise DailyReviewRefreshError(
-            daily_review_errors.SAFE_REFRESH_FAILED,
-            reason="flight_timeout",
-        )
+        raise DailyReviewRefreshError(reason="flight_timeout")
     if flight.error is not None:
         raise flight.error
     if flight.result is None:
-        raise DailyReviewRefreshError(
-            daily_review_errors.SAFE_REFRESH_FAILED,
-            reason="empty_shared_result",
-        )
+        raise DailyReviewRefreshError(reason="empty_shared_result")
     return copy.deepcopy(flight.result)
 
 
@@ -818,29 +807,44 @@ def refresh_daily_review_for_display() -> dict:
             is_leader = True
 
     if not is_leader:
-        return _await_explicit_refresh_flight(flight)
+        try:
+            return _await_explicit_refresh_flight(flight)
+        except DailyReviewRefreshError as exc:
+            # 共享失败已由 leader 记录；旧 waiter 不得覆盖后续成功轮次的状态。
+            if exc is not flight.error:
+                with _explicit_refresh_lock:
+                    if _explicit_refresh_current is flight and not flight.event.is_set():
+                        _set_refresh_failure(str(exc))
+            raise
 
     # Leader：执行唯一一次 build，结果写入本 flight 对象
     try:
         payload = _run_explicit_refresh_build()
-        flight.result = payload
-        flight.error = None
-        flight.event.set()
+        with _explicit_refresh_lock:
+            # 等待方可能在 build 收尾时超时，最终成功仍清除该轮失败提示。
+            _clear_refresh_failure()
+            # payload 可能已读取到 waiter 的超时标记，发布前同步成功响应与共享结果。
+            payload["cache_meta"]["refresh_failed"] = False
+            payload["cache_meta"]["refresh_error"] = None
+            flight.result = payload
+            flight.error = None
+            flight.event.set()
         return copy.deepcopy(payload)
     except DailyReviewRefreshError as exc:
-        flight.error = exc
-        flight.result = None
-        flight.event.set()
+        with _explicit_refresh_lock:
+            _set_refresh_failure(str(exc))
+            flight.error = exc
+            flight.result = None
+            flight.event.set()
         raise
     except Exception as exc:  # noqa: BLE001
-        wrapped = DailyReviewRefreshError(
-            daily_review_errors.SAFE_REFRESH_FAILED,
-            reason="unexpected",
-        )
+        wrapped = DailyReviewRefreshError(reason="unexpected")
         wrapped.__cause__ = exc
-        flight.error = wrapped
-        flight.result = None
-        flight.event.set()
+        with _explicit_refresh_lock:
+            _set_refresh_failure(str(wrapped))
+            flight.error = wrapped
+            flight.result = None
+            flight.event.set()
         raise wrapped from exc
     finally:
         # 允许下一轮独立请求创建新 flight；旧 flight 对象仍可被其 waiter 安全读取
@@ -864,8 +868,9 @@ def _cache_meta(
         "refreshing": refreshing,
         "saved_at": saved_at,
         "age_seconds": age_seconds,
-        "refresh_failed": bool(failed and stale),
-        "refresh_error": err if (failed and stale) else None,
+        # 新鲜缓存也可能来自失败刷新之前；失败原因与 TTL 是否到期独立。
+        "refresh_failed": failed,
+        "refresh_error": err if failed else None,
     }
 
 

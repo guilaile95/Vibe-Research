@@ -14,7 +14,9 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
 const frontendDist = path.join(root, "frontend", "dist");
-const shotDir = path.join(root, "docs", "screenshots", "daily-review-refresh-accept");
+const shotDir = path.resolve(
+  process.env.DAILY_REVIEW_SCREENSHOT_DIR?.trim() || path.join(tmpdir(), `vr-daily-review-refresh-${process.pid}`),
+);
 const backendDir = path.join(root, "backend");
 const e2eDir = __dirname;
 
@@ -125,6 +127,7 @@ async function main() {
     process.exit(2);
   }
   await mkdir(shotDir, { recursive: true });
+  console.log(`SCREENSHOT_DIR=${shotDir}`);
   const dataDir = await mkdtemp(path.join(tmpdir(), "vr-dr-e2e-"));
   const reportsDir = await mkdtemp(path.join(tmpdir(), "vr-dr-reports-"));
   const reviewDb = path.join(dataDir, "daily_reviews.sqlite3");
@@ -137,13 +140,15 @@ async function main() {
     VR_DATA_DIR: dataDir,
     VR_REPORTS_DIR: reportsDir,
     VIBE_RESEARCH_REVIEW_DB: reviewDb,
+    VR_ALLOW_ORIGINS: `http://127.0.0.1:${frontendPort}`,
+    VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH: "1",
     PYTHONPATH: [backendDir, e2eDir, process.env.PYTHONPATH || ""].filter(Boolean).join(path.delimiter),
   };
 
   const uvicorn = spawn(
     python,
     ["-m", "uvicorn", "daily_review_harness_app:app", "--host", "127.0.0.1", "--port", String(backendPort), "--log-level", "warning"],
-    { cwd: e2eDir, env, stdio: ["ignore", "pipe", "pipe"] },
+    { cwd: e2eDir, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
   );
   let uvLog = "";
   uvicorn.stdout.on("data", (d) => { uvLog += d.toString(); });
@@ -287,12 +292,13 @@ async function main() {
     if (bodyAfter.includes("持仓建议请求参数无效")) {
       errors.push("unexpected portfolio advice param error on review page");
     }
-    // capture generated_at marker from successful refresh for failure comparison
-    const genAfterOk = await page.evaluate(async () => {
+    // Capture the successful snapshot so a failed refresh cannot replace its data.
+    const snapshotAfterOk = await page.evaluate(async () => {
       const r = await fetch("/api/daily-review");
       const j = await r.json();
-      return j?.data?.generated_at || null;
+      return j?.data || null;
     });
+    const genAfterOk = snapshotAfterOk?.generated_at || null;
     if (!genAfterOk) errors.push("missing generated_at after successful refresh");
 
     // —— 失败刷新：保留旧 generated_at 与页面数据 ——
@@ -316,25 +322,29 @@ async function main() {
     if (!(lastRefreshStatus >= 400)) {
       errors.push(`expected fail refresh non-2xx, got ${lastRefreshStatus}`);
     }
-    const genAfterFail = await page.evaluate(async () => {
+    const snapshotAfterFail = await page.evaluate(async () => {
       const r = await fetch("/api/daily-review");
       const j = await r.json();
-      return j?.data?.generated_at || null;
+      return j?.data || null;
     });
-    if (genAfterOk && genAfterFail && genAfterFail !== genAfterOk) {
+    const genAfterFail = snapshotAfterFail?.generated_at || null;
+    if (genAfterOk && genAfterFail !== genAfterOk) {
       errors.push(
         `fail refresh must keep old generated_at: before=${genAfterOk} after=${genAfterFail}`,
       );
     }
+    if (snapshotAfterOk && JSON.stringify(snapshotAfterFail) !== JSON.stringify(snapshotAfterOk)) {
+      errors.push("fail refresh must keep the complete previous successful snapshot unchanged");
+    }
+    // The harness raises during build; public detail uses the safe build_exception reason.
+    const expectedFailureNote = "市场数据整理失败，请稍后重试；当前显示上次成功结果";
     const failNote = await page
-      .getByText("最新数据刷新失败，当前继续显示上次成功结果")
+      .getByText(expectedFailureNote, { exact: true })
       .first()
       .isVisible()
       .catch(() => false);
     if (!failNote) {
-      errors.push(
-        "fail refresh UI must show hard message: 最新数据刷新失败，当前继续显示上次成功结果",
-      );
+      errors.push(`fail refresh UI must show the safe reason and retained-data message: ${expectedFailureNote}`);
     }
     await page.screenshot({ path: path.join(shotDir, "daily-review-refresh.png"), fullPage: true });
 
@@ -356,6 +366,11 @@ async function main() {
     await page.reload({ waitUntil: "networkidle" });
     await page.waitForTimeout(800);
 
+    // Portfolio now mounts advice actions only inside the advice tab.
+    const adviceTab = page.getByTestId("portfolio-tab-advice");
+    await adviceTab.waitFor({ state: "visible", timeout: 15000 });
+    await adviceTab.click();
+    await page.getByTestId("portfolio-panel-advice").waitFor({ state: "visible", timeout: 15000 });
     const adviceBtn = page.getByRole("button", { name: /生成持仓|重新生成持仓/ }).first();
     if (await adviceBtn.isVisible().catch(() => false)) {
       await adviceBtn.click();

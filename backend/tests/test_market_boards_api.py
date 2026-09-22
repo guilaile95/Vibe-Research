@@ -171,3 +171,35 @@ def test_boards_api_calls_once(monkeypatch):
     r = client.get("/api/market/boards?type=industry&top_n=20")
     assert r.status_code == 200
     assert calls["n"] == 1
+
+
+@pytest.mark.parametrize(
+    ("board_type", "label"),
+    [("industry", "行业板块"), ("concept", "概念板块"), ("region", "地域板块")],
+)
+def test_boards_api_provider_network_failure_keeps_safe_component_label(monkeypatch, board_type, label):
+    """只替换 provider seam，真实 market 信封与 API 路径保留。"""
+    from requests.exceptions import ProxyError
+
+    calls = []
+
+    def fail(bt, top_n=20):
+        calls.append((bt, top_n))
+        raise ProxyError(
+            "HTTPSConnectionPool(host='provider.example', port=443): "
+            "Max retries exceeded with url: /api/qt/clist/get?token=test-token "
+            "https://test-user:test-password@127.0.0.1:7890/ Traceback"
+        )
+
+    monkeypatch.setattr(market, "_CACHE", {})
+    monkeypatch.setattr(market.astock, "board_ranking", fail)
+    response = client.get(f"/api/market/boards?type={board_type}")
+
+    assert response.status_code == 200
+    envelope = response.json()["data"]
+    assert envelope["status"] == "unavailable"
+    assert envelope["data"] is None
+    assert envelope["source"] == "eastmoney_push2"
+    assert envelope["warnings"] == [f"{label}数据获取失败，暂不可用。"]
+    assert calls == [(board_type, 100)]
+    assert market._CACHE == {}
