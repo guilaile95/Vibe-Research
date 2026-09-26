@@ -36,6 +36,7 @@ import { cn } from "@/lib/utils";
 import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 import { TodayResearchLeads } from "@/components/dailyReview/TodayResearchLeads";
 import { MarketComparisonSummary } from "@/components/dailyReview/MarketComparisonSummary";
+import { RecentResearch } from "@/components/dailyReview/RecentResearch";
 
 const HISTORY_LIMIT = 20;
 const COMPARE_BOARD_LIMIT = 10;
@@ -1715,6 +1716,7 @@ export function DailyReview() {
             <div className="mb-6 grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
               <div className="min-w-0"><MarketCloud embedded /></div>
               <div className="min-w-0 space-y-3">
+                <RecentResearch />
                 <section className="rounded-xl border border-border/60 bg-card/40 p-4">
                   <div className="mb-2 flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">关注股票</h2><Link to="/watchlist" className="text-xs text-primary hover:underline">全部自选 →</Link></div>
                   {watchCodes.length ? <ul className="divide-y divide-border/40">{watchCodes.slice(0, 5).map((code) => {
