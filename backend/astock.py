@@ -1,7 +1,7 @@
 """A股全栈数据层 —— 移植自 a-stock-data 工具包（五层数据源，自包含）。
 
 分级依赖：
-  - 行情（腾讯）        : 仅需标准库 urllib —— 永远可用
+  - 行情（腾讯）        : 仅需标准库 urllib，依赖上游可用性
   - 研报（东财）+ PDF   : 仅需 requests —— 轻量必装
   - 一致预期/新闻/公告  : akshare（惰性导入，缺失时优雅报错）
   - K线/财务/F10        : mootdx（惰性导入，缺失时优雅报错）
@@ -25,11 +25,11 @@ UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
 
 def get_prefix(code: str) -> str:
-    """6 位代码 → 交易所前缀。5 开头是沪市基金/ETF（51/56/58 等），深市基金 15/16 开头走默认 sz。"""
+    """6 位代码 → 交易所前缀；北交所 92 / 历史 4、8 号段优先于沪 B 股 9。"""
+    if code.startswith(("4", "8", "92")):
+        return "bj"
     if code.startswith(("6", "9", "5")):
         return "sh"
-    if code.startswith("8"):
-        return "bj"
     return "sz"
 
 

@@ -13,6 +13,9 @@ chat.py / mcp_server.py / debate.py 共用本模块，新增工具只需改这�
 
 from __future__ import annotations
 
+import math
+from datetime import date
+
 import astock
 import gstock
 import market
@@ -130,31 +133,57 @@ _TENCENT_KLINE = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 
 
 def _kline_tencent(code: str, period: str, n: int) -> list[dict]:
-    """腾讯前复权 K 线（备用源）。
+    """AI 工具首选的腾讯前复权 K 线；无效序列整体拒绝。
 
-    mootdx 走 TCP 7709，在部分网络下连不通（实测本机返回空）；东财 push2his 的 kline 路径
-    也可能被拦。腾讯 HTTP 接口实测不封 IP（项目数据源分层里的首选行情源），拿它兜底。
+    仅复用已有 HTTP 数据源。可用性不作保证，调用者在失败时使用既有备用路径。
     返回字段顺序：日期, 开, 收, 高, 低, 成交量。
     """
     import requests
 
     prefix = astock.get_prefix(code)
+    if prefix == "bj":
+        # Tencent can return only the latest bar for BSE, not the requested
+        # history. Let the caller use its qualified daily provider instead.
+        raise ValueError("Tencent K-line history does not support BSE")
     sym = f"{prefix}{code}"
     r = requests.get(_TENCENT_KLINE, params={"param": f"{sym},{period},,,{n},qfq"},
                      headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
-    d = (r.json().get("data") or {}).get(sym) or {}
-    raw = d.get("qfq" + period) or d.get(period) or []
+    try:
+        r.raise_for_status()
+        payload = r.json()
+    finally:
+        r.close()
+    d = (payload.get("data") or {}).get(sym) if isinstance(payload, dict) else None
+    if not isinstance(d, dict):
+        raise ValueError("Tencent K-line security identity is missing")
+    # A present-but-empty adjusted series must never fall back to raw prices.
+    # Securities without an adjustment event may return only the period key.
+    key = "qfq" + period
+    raw = d[key] if key in d else d.get(period)
+    if not isinstance(raw, list) or not raw or len(raw) > n:
+        raise ValueError("Tencent K-line series is missing or exceeds the request")
     out = []
+    previous_date = None
     for it in raw:
         if not isinstance(it, list) or len(it) < 6:
-            continue
-        def _f(x):
-            try:
-                return float(x)
-            except (TypeError, ValueError):
-                return None
-        out.append({"date": it[0], "open": _f(it[1]), "close": _f(it[2]),
-                    "high": _f(it[3]), "low": _f(it[4]), "volume": _f(it[5])})
+            raise ValueError("Tencent K-line row is malformed")
+        stamp = date.fromisoformat(it[0])
+        if stamp.isoformat() != it[0] or (previous_date is not None and stamp <= previous_date):
+            raise ValueError("Tencent K-line dates are invalid or not increasing")
+        values = []
+        for value in it[1:6]:
+            if isinstance(value, bool) or value is None:
+                raise ValueError("Tencent K-line numeric value is missing")
+            number = float(value)
+            if not math.isfinite(number):
+                raise ValueError("Tencent K-line numeric value is not finite")
+            values.append(number)
+        opened, closed, high, low, volume = values
+        if min(opened, closed, high, low) <= 0 or volume < 0 or not low <= opened <= high or not low <= closed <= high:
+            raise ValueError("Tencent K-line OHLC or volume is invalid")
+        out.append({"date": stamp.isoformat(), "open": opened, "close": closed,
+                    "high": high, "low": low, "volume": volume})
+        previous_date = stamp
     return out
 
 
@@ -165,8 +194,7 @@ def _kline(args: dict):
     cat = {"day": 4, "week": 5, "month": 6}[period]
     n = max(5, min(int(args.get("count") or 60), 250))
     code = str(args["code"])
-    # 腾讯优先：HTTP、实测不封 IP、亚秒级返回；mootdx 走 TCP 7709，连不通时要等十几秒超时
-    # （实测本机就是这种情况），放在后面当备份而不是主路径。
+    # 保留既有腾讯优先顺序；一份无效响应不与备用源的数据拼接。
     try:
         rows = _kline_tencent(code, period, n)
     except Exception:  # noqa: BLE001 — 网络问题转备用源
