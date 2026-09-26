@@ -133,10 +133,9 @@ _TENCENT_KLINE = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 
 
 def _kline_tencent(code: str, period: str, n: int) -> list[dict]:
-    """腾讯前复权 K 线（备用源）。
+    """AI 工具首选的腾讯前复权 K 线；无效序列整体拒绝。
 
-    mootdx 走 TCP 7709，在部分网络下连不通（实测本机返回空）；东财 push2his 的 kline 路径
-    也可能被拦。腾讯 HTTP 接口实测不封 IP（项目数据源分层里的首选行情源），拿它兜底。
+    仅复用已有 HTTP 数据源。可用性不作保证，调用者在失败时使用既有备用路径。
     返回字段顺序：日期, 开, 收, 高, 低, 成交量。
     """
     import requests
@@ -195,8 +194,7 @@ def _kline(args: dict):
     cat = {"day": 4, "week": 5, "month": 6}[period]
     n = max(5, min(int(args.get("count") or 60), 250))
     code = str(args["code"])
-    # 腾讯优先：HTTP、实测不封 IP、亚秒级返回；mootdx 走 TCP 7709，连不通时要等十几秒超时
-    # （实测本机就是这种情况），放在后面当备份而不是主路径。
+    # 保留既有腾讯优先顺序；一份无效响应不与备用源的数据拼接。
     try:
         rows = _kline_tencent(code, period, n)
     except Exception:  # noqa: BLE001 — 网络问题转备用源

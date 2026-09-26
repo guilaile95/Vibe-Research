@@ -257,9 +257,9 @@ async function handleApi(route) {
         market_environment: {
           indices: { status: "normal", data: [{name: "上证指数", price: 3100, change_pct: 1.2}, {name: "深证成指", price: 10000, change_pct: -0.2}, {name: "创业板指", price: 2000, change_pct: 0.6}, {name: "科创50", price: 900, change_pct: 0.3}] },
           global_indices: {status: "unavailable", data: []},
-          breadth: {status: scenario === "truth-breadth-missing" ? "unavailable" : "normal", data: {up_count: 3200, down_count: 1800, total_amount: 1200000000000}},
+          breadth: {status: scenario === "truth-breadth-missing" ? "unavailable" : "normal", trade_date: scenario === "truth-current" ? "2026-08-28" : null, data_time: null, data: {up_count: 3200, down_count: 1800, total_amount: 1200000000000}},
         },
-        sector_rotation: {industry: {status: "partial", data: {top: [], bottom: []}}, highlights: {strongest_industry: {name: "半导体", change_pct: 2.5}, weakest_industry: {name: "银行", change_pct: -0.8}}},
+        sector_rotation: {industry: {status: "partial", trade_date: "2026-08-28", data_time: scenario === "truth-current" ? null : "2026-08-28 15:00:00", data: {top: [], bottom: []}}, highlights: {strongest_industry: {name: "半导体", change_pct: 2.5}, weakest_industry: {name: "银行", change_pct: -0.8}}},
         capital_activity: {amount_top: scenario === "truth-breadth-missing" ? [] : [{code: "600519", name: "贵州茅台", amount: 2000000000, change_pct: 1.2}]},
         short_term_emotion: {status: "normal", data: {date: "2026-08-29", zt_count: 45, dt_count: 3, max_boards: 4, lianban_stocks: []}},
         data_health: {components: {indices: "normal", turnover: scenario === "truth-current" ? "unavailable" : "normal", industry_boards: "partial"}},
@@ -635,7 +635,8 @@ try {
   const amountLead = page.getByTestId("today-lead-成交活跃");
   await amountLead.getByText("贵州茅台 · 成交额 20.00 亿元 · 成交榜首位", {exact: true}).waitFor();
   assert.equal(await amountLead.getByText("数据暂不可用", {exact: true}).count(), 0, "legacy turnover failure must not mark snapshot amount facts unavailable");
-  await amountLead.getByText("全 A 快照 · 行情时间 未提供", {exact: true}).waitFor();
+  await amountLead.getByText("全 A 快照 · 交易日 2026-08-28 · 行情时间 未提供", {exact: true}).waitFor();
+  await page.getByTestId("today-lead-行业表现").getByText("行业排名 · 交易日 2026-08-28 · 行情时间 未提供", {exact: true}).waitFor();
   await page.locator("#market-detail-turnover > summary").getByText("正常", {exact: true}).waitFor();
 
   scenario = "truth-refresh-fail";
@@ -651,6 +652,8 @@ try {
 
   scenario = "truth-old";
   await page.reload({waitUntil: "domcontentloaded"});
+  await amountLead.getByText("全 A 快照 · 交易日 未提供 · 行情时间 未提供", {exact: true}).waitFor();
+  await page.getByTestId("today-lead-行业表现").getByText("行业排名 · 交易日 2026-08-28 · 行情时间 2026-08-28 15:00:00", {exact: true}).waitFor();
   await amountLead.getByText("上次结果 · 时效待核验", {exact: true}).waitFor();
   await page.locator("#market-detail-emotion > summary").getByText("上次结果 · 正常", {exact: true}).waitFor();
   assert.equal(await page.locator("[data-market-cloud]").getByText("上次结果", {exact: false}).count(), 0, "independent market cloud must retain its own freshness");
