@@ -13,11 +13,13 @@ import {
   loadLlm,
   runtimeLabel,
   type ChatReportSource,
+  type ChatReportCoverage,
   type ChatMsg,
 } from "@/lib/llm";
 import { ApiError } from "@/lib/api";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { storageGet, storageSet, storageRemove } from "@/lib/storage";
+import { parseReportChatCoverage } from "@/lib/reportChatCoverage";
 
 // 对话持久化。此前 msgs 只是组件内的 useState：切页面卸载、刷新、
 // 关标签页，问过的东西全没了——每轮对话是花了自己 API 额度换来的，丢掉的是真金白银。
@@ -34,6 +36,7 @@ const MAX_PERSISTED_CHARS = 80_000;
 type StoredMsg = ChatMsg & {
   tools?: ToolUse[];
   sources?: ChatReportSource[];
+  coverage?: ChatReportCoverage;
   // 流式中途被中止、只收到半截的回答。**不落盘、也不进下一轮 history**：
   // 否则刷新后它会以「完整回答」的身份被喂回模型，后续推理建立在残句上。
   // UI 仍然显示，用户能看到已经拿到的部分。
@@ -53,6 +56,7 @@ function loadChat(key: string): StoredMsg[] {
         (m.role === "user" || m.role === "assistant"),
     ).map((m) => ({
       ...m,
+      coverage: parseReportChatCoverage(m.coverage),
       sources: Array.isArray(m.sources) ? m.sources.filter(
         (source) => source && typeof source.report_id === "string" &&
           typeof source.title === "string" &&
@@ -292,7 +296,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     try {
       await chatStream(history, context, {
         onTool: (tool, args) => { if (alive()) patchLast((msg) => ({ ...msg, tools: [...(msg.tools || []), { name: tool, arg: argStr(args) }] })); },
-        onSources: (items) => { if (alive()) patchLast((msg) => ({ ...msg, sources: items })); },
+        onSources: (items, coverage) => { if (alive()) patchLast((msg) => ({ ...msg, sources: items, coverage })); },
         onDelta: (t) => { if (alive()) patchLast((msg) => ({ ...msg, content: msg.content + t })); },
       }, ac.signal, session, reportIds);
       // 正常收完：摘掉 partial，这条回答才开始落盘、才进下一轮 history。
@@ -444,10 +448,25 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                                 <div className="prose prose-sm dark:prose-invert max-w-none break-words text-foreground">
                                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
                                 </div>
-                                {m.sources && m.sources.length > 0 && (
-                                  <div className="mt-3 rounded-xl border border-border/50 bg-muted/40 p-3 text-xs text-muted-foreground">
+                                {(m.coverage || (m.sources && m.sources.length > 0)) && (
+                                  <div className="mt-3 break-words rounded-xl border border-border/50 bg-muted/40 p-3 text-xs text-muted-foreground">
                                     <p className="mb-1 font-medium text-foreground">检索依据</p>
-                                    {m.sources.map((source) => (
+                                    {m.coverage && (
+                                      <div data-testid="chat-report-coverage" className="mb-2 space-y-1">
+                                        <p>已选 {m.coverage.selected_count} 份 · 检索命中 {m.coverage.matched_report_count} 份 · 送入模型 {m.coverage.included_report_count} 份（{m.coverage.included_hit_count} 个片段）</p>
+                                        <p>检索上限 {m.coverage.hit_limit} 个片段：{m.coverage.hit_limit_reached ? "已达到" : "未达到"} · 上下文截断：{m.coverage.context_truncated ? "有" : "无"}</p>
+                                        <p>仅检索摘录，不代表已读取报告全文。{(m.coverage.uncovered_reports.length > 0 || m.coverage.context_truncated) && "资料覆盖不完整。"}</p>
+                                        {m.coverage.uncovered_reports.length > 0 && (
+                                          <details data-testid="chat-report-uncovered">
+                                            <summary className="cursor-pointer">未覆盖 {m.coverage.uncovered_reports.length} 份 · 查看原因</summary>
+                                            {m.coverage.uncovered_reports.map((report) => (
+                                              <p key={report.report_id} className="mt-1">{report.title}：{report.message}</p>
+                                            ))}
+                                          </details>
+                                        )}
+                                      </div>
+                                    )}
+                                    {m.sources?.map((source) => (
                                       <p key={`${source.report_id}:${source.page ?? 0}`}>
                                         {source.title} · report_id={source.report_id} · {source.page ? `第 ${source.page} 页` : "页码不可用"}
                                       </p>

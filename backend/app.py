@@ -742,11 +742,10 @@ def chat(req: ChatReq):
             context = req.context
             sources = []
             if req.report_ids:
-                hits = mr.search_report_text(question, report_ids=req.report_ids, limit=8)
-                report_context, sources = mr.build_chat_report_context(hits)
+                hits = mr.search_report_text(question, report_ids=req.report_ids, limit=mr.CHAT_REPORT_HIT_LIMIT)
+                report_context, sources, coverage = mr.build_chat_report_context(hits, report_ids=req.report_ids)
                 context = f"{context or '（无页面数据）'}\n\n{report_context}"
-                if sources:
-                    yield json.dumps({"type": "sources", "items": sources}, ensure_ascii=False) + "\n"
+                yield json.dumps({"type": "sources", "items": sources, "coverage": coverage}, ensure_ascii=False) + "\n"
             if is_codex_runtime:
                 question, history = _agent_runtime_turn(req.messages)
                 events = agent_runtime.stream_chat(

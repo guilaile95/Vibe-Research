@@ -255,6 +255,7 @@ def test_malformed_response_one_repair_retry(tmp_db):
         if call_count == 1:
             # Malformed JSON (unquoted key, trailing comma)
             return '{core_trends: "未加引号",}'
+        assert "第 1 行，第 2 列" in messages[1]["content"]
         # Repair retry returns valid JSON
         return json.dumps({
             "core_trends": "修复成功热点", "sentiment_controversy": "中立", "signals": "异动",
@@ -270,7 +271,10 @@ def test_malformed_response_one_repair_retry(tmp_db):
 
 # 13. repair failure -> honest ERROR/PARTIAL -> no fake structured SUCCESS
 def test_repair_failure_honest_error_no_fake_success(tmp_db):
+    call_count = 0
     def mock_runner(cfg, messages):
+        nonlocal call_count
+        call_count += 1
         return "完全不是 JSON 的随例文本：今天天气不错"
 
     report = reporting.generate_report(path=tmp_db, mode="CURRENT", commit=False)
@@ -278,6 +282,142 @@ def test_repair_failure_honest_error_no_fake_success(tmp_db):
     assert res["status"] == "ERROR"
     assert res["error_kind"] == "parse_error"
     assert "JSON 解析失败" in res["error"]
+    assert call_count == 2
+
+
+@pytest.mark.parametrize("wrapper", [
+    "{payload}", "  {payload}\n", "```json\n{payload}\n```", "```\r\n{payload}\r\n```",
+])
+def test_json_response_preserves_complete_payload(wrapper):
+    # Fence-like text and braces inside a string are data, not an envelope.
+    expected = [{"evidence": 'literal ```json and {braces}', "nested": {"key": 1}}]
+    assert ai._load_json_response(wrapper.format(payload=json.dumps(expected))) == expected
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_json_response_rejects_nonstandard_constants(constant):
+    for payload in (constant, '{"private-key": [{"value": ' + constant + '}]}'):
+        with pytest.raises(ai._AIJSONError, match="非标准常量") as exc:
+            ai._load_json_response(payload)
+        assert "有限数值" in str(exc.value)
+        assert "private-key" not in str(exc.value)
+    # These spellings remain valid as JSON strings.
+    assert ai._load_json_response(json.dumps(constant)) == constant
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_analysis_repair_rejects_nonstandard_constants(tmp_db, caplog, constant):
+    payload = json.dumps(ai._empty_analysis_dict()).replace(
+        '"standalone_summaries": {}',
+        '"standalone_summaries": {"private-key": [' + constant + ']}',
+    )
+    runner = MagicMock(return_value=payload)
+    result = ai.analyze_report(
+        {"items": []}, cfg={"provider": "cli-codex"}, model_runner=runner, path=tmp_db,
+    )
+    assert runner.call_count == 2
+    assert "非标准常量" in runner.call_args_list[1].args[1][1]["content"]
+    assert result["status"] == "ERROR"
+    assert result["error_kind"] == "parse_error"
+    assert "非标准常量" in result["error"]
+    assert "private-key" not in result["error"] + caplog.text
+
+
+@pytest.mark.parametrize("case", [
+    "duplicate_root", "duplicate_nested", "escaped_duplicate",
+    "two_fences", "leading_prose", "trailing_prose", "fenced_trailing_prose",
+    "two_objects", "unclosed_fence",
+])
+def test_analysis_rejects_ambiguous_json_even_after_one_repair(tmp_db, caplog, case):
+    payload = json.dumps(ai._empty_analysis_dict())
+    rejected = {
+        "duplicate_root": '{"core_trends":"private-value",' + payload[1:],
+        "duplicate_nested": payload.replace(
+            '"standalone_summaries": {}',
+            '"standalone_summaries": {"private-key":"private-value","private-key":"other"}',
+        ),
+        "escaped_duplicate": '{"core_\\u0074rends":"private-value",' + payload[1:],
+        "two_fences": f"```json\n{payload}\n```\n```json\n{{}}\n```",
+        "leading_prose": "private-value\n" + payload,
+        "trailing_prose": payload + "\nprivate-value",
+        "fenced_trailing_prose": f"```json\n{payload}\n```\nprivate-value",
+        "two_objects": payload + "\n{}",
+        "unclosed_fence": f"```json\n{payload}",
+    }[case]
+    calls = []
+
+    def runner(cfg, messages):
+        calls.append(messages)
+        return rejected
+
+    result = ai.analyze_report(
+        {"items": []}, cfg={"provider": "cli-codex"}, model_runner=runner, path=tmp_db,
+    )
+    assert len(calls) == 2
+    assert result["status"] == "ERROR"
+    assert result["error_kind"] == "parse_error"
+    assert result["core_trends"] == ""
+    assert "private-value" not in result["error"] + caplog.text
+    assert "private-key" not in result["error"] + caplog.text
+    # The correction sees the full rejected data, never an extracted fragment.
+    assert rejected in calls[1][1]["content"]
+    if "duplicate" in case:
+        assert "重复字段" in result["error"]
+        assert "删除重复项" in calls[1][1]["content"]
+    else:
+        assert "行，第" in result["error"]
+        assert "一个完整 JSON" in calls[1][1]["content"]
+
+
+def test_duplicate_json_can_be_corrected_once(tmp_db):
+    valid = ai._empty_analysis_dict()
+    valid["core_trends"] = "修复后的分析"
+    calls = []
+
+    def runner(cfg, messages):
+        calls.append(messages)
+        if len(calls) == 1:
+            return '{"core_trends":"first",' + json.dumps(valid)[1:]
+        assert "重复字段 core_trends" in messages[1]["content"]
+        return "```json\n" + json.dumps(valid) + "\n```"
+
+    result = ai.analyze_report(
+        {"items": []}, cfg={"provider": "cli-codex"}, model_runner=runner, path=tmp_db,
+    )
+    assert len(calls) == 2
+    assert result["status"] == "SUCCESS"
+    assert result["core_trends"] == valid["core_trends"]
+
+
+def test_repair_reports_latest_safe_parse_diagnostic(tmp_db, caplog):
+    calls = []
+
+    def runner(cfg, messages):
+        calls.append(messages)
+        return "{}" if len(calls) == 1 else '{\n"private-key": "private-value",\n}'
+
+    result = ai.analyze_report(
+        {"items": []}, cfg={"provider": "cli-codex"}, model_runner=runner, path=tmp_db,
+    )
+    assert len(calls) == 2
+    assert result["status"] == "ERROR"
+    assert "第 3 行，第 1 列" in result["error"]
+    assert "private-key" not in result["error"] + caplog.text
+    assert "private-value" not in result["error"] + caplog.text
+
+
+@pytest.mark.parametrize("operation,response", [
+    (ai.extract_entities, '[{"name":"a","name":"b","type":"company"}]'),
+    (ai.extract_entities, 'prefix [{"name":"a","type":"company"}]'),
+    (ai.analyze_sentiment, '{"sentiment":"positive","sentiment":"negative"}'),
+    (ai.analyze_sentiment, '```json\n{"sentiment":"positive"}\n```\nextra'),
+])
+def test_other_json_consumers_reject_ambiguous_response(tmp_db, operation, response):
+    runner = MagicMock(return_value=response)
+    result = operation("测试文本", model_runner=runner, path=tmp_db)
+    assert result["status"] == "ERROR"
+    # These operations did not have a repair retry; none is introduced here.
+    assert runner.call_count == 1
 
 
 # 14. same input cache hit

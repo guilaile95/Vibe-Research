@@ -57,7 +57,7 @@ def _install_em_get(monkeypatch, handler):
     """handler(url, params) -> payload dict or raises."""
     calls: list[dict] = []
 
-    def fake_em_get(url, params=None, headers=None, timeout=15, *, min_interval=1.0):
+    def fake_em_get(url, params=None, headers=None, timeout=15, *, min_interval=1.0, deadline=None):
         calls.append({"url": url, "params": dict(params or {}), "headers": headers, "timeout": timeout, "min_interval": min_interval})
         return _FakeResp(handler(url, params or {}))
 
@@ -264,7 +264,7 @@ def test_snapshot_request_failure_not_empty_list(monkeypatch):
 def test_snapshot_invalid_json_raises(monkeypatch):
     calls: list = []
 
-    def fake_em_get(url, params=None, headers=None, timeout=15, *, min_interval=1.0):
+    def fake_em_get(url, params=None, headers=None, timeout=15, *, min_interval=1.0, deadline=None):
         calls.append(1)
 
         class Bad:

@@ -5,6 +5,7 @@
 export type * from "./api/types.ts";
 
 import type { MarketCloudEnvelope } from "./marketCloud.ts";
+import { parseReportChatCoverage } from "./reportChatCoverage.ts";
 import type {
   CurrentThesisDelta,
   ThesisDeltaCreatePayload,
@@ -375,7 +376,13 @@ export function applyNdjsonLine(
       }
       items.push({ report_id: item.report_id, title: item.title, page: item.page });
     }
-    handlers.onSources?.(items);
+    const coverage = parseReportChatCoverage(event.coverage);
+    if (event.coverage !== undefined && !coverage) {
+      state.sawError = true;
+      state.errorMessage = "后端研报覆盖信息格式错误";
+      return;
+    }
+    handlers.onSources?.(items, coverage);
   } else if (event.type === "done") {
     if (state.sawDone) {
       state.sawError = true;

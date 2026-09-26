@@ -121,8 +121,8 @@ def test_last_page_short_ok(monkeypatch):
 # 4. 空最后一页
 # ---------------------------------------------------------------------------
 
-def test_empty_trailing_page_stops(monkeypatch):
-    """total 偏大时，空页安全结束。"""
+def test_empty_trailing_page_with_known_total_rejects_partial(monkeypatch):
+    """已知 total 未取满时，空页不能把部分数据伪装成完整快照。"""
     def handler(url, params):
         pn = int(params["pn"])
         if pn == 1:
@@ -132,9 +132,9 @@ def test_empty_trailing_page_stops(monkeypatch):
         raise AssertionError(f"unexpected page {pn}")
 
     calls = _install(monkeypatch, handler)
-    out = astock.a_share_snapshot(page_size=2)
+    with pytest.raises(RuntimeError, match="incomplete data"):
+        astock.a_share_snapshot(page_size=2)
     assert len(calls) == 2
-    assert len(out) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -539,12 +539,110 @@ def test_is_transient_network_error_helpers():
     assert astock._is_transient_network_error(RuntimeError("parse")) is False
 
 
+def test_snapshot_budget_stops_before_another_page(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(astock.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(astock, "_A_SHARE_SNAPSHOT_BUDGET_SECONDS", 1)
+
+    def handler(url, params):
+        clock[0] = 2.0
+        return {"data": {"total": 200, "diff": _codes(100, 0)}}
+
+    calls = _install(monkeypatch, handler)
+    with pytest.raises(RuntimeError, match="time budget exhausted"):
+        astock.a_share_snapshot()
+    assert len(calls) == 1
+
+
+def test_snapshot_budget_covers_retry_backoff(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(astock.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(astock, "_A_SHARE_SNAPSHOT_BUDGET_SECONDS", 0.25)
+    monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0.5, 1.0))
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append(1)
+        raise ConnectionError("temporary failure")
+
+    monkeypatch.setattr(astock, "em_get", fail)
+    with pytest.raises(RuntimeError, match="time budget exhausted"):
+        astock.a_share_snapshot()
+    assert len(calls) == 1
+
+
+def test_later_page_uses_existing_alternate_without_restarting(monkeypatch):
+    monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0))
+
+    def handler(url, params):
+        pn = int(params["pn"])
+        if pn == 2 and astock._A_SHARE_CLIST_HOSTS[0] in url:
+            raise ConnectionError("primary page unavailable")
+        return {"data": {"total": 4, "diff": _codes(2, (pn - 1) * 2)}}
+
+    calls = _install(monkeypatch, handler)
+    result = astock.a_share_snapshot(page_size=2)
+    assert len(result) == 4
+    assert sum(c["params"]["pn"] == "1" for c in calls) == 1
+    assert astock._A_SHARE_CLIST_HOSTS[1] in calls[-1]["url"]
+    assert calls[-1]["params"]["pn"] == "2"
+
+
+def test_em_get_serializes_requests_and_releases_after_failure(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    entered = Event()
+    second_started = Event()
+    second_entered = Event()
+    release = Event()
+
+    class Session:
+        def get(self, url, **kwargs):
+            if url == "first":
+                entered.set()
+                assert release.wait(2)
+                raise ConnectionError("fixture failure")
+            second_entered.set()
+            return _FakeResp({"ok": True})
+
+    monkeypatch.setattr(astock, "_em_session", lambda direct: Session())
+    monkeypatch.setattr(astock, "_em_last_call", [0.0])
+
+    def second():
+        second_started.set()
+        return astock.em_get("second", min_interval=0)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(astock.em_get, "first", min_interval=0)
+        try:
+            assert entered.wait(2)
+            following = pool.submit(second)
+            assert second_started.wait(2)
+            assert not second_entered.wait(0.05)
+        finally:
+            release.set()
+        with pytest.raises(ConnectionError):
+            first.result(timeout=2)
+        assert following.result(timeout=2).json() == {"ok": True}
+
+
+def test_em_get_budget_includes_waiting_for_request_lock(monkeypatch):
+    import time
+    assert astock._EM_REQUEST_LOCK.acquire(timeout=1)
+    try:
+        with pytest.raises(RuntimeError, match="time budget exhausted"):
+            astock.em_get("unused", deadline=time.monotonic() + 0.01)
+    finally:
+        astock._EM_REQUEST_LOCK.release()
+
+
 # ---------------------------------------------------------------------------
-# 并发分页完整性回归（强制进入真实并发路径：第一页 >= 50 条）
+# 大页分页完整性回归（第一页 >= 50 条）
 # ---------------------------------------------------------------------------
 
-def test_concurrent_multi_page_complete_success(monkeypatch):
-    """并发多页正常获取 → 完整成功，fetched_raw >= total。"""
+def test_large_page_complete_success(monkeypatch):
+    """串行多页正常获取 → 完整成功，fetched_raw >= total。"""
     def handler(url, params):
         pn = int(params["pn"])
         if pn == 1:
@@ -559,11 +657,11 @@ def test_concurrent_multi_page_complete_success(monkeypatch):
     monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
     out = astock.a_share_snapshot(page_size=100)
     assert len(out) == 250
-    # 第一页串行 + 后续并发，总共 3 次请求
+    # 顺序获取三页，总共 3 次请求
     assert len(calls) == 3
 
 
-def test_concurrent_middle_empty_page_raises_incomplete(monkeypatch):
+def test_large_page_middle_empty_raises_incomplete(monkeypatch):
     """中间页为空且 fetched_raw < total → 不允许返回 partial success。"""
     def handler(url, params):
         pn = int(params["pn"])
@@ -581,8 +679,8 @@ def test_concurrent_middle_empty_page_raises_incomplete(monkeypatch):
         astock.a_share_snapshot(page_size=100)
 
 
-def test_concurrent_repeated_page_raises_no_partial(monkeypatch):
-    """并发页重复（fingerprint 相同）→ 不允许返回 partial success。"""
+def test_large_page_repeated_page_raises_no_partial(monkeypatch):
+    """分页内容重复（fingerprint 相同）→ 不允许返回 partial success。"""
     page1_rows = _codes(100, 0)
 
     def handler(url, params):
@@ -599,8 +697,8 @@ def test_concurrent_repeated_page_raises_no_partial(monkeypatch):
         astock.a_share_snapshot(page_size=100)
 
 
-def test_concurrent_future_failure_raises_no_partial(monkeypatch):
-    """某个 concurrent future 请求失败 → 必须抛错，不返回已拿到的部分数据。"""
+def test_large_page_request_failure_raises_no_partial(monkeypatch):
+    """某一页请求失败 → 必须抛错，不返回已拿到的部分数据。"""
     def fake_em_get(url, params=None, headers=None, timeout=15, **kwargs):
         pn = int((params or {}).get("pn", "0"))
         if pn == 1:
