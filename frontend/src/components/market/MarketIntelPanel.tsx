@@ -38,6 +38,7 @@ import {
 } from "@/lib/marketIntelStatus";
 import { cn } from "@/lib/utils";
 import { selectResearchSourceItems } from "@/lib/marketIntelBrief";
+import { ArticleAssociation } from "@/components/native-intel/ArticleAssociation";
 import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 
 export type DigestPhase = "idle" | "generating" | "saving" | "saved" | "cancelled" | "error" | "save_failed" | "empty";
@@ -486,6 +487,7 @@ export default function MarketIntelPanel({ embedded = false, compact = false }: 
                     <a href={item.url} target="_blank" rel="noreferrer noopener" className="group flex items-start gap-1.5 text-sm leading-relaxed hover:text-primary hover:underline">
                       <span className="min-w-0 break-words">{item.title}</span><ExternalLink className="mt-1 h-3 w-3 shrink-0 text-muted-foreground" />
                     </a>
+                    <ArticleAssociation entities={item.entities} className="mt-1" />
                     <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                       <span>{item.source_name || item.hint}</span>
                       <span>发布于 {item.published_at ? formatShanghaiTime(item.published_at) : "未提供"}</span>
@@ -619,6 +621,7 @@ export default function MarketIntelPanel({ embedded = false, compact = false }: 
                 </a>
                 <span className="truncate text-xs text-muted-foreground">{item.source_name || item.hint}</span>
                 <span className="font-mono text-xs text-muted-foreground">{formatShanghaiTime(item.published_at || item.last_seen_at)}</span>
+                <ArticleAssociation entities={item.entities} className="md:col-span-3" />
               </li>
             ))}
           </ul>

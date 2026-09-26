@@ -1378,6 +1378,7 @@ def security_context(
     terms = store.list_entity_terms(target, security_code=code)
 
     items = store.query_items_by_security(code, target, limit=limit, window_hours=window_hours)
+    entity_map = store.list_item_entities([int(item["item_id"]) for item in items], target)
     stats = store.get_security_mention_stats([code], target, window_hours=window_hours).get(
         code,
         {"mention_count": 0, "source_count": 0, "first_seen_at": None, "last_seen_at": None},
@@ -1389,6 +1390,10 @@ def security_context(
         enriched.append(
             {
                 **item,
+                "entities": [
+                    entity for entity in entity_map.get(int(item["item_id"]), [])
+                    if entity["security_code"] == code
+                ],
                 # 热榜条目带真实当前排名；RSS 条目保持 None（无排名语义）
                 "rank": state.get("current_rank"),
                 "previous_rank": state.get("previous_rank"),
