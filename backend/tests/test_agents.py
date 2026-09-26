@@ -210,7 +210,11 @@ def test_reflection_rejects_empty():
 
 def test_reflection_truncates_long_source(monkeypatch):
     monkeypatch.setattr(chat, "_call_llm_stream", lambda *a, **k: None)
-    monkeypatch.setattr(chat, "_iter_sse_deltas", lambda resp: iter([{"content": "ok"}]))
+
+    def fake_deltas(_resp, **_kwargs):
+        yield {"content": "ok"}
+
+    monkeypatch.setattr(chat, "_iter_sse_deltas", fake_deltas)
     evs = list(reflection.run_reflection_stream(_LLM, "字" * (reflection.MAX_SOURCE_CHARS + 500)))
     assert evs[0]["type"] == "status" and "截取" in evs[0]["message"]
     assert evs[-1]["type"] == "done" and evs[-1]["truncated"] is True

@@ -70,6 +70,7 @@ httptools==0.8.0
 httpx==0.25.2
     # via
     #   -r requirements-dev.txt
+    #   -r requirements.txt
     #   mootdx
 httpx2==2.12.0
     # via mcp

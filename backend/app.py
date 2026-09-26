@@ -39,6 +39,7 @@ import chat as chat_layer
 import agent_runtime
 import ai_credential_router
 import daily_review
+import daily_review_lead
 import debate as debate_layer
 import gstock
 import hithink_finance_client as hithink
@@ -1829,6 +1830,115 @@ def daily_review_refresh():
         raise
     except Exception:  # noqa: BLE001 — 不向客户端暴露内部细节
         raise HTTPException(502, "每日复盘刷新异常") from None
+
+
+class DailyReviewLeadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: daily_review_lead.LeadKind
+    subject: str | None = None
+    llm: LLMConfig
+
+    @model_validator(mode="after")
+    def validate_subject(self):
+        if self.kind == "emotion":
+            if self.subject is not None:
+                raise ValueError("emotion 不接受 subject")
+        elif not self.subject or not self.subject.strip():
+            raise ValueError("industry/activity 必须指定 subject")
+        elif self.kind == "activity" and not re.fullmatch(r"[0-9]{6}", self.subject):
+            raise ValueError("activity subject 必须为6位代码")
+        return self
+
+
+class _LeadAnalysisStreamingResponse(_DisconnectAwareStreamingResponse):
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # send() can fail while gen() is suspended at a yield, outside its
+            # own try/finally. Close it explicitly rather than waiting for GC.
+            self.disconnect_event.set()
+            with anyio.CancelScope(shield=True):
+                await self.body_iterator.aclose()
+
+
+@app.post("/api/daily-review/lead-analysis")
+async def analyze_daily_review_lead(req: DailyReviewLeadRequest):
+    """Display snapshot -> one lead -> no-tools stream; no AI result persistence."""
+    _require_llm_ready(req.llm)
+    try:
+        payload = await run_in_threadpool(daily_review.get_daily_review_for_display)
+        context = daily_review_lead.build_lead_context(payload, req.kind, req.subject)
+        messages = daily_review_lead.build_lead_messages(context)
+    except daily_review_lead.LeadContextError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from None
+    except Exception:
+        raise HTTPException(503, "当前线索数据暂不可用，请稍后重试") from None
+
+    disconnect_event = threading.Event()
+    cfg = req.llm.model_dump()
+    cfg["_cancel_event"] = disconnect_event
+
+    async def gen():
+        source = None
+        try:
+            yield json.dumps({"type": "lead_context", "context": context},
+                             ensure_ascii=False, allow_nan=False) + "\n"
+            if disconnect_event.is_set():
+                return
+            if cfg.get("provider") == "cli-codex":
+                source = iter(chat_layer.stream_messages(cfg, messages, use_tools=False))
+                events = iterate_in_threadpool(source)
+            else:
+                source = chat_layer.stream_api_messages(cfg, messages)
+                events = source
+            saw_done = False
+            has_text = False
+            async for event in events:
+                if disconnect_event.is_set():
+                    return
+                if not isinstance(event, dict):
+                    raise ValueError("invalid model event")
+                event_type = event.get("type")
+                if saw_done:
+                    raise ValueError("event after done")
+                if event_type == "delta":
+                    text = event.get("text")
+                    if not isinstance(text, str):
+                        raise ValueError("invalid model delta")
+                    has_text = has_text or bool(text.strip())
+                    yield json.dumps({"type": "delta", "text": text}, ensure_ascii=False) + "\n"
+                elif event_type == "done":
+                    saw_done = True
+                else:
+                    raise ValueError("unexpected model event")
+            if not saw_done or not has_text:
+                raise ValueError("incomplete model stream")
+            if not disconnect_event.is_set():
+                yield json.dumps({"type": "done", "trace": [], "rounds": 1}) + "\n"
+        except Exception:
+            if not disconnect_event.is_set():
+                yield json.dumps({"type": "error", "message": "单条线索AI解读失败，请稍后重试"},
+                                 ensure_ascii=False) + "\n"
+        finally:
+            disconnect_event.set()
+            aclose = getattr(source, "aclose", None)
+            if callable(aclose):
+                # Disconnect cancellation is already active; still finish cleanup
+                # if the generator was suspended while yielding a delta.
+                with anyio.CancelScope(shield=True):
+                    await aclose()
+            close = getattr(source, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+
+    return _LeadAnalysisStreamingResponse(
+        gen(), media_type="application/x-ndjson", disconnect_event=disconnect_event,
+    )
 
 
 class DailyReviewAnalyzeRequest(BaseModel):
