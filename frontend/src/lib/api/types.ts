@@ -929,6 +929,13 @@ export interface HighlightComparison<T> {
 /** GET /api/daily-review/history/compare 结果 */
 export interface DailyReviewComparison {
   schema_version: string;
+  market_comparability?: {
+    status: "comparable" | "unverified" | "incomparable";
+    metrics: Record<"up_ratio" | "total_amount", {
+      status: "comparable" | "unverified" | "incomparable";
+      issues: string[];
+    }>;
+  };
   base: DailyReviewComparisonMeta;
   target: DailyReviewComparisonMeta;
   comparison_status: DataStatus;
@@ -3533,6 +3540,15 @@ export interface CommittedDecisionRuntimeRead {
 
 export type NativeIntelStatusValue = "normal" | "partial" | "stale" | "unavailable";
 
+export interface NativeIntelItemEntity {
+  security_code: string | null;
+  term_kind: string;
+  term: string;
+  matched_in: string;
+  /** Current mapping source, not a historical source snapshot at match time. */
+  source_ref: string | null;
+}
+
 export interface NativeIntelItem {
   item_id: number;
   title: string;
@@ -3549,6 +3565,8 @@ export interface NativeIntelItem {
   observation_count: number;
   rank?: number | null;
   rank_history?: Array<{ observed_at: string; rank: number }>;
+  // Present on items and security-context GETs; other item surfaces may omit it.
+  entities?: NativeIntelItemEntity[];
 }
 
 export interface NativeIntelStatus {

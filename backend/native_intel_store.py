@@ -667,7 +667,7 @@ def list_item_entities(
     item_ids: list[int],
     db_path: str | Path | None = None,
 ) -> dict[int, list[dict[str, Any]]]:
-    """批量读取条目的实体映射；返回 ``{item_id: [entity]}``。"""
+    """批量读取已有词面关联；source_ref 是当前映射来源，并非命中时快照。"""
     if not item_ids:
         return {}
     path = Path(db_path) if db_path else get_default_db_path()
@@ -678,9 +678,14 @@ def list_item_entities(
             with _connect(path) as conn:
                 rows = conn.execute(
                     f"""
-                    SELECT item_id, term_kind, term, security_code
-                    FROM intel_item_entities
-                    WHERE item_id IN ({placeholders})
+                    SELECT e.item_id, e.term_kind, e.term, e.security_code,
+                           e.matched_in, t.source_ref
+                    FROM intel_item_entities e
+                    LEFT JOIN intel_entity_terms t
+                      ON t.term = e.term AND t.term_kind = e.term_kind
+                     AND t.security_code IS e.security_code
+                    WHERE e.item_id IN ({placeholders})
+                    ORDER BY e.item_id, e.security_code, e.term_kind, e.term
                     """,
                     tuple(int(i) for i in item_ids),
                 ).fetchall()
@@ -691,6 +696,8 @@ def list_item_entities(
                             "term_kind": row["term_kind"],
                             "term": row["term"],
                             "security_code": row["security_code"],
+                            "matched_in": row["matched_in"],
+                            "source_ref": row["source_ref"],
                         }
                     )
                 return out

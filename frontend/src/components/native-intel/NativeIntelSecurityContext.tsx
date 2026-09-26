@@ -4,6 +4,7 @@ import { AlertCircle, Loader2, RefreshCw, Rss } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError, type EvidenceRecord, type NativeIntelSecurityContext as Context } from "@/lib/api";
 import { buildEvidenceNewHref, findEvidenceBySourceUrl } from "@/lib/candidateCampaign";
+import { ArticleAssociation } from "@/components/native-intel/ArticleAssociation";
 
 const usable = (status?: string) => status === "normal" || status === "partial" || status === "stale";
 const statusLabel = (status?: string) => ({ normal: "可用", partial: "部分可用", stale: "历史可用 · 已过期", unavailable: "不可用" }[status || ""] || status || "读取中");
@@ -104,6 +105,7 @@ export function NativeIntelSecurityContext({
                         </Link>
                       ))}
                     </div>
+                    <ArticleAssociation entities={item.entities} className="mt-1" />
                     <div className="mt-1 flex flex-wrap gap-x-3 text-[10px] text-muted-foreground"><span>{item.source_name || item.hint}</span><span>首次 {displayTime(item.first_seen_at)}</span><span>最近 {displayTime(item.last_seen_at)}</span><span>观察 {item.observation_count} 次</span></div>
                   </li>
                 );

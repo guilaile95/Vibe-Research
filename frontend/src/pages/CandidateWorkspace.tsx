@@ -17,6 +17,7 @@ import {
 import { api, ApiError, type EvidenceRecord, type StockRelativeContext, type StockValuationContext } from "@/lib/api";
 import { candidateEntryContext } from "@/lib/candidateEntryContext";
 import { CAMPAIGN_STRATEGY_LABELS } from "@/lib/decisionInbox";
+import { rememberResearchVisit, RESEARCH_SECTIONS as researchSections } from "@/lib/researchResume";
 
 type LoadState<T> =
   | { status: "loading"; value: null; error: "" }
@@ -41,12 +42,6 @@ function errorMessage(cause: unknown, fallback: string): string {
   return cause instanceof ApiError ? cause.message : fallback;
 }
 
-const researchSections = [
-  { id: "candidate-public-info", label: "查看公开资讯" },
-  { id: "candidate-evidence-gap", label: "查看证据缺口" },
-  { id: "candidate-existing-research", label: "继续已有研究" },
-] as const;
-
 function focusResearchSection(id: string) {
   const target = document.getElementById(id);
   target?.focus({ preventScroll: true });
@@ -66,6 +61,10 @@ export function CandidateWorkspace() {
   const [valuationContext, setValuationContext] = useState<StockValuationContext | null>(null);
   const [valuationLoading, setValuationLoading] = useState(false);
   const [valuationError, setValuationError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (validCode) rememberResearchVisit(`${location.pathname}${location.search}${location.hash}`);
+  }, [validCode, location.pathname, location.search, location.hash]);
 
   useEffect(() => {
     const section = researchSections.find(({ id }) => location.hash === `#${id}`);

@@ -35,6 +35,8 @@ import {
 import { cn } from "@/lib/utils";
 import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 import { TodayResearchLeads } from "@/components/dailyReview/TodayResearchLeads";
+import { MarketComparisonSummary } from "@/components/dailyReview/MarketComparisonSummary";
+import { RecentResearch } from "@/components/dailyReview/RecentResearch";
 
 const HISTORY_LIMIT = 20;
 const COMPARE_BOARD_LIMIT = 10;
@@ -86,9 +88,9 @@ const fmtYiDelta = (v: number | null | undefined) => {
 };
 
 const comparisonStatusLabel = (s: DataStatus | undefined) => {
-  if (s === "normal") return { text: "可完整比较", cls: "bg-muted/40 text-muted-foreground" };
-  if (s === "partial") return { text: "部分数据不可比较", cls: "bg-warning/15 text-warning" };
-  if (s === "unavailable") return { text: "核心数据不可比较", cls: "bg-destructive/15 text-destructive" };
+  if (s === "normal") return { text: "存档结构可对照", cls: "bg-muted/40 text-muted-foreground" };
+  if (s === "partial") return { text: "存档对照有缺口", cls: "bg-warning/15 text-warning" };
+  if (s === "unavailable") return { text: "缺少核心对照结构", cls: "bg-destructive/15 text-destructive" };
   return null;
 };
 
@@ -557,7 +559,7 @@ export function DailyReview() {
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
-            {["指标", "基础值", "目标值", "变化", "相对变化"].map((h) => (
+            {["指标", "基础值", "目标值", "存档差值", "存档相对差值"].map((h) => (
               <th key={h} className="whitespace-nowrap px-2 py-2 font-medium">{h}</th>
             ))}
           </tr>
@@ -1714,6 +1716,7 @@ export function DailyReview() {
             <div className="mb-6 grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
               <div className="min-w-0"><MarketCloud embedded /></div>
               <div className="min-w-0 space-y-3">
+                <RecentResearch />
                 <section className="rounded-xl border border-border/60 bg-card/40 p-4">
                   <div className="mb-2 flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">关注股票</h2><Link to="/watchlist" className="text-xs text-primary hover:underline">全部自选 →</Link></div>
                   {watchCodes.length ? <ul className="divide-y divide-border/40">{watchCodes.slice(0, 5).map((code) => {
@@ -2188,6 +2191,8 @@ export function DailyReview() {
                 </span>
               )}
             </div>
+
+            <MarketComparisonSummary comparison={comparison} />
 
             {(comparison.warnings?.length ?? 0) > 0 && (
               <div className="mb-3 rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-warning">

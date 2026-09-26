@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import sqlite3
+from unittest.mock import Mock
 
 import astock
 from fastapi import FastAPI
@@ -139,6 +141,80 @@ def test_realistic_a_share_terms_map_code_company_industry_and_concept_without_f
     assert "固态电池产业化进展加速" in catl
     assert "贵州旅游市场迎来旺季" not in maotai
     assert service._normalize_security_name("五 粮 液") == "五粮液"
+
+
+def test_article_entities_gets_preserve_items_and_read_current_mapping_only(tmp_path, monkeypatch):
+    path = tmp_path / "article-entities.sqlite3"
+    _seed_source(path)
+    store.upsert_security_directory(
+        [{"code": "600519", "name": "贵州茅台", "industry": "白酒"}], path
+    )
+    for code in ("600519", "000858"):
+        store.replace_entity_terms(code, [
+            {"term": "白酒", "term_kind": "industry", "source_ref": f"industry:{code}"},
+            {"term": "消费升级", "term_kind": "concept", "source_ref": f"concept:{code}"},
+        ], path)
+    shared = _insert(path, "shared", "白酒行业观察", "白酒与消费升级")
+    unlinked = _insert(path, "unlinked", "天气预报")
+    service.link_entities_for_items([shared, unlinked], str(path))
+    # An existing link can outlive its mapping row. GET must preserve it with null provenance.
+    store.link_item_entities(shared, [
+        {"security_code": "600519", "term_kind": "company_name", "term": "旧名称", "matched_in": "summary"},
+    ], path)
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE intel_entity_terms SET source_ref = ? WHERE security_code = ? AND term_kind = ?",
+                     ("current-industry-source", "600519", "industry"))
+
+    before = store.export_state(path)
+    expected_rows, expected_total = store.query_items(path, limit=2, order_by="published")
+    expected_security = store.query_items_by_security("600519", path)
+    monkeypatch.setenv("VIBE_NATIVE_INTEL_DB", str(path))
+    # Stub the pre-existing mapping step, so any extra enrichment backfill/provider is a failure.
+    ensure = Mock(return_value={"errors": [], "refreshed": False})
+    monkeypatch.setattr(service, "ensure_security_terms", ensure)
+    for name in ("backfill_entities_for_terms", "link_entities_for_items", "_refresh_security_profile", "run_fetch"):
+        monkeypatch.setattr(service, name, Mock(side_effect=AssertionError(f"unexpected {name}")))
+    for name in ("individual_info", "concept_blocks", "hot_concepts"):
+        monkeypatch.setattr(astock, name, Mock(side_effect=AssertionError(f"unexpected provider {name}")))
+    batch_read = Mock(wraps=store.list_item_entities)
+    monkeypatch.setattr(store, "list_item_entities", batch_read)
+    app = FastAPI()
+    app.include_router(native_intel_router.router)
+    client = TestClient(app)
+
+    response = client.get("/api/native-intel/items?limit=2&order_by=published")
+    assert response.status_code == 200
+    payload = response.json()
+    ensure.assert_not_called()
+    assert batch_read.call_count == 1
+    assert payload["total"] == expected_total
+    assert [{k: v for k, v in item.items() if k != "entities"} for item in payload["items"]] == expected_rows
+    by_id = {item["item_id"]: item for item in payload["items"]}
+    assert by_id[unlinked]["entities"] == []
+    entities = by_id[shared]["entities"]
+    assert len(entities) == 5
+    assert {e["security_code"] for e in entities} == {"600519", "000858"}
+    assert all(set(e) == {"security_code", "term_kind", "term", "matched_in", "source_ref"} for e in entities)
+    by_term = {(e["security_code"], e["term"]): e for e in entities}
+    assert by_term[("600519", "白酒")]["matched_in"] == "title"  # Also appears in summary.
+    assert by_term[("600519", "消费升级")]["matched_in"] == "summary"
+    assert by_term[("600519", "白酒")]["source_ref"] == "current-industry-source"
+    assert by_term[("000858", "白酒")]["source_ref"] == "industry:000858"
+    assert by_term[("600519", "旧名称")]["source_ref"] is None
+
+    response = client.get("/api/native-intel/security-context/600519")
+    assert response.status_code == 200
+    context_items = response.json()["observation"]["items"]
+    ensure.assert_called_once_with("600519", str(path))
+    assert batch_read.call_count == 2
+    assert [item["item_id"] for item in context_items] == [item["item_id"] for item in expected_security]
+    assert context_items[0]["entities"] == [e for e in entities if e["security_code"] == "600519"]
+
+    filtered = client.get("/api/native-intel/items?include=白酒&exclude=天气&search=行业&limit=1").json()
+    assert filtered["total"] == 1
+    assert [item["item_id"] for item in filtered["items"]] == [shared]
+    assert client.get("/api/native-intel/items?offset=2").json()["items"] == []
+    assert store.export_state(path) == before
 
 
 def test_ascii_concept_and_security_code_require_real_boundaries() -> None:

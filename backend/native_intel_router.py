@@ -125,6 +125,11 @@ def get_items(
             offset=offset,
             order_by=order_by,
         )
+        entity_map = service.store.list_item_entities(
+            [int(row["item_id"]) for row in rows], _db_path()
+        )
+        for row in rows:
+            row["entities"] = entity_map.get(int(row["item_id"]), [])
     except service.store.NativeIntelStoreError as exc:
         return {
             "status": service.STATUS_UNAVAILABLE,

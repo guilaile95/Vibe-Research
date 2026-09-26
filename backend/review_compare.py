@@ -8,8 +8,9 @@
 
 from __future__ import annotations
 
+import math
 import re
-from datetime import date
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 SCHEMA_VERSION = "daily-review-comparison-v0.1"
@@ -57,10 +58,10 @@ _FORBIDDEN_KEYS = frozenset({
 
 
 def _is_number(v: Any) -> bool:
-    """有效数值：int/float，排除 bool（bool 是 int 子类）。"""
+    """有效数值：有限 int/float，排除 bool（bool 是 int 子类）。"""
     if isinstance(v, bool) or v is None:
         return False
-    return isinstance(v, (int, float)) and v == v  # NaN 排除
+    return isinstance(v, (int, float)) and math.isfinite(v)
 
 
 def _round4(v: float) -> float:
@@ -254,6 +255,124 @@ def _board_side_comparable(base_sector: dict | None, target_sector: dict | None,
         if _envelope_data_list(target_sector, kind, side) is None:
             return False
     return True
+
+
+def _source_datetime(value: Any) -> datetime | None:
+    """只解析源完整日期时间；naive 按现有北京时间约定，不接受日期或钟点替代。"""
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}"
+        r"(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})?", value,
+    ):
+        return None
+    beijing = timezone(timedelta(hours=8))
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return (parsed if parsed.tzinfo else parsed.replace(tzinfo=beijing)).astimezone(beijing)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _market_comparability(
+    base_snapshot: dict, target_snapshot: dict,
+    base_envelope: dict | None, target_envelope: dict | None,
+) -> dict:
+    """两份存档已记录维度的可比性；不是整体 source 单时点一致性的证明。
+
+    旧存档差值不受此门禁影响。缺证据为 unverified，已知冲突优先为 incomparable。
+    schema_version 仅核对存档结构版本，不独立验证统计口径；
+    fingerprint 表示相应有效字段的代码集合。
+    """
+    common: list[tuple[str, str]] = []
+    envelopes = (base_envelope or {}, target_envelope or {})
+    schemas = [snapshot.get("schema_version") for snapshot in (base_snapshot, target_snapshot)]
+    sources = [env.get("source") for env in envelopes]
+    for values, label in ((schemas, "存档结构版本"), (sources, "数据来源")):
+        if not all(isinstance(value, str) and value.strip() for value in values):
+            common.append(("unverified", f"{label}缺失或无效"))
+        elif values[0] != values[1]:
+            common.append(("incomparable", f"两份存档的{label}不一致"))
+
+    source_times = []
+    for label, env in zip(("基础", "目标"), envelopes):
+        status = env.get("status")
+        if status in ("partial", "unavailable"):
+            common.append(("incomparable", f"{label}市场广度状态不是正常"))
+        elif status != "normal":
+            common.append(("unverified", f"{label}市场广度状态缺失或未知"))
+        if not isinstance(env.get("data"), dict) or not env["data"]:
+            common.append(("unverified", f"{label}市场广度数据缺失"))
+        if env.get("is_stale") is True:
+            common.append(("incomparable", f"{label}市场广度明确标记为过期"))
+        trade_date = env.get("trade_date")
+        source_date = None
+        if isinstance(trade_date, str) and _DATE_RE.fullmatch(trade_date):
+            try:
+                source_date = date.fromisoformat(trade_date)
+            except ValueError:
+                pass
+        if source_date is None:
+            common.append(("unverified", f"{label}源交易日缺失或无效"))
+        source_time = _source_datetime(env.get("data_time"))
+        source_times.append(source_time)
+        if source_time is None:
+            common.append(("unverified", f"{label}源行情时间缺失或不是完整日期时间"))
+        elif source_date is not None and source_time.date() != source_date:
+            common.append(("incomparable", f"{label}源行情时间与源交易日不一致"))
+
+    base_time, target_time = source_times
+    if base_time is not None and target_time is not None:
+        if target_time <= base_time:
+            common.append(("incomparable", "目标源行情时点必须晚于基础源行情时点"))
+        if base_time.date() != target_time.date() and base_time.time() != target_time.time():
+            common.append(("incomparable", "跨源交易日的行情钟点不一致"))
+        # 显式源时刻跨过 15:00 时拒绝混比；不从顶层日期或生成时间推定收盘。
+        if (base_time.time() < time(15)) != (target_time.time() < time(15)):
+            common.append(("incomparable", "源行情时点跨盘中与收盘边界"))
+
+    def aggregate(statuses: list[str]) -> str:
+        if "incomparable" in statuses:
+            return "incomparable"
+        return "unverified" if "unverified" in statuses else "comparable"
+
+    metrics = {}
+    for metric, count_field, metric_label in (
+        ("up_ratio", "valid_count", "上涨占比"),
+        ("total_amount", "amount_valid_count", "成交额"),
+    ):
+        findings = list(common)
+        fingerprints = []
+        counts = []
+        for label, env in zip(("基础", "目标"), envelopes):
+            data = _as_dict(env.get("data")) or {}
+            value = data.get(metric)
+            if not _is_number(value):
+                findings.append(("unverified", f"{label}{metric_label}缺少有限数值"))
+            samples = _as_dict(data.get("comparison_samples")) or {}
+            sample = _as_dict(samples.get(metric)) or {}
+            fingerprint = sample.get("fingerprint")
+            if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+                fingerprint = None
+                findings.append(("unverified", f"{label}{metric_label}样本身份未确认"))
+            fingerprints.append(fingerprint)
+            count = sample.get("count")
+            if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+                count = None
+                findings.append(("unverified", f"{label}{metric_label}样本数量缺失或无效"))
+            recorded_count = data.get(count_field)
+            if not isinstance(recorded_count, int) or isinstance(recorded_count, bool) or recorded_count <= 0:
+                findings.append(("unverified", f"{label}{metric_label}有效统计数量缺失或无效"))
+            elif count is not None and count != recorded_count:
+                findings.append(("incomparable", f"{label}{metric_label}样本数量与统计数量不一致"))
+            counts.append(count)
+        if all(fp is not None for fp in fingerprints) and fingerprints[0] != fingerprints[1]:
+            findings.append(("incomparable", f"两份存档的{metric_label}有效样本身份不一致"))
+        if all(count is not None for count in counts) and counts[0] != counts[1]:
+            findings.append(("incomparable", f"两份存档的{metric_label}有效样本数量不一致"))
+        metrics[metric] = {
+            "status": aggregate([status for status, _ in findings]),
+            "issues": [issue for _, issue in findings],
+        }
+    return {"status": aggregate([result["status"] for result in metrics.values()]), "metrics": metrics}
 
 
 def compare_daily_review_snapshots(
@@ -503,6 +622,9 @@ def compare_daily_review_snapshots(
         "schema_compatible": schema_compatible,
         "warnings": uniq_warnings,
         "market_breadth": market_breadth,
+        "market_comparability": _market_comparability(
+            base_snapshot, target_snapshot, base_breadth_env, target_breadth_env,
+        ),
         "short_term_emotion": short_term_emotion,
         "sector_rotation": sector_rotation,
         "capital_activity": capital_activity,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 
 import pytest
 
@@ -570,3 +571,191 @@ def test_one_side_breadth_unknowns():
     assert "目标快照市场广度不可用" in out["unknowns"]
     assert out["market_breadth"]["available"] is False
     assert out["comparison_status"] == "partial"
+
+
+# 市场摘要门禁与存档数值差是独立契约；样本来自实际纯计算入口。
+def _market_snap(day="2026-07-20", clock="14:00:00", rows=None):
+    from market import calculate_market_breadth
+
+    snapshot = _snap(trade_date=day)
+    snapshot["review"]["market_environment"]["breadth"] = {
+        "status": "normal", "source": "eastmoney_push2", "trade_date": day,
+        "data_time": f"{day}T{clock}+08:00", "is_stale": False,
+        "data": calculate_market_breadth(rows if rows is not None else [
+            _stock("000001", "甲", amount=100), _stock("000002", "乙", amount=200),
+        ]),
+    }
+    return snapshot
+
+
+def _breadth(snapshot):
+    return snapshot["review"]["market_environment"]["breadth"]
+
+
+def _comparability(base, target):
+    return compare_daily_review_snapshots(base, target)["market_comparability"]
+
+
+def test_market_comparability_known_source_times_and_same_samples():
+    base = _market_snap()
+    target = _market_snap("2026-07-21", rows=[
+        _stock("000002", "乙", amount=300), _stock("000001", "甲", amount=200),
+    ])
+    _breadth(target)["data"]["up_ratio"] = 0.5
+    originals = copy.deepcopy((base, target))
+    out = compare_daily_review_snapshots(base, target)
+    assert out["market_comparability"] == {
+        "status": "comparable",
+        "metrics": {metric: {"status": "comparable", "issues": []} for metric in ("up_ratio", "total_amount")},
+    }
+    assert out["market_breadth"]["total_amount"]["delta"] == 200
+    assert out["market_breadth"]["up_ratio"]["delta"] == -0.5
+    assert (base, target) == originals
+
+
+def test_market_comparability_does_not_substitute_generation_or_cutoff_for_source_time():
+    base, target = _market_snap(), _market_snap("2026-07-21")
+    for snapshot in (base, target):
+        envelope = _breadth(snapshot)
+        snapshot["data_cutoff"] = snapshot["generated_at"]
+        snapshot["date"] = snapshot["trade_date"]
+        envelope["fetched_at"] = envelope["data_time"]
+        envelope["data_time"] = envelope["trade_date"] = None
+    out = compare_daily_review_snapshots(base, target)
+    assert out["market_comparability"]["status"] == "unverified"
+    assert out["market_breadth"]["total_amount"]["delta"] == 0
+    assert out["comparison_status"] == "normal"
+    assert any("源行情时间" in issue for issue in out["market_comparability"]["metrics"]["up_ratio"]["issues"])
+
+
+def test_market_comparability_same_count_different_codes_is_incomparable():
+    base = _market_snap()
+    target = _market_snap("2026-07-21", rows=[
+        _stock("000001", "甲", amount=100), _stock("000003", "丙", amount=200),
+    ])
+    result = _comparability(base, target)
+    assert result["status"] == "incomparable"
+    for metric in result["metrics"].values():
+        assert metric["status"] == "incomparable"
+        assert any("样本身份不一致" in issue for issue in metric["issues"])
+
+
+@pytest.mark.parametrize("field,metric,other", [
+    ("amount", "total_amount", "up_ratio"),
+    ("change_pct", "up_ratio", "total_amount"),
+])
+def test_market_comparability_field_populations_checked_independently(field, metric, other):
+    base_rows = [_stock("000001", "甲"), _stock("000002", "乙")]
+    target_rows = copy.deepcopy(base_rows)
+    base_rows[0][field] = None
+    target_rows[1][field] = None
+    result = _comparability(_market_snap(rows=base_rows), _market_snap("2026-07-21", rows=target_rows))
+    assert result["status"] == "incomparable"
+    assert result["metrics"][metric]["status"] == "incomparable"
+    assert result["metrics"][other] == {"status": "comparable", "issues": []}
+
+
+@pytest.mark.parametrize("target_day,target_clock,status", [
+    ("2026-07-20", "14:30:00", "comparable"),
+    ("2026-07-21", "14:00:00", "comparable"),
+    ("2026-07-20", "14:00:00", "incomparable"),
+    ("2026-07-20", "13:59:00", "incomparable"),
+    ("2026-07-19", "14:00:00", "incomparable"),
+    ("2026-07-20", "15:00:00", "incomparable"),
+    ("2026-07-21", "15:00:00", "incomparable"),
+    ("2026-07-21", "14:30:00", "incomparable"),
+])
+def test_market_comparability_source_time_order_clock_and_session(target_day, target_clock, status):
+    assert _comparability(_market_snap(), _market_snap(target_day, target_clock))["status"] == status
+
+
+@pytest.mark.parametrize("base_time,target_time", [
+    ("2026-07-20 15:00:00", "2026-07-21T07:00:00Z"),
+    ("2026-07-20T15:00:00+08:00", "2026-07-21T15:00:00+08:00"),
+])
+def test_market_comparability_source_times_use_beijing_timezone(base_time, target_time):
+    base, target = _market_snap(), _market_snap("2026-07-21")
+    _breadth(base)["data_time"], _breadth(target)["data_time"] = base_time, target_time
+    assert _comparability(base, target)["status"] == "comparable"
+
+
+@pytest.mark.parametrize("value", [None, "15:00:00", "2026-07-21", "2026-02-30T14:00:00", "not a time"])
+def test_market_comparability_missing_or_invalid_time_is_unverified(value):
+    base, target = _market_snap(), _market_snap("2026-07-21")
+    _breadth(target)["data_time"] = value
+    assert _comparability(base, target)["status"] == "unverified"
+
+
+@pytest.mark.parametrize("field,value,expected", [
+    ("source", None, "unverified"),
+    ("source", " ", "unverified"),
+    ("source", "another_provider", "incomparable"),
+    ("status", None, "unverified"),
+    ("status", "partial", "incomparable"),
+    ("status", "unavailable", "incomparable"),
+    ("trade_date", None, "unverified"),
+    ("trade_date", "2026-02-30", "unverified"),
+    ("trade_date", "2026-07-22", "incomparable"),
+    ("is_stale", True, "incomparable"),
+    ("data", None, "unverified"),
+])
+def test_market_comparability_envelope_missing_evidence_and_known_conflicts(field, value, expected):
+    base, target = _market_snap(), _market_snap("2026-07-21")
+    _breadth(target)[field] = value
+    assert _comparability(base, target)["status"] == expected
+
+
+@pytest.mark.parametrize("value,status", [(None, "unverified"), (" ", "unverified"), ("daily-review-v0.2", "incomparable")])
+def test_market_comparability_requires_known_equal_snapshot_schema(value, status):
+    base, target = _market_snap(), _market_snap("2026-07-21")
+    target["schema_version"] = value
+    assert _comparability(base, target)["status"] == status
+    if status == "unverified":
+        base["schema_version"] = value
+        # None == None 仍可满足旧 schema_compatible，但不能通过市场门禁。
+        assert _comparability(base, target)["status"] == "unverified"
+
+
+def test_market_comparability_missing_fingerprint_cannot_use_equal_counts():
+    base, target = _market_snap(), _market_snap("2026-07-21")
+    _breadth(target)["data"]["comparison_samples"]["up_ratio"]["fingerprint"] = None
+    result = _comparability(base, target)
+    assert result["status"] == "unverified"
+    assert result["metrics"]["up_ratio"]["status"] == "unverified"
+    assert result["metrics"]["total_amount"]["status"] == "comparable"
+    _breadth(target)["data"]["comparison_samples"]["total_amount"]["count"] = 3
+    # 已知冲突优先于另一指标的未知。
+    result = _comparability(base, target)
+    assert result["status"] == "incomparable"
+    assert result["metrics"]["up_ratio"]["status"] == "unverified"
+
+
+@pytest.mark.parametrize("metric", ["up_ratio", "total_amount"])
+@pytest.mark.parametrize("value", [None, True, float("nan"), float("inf")])
+def test_market_comparability_requires_finite_metric_values(metric, value):
+    base, target = _market_snap(), _market_snap("2026-07-21")
+    _breadth(target)["data"][metric] = value
+    result = _comparability(base, target)
+    assert result["status"] == "unverified"
+    assert result["metrics"][metric]["status"] == "unverified"
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("-inf")])
+@pytest.mark.parametrize("side", ["base", "target"])
+def test_nonfinite_archived_values_do_not_escape_into_numeric_deltas_or_json(value, side):
+    base, target = _market_snap(), _market_snap("2026-07-21")
+    snapshot = base if side == "base" else target
+    _breadth(snapshot)["data"]["total_amount"] = value
+    snapshot["review"]["capital_activity"]["total_amount"] = value
+    snapshot["review"]["short_term_emotion"]["data"]["seal_rate"] = value
+    out = compare_daily_review_snapshots(base, target)
+    for section, field in (
+        ("market_breadth", "total_amount"),
+        ("capital_activity", "total_amount"),
+        ("short_term_emotion", "seal_rate"),
+    ):
+        assert out[section][field][side] is None
+        assert out[section][field]["delta"] is None
+        assert out[section][field]["change_pct"] is None
+    assert out["market_comparability"]["metrics"]["total_amount"]["status"] == "unverified"
+    json.dumps(out, allow_nan=False)
