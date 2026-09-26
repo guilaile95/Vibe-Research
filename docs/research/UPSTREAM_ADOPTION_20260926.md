@@ -36,4 +36,3 @@ CNEquity 的[标的截面核验](https://github.com/rootSunc/CNEquity/commit/661
 ## 验证范围
 
 上游调查仅核对本地相关文档/代码/历史、公开 GitHub commits / compare / releases / 固定源码；未执行上游代码。适配实现的定向测试与隔离界面验收记录在对应 PR。真实全市场恢复仍未证实，未切换本机运行入口，也未启动正式 Product Reality 观察。
-
