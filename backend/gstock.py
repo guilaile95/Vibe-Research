@@ -7,7 +7,7 @@
 - 东财调用全部复用 `astock.em_get`（直连优先、避开用户 Clash 代理挂国内站）+
   `astock.eastmoney_datacenter`（datacenter 三表/指标已封装）。
 - push2 stock/get 直连偶发掉连 → **push2 优先、失败降级 push2delay**（延时行情，研究场景足够），
-  latch 到可用主机整进程复用（同成交额榜的做法）。
+  优先复用上次成功主机；其失败时仍尝试另一台既有主机。
 - Yahoo / SEC 等国外源不并入（需科学上网、且非必要）。
 """
 
@@ -17,7 +17,7 @@ import astock
 
 _UA_H = {"User-Agent": astock.UA}
 _GS_HOSTS = ("push2.eastmoney.com", "push2delay.eastmoney.com")
-_gs_host = [0]  # 当前可用主机下标；首次 push2 掉连后 latch 到 push2delay
+_gs_host = [0]  # 上次成功主机；失败时仍可回到另一台既有主机
 
 # 全球指数（东财 push2 secid）—— A 股看隔夜外围脸色的核心几个，均已实测。
 _INDICES = (
@@ -36,9 +36,10 @@ _QUOTE_FIELDS = "f43,f44,f45,f46,f48,f57,f58,f59,f60,f116,f170"
 
 
 def _push2_stock_get(secid: str, fields: str) -> dict | None:
-    """东财 push2 stock/get：push2 优先、失败降级 push2delay；latch 可用主机。空数据返回 None。"""
+    """东财 stock/get：优先上次成功主机，失败尝试另一台。空数据返回 None。"""
     params = {"secid": secid, "fields": fields}
-    for i in range(_gs_host[0], len(_GS_HOSTS)):
+    preferred = _gs_host[0]
+    for i in (preferred, *(index for index in range(len(_GS_HOSTS)) if index != preferred)):
         try:
             r = astock.em_get(f"https://{_GS_HOSTS[i]}/api/qt/stock/get",
                               params=params, headers=_UA_H, timeout=10)
