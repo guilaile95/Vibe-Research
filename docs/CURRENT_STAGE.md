@@ -1,6 +1,6 @@
 # Current Stage — Recovery Coordinates
 
-Last reviewed: 2026-09-10
+Last reviewed: 2026-09-26
 
 This file is a recovery pointer, not Engineering Truth and not a second task database.
 Always resolve live GitHub state before acting; do not persist an exact stable SHA here.
@@ -35,6 +35,36 @@ Reality evidence.
 Issue [#203](https://github.com/guilaile95/Vibe-Research/issues/203) remains the live engineering authority.
 The default state is **FROZEN between slices**, unless its latest comment records an active Owner/PM
 Planning Parity authorization or another narrow Owner override.
+
+### Current Owner override: market research experience continuation
+
+The Owner has explicitly authorized continued improvements toward **quickly understanding the market
+and finding worthwhile research leads**, including source/time correctness, frontend clarity,
+article-level association, research continuity, targeted AI assistance, and bounded adoption of updates
+from projects already used here. The delivery trail is PRs
+[#348](https://github.com/guilaile95/Vibe-Research/pull/348),
+[#349](https://github.com/guilaile95/Vibe-Research/pull/349),
+[#350](https://github.com/guilaile95/Vibe-Research/pull/350),
+[#351](https://github.com/guilaile95/Vibe-Research/pull/351),
+[#352](https://github.com/guilaile95/Vibe-Research/pull/352),
+[#353](https://github.com/guilaile95/Vibe-Research/pull/353),
+[#354](https://github.com/guilaile95/Vibe-Research/pull/354) and
+[#355](https://github.com/guilaile95/Vibe-Research/pull/355).
+Resolve their live state, reviews, actual diffs and CI; inclusion here does not mean a PR is merged or
+verified. This records the Owner's continuing instruction, not a new authorization granted by an agent.
+
+Within this accepted program, completing one slice or scheduling a later wake-up is not a reason to
+stop. Ready and ordinary merge follow `AGENTS.md` without a repeated permission request. Check the
+actual available core usage windows during execution: stop when any remaining allowance reaches
+**10% or less**, or when a reset is detected and the remaining allowance becomes **100% or 99%**.
+Missing usage information is unknown, not zero. At a stop, preserve work and the exact continuation
+point, pause this program's automation, and wait for a new Owner continuation instruction; never redeem
+a reset credit or resume automatically into the reset allowance.
+
+This override does not revive historical Drafts, authorize general modernization, switch the current
+desktop runtime, deploy, or activate Product Reality Day 1. It supersedes the old between-slice freeze
+only for the accepted program above. Read the live delivery trail and current Owner instructions
+alongside #203, whose older Draft-only decisions must not be mistaken for the later authorization.
 
 A clear next action does not itself authorize unrelated implementation. Historical Draft PRs and old
 agent lane assignments remain archival context and must not be revived automatically.
@@ -77,7 +107,7 @@ separate truth gate, but Owner has explicitly chosen to continue Planning Parity
 4. Inspect all Open PRs before creating work; treat old Drafts as historical unless the current live
    authority explicitly names one.
 5. Inspect the local workspace before touching files; preserve uncommitted work.
-6. If a current Planning Parity authorization exists in #203, execute only that bounded slice and
+6. Check the current Owner override above before applying the default freeze. If a current Planning Parity authorization exists in #203, execute only that bounded slice and
    restore the freeze after verified closure. If no active authorization exists, remain frozen until the
    Owner or PM operating under the Owner's continuing Planning Parity direction authorizes the next
    bounded slice.
@@ -111,7 +141,8 @@ Before Product Reality is activated, Planning Parity may continue when each slic
 - has a bounded contract and explicit non-scope;
 - preserves no-broker / no-auto-trading / private-data boundaries;
 - uses minimum sufficient validation and an independent Gate;
-- restores the project freeze after verified closure.
+- restores the project freeze after verified closure, except where the current Owner override explicitly
+  authorizes continuation across accepted slices.
 
 Do not create work merely for elegance, broad modernization, generic infrastructure, or feature-count
 completeness. Product Reality can still later invalidate, simplify, or reprioritize implemented features.
