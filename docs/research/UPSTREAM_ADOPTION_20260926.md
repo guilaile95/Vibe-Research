@@ -36,3 +36,18 @@ CNEquity 的[标的截面核验](https://github.com/rootSunc/CNEquity/commit/661
 ## 验证范围
 
 上游调查仅核对本地相关文档/代码/历史、公开 GitHub commits / compare / releases / 固定源码；未执行上游代码。适配实现的定向测试与隔离界面验收记录在对应 PR。真实全市场恢复仍未证实，未切换本机运行入口，也未启动正式 Product Reality 观察。
+
+## 内嵌数据工具包补充核查
+
+前述五个来源之外，项目还内嵌两个实际使用的数据工具包。补查以本地 `714343d` 的同步记录、当前内嵌版本和固定上游源码为依据，不把安装的所有 Skills 当作已吸收项目。
+
+| 来源 | 本地基准 | 本次核验坐标与结论 |
+| --- | --- | --- |
+| [a-stock-data](https://github.com/simonlin1212/a-stock-data) | 内嵌 3.7.1，对应上游 `f90d67853b8108f13d286e1df20b357e2c5198a9` | [固定比较](https://github.com/simonlin1212/a-stock-data/compare/f90d67853b8108f13d286e1df20b357e2c5198a9...f814dcfe209dd7958f4858f9d878d591ee85fb56)：8 个提交。最新功能版本 [3.10.0](https://github.com/simonlin1212/a-stock-data/commit/2e0ae6383c649b2bc5f68d3bc430d357f1c59ae7) 含腾讯逐笔；3.9.0 含腾讯 K 线、通达信盘后包及更多官方数据源；3.7.2 对齐北交所号段规则。HEAD 的最后提交为文档更新。 |
+| [global-stock-data](https://github.com/simonlin1212/global-stock-data) | 内嵌 2.0.3 | [固定 HEAD](https://github.com/simonlin1212/global-stock-data/tree/5f27525709ab043b91e53d7a420ce6d46e66a0ce) 的 SKILL.md 与项目内嵌文件逐行比较，仅作者说明旁一处尾随空格不同，无新增可吸收的工具包功能。未整体重写本地 Skill。 |
+
+本补丁独立适配北交所行情路由：`92`、历史 `4/8` 号段优先于沪 B 股 `9` 规则，避免把 `920982` 请求为 `sh920982`。保留沪深股票、沪 B 股及 ETF 规则。调用链核查还确认 AI 工具已有腾讯 K 线入口，因此同时拒绝其不支持的北交所历史请求，交回既有 `astock.kline` 路径；可用的 HiThink 日线资格认定和不可用时的拒绝条件保持原样。上游 [3.10.0 固定契约](https://github.com/simonlin1212/a-stock-data/blob/2e0ae6383c649b2bc5f68d3bc430d357f1c59ae7/SKILL.md) 说明腾讯可能只返回北交所最新一根日线，不能据此形成历史涨跌幅结论。
+
+腾讯新 K 线暂不替换主产品 K 线数据源：其默认前复权口径、无成交额、沪深覆盖范围与当前 HiThink 不复权日线及成交額契约不同。本项目的 AI 工具已有腾讯前复权取数，并非此次新增能力；其余新端点也没有直接纳入调用链。官方盘后包、更多期货/可转债接口属于后续按产品需求核定的候选，不能因上游新增就声称已经接入。上游自报测试数不是本项目验证结果。
+
+本轮后续的全 A 分页实测：前 13 页各 100 行、源 total=5920；第 14 页主备主机各 3 次 `ConnectionError`，异常链包括 `MaxRetryError` / `ProtocolError`，总耗时 24.12 秒。最终拒绝返回不完整快照，未达到整轮时间预算。该证据仍不能区分代理、限流或供应商根因，也不能证明全市场恢复；没有追加重复全量探测。
