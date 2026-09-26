@@ -1,6 +1,9 @@
 """市场广度 calculate_market_breadth / get_market_breadth 信封契约离线测试（Mock 快照，不联网）。"""
 from __future__ import annotations
 
+import copy
+import hashlib
+
 import pytest
 
 import market
@@ -132,6 +135,53 @@ def test_breadth_high_turnover_threshold_and_order():
     b = market.calculate_market_breadth(snap, high_turnover_n=10, high_turnover_min=15.0)
     ht = b["high_turnover"]
     assert [x["code"] for x in ht] == ["000005", "000001", "000002"]
+
+
+def test_comparison_samples_normalize_sort_codes_without_mutating_input():
+    rows = [_s(" 2 "), _s(1)]
+    original = copy.deepcopy(rows)
+    breadth = market.calculate_market_breadth(rows)
+    expected = hashlib.sha256(b"000001\n000002").hexdigest()
+    for sample in breadth["comparison_samples"].values():
+        assert sample == {"fingerprint": expected, "count": 2}
+    assert rows == original
+    assert market.calculate_market_breadth(list(reversed(rows)))["comparison_samples"] == breadth["comparison_samples"]
+
+
+def test_comparison_samples_identify_each_effective_field_population():
+    breadth = market.calculate_market_breadth([
+        _s("000001", amount=None),
+        _s("000002", change_pct=None),
+        _s("000003", amount=-1),
+    ])
+    assert breadth["comparison_samples"] == {
+        "up_ratio": {"fingerprint": hashlib.sha256(b"000001\n000003").hexdigest(), "count": 2},
+        "total_amount": {"fingerprint": hashlib.sha256(b"000002").hexdigest(), "count": 1},
+    }
+
+
+@pytest.mark.parametrize("bad_code", [None, "", "BAD", "1234567", True, "１２３４５６"])
+def test_comparison_samples_missing_or_invalid_identity_is_not_certified(bad_code):
+    breadth = market.calculate_market_breadth([_s(bad_code)])
+    assert breadth["valid_count"] == breadth["amount_valid_count"] == 1
+    assert all(sample == {"fingerprint": None, "count": 1} for sample in breadth["comparison_samples"].values())
+
+
+def test_comparison_samples_duplicate_normalized_code_is_not_silently_deduped():
+    breadth = market.calculate_market_breadth([_s("000001"), _s(1)])
+    assert breadth["valid_count"] == breadth["amount_valid_count"] == 2
+    assert all(sample == {"fingerprint": None, "count": 2} for sample in breadth["comparison_samples"].values())
+
+
+@pytest.mark.parametrize("field,metric,other", [
+    ("change_pct", "up_ratio", "total_amount"),
+    ("amount", "total_amount", "up_ratio"),
+])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_comparison_samples_nonfinite_field_only_invalidates_its_metric(field, metric, other, value):
+    breadth = market.calculate_market_breadth([_s(**{field: value})])
+    assert breadth["comparison_samples"][metric]["fingerprint"] is None
+    assert breadth["comparison_samples"][other]["fingerprint"] == hashlib.sha256(b"600519").hexdigest()
 
 
 # ── 缓存 ────────────────────────────────────────────────────────────

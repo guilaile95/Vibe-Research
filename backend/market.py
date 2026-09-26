@@ -411,7 +411,11 @@ def calculate_market_breadth(
     """由全 A 快照纯计算市场广度。不联网、不读缓存。
 
     涨跌统计仅使用 ``change_pct`` 为有效数值的股票；上涨/下跌/平盘互斥。
+    comparison_samples 仅记录各指标样本身份；不证明整批行情来自同一时点。
     """
+    import hashlib
+    import math
+
     if not isinstance(snapshot, list):
         raise TypeError(f"snapshot must be a list, got {type(snapshot).__name__}")
 
@@ -426,10 +430,32 @@ def calculate_market_breadth(
 
     amount_candidates: list[dict] = []
     turnover_candidates: list[dict] = []
+    sample_codes: dict[str, set[str]] = {"up_ratio": set(), "total_amount": set()}
+    sample_known = {"up_ratio": True, "total_amount": True}
+    seen_codes: set[str] = set()
+    identity_known = True
 
     for s in snapshot:
         if not isinstance(s, dict):
+            identity_known = False
             continue
+        raw_code = s.get("code")
+        code = str(raw_code).strip() if isinstance(raw_code, (str, int)) and not isinstance(raw_code, bool) else ""
+        if code.isascii() and code.isdigit() and len(code) <= 6:
+            code = code.zfill(6)
+            if code in seen_codes:
+                identity_known = False
+            seen_codes.add(code)
+        else:
+            identity_known = False
+        # 缺字段可确定为未入样本；非有限数值则不签发相应指标的样本证明。
+        for metric, field in (("up_ratio", "change_pct"), ("total_amount", "amount")):
+            value = s.get(field)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                if not math.isfinite(value):
+                    sample_known[metric] = False
+                elif metric == "up_ratio" or value >= 0:
+                    sample_codes[metric].add(code)
         pct = s.get("change_pct")
         if isinstance(pct, (int, float)) and not isinstance(pct, bool):
             # 排除 NaN
@@ -497,6 +523,14 @@ def calculate_market_breadth(
         "amount_valid_count": amount_valid_count,
         "amount_top": amount_top,
         "high_turnover": high_turnover,
+        "comparison_samples": {
+            metric: {
+                "fingerprint": hashlib.sha256("\n".join(sorted(sample_codes[metric])).encode("ascii")).hexdigest()
+                if identity_known and sample_known[metric] else None,
+                "count": count,
+            }
+            for metric, count in (("up_ratio", valid_count), ("total_amount", amount_valid_count))
+        },
     }
 
 

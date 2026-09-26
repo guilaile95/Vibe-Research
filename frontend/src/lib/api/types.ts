@@ -929,6 +929,13 @@ export interface HighlightComparison<T> {
 /** GET /api/daily-review/history/compare 结果 */
 export interface DailyReviewComparison {
   schema_version: string;
+  market_comparability?: {
+    status: "comparable" | "unverified" | "incomparable";
+    metrics: Record<"up_ratio" | "total_amount", {
+      status: "comparable" | "unverified" | "incomparable";
+      issues: string[];
+    }>;
+  };
   base: DailyReviewComparisonMeta;
   target: DailyReviewComparisonMeta;
   comparison_status: DataStatus;
