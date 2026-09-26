@@ -6,6 +6,7 @@ export type * from "./api/types.ts";
 
 import type { MarketCloudEnvelope } from "./marketCloud.ts";
 import { parseReportChatCoverage } from "./reportChatCoverage.ts";
+import { parseLeadAnalysisContext } from "./leadAnalysisContext.ts";
 import type {
   CurrentThesisDelta,
   ThesisDeltaCreatePayload,
@@ -359,6 +360,14 @@ export function applyNdjsonLine(
       return;
     }
     handlers.onTool?.(String(event.tool || ""), event.args || {});
+  } else if (event.type === "lead_context") {
+    const context = parseLeadAnalysisContext(event.context);
+    if (state.sawDone || !context) {
+      state.sawError = true;
+      state.errorMessage = "线索分析来源格式错误";
+      return;
+    }
+    handlers.onLeadContext?.(context);
   } else if (event.type === "sources") {
     if (state.sawDone || !Array.isArray(event.items) || event.items.length > 8) {
       state.sawError = true;

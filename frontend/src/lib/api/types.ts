@@ -2083,6 +2083,7 @@ export interface DailyReviewAnalyzeRequest {
 
 
 export interface NdjsonStreamHandlers {
+  onLeadContext?: (context: import("../leadAnalysisContext.ts").LeadAnalysisContext) => void;
   onDelta?: (text: string) => void;
   onTool?: (tool: string, args: Record<string, unknown>) => void;
   onSources?: (items: ReportChatSource[], coverage?: ReportChatCoverage) => void;
