@@ -13,6 +13,9 @@ chat.py / mcp_server.py / debate.py 共用本模块，新增工具只需改这�
 
 from __future__ import annotations
 
+import math
+from datetime import date
+
 import astock
 import gstock
 import market
@@ -142,19 +145,42 @@ def _kline_tencent(code: str, period: str, n: int) -> list[dict]:
     sym = f"{prefix}{code}"
     r = requests.get(_TENCENT_KLINE, params={"param": f"{sym},{period},,,{n},qfq"},
                      headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
-    d = (r.json().get("data") or {}).get(sym) or {}
-    raw = d.get("qfq" + period) or d.get(period) or []
+    try:
+        r.raise_for_status()
+        payload = r.json()
+    finally:
+        r.close()
+    d = (payload.get("data") or {}).get(sym) if isinstance(payload, dict) else None
+    if not isinstance(d, dict):
+        raise ValueError("Tencent K-line security identity is missing")
+    # A present-but-empty adjusted series must never fall back to raw prices.
+    # Securities without an adjustment event may return only the period key.
+    key = "qfq" + period
+    raw = d[key] if key in d else d.get(period)
+    if not isinstance(raw, list) or not raw or len(raw) > n:
+        raise ValueError("Tencent K-line series is missing or exceeds the request")
     out = []
+    previous_date = None
     for it in raw:
         if not isinstance(it, list) or len(it) < 6:
-            continue
-        def _f(x):
-            try:
-                return float(x)
-            except (TypeError, ValueError):
-                return None
-        out.append({"date": it[0], "open": _f(it[1]), "close": _f(it[2]),
-                    "high": _f(it[3]), "low": _f(it[4]), "volume": _f(it[5])})
+            raise ValueError("Tencent K-line row is malformed")
+        stamp = date.fromisoformat(it[0])
+        if stamp.isoformat() != it[0] or (previous_date is not None and stamp <= previous_date):
+            raise ValueError("Tencent K-line dates are invalid or not increasing")
+        values = []
+        for value in it[1:6]:
+            if isinstance(value, bool) or value is None:
+                raise ValueError("Tencent K-line numeric value is missing")
+            number = float(value)
+            if not math.isfinite(number):
+                raise ValueError("Tencent K-line numeric value is not finite")
+            values.append(number)
+        opened, closed, high, low, volume = values
+        if min(opened, closed, high, low) <= 0 or volume < 0 or not low <= opened <= high or not low <= closed <= high:
+            raise ValueError("Tencent K-line OHLC or volume is invalid")
+        out.append({"date": stamp.isoformat(), "open": opened, "close": closed,
+                    "high": high, "low": low, "volume": volume})
+        previous_date = stamp
     return out
 
 
