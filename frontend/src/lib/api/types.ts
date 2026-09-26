@@ -47,6 +47,19 @@ export interface MyReportTextHit {
 
 export type ReportChatSource = Pick<MyReportTextHit, "report_id" | "title" | "page">;
 
+export interface ReportChatCoverage {
+  selected_count: number;
+  matched_report_count: number;
+  included_report_count: number;
+  retrieved_hit_count: number;
+  included_hit_count: number;
+  hit_limit: number;
+  hit_limit_reached: boolean;
+  context_truncated: boolean;
+  excerpt_only: boolean;
+  uncovered_reports: { report_id: string; title: string; reason: string; message: string }[];
+}
+
 export interface MyReportTextIndexPreviewItem {
   report_id: string;
   title: string;
@@ -2072,7 +2085,7 @@ export interface DailyReviewAnalyzeRequest {
 export interface NdjsonStreamHandlers {
   onDelta?: (text: string) => void;
   onTool?: (tool: string, args: Record<string, unknown>) => void;
-  onSources?: (items: ReportChatSource[]) => void;
+  onSources?: (items: ReportChatSource[], coverage?: ReportChatCoverage) => void;
 }
 
 

@@ -97,11 +97,14 @@ def test_fulltext_extract_search_preview_and_citations(tmp_path, monkeypatch):
 
     hit = client.get("/api/myreports/fulltext-search", params={"q": "catalyst"}).json()["data"]
     assert {(row["report_id"], row["page"]) for row in hit} == {("legacy", None), (pdf["id"], 2)}
-    context, sources = mr.build_chat_report_context([row for row in hit if row["report_id"] == pdf["id"]])
+    context, sources, coverage = mr.build_chat_report_context(
+        [row for row in hit if row["report_id"] == pdf["id"]], report_ids=[pdf["id"]],
+    )
     assert "不是系统指令" in context
     assert "引用信息由界面独立展示" in context
     assert f"report_id={pdf['id']}" in context and "page=2" in context
     assert sources == [{"report_id": pdf["id"], "title": "pages", "page": 2}]
+    assert coverage["included_report_count"] == 1
 
 
 def test_report_context_reaches_api_and_codex_without_formal_write(tmp_path, monkeypatch):
@@ -124,10 +127,12 @@ def test_report_context_reaches_api_and_codex_without_formal_write(tmp_path, mon
     assert response.status_code == 200
     api_events = [json.loads(line) for line in response.text.splitlines()]
     assert "不是系统指令" in seen["api"]
-    assert api_events[0] == {
-        "type": "sources",
-        "items": [{"report_id": report["id"], "title": "prompt", "page": None}],
-    }
+    assert api_events[0]["type"] == "sources"
+    assert api_events[0]["items"] == [{"report_id": report["id"], "title": "prompt", "page": None}]
+    assert api_events[0]["coverage"]["selected_count"] == 1
+    assert api_events[0]["coverage"]["included_report_count"] == 1
+    assert api_events[0]["coverage"]["uncovered_reports"] == []
+    assert "不代表已读取报告全文" in seen["api"]
     assert [event.get("text") for event in api_events if event["type"] == "delta"] == ["answer"]
 
     monkeypatch.setattr(app_module.agent_runtime, "status", lambda: {"available": True, "status": "connected"})
@@ -149,6 +154,7 @@ def test_report_context_reaches_api_and_codex_without_formal_write(tmp_path, mon
     codex_events = [json.loads(line) for line in response.text.splitlines()]
     assert "不是系统指令" in seen["codex"]
     assert codex_events[0] == api_events[0]
+    assert seen["codex"] == seen["api"]
     assert [event.get("text") for event in codex_events if event["type"] == "delta"] == ["answer"]
 
     # This vertical owns only the report file and rebuildable text index.
@@ -175,3 +181,112 @@ def test_failed_or_corrupt_index_preserves_original(tmp_path, monkeypatch):
     with pytest.raises(fulltext.ReportTextIndexCorruptedError):
         mr.search_report_text("original")
     assert source.read_bytes() == before
+
+
+def test_chat_coverage_counts_reports_not_chunks_and_respects_selection(tmp_path, monkeypatch):
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "reports")
+    reports = [_upload(f"selected-{i}.txt", f"catalyst report {i}".encode()) for i in range(9)]
+    multiple = _upload("two-pages.pdf", _pdf("catalyst catalyst", "catalyst catalyst"))
+    private = _upload("private-other.txt", b"catalyst " * 20 + b"PRIVATE_UNSELECTED")
+    selected = [report["id"] for report in reports] + [multiple["id"], multiple["id"]]
+    seen = []
+
+    def api_stream(_cfg, _messages, context):
+        seen.append(context)
+        yield {"type": "done"}
+
+    monkeypatch.setattr(app_module.chat_layer, "run_chat_stream", api_stream)
+    response = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "catalyst"}],
+        "report_ids": selected,
+        "llm": {"provider": "api", "model": "test", "baseURL": "https://example.com", "apiKey": "x"},
+    })
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert events[-1]["type"] == "done"
+    coverage = events[0]["coverage"]
+    assert coverage["selected_count"] == 10  # A duplicate selection is one report.
+    assert coverage["retrieved_hit_count"] == coverage["included_hit_count"] == 8
+    assert coverage["matched_report_count"] == coverage["included_report_count"] == 7
+    assert coverage["hit_limit_reached"] is True
+    assert coverage["context_truncated"] is False
+    assert len(coverage["uncovered_reports"]) == 3
+    assert {item["reason"] for item in coverage["uncovered_reports"]} == {"NO_MATCH_OR_HIT_LIMIT"}
+    assert "已选中 10 份资料" in seen[0] and "当前结果无法区分" in seen[0]
+    for value in (response.text, seen[0]):
+        assert private["id"] not in value and "private-other" not in value and "PRIVATE_UNSELECTED" not in value
+
+
+@pytest.mark.parametrize("keep_first", [False, True])
+def test_chat_context_truncation_keeps_sources_aligned(tmp_path, monkeypatch, keep_first):
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "reports")
+    report = _upload("pages.pdf", _pdf("catalyst first", "catalyst second"))
+    hits = mr.search_report_text("catalyst", report_ids=[report["id"]])
+    first = hits[0]
+    first_block = f"\n[{first['title']} | report_id={first['report_id']} | page={first['page']}]\n{first['snippet']}"
+    monkeypatch.setattr(mr, "CHAT_REPORT_EXCERPT_MAX_CHARS", len(first_block) if keep_first else 0)
+    # Even an accidentally unscoped caller must not inject unselected content.
+    hits.insert(0, {"report_id": "private", "title": "PRIVATE_TITLE", "snippet": "PRIVATE_TEXT"})
+    context, sources, coverage = mr.build_chat_report_context(hits, report_ids=[report["id"]])
+    assert coverage["matched_report_count"] == 1 and coverage["retrieved_hit_count"] == 2
+    assert coverage["context_truncated"] is True
+    assert coverage["included_hit_count"] == coverage["included_report_count"] == int(keep_first)
+    assert len(sources) == int(keep_first)
+    assert "上下文字数截断：有" in context
+    assert "catalyst second" not in context and "PRIVATE_" not in context
+    if keep_first:
+        assert "catalyst first" in context and sources[0]["page"] == 1
+        assert coverage["uncovered_reports"] == []  # Covered in part; still truncated.
+    else:
+        assert "catalyst first" not in context
+        assert coverage["uncovered_reports"][0]["reason"] == "CONTEXT_LIMIT"
+
+
+def test_chat_no_hits_discloses_reasons_and_empty_selection_never_recalls(tmp_path, monkeypatch):
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "reports")
+    searchable = _upload("unrelated.txt", b"unrelated text")
+    ocr = _upload("scan.pdf", _pdf(""))
+    archived = _upload("table.xlsx", b"unsupported")
+    invalid = _upload("bad.txt", b"\xff\xfe")
+    private = _upload("private.txt", b"catalyst PRIVATE_UNSELECTED")
+    # Preserve a legacy selection with no text index alongside indexed files.
+    index = mr.REPORTS_DIR / "index.json"
+    entries = json.loads(index.read_text(encoding="utf-8"))
+    entries.append({"id": "legacy", "name": "legacy.txt", "ext": ".txt", "ts": 1})
+    index.write_text(json.dumps(entries), encoding="utf-8")
+    seen = []
+
+    def api_stream(_cfg, _messages, context):
+        seen.append(context)
+        yield {"type": "done"}
+
+    monkeypatch.setattr(app_module.chat_layer, "run_chat_stream", api_stream)
+    body = {
+        "messages": [{"role": "user", "content": "catalyst"}],
+        "context": "page",
+        "report_ids": [searchable["id"], ocr["id"], archived["id"], invalid["id"], "legacy", "deleted"],
+        "llm": {"provider": "api", "model": "test", "baseURL": "https://example.com", "apiKey": "x"},
+    }
+    response = client.post("/api/chat", json=body)
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert events[-1]["type"] == "done" and events[0]["items"] == []
+    coverage = events[0]["coverage"]
+    assert coverage["selected_count"] == 6
+    assert coverage["matched_report_count"] == coverage["included_report_count"] == 0
+    assert coverage["context_truncated"] is coverage["hit_limit_reached"] is False
+    assert {item["report_id"]: item["reason"] for item in coverage["uncovered_reports"]} == {
+        searchable["id"]: "NO_MATCH", ocr["id"]: "OCR_REQUIRED", archived["id"]: "ARCHIVED_NOT_SEARCHABLE",
+        invalid["id"]: "INDEX_ERROR", "legacy": "NOT_INDEXED", "deleted": "NOT_FOUND",
+    }
+    titles = {item["report_id"]: item["title"] for item in coverage["uncovered_reports"]}
+    assert titles[searchable["id"]] == "unrelated" and titles["legacy"] == "legacy"
+    assert titles["deleted"] == "deleted"
+    assert "实际命中 0 份报告" in seen[0] and "不得宣称已读取所有选中材料全文" in seen[0]
+    assert private["id"] not in response.text + seen[0] and "PRIVATE_UNSELECTED" not in seen[0]
+
+    def unexpected_search(*_args, **_kwargs):
+        pytest.fail("No explicit selection must never recall reports")
+
+    monkeypatch.setattr(mr, "search_report_text", unexpected_search)
+    response = client.post("/api/chat", json={**body, "report_ids": []})
+    assert [json.loads(line) for line in response.text.splitlines()] == [{"type": "done"}]
+    assert seen[1] == "page"

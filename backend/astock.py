@@ -15,6 +15,7 @@ import math
 import os
 import random
 import re
+import threading
 import time
 import urllib.request
 from datetime import datetime, timedelta
@@ -729,6 +730,7 @@ _DATACENTER_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 _EM_MIN_INTERVAL = 1.0          # 两次东财请求最小间隔（秒），内置防封节流
 _em_last_call = [0.0]
 _EM_SESSIONS: dict = {}         # {direct(bool): requests.Session}
+_EM_REQUEST_LOCK = threading.Lock()
 
 # 东财固定直连：Windows 系统代理（Clash 等）常把 push2.eastmoney.com 的 CONNECT 掐断，
 # 导致全 A 快照分页中途 ProxyError。数据层一律 trust_env=False，不读系统/环境代理。
@@ -764,23 +766,47 @@ def _em_session(direct: bool = True):
     return s
 
 
-def em_get(url: str, params: dict | None = None, headers: dict | None = None, timeout: int = 15, *, min_interval: float = _EM_MIN_INTERVAL):
+def _snapshot_remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RuntimeError("a_share_snapshot: refresh time budget exhausted")
+    return remaining
+
+
+def em_get(url: str, params: dict | None = None, headers: dict | None = None, timeout: int = 15, *, min_interval: float = _EM_MIN_INTERVAL, deadline: float | None = None):
     """东财统一请求入口：串行限流 + **固定直连**（trust_env=False）。
 
     不读取环境/系统代理，避免 Clash 等代理导致国内站 ProxyError。
     瞬时失败由调用方（如 a_share_snapshot 分页）做有限页级重试。
 
-    min_interval: 两次请求最小间隔（秒）。默认全局 _EM_MIN_INTERVAL=1.0；
-    批量分页（如全 A 快照）可传入更短值以加速，同端点连续请求风险可控。
+    min_interval: 两次请求最小间隔（秒）。锁覆盖等待及请求，避免并发调用越过限流。
+    deadline: 快照协作预算，覆盖锁等待、限流和分页重试；不是线程强制终止。
     """
-    wait = min_interval - (time.time() - _em_last_call[0])
-    if wait > 0:
-        time.sleep(wait + random.uniform(0.1, 0.3))
+    acquired = (_EM_REQUEST_LOCK.acquire() if deadline is None else
+                _EM_REQUEST_LOCK.acquire(timeout=_snapshot_remaining(deadline)))
+    if not acquired:
+        raise RuntimeError("a_share_snapshot: refresh time budget exhausted")
     try:
-        _em_mode[0] = "direct"
-        return _em_session(True).get(url, params=params, headers=headers, timeout=timeout)
+        wait = min_interval - (time.monotonic() - _em_last_call[0])
+        if wait > 0:
+            delay = wait + random.uniform(0.1, 0.3)
+            if deadline is not None and delay >= _snapshot_remaining(deadline):
+                raise RuntimeError("a_share_snapshot: refresh time budget exhausted")
+            time.sleep(delay)
+        if deadline is not None:
+            # requests 的连接/读取超时不等于整体 deadline；返回后仍须核对预算。
+            remaining = _snapshot_remaining(deadline)
+            timeout = (min(timeout, remaining / 2), min(timeout, remaining / 2))
+        try:
+            _em_mode[0] = "direct"
+            response = _em_session(True).get(url, params=params, headers=headers, timeout=timeout)
+        finally:
+            _em_last_call[0] = time.monotonic()
+        if deadline is not None:
+            _snapshot_remaining(deadline)
+        return response
     finally:
-        _em_last_call[0] = time.time()
+        _EM_REQUEST_LOCK.release()
 
 
 def _is_transient_network_error(exc: BaseException) -> bool:
@@ -825,15 +851,23 @@ def _em_get_page_with_retries(
     headers: dict | None,
     timeout: int = 15,
     max_attempts: int = _A_SHARE_PAGE_MAX_ATTEMPTS,
-    backoff: tuple[float, ...] = _A_SHARE_PAGE_RETRY_BACKOFF,
+    backoff: tuple[float, ...] | None = None,
     min_interval: float = _EM_MIN_INTERVAL,
+    deadline: float | None = None,
 ):
     """单页请求：瞬时网络错误有限重试；解析/结构类错误不重试。"""
     last_err: BaseException | None = None
     attempts = max(1, int(max_attempts))
+    backoff = _A_SHARE_PAGE_RETRY_BACKOFF if backoff is None else backoff
     for attempt in range(attempts):
+        if deadline is not None:
+            _snapshot_remaining(deadline)
         try:
-            return em_get(url, params=params, headers=headers, timeout=timeout, min_interval=min_interval)
+            request_options = {} if deadline is None else {"deadline": deadline}
+            response = em_get(url, params=params, headers=headers, timeout=timeout, min_interval=min_interval, **request_options)
+            if deadline is not None:
+                _snapshot_remaining(deadline)
+            return response
         except Exception as e:  # noqa: BLE001
             last_err = e
             if not _is_transient_network_error(e):
@@ -841,60 +875,11 @@ def _em_get_page_with_retries(
             if attempt >= attempts - 1:
                 break
             delay = backoff[attempt] if attempt < len(backoff) else backoff[-1]
+            if deadline is not None and delay >= _snapshot_remaining(deadline):
+                raise RuntimeError("a_share_snapshot: refresh time budget exhausted") from e
             time.sleep(delay)
     assert last_err is not None
     raise last_err
-
-
-def _fetch_snapshot_page(pn: int, *, page_size: int, host: str, headers: dict) -> list[dict]:
-    """获取单页全 A 快照并返回原始 diff list[dict]。
-
-    用于有界并发分页：第一页串行获取确定 total 后，后续页并发调用本函数。
-    仍走 em_get 全局限流（测试可 mock），但多线程重叠网络等待。
-    失败抛出异常，由调用方处理。
-    """
-    params = {
-        "pn": str(pn),
-        "pz": str(page_size),
-        "po": "1",
-        "np": "1",
-        "fltt": "2",
-        "invt": "2",
-        "fid": "f3",
-        "fs": _A_SHARE_FS,
-        "fields": _A_SHARE_FIELDS,
-    }
-    try:
-        r = _em_get_page_with_retries(
-            f"https://{host}/api/qt/clist/get",
-            params=params,
-            headers=headers,
-            timeout=15,
-            min_interval=0.1,
-        )
-    except RuntimeError:
-        raise
-    except Exception as e:  # noqa: BLE001 — 与串行路径一致：网络失败包装为 request failed
-        raise RuntimeError(
-            f"a_share_snapshot page {pn}: request failed: {e}"
-        ) from e
-    try:
-        payload = r.json()
-    except Exception as e:  # noqa: BLE001
-        raise RuntimeError(f"a_share_snapshot page {pn}: invalid JSON from {host}: {e}") from e
-    if not isinstance(payload, dict):
-        raise RuntimeError(f"a_share_snapshot page {pn}: response is not a dict")
-    if "data" not in payload or payload["data"] is None:
-        raise RuntimeError(f"a_share_snapshot page {pn}: missing data in response")
-    data = payload["data"]
-    if not isinstance(data, dict):
-        raise RuntimeError(f"a_share_snapshot page {pn}: data is not a dict")
-    try:
-        return _normalize_clist_diff(data.get("diff"))
-    except RuntimeError:
-        raise
-    except Exception as e:  # noqa: BLE001
-        raise RuntimeError(f"a_share_snapshot page {pn}: bad diff: {e}") from e
 
 
 # ---------------------------------------------------------------------------
@@ -1014,6 +999,7 @@ _A_SHARE_FS = "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048"
 # Keep both in the request so the public ``pe_ttm`` contract never consumes f9.
 _A_SHARE_FIELDS = "f2,f3,f4,f5,f6,f7,f8,f9,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23,f26,f100,f115"
 _A_SHARE_PAGE_SIZE = 500
+_A_SHARE_SNAPSHOT_BUDGET_SECONDS = 120
 _A_SHARE_CLIST_HOSTS = ("push2.eastmoney.com", "push2delay.eastmoney.com")
 
 
@@ -1077,13 +1063,14 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
     - 上游可能强制限制每页最多 100 条，即使请求 ``pz`` 更大；
     - 在已知 ``total`` 且尚未取完时，**不得**因本页条数 < page_size 而提前结束
       （否则只拿到第一页 100 条）；
-    - 空页终止；``fetched_raw >= total`` 终止；
+    - 已知 total 时仅完整抓取成功；提前空页报错，未知 total 时空页终止；
     - 仅当 total 未知/为 0 时，才用「本页短于 page_size」作为取尽信号。
     - 按 code 去重，保留首次出现顺序；缺 code 记录跳过。
     """
     if page_size < 1:
         raise ValueError("page_size must be >= 1")
 
+    deadline = time.monotonic() + _A_SHARE_SNAPSHOT_BUDGET_SECONDS
     out: list[dict] = []
     seen_codes: set[str] = set()
     fetched_raw = 0  # 原始 diff 条数（过滤/去重前），与上游 total 对齐
@@ -1095,6 +1082,7 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
     _MAX_PAGES = 500
 
     while pn <= _MAX_PAGES:
+        _snapshot_remaining(deadline)
         params = {
             "pn": str(pn),
             "pz": str(page_size),
@@ -1108,9 +1096,8 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
         }
         headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
 
-        # 首页探测 push2 → push2delay；后续页固定可用主机（与 market_turnover_rank 一致）
-        # 每页：同一页内有限重试瞬时网络错误；失败换主机；不回到第 1 页重跑
-        hosts = _A_SHARE_CLIST_HOSTS if pn == 1 else (host,)
+        # 优先复用已成功主机；网络失败时仅重试当前页，再尝试现有备用。
+        hosts = (host,) + tuple(h for h in _A_SHARE_CLIST_HOSTS if h != host)
         payload = None
         last_err: Exception | None = None
         for h in hosts:
@@ -1120,7 +1107,8 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
                     params=params,
                     headers=headers,
                     timeout=15,
-                    min_interval=0.1,
+                    min_interval=_EM_MIN_INTERVAL,
+                    deadline=deadline,
                 )
                 try:
                     payload = r.json()
@@ -1183,7 +1171,7 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
             )
 
         if not rows:
-            # 空页：正常结束（total 未知或已取尽）
+            # 空页结束分页；退出时核对已知 total，拒绝提前结束的部分结果
             break
 
         # 重复页保护（同一批 code 指纹且无新增唯一股票）
@@ -1229,73 +1217,6 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
         if total <= 0 and len(rows) < page_size:
             break
 
-        # 第一页串行获取确定 total 后，后续页有界并发获取（4 workers）
-        # 仅当第一页返回合理数量(>=50)且剩余页数合理(<=200)时才用并发
-        # 否则回退串行（处理空页、mid-page failure 等边界情况）
-        if pn == 1 and total > 0 and fetched_raw < total and len(rows) >= 50:
-            remaining = total - fetched_raw
-            # 用第一页实际返回条数估算剩余页数（上游可能强制每页 < page_size）
-            items_per_page = max(1, len(rows))
-            num_remaining_pages = (remaining + items_per_page - 1) // items_per_page
-            if num_remaining_pages > 200:
-                # 剩余页数过多（total 可能不可靠），回退串行逐页获取
-                pn += 1
-                continue
-            page_numbers = list(range(2, 2 + num_remaining_pages))
-            headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            results: dict[int, list[dict]] = {}
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                futures = {
-                    executor.submit(_fetch_snapshot_page, p, page_size=page_size, host=host, headers=headers): p
-                    for p in page_numbers
-                }
-                for future in as_completed(futures):
-                    p = futures[future]
-                    results[p] = future.result()
-            # 按页码顺序处理剩余页（与串行路径等价的完整性检查）
-            for p in sorted(results.keys()):
-                page_rows = results[p]
-                if not page_rows:
-                    # 空页：不立即失败，最终完整性校验捕获 fetched_raw < total
-                    continue
-                page_codes = [
-                    str(item.get("f12") or "").strip()
-                    for item in page_rows
-                    if isinstance(item, dict)
-                ]
-                fingerprint = tuple(page_codes)
-                if prev_page_fingerprint is not None and fingerprint == prev_page_fingerprint:
-                    raise RuntimeError(
-                        f"a_share_snapshot page {p}: repeated page content without progress"
-                    )
-                prev_page_fingerprint = fingerprint
-                fetched_raw += len(page_rows)
-                page_new_unique = 0
-                for item in page_rows:
-                    mapped = _map_a_share_row(item)
-                    if mapped is None:
-                        continue
-                    code = mapped["code"]
-                    if code in seen_codes:
-                        continue
-                    seen_codes.add(code)
-                    out.append(mapped)
-                    page_new_unique += 1
-                # 与串行路径等价：有数据但没有任何新 code -> no progress -> fail closed
-                if page_new_unique == 0:
-                    raise RuntimeError(
-                        f"a_share_snapshot page {p}: no new unique codes "
-                        f"(fetched_raw={fetched_raw}, unique={len(out)}, total={total})"
-                    )
-            # 并发结束后完整性校验：必须证明 fetched_raw >= total 才允许成功
-            if total > 0 and fetched_raw < total:
-                raise RuntimeError(
-                    f"a_share_snapshot concurrent: incomplete data "
-                    f"(fetched_raw={fetched_raw}, total={total}, unique={len(out)})"
-                )
-            break
-
         pn += 1
 
     if pn > _MAX_PAGES:
@@ -1304,6 +1225,11 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
             f"(unique={len(out)}, fetched_raw={fetched_raw}, total={total})"
         )
 
+    _snapshot_remaining(deadline)
+    if total and fetched_raw < total:
+        raise RuntimeError(
+            f"a_share_snapshot: incomplete data (fetched_raw={fetched_raw}, total={total})"
+        )
     return out
 
 

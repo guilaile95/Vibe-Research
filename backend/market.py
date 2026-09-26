@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import time
 from collections import Counter
+from concurrent.futures import Future
 from datetime import datetime, timezone, timedelta
+from threading import Lock
 
 import astock
 import daily_review_errors
@@ -339,15 +341,47 @@ def get_global_indices() -> list[dict]:
 _AMOUNT_TOP_N = 30
 _HIGH_TURNOVER_N = 30
 _HIGH_TURNOVER_MIN = 15.0  # 换手率 %
+_A_SHARE_SNAPSHOT_LOCK = Lock()
+_A_SHARE_SNAPSHOT_FLIGHT: Future | None = None
+_A_SHARE_SNAPSHOT_WAIT_SECONDS = 125  # 略长于上游 120 秒协作预算
 
 
 def get_a_share_snapshot() -> list[dict]:
     """全 A 股行情快照（共享缓存，TTL 同模块 5 分钟）。
 
     调用 ``astock.a_share_snapshot()``；空列表不缓存；异常向上抛出，不伪装成空市场。
-    同缓存周期内市场广度等调用方应复用本入口，避免重复分页抓取。
+    冷缓存并发调用共享同一轮结果或异常；TTL 从完整抓取完成时起算。
+    等待者超时不取消领先者；分页完整性由 astock.a_share_snapshot 校验。
     """
-    return _cached("a_share_snapshot", astock.a_share_snapshot, valid=bool)
+    global _A_SHARE_SNAPSHOT_FLIGHT
+
+    with _A_SHARE_SNAPSHOT_LOCK:
+        hit = _CACHE.get("a_share_snapshot")
+        if hit and time.time() - hit[0] < _TTL:
+            return hit[1]
+        flight = _A_SHARE_SNAPSHOT_FLIGHT
+        leader = flight is None
+        if leader:
+            flight = Future()
+            _A_SHARE_SNAPSHOT_FLIGHT = flight
+
+    if not leader:
+        return flight.result(timeout=_A_SHARE_SNAPSHOT_WAIT_SECONDS)
+
+    try:
+        snapshot = astock.a_share_snapshot()
+        if snapshot:
+            with _A_SHARE_SNAPSHOT_LOCK:
+                _CACHE["a_share_snapshot"] = (time.time(), snapshot)
+        flight.set_result(snapshot)
+        return snapshot
+    except BaseException as exc:
+        # 领先者中断也须唤醒本轮等待者，不留下永远 pending 的 Future。
+        flight.set_exception(exc)
+        raise
+    finally:
+        with _A_SHARE_SNAPSHOT_LOCK:
+            _A_SHARE_SNAPSHOT_FLIGHT = None
 
 
 def _stock_subset(s: dict, *, amount_required: bool) -> dict:
