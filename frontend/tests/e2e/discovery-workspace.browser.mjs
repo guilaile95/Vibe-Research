@@ -434,11 +434,15 @@ try {
 
   // All existing filters operate on the same queue without changing its backend ordering.
   await page.getByLabel("发现行业或主题").selectOption("消费");
+  await page.getByTestId("discovery-item-SWING-600221").waitFor({ state: "detached" });
   assert.equal(await page.getByTestId("discovery-item-SWING-600221").count(), 0);
   await page.getByLabel("发现行业或主题").selectOption("ALL");
+  await page.getByTestId("discovery-item-SWING-600221").waitFor();
   await page.getByLabel("研究优先级", { exact: true }).selectOption("LOW");
+  await firstCard.waitFor({ state: "detached" });
   assert.equal(await firstCard.count(), 0);
   await page.getByLabel("研究优先级", { exact: true }).selectOption("ALL");
+  await firstCard.waitFor();
   const discoveryText = await workspace.innerText();
   assert.doesNotMatch(discoveryText, /\bBUY\b|Opportunity Score|综合评分/);
   assert.equal(await page.locator('[data-testid*="market-cloud"], [data-testid*="market-intel"]').count(), 0);
@@ -540,6 +544,7 @@ try {
   await page.getByTestId("discovery-source-warning").getByText("行业背景：不可用", { exact: true }).waitFor();
   assert.equal(await diagnostics.getAttribute("open"), null);
   await page.getByLabel("发现数据状态", { exact: true }).selectOption("unknown");
+  await firstCard.waitFor({ state: "detached" });
   assert.equal(await firstCard.count(), 0);
   await unknownCard.waitFor();
   await page.getByLabel("发现数据状态", { exact: true }).selectOption("ALL");
