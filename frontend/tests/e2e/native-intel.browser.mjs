@@ -89,7 +89,7 @@ try {
   await panel.getByText("历史资讯 1", { exact: false }).waitFor();
   await panel.getByText("失败来源：失败测试源", { exact: false }).waitFor();
   await panel.getByText("固态电池产业化进展加速", { exact: true }).waitFor();
-  await panel.getByText(/固态电池.*1 条/).waitFor();
+  await panel.locator('[aria-label="近 24 小时关注趋势"]').getByText(/固态电池.*1 条/).waitFor();
   assert.deepEqual(pageErrors, []);
   console.log("Native Intel rendered vertical: PASS");
 } finally {
