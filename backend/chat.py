@@ -12,8 +12,11 @@ import os
 import socket
 import threading
 import uuid
+from contextlib import closing
 from urllib.parse import urlparse
 
+import anyio
+import httpx
 import requests
 
 import agent_runtime
@@ -191,24 +194,32 @@ def _resolve_base(cfg: dict) -> str:
     return base
 
 
-def _call_llm_stream(cfg: dict, messages: list, use_tools: bool):
+def _stream_request(cfg: dict, messages: list, use_tools: bool) -> dict:
+    """Keep sync and async API requests on the same URL/payload contract."""
     _check_base_url(cfg.get("baseURL", ""))
     payload = {"model": cfg["model"], "messages": messages, "temperature": 0.3, "stream": True}
     if use_tools:
         payload["tools"] = TOOLS
         payload["tool_choice"] = "auto"
-    r = requests.post(
-        f"{_resolve_base(cfg)}/chat/completions",
-        headers={"Authorization": f"Bearer {cfg['apiKey']}", "Content-Type": "application/json"},
-        json=payload, timeout=120, stream=True,
-    )
+    return {
+        "url": f"{_resolve_base(cfg)}/chat/completions",
+        "headers": {"Authorization": f"Bearer {cfg['apiKey']}", "Content-Type": "application/json"},
+        "json": payload,
+    }
+
+
+def _call_llm_stream(cfg: dict, messages: list, use_tools: bool):
+    r = requests.post(**_stream_request(cfg, messages, use_tools), timeout=120, stream=True)
     if r.status_code != 200:
-        raise RuntimeError(f"模型接口 HTTP {r.status_code}: {r.text[:300]}")
+        try:
+            raise RuntimeError(f"模型接口 HTTP {r.status_code}: {r.text[:300]}")
+        finally:
+            r.close()
     return r
 
 
-def _parse_sse_line(raw: bytes) -> tuple[bool, dict | None]:
-    line = raw.decode("utf-8", errors="replace").strip()
+def _parse_sse_line(raw: bytes | str, *, use_tools: bool = True) -> tuple[bool, dict | None]:
+    line = (raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw).strip()
     if not line.startswith("data:"):
         return False, None
     data = line[5:].strip()
@@ -217,38 +228,87 @@ def _parse_sse_line(raw: bytes) -> tuple[bool, dict | None]:
     try:
         parsed = json.loads(data)
     except json.JSONDecodeError:
-        return False, None
+        raise RuntimeError("模型响应包含无效 JSON") from None
+    if not isinstance(parsed, dict):
+        raise RuntimeError("模型响应格式无效")
+    if parsed.get("error") is not None:
+        raise RuntimeError("模型接口返回错误")
     choices = parsed.get("choices") or []
     if not choices:
         return False, None
-    return False, choices[0].get("delta") or {}
+    if not isinstance(choices, list) or not isinstance(choices[0], dict):
+        raise RuntimeError("模型响应格式无效")
+    choice = choices[0]
+    reason = choice.get("finish_reason")
+    # Absence of finish_reason remains legal for compatible gateways using [DONE].
+    if reason not in (None, "stop") and not (use_tools and reason in ("tool_calls", "function_call")):
+        raise RuntimeError("模型响应未正常完成")
+    delta = choice.get("delta") or {}
+    if not isinstance(delta, dict):
+        raise RuntimeError("模型响应格式无效")
+    if not use_tools and (delta.get("tool_calls") or delta.get("function_call")):
+        raise RuntimeError("当前模型响应不允许工具调用")
+    return False, delta
 
 
-def _iter_sse_deltas(resp):
+def _iter_sse_deltas(resp, *, use_tools: bool = True):
     """解析上游 SSE 流，逐个 yield choices[0].delta。
 
     按字节缓冲、只解码「完整行」——`\\n` 是 ASCII(0x0A)不会落在多字节 UTF-8 字符内部，
     故按 `\\n` 切分再解码，避免 iter_lines(decode_unicode=True) 在网络分块处切断中文导致乱码。
     """
-    buf = b""
-    for chunk in resp.iter_content(chunk_size=None):
-        if not chunk:
-            continue
-        buf += chunk
-        while b"\n" in buf:
-            raw, buf = buf.split(b"\n", 1)
-            done, delta = _parse_sse_line(raw)
+    try:
+        buf = b""
+        for chunk in resp.iter_content(chunk_size=None):
+            if not chunk:
+                continue
+            buf += chunk
+            while b"\n" in buf:
+                raw, buf = buf.split(b"\n", 1)
+                done, delta = _parse_sse_line(raw, use_tools=use_tools)
+                if done:
+                    return
+                if delta is not None:
+                    yield delta
+        if buf.strip():
+            done, delta = _parse_sse_line(buf, use_tools=use_tools)
             if done:
                 return
             if delta is not None:
                 yield delta
-    if buf.strip():
-        done, delta = _parse_sse_line(buf)
-        if done:
-            return
-        if delta is not None:
-            yield delta
-    raise ModelStreamIncompleteError()
+        raise ModelStreamIncompleteError()
+    finally:
+        close = getattr(resp, "close", None)
+        if close is not None:
+            close()
+
+
+async def stream_api_messages(cfg: dict, messages: list):
+    """Cancellable, no-tools API stream. The ASGI task owns the HTTP connection.
+
+    Cancellation interrupts both response headers and body reads. Exiting the
+    HTTPX contexts closes the response/client on errors, disconnects and [DONE].
+    """
+    request = _stream_request(cfg, messages, use_tools=False)
+    async with httpx.AsyncClient(timeout=120) as client:
+        async with client.stream("POST", **request) as response:
+            try:
+                if response.status_code != 200:
+                    raise RuntimeError(f"模型接口 HTTP {response.status_code}")
+                async for line in response.aiter_lines():
+                    done, delta = _parse_sse_line(line, use_tools=False)
+                    if done:
+                        break
+                    if delta is not None and delta.get("content"):
+                        yield {"type": "delta", "text": delta["content"]}
+                else:
+                    raise ModelStreamIncompleteError()
+            finally:
+                # HTTPX marks a response closed before awaiting transport cleanup.
+                # Shield the first close so active ASGI cancellation cannot abort it.
+                with anyio.CancelScope(shield=True):
+                    await response.aclose()
+    yield {"type": "done", "trace": [], "rounds": 1}
 
 
 def prepare_daily_review_analysis(
@@ -318,9 +378,10 @@ def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
 
     if not use_tools:
         resp = _call_llm_stream(cfg, messages, use_tools=False)
-        for delta in _iter_sse_deltas(resp):
-            if delta.get("content"):
-                yield {"type": "delta", "text": delta["content"]}
+        with closing(_iter_sse_deltas(resp, use_tools=False)) as deltas:
+            for delta in deltas:
+                if delta.get("content"):
+                    yield {"type": "delta", "text": delta["content"]}
         yield {"type": "done", "trace": [], "rounds": 1}
         return
 
@@ -332,27 +393,28 @@ def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
         resp = _call_llm_stream(cfg, work, use_tools=True)
         content_parts: list[str] = []
         tool_acc: dict[int, dict] = {}
-        for delta in _iter_sse_deltas(resp):
-            if delta.get("content"):
-                content_parts.append(delta["content"])
-                yield {"type": "delta", "text": delta["content"]}
-            for tc in (delta.get("tool_calls") or []):
-                idx = tc.get("index")
-                if idx is None:
-                    # 非标「OpenAI 兼容」网关可能不带 index：有 id 按 id 归位（新 id 开新槽），
-                    # 无 id 则续拼最后一个调用，避免多个调用的 arguments 串到一起
-                    tc_id = tc.get("id") or ""
-                    idx = next((k for k, v in tool_acc.items() if tc_id and v["id"] == tc_id), None)
+        with closing(_iter_sse_deltas(resp)) as deltas:
+            for delta in deltas:
+                if delta.get("content"):
+                    content_parts.append(delta["content"])
+                    yield {"type": "delta", "text": delta["content"]}
+                for tc in (delta.get("tool_calls") or []):
+                    idx = tc.get("index")
                     if idx is None:
-                        idx = len(tool_acc) if (tc_id or not tool_acc) else max(tool_acc)
-                acc = tool_acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
-                if tc.get("id"):
-                    acc["id"] = tc["id"]
-                fn = tc.get("function") or {}
-                if fn.get("name"):
-                    acc["name"] = fn["name"]
-                if fn.get("arguments"):
-                    acc["arguments"] += fn["arguments"]
+                        # 非标「OpenAI 兼容」网关可能不带 index：有 id 按 id 归位（新 id 开新槽），
+                        # 无 id 则续拼最后一个调用，避免多个调用的 arguments 串到一起
+                        tc_id = tc.get("id") or ""
+                        idx = next((k for k, v in tool_acc.items() if tc_id and v["id"] == tc_id), None)
+                        if idx is None:
+                            idx = len(tool_acc) if (tc_id or not tool_acc) else max(tool_acc)
+                    acc = tool_acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+                    if tc.get("id"):
+                        acc["id"] = tc["id"]
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        acc["name"] = fn["name"]
+                    if fn.get("arguments"):
+                        acc["arguments"] += fn["arguments"]
 
         if not tool_acc:  # 本轮是纯答案（已流完）→ 结束
             yield {"type": "done", "trace": trace, "rounds": rnd}
