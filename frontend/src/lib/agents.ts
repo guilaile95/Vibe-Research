@@ -7,10 +7,12 @@ import { streamNdjson, type NdjsonEvent } from "@/lib/ndjson";
 
 export type DebateStage = "bull" | "bear" | "bull_rebut" | "bear_rebut" | "referee";
 
+export type DossierStatus = "success" | "partial" | "empty" | "error";
+
 export interface DebateHandlers {
   onStatus?: (message: string) => void;
-  onDossierProgress?: (title: string, ok: boolean, loaded: number, total: number) => void;
-  onDossierReady?: (sections: { title: string; tool: string }[], missing: string[]) => void;
+  onDossierProgress?: (title: string, ok: boolean, loaded: number, total: number, status?: DossierStatus, truncated?: boolean) => void;
+  onDossierReady?: (sections: { title: string; tool: string; status?: DossierStatus; truncated?: boolean }[], missing: string[], partial?: string[]) => void;
   onStageStart?: (stage: DebateStage, label: string) => void;
   onDelta?: (stage: DebateStage, text: string) => void;
   onStageDone?: (stage: DebateStage, label: string, content: string) => void;
@@ -29,10 +31,10 @@ function dispatchDebate(ev: NdjsonEvent, h: DebateHandlers) {
       h.onStatus?.(ev.message);
       break;
     case "dossier_progress":
-      h.onDossierProgress?.(ev.title, ev.ok, ev.loaded, ev.total);
+      h.onDossierProgress?.(ev.title, ev.ok, ev.loaded, ev.total, ev.status, ev.truncated);
       break;
     case "dossier":
-      h.onDossierReady?.(ev.sections || [], ev.missing || []);
+      h.onDossierReady?.(ev.sections || [], ev.missing || [], ev.partial || []);
       break;
     case "stage":
       h.onStageStart?.(ev.stage, ev.label);

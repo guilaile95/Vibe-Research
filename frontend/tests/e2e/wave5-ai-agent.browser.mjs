@@ -483,7 +483,10 @@ try {
   await page.locator('[data-testid="wave5-model-input"]').fill("fixture-model");
   await page.locator('[data-testid="wave5-api-key-input"]').fill("e2e-secret-never-log");
   await page.locator('[data-testid="wave5-save-api-btn"]').click();
-  await page.getByText("已保存到本机浏览器和 Vibe 本机后台").waitFor({ timeout: 10000 });
+  await page.getByText("配置已保存到本机浏览器和后台；尚未验证模型调用").waitFor({ timeout: 10000 });
+  await page.getByTestId("first-research-status").waitFor({ state: "visible" });
+  await page.getByText("查看配置状态与能力边界", { exact: true }).click();
+  await page.getByText("本页未验证模型调用；保存配置或登录成功不代表模型已成功回答", { exact: true }).waitFor({ state: "visible" });
 
   const stored = JSON.parse(await page.evaluate(() => localStorage.getItem("vr-llm") || "null"));
   assert.equal(stored.apiKey, "e2e-secret-never-log");

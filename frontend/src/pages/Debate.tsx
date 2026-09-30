@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Disclaimer } from "@/components/ui/Disclaimer";
-import { debateStream, type DebateStage } from "@/lib/agents";
+import { debateStream, type DebateStage, type DossierStatus } from "@/lib/agents";
 import { addNote } from "@/lib/notes";
 import { ApiError } from "@/lib/api";
 
@@ -26,15 +26,16 @@ const STAGE_TONE: Record<DebateStage, string> = {
   referee: "border-border bg-background/40",
 };
 
-const DOSSIER_HINT = "多空双方拿到的是同一份接口实时拉取的数据，谁也不能靠编数字赢。";
+const DOSSIER_HINT = "多空双方使用同一份接口返回的数据；部分、过期、空结果和截断均须保留限制，不能补造数字。";
 
 export function Debate() {
   const [code, setCode] = useState("");
   const [rounds, setRounds] = useState(1);
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState("");
-  const [progress, setProgress] = useState<{ title: string; ok: boolean }[]>([]);
+  const [progress, setProgress] = useState<{ title: string; ok: boolean; status?: DossierStatus; truncated?: boolean }[]>([]);
   const [missing, setMissing] = useState<string[]>([]);
+  const [partial, setPartial] = useState<string[]>([]);
   const [stages, setStages] = useState<StageBox[]>([]);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
@@ -50,7 +51,7 @@ export function Debate() {
 
   const reset = () => {
     setCompleted(false);
-    setStatus(""); setProgress([]); setMissing([]); setStages([]); setError(""); setSaved(false);
+    setStatus(""); setProgress([]); setMissing([]); setPartial([]); setStages([]); setError(""); setSaved(false);
   };
 
   async function start() {
@@ -67,12 +68,12 @@ export function Debate() {
     try {
       await debateStream(c, rounds, {
         onStatus: (message) => { if (active()) setStatus(message); },
-        onDossierProgress: (title, ok, loaded, total) => {
+        onDossierProgress: (title, ok, loaded, total, status, truncated) => {
           if (!active()) return;
           setStatus(`正在拉取客观事实底稿… ${loaded}/${total}`);
-          setProgress((p) => [...p, { title, ok }]);
+          setProgress((p) => [...p, { title, ok, status, truncated }]);
         },
-        onDossierReady: (_sections, miss) => { if (active()) { setMissing(miss); setStatus("底稿就绪，辩论开始"); } },
+        onDossierReady: (_sections, miss, limited) => { if (active()) { setMissing(miss); setPartial(limited || []); setStatus("底稿就绪，辩论开始"); } },
         onStageStart: (stage, label) => {
           if (active()) setStages((s) => [...s, { stage, label, content: "", done: false }]);
         },
@@ -178,8 +179,8 @@ export function Debate() {
             ⏱ {rounds === 2
               ? "两轮约 3 分钟 · 5 次模型调用 · 约 6 万字进上下文"
               : "一轮约 100 秒 · 3 次模型调用 · 约 3.5 万字进上下文"}
-            （每个角色都会带上完整底稿）。其中拉底稿约 35 秒、走公开数据接口，不消耗 token。
-            省额度可用 Codex Subscription，或选中档 API 模型——数据已备齐，模型只做组织和表达。
+            （每个角色都会带上同一份底稿及其限制）。其中拉底稿约 35 秒、走公开数据接口，不消耗 token。
+            省额度可用 Codex Subscription，或选中档 API 模型——模型基于已返回数据组织和表达。
           </p>
         )}
 
@@ -196,13 +197,21 @@ export function Debate() {
             <div className="flex flex-wrap gap-x-4 gap-y-1.5">
               {progress.map((p) => (
                 <span key={p.title} className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-                  {p.ok
+                  {p.status === "partial" || p.truncated
+                    ? <AlertTriangle className="h-3 w-3 text-warning" />
+                    : p.status === "success" || (!p.status && p.ok)
                     ? <CheckCircle2 className="h-3 w-3 text-primary/70" />
                     : <Circle className="h-3 w-3 text-muted-foreground/40" />}
-                  {p.title}
+                  {p.title}{p.status === "partial" ? " · 部分数据" : p.status === "empty" ? " · 未取到记录" : p.status === "error" ? " · 获取失败" : ""}
+                  {p.truncated ? " · 已截断" : ""}
                 </span>
               ))}
             </div>
+            {partial.length > 0 && (
+              <p className="mt-2 text-[11px] text-warning">
+                部分数据：{partial.join("、")}（可用观测已保留，缺失、过期或截断部分不能据此推断）
+              </p>
+            )}
             {missing.length > 0 && (
               <p className="mt-2 text-[11px] text-warning">
                 未取到：{missing.join("、")}（双方立论时不得臆测这部分）

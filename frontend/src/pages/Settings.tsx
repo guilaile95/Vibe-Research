@@ -3,6 +3,7 @@ import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal, Loader2, Refr
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { BackendRuntimeCard } from "@/components/settings/BackendRuntimeCard";
+import { FirstResearchStatusCard } from "@/components/settings/FirstResearchStatusCard";
 import { toast } from "sonner";
 import {
   clearLlm,
@@ -109,7 +110,7 @@ export function Settings() {
       return;
     }
     await refreshScheduledStatus();
-    toast.success("已保存到本机浏览器和 Vibe 本机后台");
+    toast.success("配置已保存到本机浏览器和后台；尚未验证模型调用");
   };
 
   const saveSubscription = async () => {
@@ -137,7 +138,7 @@ export function Settings() {
       return;
     }
     await refreshScheduledStatus();
-    toast.success(`已选「${m.name}」订阅，全站 AI 功能将调用 ${runtimeStatus?.runtime || m.name}`);
+    toast.success(`已保存「${m.name}」订阅配置；尚未验证模型调用`);
   };
 
   const loginCodex = async () => {
@@ -190,6 +191,7 @@ export function Settings() {
       <PageHeader title="接入 AI" subtitle="配置一次，全站所有 AI 功能统一使用 Codex Subscription 或 API Compatible" />
 
       <BackendRuntimeCard />
+      <FirstResearchStatusCard mirror={scheduledStatus} />
 
       <div className="mb-4 flex items-start gap-2 rounded-lg border border-success/25 bg-success/5 p-3 text-xs text-muted-foreground">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />

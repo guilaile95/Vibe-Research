@@ -940,9 +940,9 @@ def _portfolio_payload() -> dict:
     except pf.PortfolioDataCorruptedError:
         raise
     except prs.PositionDerivationError as e:
-        raise HTTPException(502, f"Holding 权威派生失败：{e}") from e
+        raise HTTPException(502, "Holding 权威不可读或派生失败，请检查本地账本与数据健康。") from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"持仓读取异常：{e}") from e
+        raise HTTPException(502, "持仓读取异常，请稍后重试。") from e
     data.pop("authority_state", None)
     return data
 
@@ -1135,7 +1135,7 @@ def account_profile_get():
             "data": status.get("data"),
         }
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"账户资金读取异常：{e}") from e
+        raise HTTPException(502, "账户资金读取异常，请稍后重试。") from e
 
 
 @app.put("/api/account-profile")
@@ -1151,7 +1151,7 @@ def account_profile_save(req: AccountProfileIn):
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"账户资金保存异常：{e}") from e
+        raise HTTPException(502, "账户资金保存异常，请稍后重试。") from e
 
 
 # ---- 我的研报（用户上传自己的研报，存本地、不上传、不进开源仓库）----
@@ -1348,7 +1348,7 @@ def portfolio_refresh():
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"刷新失败：{e}") from e
+        raise HTTPException(502, "刷新失败，请稍后重试。") from e
 
 
 @app.get("/api/radar")
@@ -1357,7 +1357,7 @@ def radar():
     try:
         return {"data": newsradar.get_radar(force=False)}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"资讯雷达异常：{e}") from e
+        raise HTTPException(502, "资讯雷达异常，请稍后重试。") from e
 
 
 @app.post("/api/radar/refresh")
@@ -1366,7 +1366,7 @@ def radar_refresh():
     try:
         return {"data": newsradar.fetch_radar()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"资讯雷达刷新失败：{e}") from e
+        raise HTTPException(502, "资讯雷达刷新失败，请稍后重试。") from e
 
 
 @app.get("/api/signals/gpu-rent")
@@ -1375,7 +1375,7 @@ def signals_gpu_rent():
     try:
         return {"data": signals.get_gpu_rent(force=False)}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"GPU 租金信号异常：{e}") from e
+        raise HTTPException(502, "GPU 租金信号异常，请稍后重试。") from e
 
 
 @app.post("/api/signals/gpu-rent/refresh")
@@ -1384,7 +1384,7 @@ def signals_gpu_rent_refresh():
     try:
         return {"data": signals.fetch_gpu_rent()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"GPU 租金信号刷新失败：{e}") from e
+        raise HTTPException(502, "GPU 租金信号刷新失败，请稍后重试。") from e
 
 
 @app.get("/api/market/overview")
@@ -1393,7 +1393,7 @@ def market_overview():
     try:
         return {"data": market.get_overview()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"市场总览异常：{e}") from e
+        raise HTTPException(502, "市场总览异常，请稍后重试。") from e
 
 
 @app.get("/api/market/emotion")
@@ -1402,7 +1402,7 @@ def market_emotion():
     try:
         return {"data": market.get_short_term_emotion()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"短线情绪异常：{e}") from e
+        raise HTTPException(502, "短线情绪异常，请稍后重试。") from e
 
 
 @app.get("/api/market/turnover-top")
@@ -1411,7 +1411,7 @@ def market_turnover_top():
     try:
         return {"data": market.get_turnover_top()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"成交额榜异常：{e}") from e
+        raise HTTPException(502, "成交额榜异常，请稍后重试。") from e
 
 
 @app.get("/api/market/breadth")
@@ -1424,7 +1424,7 @@ def market_breadth():
     try:
         return {"data": market.get_market_breadth()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"市场广度异常：{e}") from e
+        raise HTTPException(502, "市场广度异常，请稍后重试。") from e
 
 
 @app.get("/api/market/boards")
@@ -1443,7 +1443,7 @@ def market_boards(
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"板块排名异常：{e}") from e
+        raise HTTPException(502, "板块排名异常，请稍后重试。") from e
 
 
 @app.get("/api/market/cloud")
@@ -1538,7 +1538,7 @@ def watchlist_get():
     try:
         return {"data": watchlist_store.get_watchlist_status()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"自选股读取异常：{e}") from e
+        raise HTTPException(502, "自选股读取异常，请稍后重试。") from e
 
 
 class WatchlistIn(BaseModel):
@@ -1572,7 +1572,7 @@ def watchlist_save(req: WatchlistIn):
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"自选股保存异常：{e}") from e
+        raise HTTPException(502, "自选股保存异常，请稍后重试。") from e
 
 
 class WatchlistImportLocalIn(BaseModel):
@@ -1597,7 +1597,7 @@ def watchlist_import_local(req: WatchlistImportLocalIn):
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"自选股并入异常：{e}") from e
+        raise HTTPException(502, "自选股并入异常，请稍后重试。") from e
 
 
 @app.get("/api/watchlist/anomalies")
@@ -1644,7 +1644,7 @@ def decision_cockpit_overview(
         # trade_date 非法 / 未来日等
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"驱动舱总览异常：{e}") from e
+        raise HTTPException(502, "驱动舱总览异常，请稍后重试。") from e
 
 
 @app.get("/api/decision-cockpit/today-actions")
@@ -1686,7 +1686,7 @@ def decision_cockpit_generate(req: TomorrowPlanGenerateIn):
     except DecisionCockpitSnapshotError as e:
         raise HTTPException(409, str(e)) from e
     except DecisionCockpitModelError as e:
-        raise HTTPException(502, f"明日计划解释生成失败：{e}") from e
+        raise HTTPException(502, "明日计划解释生成失败，请稍后重试。") from e
     except prs.PositionDerivationError:
         raise HTTPException(503, _HOLDING_AUTHORITY_UNPROVEN_READ_DETAIL) from None
     except DecisionCockpitError as e:
@@ -1717,7 +1717,7 @@ def decision_cockpit_current(
         plan = dc_get_current_plan(trade_date)
         return {"data": plan}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"读取当前计划异常：{e}") from e
+        raise HTTPException(502, "读取当前计划异常，请稍后重试。") from e
 
 
 @app.get("/api/decision-cockpit/tomorrow-plan/history")
@@ -1732,7 +1732,7 @@ def decision_cockpit_history(
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"计划历史异常：{e}") from e
+        raise HTTPException(502, "计划历史异常，请稍后重试。") from e
 
 
 @app.get("/api/decision-cockpit/tomorrow-plan/{plan_id}")
@@ -1746,7 +1746,7 @@ def decision_cockpit_get(plan_id: int):
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"读取计划异常：{e}") from e
+        raise HTTPException(502, "读取计划异常，请稍后重试。") from e
 
 
 class FreezePlanIn(BaseModel):
@@ -1764,7 +1764,7 @@ def decision_cockpit_freeze(plan_id: int, req: FreezePlanIn):
     except ValueError as e:
         raise HTTPException(409, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"冻结计划异常：{e}") from e
+        raise HTTPException(502, "冻结计划异常，请稍后重试。") from e
 
 
 @app.get("/api/daily-review")
@@ -2202,7 +2202,7 @@ def global_indices():
     try:
         return {"data": market.get_global_indices()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"全球指数异常：{e}") from e
+        raise HTTPException(502, "全球指数异常，请稍后重试。") from e
 
 
 @app.get("/api/global/stock")
@@ -2218,7 +2218,7 @@ def global_stock(symbol: str = Query(..., min_length=1, max_length=16)):
     except gstock.SearchUnavailable as e:
         raise HTTPException(503, str(e)) from None
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"美港股查询异常：{e}") from e
+        raise HTTPException(502, "美港股查询异常，请稍后重试。") from e
 
 
 @app.get("/api/global/hk/cashflow")
@@ -2234,7 +2234,7 @@ def global_hk_cashflow(symbol: str = Query(..., min_length=1, max_length=16)):
     except gstock.SearchUnavailable as e:
         raise HTTPException(503, str(e)) from None
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"港股现金流查询异常：{e}") from e
+        raise HTTPException(502, "港股现金流查询异常，请稍后重试。") from e
 
 
 @app.get("/api/indices")
@@ -2243,7 +2243,7 @@ def indices():
     try:
         return {"data": astock.index_quote()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"指数行情异常：{e}") from e
+        raise HTTPException(502, "指数行情异常，请稍后重试。") from e
 
 
 @app.get("/api/quote")
@@ -2345,7 +2345,7 @@ def valuation_percentile(code: str = Query(...)):
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"估值分位异常：{e}") from e
+        raise HTTPException(502, "估值分位异常，请稍后重试。") from e
 
 
 _ANN_CACHE = TTLCache()
@@ -2425,7 +2425,7 @@ def financials(code: str = Query(...)):
             _dhes.safe_call(_dhes.record_failure, "financials", "SOURCE_UNAVAILABLE")
         except Exception:
             pass
-        raise HTTPException(502, f"财务摘要异常：{e}") from e
+        raise HTTPException(502, "财务摘要异常，请稍后重试。") from e
 
 
 @app.get("/api/valuation")
@@ -2437,7 +2437,7 @@ def valuation(code: str = Query(...)):
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"估值计算异常：{e}") from e
+        raise HTTPException(502, "估值计算异常，请稍后重试。") from e
 
 
 @app.get("/api/reports")
@@ -2450,7 +2450,7 @@ def reports(code: str = Query(...), pages: int = Query(2, ge=1, le=5)):
             r["pdfUrl"] = astock.pdf_url(r.get("infoCode", "")) if r.get("infoCode") else None
         return {"data": rows}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"研报源异常：{e}") from e
+        raise HTTPException(502, "研报源异常，请稍后重试。") from e
 
 
 @app.get("/api/news")
@@ -2483,7 +2483,7 @@ def info(code: str = Query(...)):
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"基本面源异常：{e}") from e
+        raise HTTPException(502, "基本面源异常，请稍后重试。") from e
 
 
 @app.get("/api/disclosure")
@@ -2495,7 +2495,7 @@ def disclosure(code: str = Query(...)):
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"公告源异常：{e}") from e
+        raise HTTPException(502, "公告源异常，请稍后重试。") from e
 
 
 @app.get("/api/kline")
@@ -2507,7 +2507,7 @@ def kline(code: str = Query(...), category: int = Query(4), offset: int = Query(
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"K线源异常：{e}") from e
+        raise HTTPException(502, "K线源异常，请稍后重试。") from e
 
 
 @app.get("/api/finance")
@@ -2519,7 +2519,7 @@ def finance(code: str = Query(...)):
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"财务源异常：{e}") from e
+        raise HTTPException(502, "财务源异常，请稍后重试。") from e
 
 
 # ---------------------------------------------------------------------------
@@ -2547,7 +2547,7 @@ def margin(code: str = Query(...)):
     try:
         return {"data": _cached("margin", code, 1800, lambda: astock.margin_trading(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"融资融券异常：{e}") from e
+        raise HTTPException(502, "融资融券异常，请稍后重试。") from e
 
 
 @app.get("/api/block-trade")
@@ -2557,7 +2557,7 @@ def block_trade(code: str = Query(...)):
     try:
         return {"data": _cached("block", code, 1800, lambda: astock.block_trade(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"大宗交易异常：{e}") from e
+        raise HTTPException(502, "大宗交易异常，请稍后重试。") from e
 
 
 @app.get("/api/holders")
@@ -2567,7 +2567,7 @@ def holders(code: str = Query(...)):
     try:
         return {"data": _cached("holders", code, 1800, lambda: astock.holder_num_change(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"股东户数异常：{e}") from e
+        raise HTTPException(502, "股东户数异常，请稍后重试。") from e
 
 
 @app.get("/api/dividend")
@@ -2577,7 +2577,7 @@ def dividend(code: str = Query(...)):
     try:
         return {"data": _cached("dividend", code, 1800, lambda: astock.dividend_history(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"分红送转异常：{e}") from e
+        raise HTTPException(502, "分红送转异常，请稍后重试。") from e
 
 
 @app.get("/api/fund-flow")
@@ -2588,7 +2588,7 @@ def fund_flow(code: str = Query(...)):
     try:
         return {"data": _cached("fundflow", code, 900, lambda: astock.stock_fund_flow_120d(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"资金流异常：{e}") from e
+        raise HTTPException(502, "资金流异常，请稍后重试。") from e
 
 
 @app.get("/api/dragon-tiger")
@@ -2598,7 +2598,7 @@ def dragon_tiger(code: str = Query(...)):
     try:
         return {"data": _cached("dt", code, 1800, lambda: astock.dragon_tiger_board(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"龙虎榜异常：{e}") from e
+        raise HTTPException(502, "龙虎榜异常，请稍后重试。") from e
 
 
 @app.get("/api/lockup")
@@ -2608,7 +2608,7 @@ def lockup(code: str = Query(...)):
     try:
         return {"data": _cached("lockup", code, 1800, lambda: astock.lockup_expiry(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"解禁日历异常：{e}") from e
+        raise HTTPException(502, "解禁日历异常，请稍后重试。") from e
 
 
 @app.get("/api/blocks")
@@ -2618,7 +2618,7 @@ def blocks(code: str = Query(...)):
     try:
         return {"data": _cached("blocks", code, 1800, lambda: astock.concept_blocks(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"板块归属异常：{e}") from e
+        raise HTTPException(502, "板块归属异常，请稍后重试。") from e
 
 
 @app.get("/api/hot-concepts")
@@ -2628,7 +2628,7 @@ def hot_concepts(code: str = Query(...)):
     try:
         return {"data": _cached("hotcon", code, 900, lambda: astock.hot_concepts(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"热门概念异常：{e}") from e
+        raise HTTPException(502, "热门概念异常，请稍后重试。") from e
 
 
 @app.get("/api/investor-qa")
@@ -2638,7 +2638,7 @@ def investor_qa(code: str = Query(...)):
     try:
         return {"data": _cached("irm", code, 900, lambda: astock.investor_qa(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"互动易异常：{e}") from e
+        raise HTTPException(502, "互动易异常，请稍后重试。") from e
 
 
 @app.get("/api/industry")
@@ -2653,7 +2653,7 @@ def industry(top: int = Query(20, ge=5, le=50)):
         _DC_CACHE.set(key, data)
         return {"data": data}
     except Exception as e:  # noqa: BL001
-        raise HTTPException(502, f"行业排名异常：{e}") from e
+        raise HTTPException(502, "行业排名异常，请稍后重试。") from e
 
 
 # ---------------------------------------------------------------------------
@@ -2807,7 +2807,7 @@ def sector_research_data(sector_key: str):
             _dhes.safe_call(_dhes.record_failure, "sector_research", "SOURCE_UNAVAILABLE")
         except Exception:
             pass
-        raise HTTPException(502, f"板块动态数据异常：{e}") from e
+        raise HTTPException(502, "板块动态数据异常，请稍后重试。") from e
     return {"data": data}
 
 
@@ -2826,7 +2826,7 @@ def sector_research_market_context(sector_key: str | None = Query(None)):
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
     except Exception as e:  # noqa: BLE001 — unexpected orchestration failure
-        raise HTTPException(502, f"板块市场上下文异常：{type(e).__name__}") from e
+        raise HTTPException(502, "板块市场上下文暂不可用，请稍后重试。") from e
     _DC_CACHE.set(key, data)
     return {"data": data}
 
@@ -2874,7 +2874,7 @@ def sector_research_import(sector_key: str, body: SectorReportImportIn):
     except mr.ReportError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BL001
-        raise HTTPException(502, f"PDF 下载失败：{e}") from e
+        raise HTTPException(502, "PDF 下载失败，请稍后重试。") from e
     if not blob:
         raise HTTPException(502, "PDF 内容为空")
 

@@ -171,12 +171,13 @@ def _compact_tool_data(value, item_limit, text_limit):
     return value
 
 
-def _serialize_tool_result(result):
+def _serialize_tool_result(result, *, max_chars=None):
     """Return bounded valid JSON plus an honest outcome, not an attempted-call badge.
 
     Success means a payload was returned, not that its facts are current or verified.
     Existing source health/unknown fields remain data for the grounding contract.
     """
+    cap = _TOOL_RESULT_CAP if max_chars is None else max_chars
     status = "error"
 
     def encode(value, truncated):
@@ -192,14 +193,14 @@ def _serialize_tool_result(result):
         status = ("error" if limited else "empty") if empty else ("partial" if limited else "success")
         data = _safe_tool_data(result)
         serialized = encode(data, False)
-        if len(serialized) <= _TOOL_RESULT_CAP:
+        if len(serialized) <= cap:
             return serialized, status, False
         for item_limit, text_limit in ((32, 1024), (16, 512), (8, 256), (4, 128), (2, 64), (1, 32)):
             compact = _compact_tool_data(data, item_limit, text_limit)
             if not empty and _tool_payload_empty(compact):
                 continue
             serialized = encode(compact, True)
-            if len(serialized) <= _TOOL_RESULT_CAP:
+            if len(serialized) <= cap:
                 return serialized, status, True
         # A pathological object may not fit even after field-aware compaction.
         status = "empty"
