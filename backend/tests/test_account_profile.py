@@ -374,3 +374,27 @@ def test_dynamic_path_follows_cache_dir(tmp_path):
     assert "account_profile.json" in isolated_files
     tmp_files = [f for f in isolated_files if ".tmp." in f]
     assert len(tmp_files) == 0, f"有残留临时文件: {tmp_files}"
+
+
+@pytest.mark.parametrize("total", [0.001, 0.004, 0.000001])
+def test_subcent_total_is_rejected_before_overwriting_profile(total):
+    original = account_profile.save_account_profile(100, 10, confirm_current=True)
+    with pytest.raises(ValueError, match="大于 0"):
+        account_profile.validate_account_payload({"total_assets": total, "available_cash": 0})
+    with pytest.raises(ValueError, match="大于 0"):
+        account_profile.save_account_profile(total, 0, confirm_current=True)
+    assert account_profile.load_account_profile() == original
+
+
+def test_normalized_validation_matches_persisted_profile():
+    total, cash = account_profile.validate_account_payload({
+        "total_assets": 0.006, "available_cash": 0.005,
+    })
+    assert (total, cash) == (0.01, 0.01)
+    saved = account_profile.save_account_profile(total, cash, confirm_current=True)
+    assert account_profile.load_account_profile() == saved
+
+
+def test_negative_subcent_cash_still_rejected():
+    with pytest.raises(ValueError, match="不能小于 0"):
+        account_profile.validate_account_payload({"total_assets": 1, "available_cash": -0.001})

@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+import hashlib
+import time
 import ipaddress
 import json
 import os
@@ -29,13 +32,91 @@ TOOLS = tools.TOOLS
 _exec_tool = tools.exec_tool
 
 
-class ModelStreamIncompleteError(RuntimeError):
+class ModelTransportError(RuntimeError):
+    """Public, sanitized model failure; never contains provider bodies or URLs."""
+
+
+class ModelStreamIncompleteError(ModelTransportError):
     """The upstream stream ended without its explicit completion signal."""
 
     def __init__(self):
         super().__init__("模型响应流未完整结束")
 
 MAX_ROUNDS = 6  # 工具调用最大轮数，防死循环
+_CONNECT_TIMEOUT = 10
+_READ_TIMEOUT = 120
+_TURN_TIMEOUT = (MAX_ROUNDS + 1) * _READ_TIMEOUT  # Preserve each round's slow first-token budget.
+
+
+def public_error_message(error):
+    if isinstance(error, (ModelTransportError, agent_runtime.AgentRuntimeError)):
+        return str(error)
+    return "模型服务暂时不可用，请稍后重试"
+
+
+def _check_active(cfg):
+    if cfg.get("_cancel_event") is not None and cfg["_cancel_event"].is_set():
+        raise ModelTransportError("生成已停止")
+    if time.monotonic() >= cfg.get("_deadline", float("inf")):
+        raise ModelTransportError("模型响应超时")
+
+
+def _request_headers(cfg):
+    headers = {"Authorization": f"Bearer {cfg['apiKey']}", "Content-Type": "application/json"}
+    base = urlparse(_resolve_base(cfg))
+    if base.scheme == "https" and base.hostname == "opencode.ai" and base.path == "/zen/go/v1":
+        headers["User-Agent"] = "Vibe-Research/1.0"
+        # Do not forward arbitrary user input as a header or disclose the raw session ID.
+        session = str(cfg.get("_session") or uuid.uuid4().hex)
+        headers["x-opencode-session"] = hashlib.sha256(session.encode()).hexdigest()
+    return headers
+
+
+@contextmanager
+def _open_stream(cfg, messages, use_tools):
+    _check_active(cfg)
+    resp = _call_llm_stream(cfg, messages, use_tools)
+    finished = threading.Event()
+    close_lock = threading.Lock()
+    closed = False
+
+    def close():
+        nonlocal closed
+        with close_lock:
+            if closed:
+                return
+            closed = True
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:
+                pass  # Cleanup must not expose provider/socket internals.
+
+    def watch():
+        while not finished.wait(0.05):
+            try:
+                _check_active(cfg)
+            except ModelTransportError:
+                close()
+                return
+
+    # requests cannot interrupt DNS/connect or reliably unblock every socket read.
+    # Close active responses on cancellation; finite connect/read timeouts bound
+    # blocking I/O, and the turn deadline also stops trickling streams.
+    watcher = threading.Thread(target=watch, daemon=True, name="vibe-model-stream-watch")
+    watcher.start()
+    try:
+        _check_active(cfg)
+        yield resp
+        _check_active(cfg)
+    except requests.RequestException as exc:
+        _check_active(cfg)
+        raise ModelTransportError("模型连接中断，请重试") from exc
+    finally:
+        finished.set()
+        close()
+
+
 _TOOL_RESULT_CAP = 6000  # 单次工具结果注入上限（控 token）
 
 # 投研分析框架：用户要「分析个股 / 给判断 / 下结论」时，AI 按这五维组织，
@@ -132,13 +213,17 @@ def _call_llm(cfg: dict, messages: list, use_tools: bool) -> dict:
         payload["tool_choice"] = "auto"
     r = requests.post(
         f"{base}/chat/completions",
-        headers={"Authorization": f"Bearer {cfg['apiKey']}", "Content-Type": "application/json"},
+        headers=_request_headers(cfg),
         json=payload,
         timeout=90,
     )
     if r.status_code != 200:
-        raise RuntimeError(f"模型接口 HTTP {r.status_code}: {r.text[:300]}")
-    return r.json()
+        r.close()
+        raise ModelTransportError(f"模型接口 HTTP {r.status_code}")
+    try:
+        return r.json()
+    finally:
+        r.close()
 
 
 def run_chat(cfg: dict, user_messages: list, context: str = "") -> dict:
@@ -197,13 +282,22 @@ def _call_llm_stream(cfg: dict, messages: list, use_tools: bool):
     if use_tools:
         payload["tools"] = TOOLS
         payload["tool_choice"] = "auto"
-    r = requests.post(
-        f"{_resolve_base(cfg)}/chat/completions",
-        headers={"Authorization": f"Bearer {cfg['apiKey']}", "Content-Type": "application/json"},
-        json=payload, timeout=120, stream=True,
-    )
+    _check_active(cfg)
+    try:
+        r = requests.post(
+            f"{_resolve_base(cfg)}/chat/completions",
+            headers=_request_headers(cfg),
+            json=payload, timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT), stream=True,
+        )
+    except requests.Timeout as exc:
+        _check_active(cfg)
+        raise ModelTransportError("模型响应超时") from exc
+    except requests.RequestException as exc:
+        _check_active(cfg)
+        raise ModelTransportError("模型连接失败，请重试") from exc
     if r.status_code != 200:
-        raise RuntimeError(f"模型接口 HTTP {r.status_code}: {r.text[:300]}")
+        r.close()
+        raise ModelTransportError(f"模型接口 HTTP {r.status_code}")
     return r
 
 
@@ -216,12 +310,26 @@ def _parse_sse_line(raw: bytes) -> tuple[bool, dict | None]:
         return True, None
     try:
         parsed = json.loads(data)
-    except json.JSONDecodeError:
-        return False, None
-    choices = parsed.get("choices") or []
-    if not choices:
-        return False, None
-    return False, choices[0].get("delta") or {}
+    except (json.JSONDecodeError, UnicodeError) as exc:
+        raise ModelTransportError("模型响应格式无效") from exc
+    if not isinstance(parsed, dict):
+        raise ModelTransportError("模型响应格式无效")
+    if "error" in parsed:
+        raise ModelTransportError("模型服务返回错误，请稍后重试")
+    choices = parsed.get("choices")
+    if choices == [] and isinstance(parsed.get("usage"), dict):
+        return False, None  # A valid usage-only chunk is not an answer.
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise ModelTransportError("模型响应格式无效")
+    choice = choices[0]
+    delta = choice.get("delta")
+    if not isinstance(delta, dict):
+        raise ModelTransportError("模型响应格式无效")
+    if delta.get("refusal") or choice.get("finish_reason") == "content_filter":
+        raise ModelTransportError("模型拒绝了本次请求")
+    if delta.get("content") is not None and not isinstance(delta["content"], str):
+        raise ModelTransportError("模型响应格式无效")
+    return False, delta
 
 
 def _iter_sse_deltas(resp):
@@ -286,6 +394,9 @@ def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
     - use_tools=True：function-calling 循环（通用聊天 API 路径）。
     事件协议与 /api/chat 一致：{type: tool|delta|done|error}。
     """
+    cfg = {**cfg, "_deadline": time.monotonic() + _TURN_TIMEOUT,
+           "_session": cfg.get("_session") or uuid.uuid4().hex}
+    _check_active(cfg)
     provider = str(cfg.get("provider", ""))
     if not use_tools and provider == "cli-codex":
         instructions: list[str] = []
@@ -317,10 +428,15 @@ def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
         raise RuntimeError("当前订阅接入仅支持 Codex Subscription")
 
     if not use_tools:
-        resp = _call_llm_stream(cfg, messages, use_tools=False)
-        for delta in _iter_sse_deltas(resp):
-            if delta.get("content"):
-                yield {"type": "delta", "text": delta["content"]}
+        answered = False
+        with _open_stream(cfg, messages, False) as resp:
+            for delta in _iter_sse_deltas(resp):
+                _check_active(cfg)
+                if delta.get("content"):
+                    answered = True
+                    yield {"type": "delta", "text": delta["content"]}
+        if not answered:
+            raise ModelTransportError("模型没有返回可用内容")
         yield {"type": "done", "trace": [], "rounds": 1}
         return
 
@@ -329,32 +445,34 @@ def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
     trace: list[dict] = []
 
     for rnd in range(1, MAX_ROUNDS + 1):
-        resp = _call_llm_stream(cfg, work, use_tools=True)
         content_parts: list[str] = []
         tool_acc: dict[int, dict] = {}
-        for delta in _iter_sse_deltas(resp):
-            if delta.get("content"):
-                content_parts.append(delta["content"])
-                yield {"type": "delta", "text": delta["content"]}
-            for tc in (delta.get("tool_calls") or []):
-                idx = tc.get("index")
-                if idx is None:
-                    # 非标「OpenAI 兼容」网关可能不带 index：有 id 按 id 归位（新 id 开新槽），
-                    # 无 id 则续拼最后一个调用，避免多个调用的 arguments 串到一起
-                    tc_id = tc.get("id") or ""
-                    idx = next((k for k, v in tool_acc.items() if tc_id and v["id"] == tc_id), None)
+        with _open_stream(cfg, work, True) as resp:
+            for delta in _iter_sse_deltas(resp):
+                _check_active(cfg)
+                if delta.get("content"):
+                    content_parts.append(delta["content"])
+                    yield {"type": "delta", "text": delta["content"]}
+                for tc in (delta.get("tool_calls") or []):
+                    idx = tc.get("index")
                     if idx is None:
-                        idx = len(tool_acc) if (tc_id or not tool_acc) else max(tool_acc)
-                acc = tool_acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
-                if tc.get("id"):
-                    acc["id"] = tc["id"]
-                fn = tc.get("function") or {}
-                if fn.get("name"):
-                    acc["name"] = fn["name"]
-                if fn.get("arguments"):
-                    acc["arguments"] += fn["arguments"]
-
+                        # 非标「OpenAI 兼容」网关可能不带 index：有 id 按 id 归位（新 id 开新槽），
+                        # 无 id 则续拼最后一个调用，避免多个调用的 arguments 串到一起
+                        tc_id = tc.get("id") or ""
+                        idx = next((k for k, v in tool_acc.items() if tc_id and v["id"] == tc_id), None)
+                        if idx is None:
+                            idx = len(tool_acc) if (tc_id or not tool_acc) else max(tool_acc)
+                    acc = tool_acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+                    if tc.get("id"):
+                        acc["id"] = tc["id"]
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        acc["name"] = fn["name"]
+                    if fn.get("arguments"):
+                        acc["arguments"] += fn["arguments"]
         if not tool_acc:  # 本轮是纯答案（已流完）→ 结束
+            if not content_parts:
+                raise ModelTransportError("模型没有返回可用内容")
             yield {"type": "done", "trace": trace, "rounds": rnd}
             return
 
@@ -368,12 +486,14 @@ def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
             } for i in sorted(tool_acc)],
         })
         for i in sorted(tool_acc):
+            _check_active(cfg)
             a = tool_acc[i]
             try:
                 args = json.loads(a["arguments"] or "{}")
             except json.JSONDecodeError:
                 args = {}
             yield {"type": "tool", "tool": a["name"], "args": args}
+            _check_active(cfg)
             result = _exec_tool(a["name"], args)
             trace.append({"tool": a["name"], "args": args})
             work.append({
@@ -381,9 +501,16 @@ def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
                 "content": json.dumps(result, ensure_ascii=False)[:_TOOL_RESULT_CAP],
             })
 
-    # 超过最大轮数：不带工具收尾（非流式一次拿完再吐）
-    data = _call_llm(cfg, work, use_tools=False)
-    yield {"type": "delta", "text": data["choices"][0]["message"].get("content") or ""}
+    # Keep final synthesis on the same cancellable, bounded streaming path.
+    answered = False
+    with _open_stream(cfg, work, False) as resp:
+        for delta in _iter_sse_deltas(resp):
+            _check_active(cfg)
+            if delta.get("content"):
+                answered = True
+                yield {"type": "delta", "text": delta["content"]}
+    if not answered:
+        raise ModelTransportError("模型没有返回可用内容")
     yield {"type": "done", "trace": trace, "rounds": MAX_ROUNDS}
 
 

@@ -2,7 +2,7 @@
 
 import { ApiError, request, streamNdjson, type NdjsonStreamResult, type ReportChatSource, type ReportChatCoverage } from "./api.ts";
 import { isCliProvider, type ProviderId } from "./ai-models.ts";
-import { storageSet, storageRemove } from "./storage.ts";
+import { storageSetChecked, storageRemoveChecked } from "./storage.ts";
 
 export interface LlmConfig {
   provider: ProviderId;
@@ -42,12 +42,12 @@ export function loadLlm(): LlmConfig | null {
 }
 
 export function saveLlm(cfg: LlmConfig) {
-  storageSet(KEY, JSON.stringify(cfg));
+  storageSetChecked(KEY, JSON.stringify(cfg));
   notifyLlmChanged();
 }
 
 export function clearLlm() {
-  storageRemove(KEY);
+  storageRemoveChecked(KEY);
   notifyLlmChanged();
 }
 

@@ -191,7 +191,7 @@ def _read_full_market(
         except Exception as exc:  # noqa: BLE001 — source failure is fail-closed
             raise _RdpUnavailable(type(exc).__name__) from exc
 
-        if not isinstance(envelope, Mapping) or envelope.get("status") != "normal":
+        if not isinstance(envelope, Mapping) or envelope.get("status") not in {"normal", "partial"}:
             raise _RdpUnavailable("unavailable_envelope")
 
         envelope_date = _date_value(envelope.get("latest_date") or envelope.get("as_of"))
@@ -458,7 +458,7 @@ def build_stock_relative_context(
         warnings.append("当前行业没有可用成员；行业 benchmark 保持 null。")
 
     complete = _all_complete(periods)
-    status = "normal" if complete and industry_status == "normal" else "partial"
+    status = "normal" if complete and industry_status == "normal" and not stale_count else "partial"
     return _base_envelope(
         code=normalized_code,
         fetched_at=fetched_at,

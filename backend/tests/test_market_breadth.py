@@ -52,7 +52,7 @@ def _assert_envelope(env: dict):
     assert env["source"] == "eastmoney_push2"
     assert env["trade_date"] is None
     assert env["data_time"] is None
-    assert isinstance(env["fetched_at"], str) and len(env["fetched_at"]) >= 10
+    assert env["fetched_at"] is None if env["status"] == "unavailable" else isinstance(env["fetched_at"], str)
     assert isinstance(env["is_stale"], bool)
     assert isinstance(env["warnings"], list)
     assert env["status"] in ("normal", "partial", "unavailable")
@@ -240,7 +240,7 @@ def test_get_market_breadth_normal_envelope(monkeypatch):
         _s(f"{i:06d}", change_pct=1.0 if i % 2 == 0 else -0.5, amount=1e7)
         for i in range(3500)
     ]
-    monkeypatch.setattr(market, "get_a_share_snapshot", lambda: snap)
+    monkeypatch.setattr(market, "get_a_share_snapshot_observation", lambda: {"rows": snap, "fetched_at": "2026-09-30 10:00:00"})
     env = market.get_market_breadth()
     _assert_envelope(env)
     assert env["status"] == "normal"
@@ -259,7 +259,7 @@ def test_get_market_breadth_partial_low_valid_pct(monkeypatch):
     for i in range(3200):
         pct = 1.0 if i < 1600 else None
         snap.append(_s(f"{i:06d}", change_pct=pct, amount=1e7))
-    monkeypatch.setattr(market, "get_a_share_snapshot", lambda: snap)
+    monkeypatch.setattr(market, "get_a_share_snapshot_observation", lambda: {"rows": snap, "fetched_at": "2026-09-30 10:00:00"})
     env = market.get_market_breadth()
     _assert_envelope(env)
     assert env["status"] == "partial"
@@ -277,7 +277,7 @@ def test_get_market_breadth_partial_low_amount_ratio(monkeypatch):
     for i in range(3200):
         amt = 1e7 if i < 1000 else None  # ~31% 有成交额
         snap.append(_s(f"{i:06d}", change_pct=0.5, amount=amt))
-    monkeypatch.setattr(market, "get_a_share_snapshot", lambda: snap)
+    monkeypatch.setattr(market, "get_a_share_snapshot_observation", lambda: {"rows": snap, "fetched_at": "2026-09-30 10:00:00"})
     env = market.get_market_breadth()
     _assert_envelope(env)
     assert env["status"] == "partial"
@@ -288,7 +288,7 @@ def test_get_market_breadth_partial_low_amount_ratio(monkeypatch):
 
 def test_get_market_breadth_empty_snapshot_unavailable(monkeypatch):
     market._CACHE.clear()
-    monkeypatch.setattr(market, "get_a_share_snapshot", lambda: [])
+    monkeypatch.setattr(market, "get_a_share_snapshot_observation", lambda: {"rows": [], "fetched_at": "2026-09-30 10:00:00"})
     env = market.get_market_breadth()
     _assert_envelope(env)
     assert env["status"] == "unavailable"
@@ -305,12 +305,12 @@ def test_get_market_breadth_snapshot_error_unavailable(monkeypatch):
     def boom():
         raise RuntimeError("timeout")
 
-    monkeypatch.setattr(market, "get_a_share_snapshot", boom)
+    monkeypatch.setattr(market, "get_a_share_snapshot_observation", boom)
     env = market.get_market_breadth()  # 不向外抛
     _assert_envelope(env)
     assert env["status"] == "unavailable"
     assert env["data"] is None
-    assert any("timeout" in w for w in env["warnings"])
+    assert env["warnings"] == ["全市场快照暂不可用"]
     market._CACHE.clear()
 
 
@@ -323,17 +323,17 @@ def test_get_market_breadth_envelope_keys_all_statuses(monkeypatch):
     snap_ok = [
         _s(f"{i:06d}", change_pct=1.0, amount=1e7) for i in range(3500)
     ]
-    monkeypatch.setattr(market, "get_a_share_snapshot", lambda: snap_ok)
+    monkeypatch.setattr(market, "get_a_share_snapshot_observation", lambda: {"rows": snap_ok, "fetched_at": "2026-09-30 10:00:00"})
     cases.append(market.get_market_breadth())
 
     # partial (count < 3000)
     snap_few = [_s(f"{i:06d}", change_pct=1.0, amount=1e7) for i in range(100)]
-    monkeypatch.setattr(market, "get_a_share_snapshot", lambda: snap_few)
+    monkeypatch.setattr(market, "get_a_share_snapshot_observation", lambda: {"rows": snap_few, "fetched_at": "2026-09-30 10:00:00"})
     market._CACHE.clear()
     cases.append(market.get_market_breadth())
 
     # unavailable
-    monkeypatch.setattr(market, "get_a_share_snapshot", lambda: [])
+    monkeypatch.setattr(market, "get_a_share_snapshot_observation", lambda: {"rows": [], "fetched_at": "2026-09-30 10:00:00"})
     market._CACHE.clear()
     cases.append(market.get_market_breadth())
 

@@ -1,7 +1,7 @@
 // 研究记录（沉淀）—— 把 AI 复盘 / 今日要点 / 问 AI 的结果存本地，形成个人投研记录。
 // 只存本地 localStorage，不上传、不进仓库。对应投研框架第 7 层「沉淀」。
 
-import { storageGet, storageSet, storageRemove } from "./storage.ts";
+import { storageGetChecked, storageSetChecked, storageRemoveChecked } from "./storage.ts";
 
 export interface Note {
   id: string;       // 记录身份
@@ -37,19 +37,36 @@ function parseNote(value: unknown, index: number): Note {
   return { id, kind, title, content, ts };
 }
 
-export function loadNotes(): Note[] {
+function readNotes(): Note[] {
+  const raw = storageGetChecked(KEY);
+  let value: unknown;
   try {
-    const value = JSON.parse(storageGet(KEY) || "[]");
-    return Array.isArray(value) ? value : [];
+    value = JSON.parse(raw ?? "[]");
   } catch {
-    return [];
+    throw new Error("本地研究记录格式无效，原始数据已保留；请先恢复备份或修复数据");
+  }
+  if (!Array.isArray(value)) throw new Error("本地研究记录列表格式无效，原始数据已保留");
+  const notes = value.map(parseNote);
+  if (new Set(notes.map((note) => note.id)).size !== notes.length) {
+    throw new Error("本地研究记录包含重复 id，原始数据已保留");
+  }
+  return notes;
+}
+
+export function loadNotesState(): { notes: Note[]; error: string } {
+  try {
+    return { notes: readNotes(), error: "" };
+  } catch (error) {
+    return { notes: [], error: error instanceof Error ? error.message : "无法读取研究记录" };
   }
 }
 
-function persist(notes: Note[]): string {
-  const serialized = JSON.stringify(notes.slice(0, NOTES_LIMIT));
-  storageSet(KEY, serialized);
-  return serialized;
+export function loadNotes(): Note[] {
+  return loadNotesState().notes;
+}
+
+function persist(notes: Note[]): void {
+  storageSetChecked(KEY, JSON.stringify(notes.slice(0, NOTES_LIMIT)));
 }
 
 export function createNotesBackupJson(
@@ -125,11 +142,8 @@ export function mergeNotesFromBackup(
 
 export function importNotesBackupJson(raw: string): NotesImportResult {
   const imported = parseNotesBackupJson(raw);
-  const result = mergeNotesFromBackup(loadNotes(), imported);
-  const serialized = persist(result.notes);
-  if (storageGet(KEY) !== serialized) {
-    throw new Error("浏览器无法保存导入的研究记录，请检查存储权限或空间");
-  }
+  const result = mergeNotesFromBackup(readNotes(), imported);
+  persist(result.notes);
   return result;
 }
 
@@ -142,17 +156,17 @@ export function addNote(kind: string, title: string, content: string): Note[] {
     content,
     ts: Date.now(),
   };
-  const next = [note, ...loadNotes()];
+  const next = [note, ...readNotes()].slice(0, NOTES_LIMIT);
   persist(next);
   return next;
 }
 
 export function deleteNote(id: string): Note[] {
-  const next = loadNotes().filter((note) => note.id !== id);
+  const next = readNotes().filter((note) => note.id !== id);
   persist(next);
   return next;
 }
 
 export function clearNotes() {
-  storageRemove(KEY);
+  storageRemoveChecked(KEY);
 }

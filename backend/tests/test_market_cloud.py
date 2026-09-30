@@ -29,8 +29,8 @@ def _stock(code, name, *, f3=1.0, f21=1e10, f100="电子", **extra):
 def _install_snapshot(monkeypatch, stocks):
     """mock get_a_share_snapshot 返回指定股票列表。"""
     def fake_snapshot():
-        return [astock._map_a_share_row(s) for s in stocks]
-    monkeypatch.setattr(market, "get_a_share_snapshot", fake_snapshot)
+        return {"rows": [astock._map_a_share_row(s) for s in stocks], "fetched_at": "2026-09-30 10:00:00"}
+    monkeypatch.setattr(market, "get_a_share_snapshot_observation", fake_snapshot)
 
 
 # ── 1. 行业分组 + 流通市值面积 ────────────────────────────────────────

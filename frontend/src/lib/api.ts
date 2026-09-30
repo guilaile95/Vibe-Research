@@ -3,6 +3,7 @@
 // 纯类型定义见 ./api/types.ts；本文件仅保留运行时客户端。
 
 export type * from "./api/types.ts";
+import { storageSetChecked, storageRemoveChecked } from "./storage.ts";
 
 import type { MarketCloudEnvelope } from "./marketCloud.ts";
 import { parseReportChatCoverage } from "./reportChatCoverage.ts";
@@ -211,12 +212,8 @@ export function loadAccessKey(): string {
 
 
 export function saveAccessKey(key: string) {
-  try {
-    if (key) localStorage.setItem(ACCESS_KEY, key);
-    else localStorage.removeItem(ACCESS_KEY);
-  } catch {
-    /* 隐私模式等场景 localStorage 不可用 */
-  }
+  if (key) storageSetChecked(ACCESS_KEY, key);
+  else storageRemoveChecked(ACCESS_KEY);
 }
 
 
@@ -903,10 +900,10 @@ export const api = {
     }),
   deleteReport: (id: string) => request<{ ok: boolean }>(`/myreports/${id}`, "DELETE"),
   // 注意：get()/request() 已自动加 /api 前缀，这里只传 /myreports/... 即可，禁止重复 /api。
-  searchMyReportText: (q: string, reportIds?: string[], limit = 20) => {
+  searchMyReportText: (q: string, reportIds?: string[], limit = 20, signal?: AbortSignal) => {
     const params = new URLSearchParams({ q, limit: String(limit) });
     for (const reportId of reportIds ?? []) params.append("report_ids", reportId);
-    return get<MyReportTextHit[]>(`/myreports/fulltext-search?${params.toString()}`);
+    return get<MyReportTextHit[]>(`/myreports/fulltext-search?${params.toString()}`, { signal });
   },
   previewMyReportTextIndex: (reportIds?: string[]) => {
     const params = new URLSearchParams();

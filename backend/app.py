@@ -725,7 +725,8 @@ def chat(req: ChatReq):
     _require_llm_ready(req.llm)
 
     cfg = req.llm.model_dump()
-    # Codex Subscription 需要 ASGI disconnect → Agent Runtime cancel 传播；API 路径忽略。
+    cfg["_session"] = req.session
+    # Both API and Codex streams observe the same disconnect signal.
     disconnect_event = threading.Event()
     cfg["_cancel_event"] = disconnect_event
 
@@ -763,7 +764,7 @@ def chat(req: ChatReq):
                 yield json.dumps(ev, ensure_ascii=False) + "\n"
         except Exception as e:  # noqa: BLE001 — 运行时错误以流内事件上报，不中断连接
             if not disconnect_event.is_set():
-                yield json.dumps({"type": "error", "message": f"对话失败：{e}"}, ensure_ascii=False) + "\n"
+                yield json.dumps({"type": "error", "message": f"对话失败：{chat_layer.public_error_message(e)}"}, ensure_ascii=False) + "\n"
 
     return _DisconnectAwareStreamingResponse(
         gen(),
@@ -2137,31 +2138,52 @@ def indices():
 
 @app.get("/api/quote")
 def quote(codes: str = Query(..., description="逗号分隔的 6 位代码")):
-    """实时行情：现价/涨跌/PE/PB/市值/换手/涨跌停。仅标准库，永远可用。"""
+    """实时行情：现价/涨跌/PE/PB/市值/换手/涨跌停；缺失或过期数据显式降级。"""
     lst = [c.strip() for c in codes.split(",") if c.strip()]
     if not lst or any(not c.isdigit() or len(c) != 6 for c in lst):
         raise HTTPException(400, "codes 必须是逗号分隔的 6 位数字")
     try:
-        data = astock.tencent_quote(lst)
+        import math
+        raw = astock.tencent_quote(lst)
+        data = {}
+        for code in lst:
+            row = raw.get(code) if isinstance(raw, dict) else None
+            if not isinstance(row, dict):
+                continue
+            price = row.get("price")
+            if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(price) or price <= 0:
+                continue
+            # Enforce JSON safety before health success, including alternate adapters.
+            try:
+                json.dumps(row, allow_nan=False)
+            except (ValueError, TypeError):
+                continue
+            data[code] = row
+        from trade_calendar import observation_trade_date_at
+        expected_date = observation_trade_date_at(datetime.now(timezone.utc).isoformat())
+        fresh = bool(data) and all(
+            expected_date is not None and row.get("trade_date") == expected_date
+            for row in data.values()
+        )
         # 健康事件：最近一次真实 quotes 调用（覆盖不持久化）
         try:
             import data_health_event_store as _dhes
             if not isinstance(data, dict) or not data:
                 _dhes.safe_call(_dhes.record_failure, "quotes", "SOURCE_UNAVAILABLE")
-            elif any(c not in data for c in lst):
+            elif any(c not in data for c in lst) or not fresh:
                 _dhes.safe_call(_dhes.record_partial, "quotes")
             else:
                 _dhes.safe_call(_dhes.record_success, "quotes")
         except Exception:
             pass
-        return {"data": data}
+        return {"data": data, "status": "unavailable" if not data else "normal" if fresh and all(c in data for c in lst) else "partial"}
     except Exception as e:  # noqa: BLE001 — 边界统一兜底
         try:
             import data_health_event_store as _dhes
             _dhes.safe_call(_dhes.record_failure, "quotes", "SOURCE_UNAVAILABLE")
         except Exception:
             pass
-        raise HTTPException(502, f"行情源异常：{e}") from e
+        raise HTTPException(502, "行情源暂不可用") from None
 
 
 _CACHE_MISS = object()

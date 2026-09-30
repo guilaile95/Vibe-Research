@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   ChevronDown,
@@ -21,7 +21,7 @@ import {
   createNotesBackupJson,
   deleteNote,
   importNotesBackupJson,
-  loadNotes,
+  loadNotesState,
   type Note,
 } from "@/lib/notes";
 import { reflectStream } from "@/lib/agents";
@@ -36,7 +36,8 @@ const KIND_COLOR: Record<string, string> = {
 };
 
 export function Notes() {
-  const [notes, setNotes] = useState<Note[]>(loadNotes);
+  const [initialNotes] = useState(loadNotesState);
+  const [notes, setNotes] = useState<Note[]>(initialNotes.notes);
   const [openId, setOpenId] = useState<string | null>(null);
   // 反思：对某条记录做推理审计。只保留「当前这条」的结果，避免一堆长文同时挂在页面上。
   const [reflectId, setReflectId] = useState<string | null>(null);
@@ -45,9 +46,15 @@ export function Notes() {
   const [reflecting, setReflecting] = useState(false);
   const [reflectSaved, setReflectSaved] = useState(false);
   const [backupStatus, setBackupStatus] = useState("");
-  const [backupError, setBackupError] = useState("");
+  const [backupError, setBackupError] = useState(initialNotes.error);
   const abortRef = useRef<AbortController | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => () => {
+    const controller = abortRef.current;
+    abortRef.current = null;
+    controller?.abort();
+  }, []);
 
   async function runReflect(n: Note) {
     abortRef.current?.abort();
@@ -56,21 +63,27 @@ export function Notes() {
     setReflectId(n.id); setReflectText(""); setReflectErr(""); setReflectSaved(false); setReflecting(true);
     try {
       await reflectStream(n.content, n.title, {
-        onDelta: (t) => setReflectText((s) => s + t),
-        onError: setReflectErr,
+        onDelta: (t) => { if (abortRef.current === ctrl && !ctrl.signal.aborted) setReflectText((s) => s + t); },
+        onError: (message) => { if (abortRef.current === ctrl && !ctrl.signal.aborted) setReflectErr(message); },
       }, ctrl.signal);
     } catch (e) {
-      if (!(e instanceof DOMException && e.name === "AbortError")) {
+      if (abortRef.current === ctrl && !ctrl.signal.aborted && !(e instanceof DOMException && e.name === "AbortError")) {
         setReflectErr(e instanceof ApiError ? e.message : String(e));
       }
     } finally {
-      setReflecting(false);
+      if (abortRef.current === ctrl) { setReflecting(false); abortRef.current = null; }
     }
   }
 
   function saveReflection(n: Note) {
-    setNotes(addNote("反思审计", `反思 · ${n.title}`, reflectText));
-    setReflectSaved(true);
+    setBackupStatus("");
+    try {
+      setNotes(addNote("反思审计", `反思 · ${n.title}`, reflectText));
+      setReflectSaved(true);
+      setBackupError("");
+    } catch (error) {
+      setBackupError(error instanceof Error ? error.message : "研究记录保存失败");
+    }
   }
 
   function downloadBackup() {
@@ -146,7 +159,11 @@ export function Notes() {
             {notes.length > 0 && (
               <button
                 type="button"
-                onClick={() => { if (confirm("清空所有研究记录？")) { clearNotes(); setNotes([]); } }}
+                onClick={() => { if (confirm("清空所有研究记录？")) {
+                  setBackupStatus("");
+                  try { clearNotes(); setNotes([]); setBackupError(""); }
+                  catch (error) { setBackupError(error instanceof Error ? error.message : "清空失败"); }
+                } }}
                 className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:text-destructive"
               >
                 <Trash2 className="h-4 w-4" /> 清空
@@ -186,7 +203,11 @@ export function Notes() {
                     <span className="flex-1 truncate text-sm font-medium">{n.title}</span>
                     <span className="shrink-0 font-mono text-[11px] text-muted-foreground/60">{fmt(n.ts)}</span>
                   </button>
-                  <button onClick={() => setNotes(deleteNote(n.id))} className="shrink-0 text-muted-foreground/60 hover:text-destructive" title="删除">
+                  <button onClick={() => {
+                    setBackupStatus("");
+                    try { setNotes(deleteNote(n.id)); setBackupError(""); }
+                    catch (error) { setBackupError(error instanceof Error ? error.message : "删除失败"); }
+                  }} className="shrink-0 text-muted-foreground/60 hover:text-destructive" title="删除">
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 </div>

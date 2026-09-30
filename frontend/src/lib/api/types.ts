@@ -490,10 +490,12 @@ export interface IntelDigestLatestResult {
 
 
 export interface Quote {
-  name: string; price: number; last_close: number; change_pct: number;
-  pe_ttm: number; pb: number; mcap_yi: number; turnover_pct: number;
-  limit_up: number; limit_down: number;
-  amount_wan?: number;
+  name: string; price: number; last_close: number | null; change_pct: number | null;
+  pe_ttm: number | null; pb: number | null; mcap_yi: number | null; turnover_pct: number | null;
+  limit_up: number | null; limit_down: number | null;
+  amount_wan?: number | null;
+  data_time?: string | null;
+  trade_date?: string | null;
 }
 
 

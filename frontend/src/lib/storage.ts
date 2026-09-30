@@ -29,3 +29,30 @@ export function storageRemove(key: string): void {
     /* 同上 */
   }
 }
+
+// User-visible save/delete operations must verify persistence instead of silently succeeding.
+export function storageGetChecked(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    throw new Error("浏览器无法读取本地存储，请检查存储权限");
+  }
+}
+
+export function storageSetChecked(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+    if (localStorage.getItem(key) !== value) throw new Error();
+  } catch {
+    throw new Error("浏览器无法保存数据，请检查存储权限或空间");
+  }
+}
+
+export function storageRemoveChecked(key: string): void {
+  try {
+    localStorage.removeItem(key);
+    if (localStorage.getItem(key) !== null) throw new Error();
+  } catch {
+    throw new Error("浏览器无法清除数据，请检查存储权限");
+  }
+}

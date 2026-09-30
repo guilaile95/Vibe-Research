@@ -105,7 +105,9 @@ function FullMarketResultTable({ result }: { result: FullMarketResult }) {
   const metric = (row: FullMarketResult["rows"][number], key: FullMarketValueMetric) => {
     const value = row[key];
     const status = row.metric_status?.[key];
-    return status === "INSUFFICIENT_HISTORY" ? "历史不足" : formatFullMarketMetric(key, value);
+    if (status === "INSUFFICIENT_HISTORY") return "历史不足";
+    const formatted = formatFullMarketMetric(key, value);
+    return status === "STALE" || row.status === "stale" ? `${formatted}（过期）` : formatted;
   };
   return (
     <GlassCard className="overflow-hidden p-0" data-testid="full-market-results">
@@ -137,7 +139,7 @@ function FullMarketResultTable({ result }: { result: FullMarketResult }) {
                     <Link className="font-mono hover:text-primary hover:underline" to={`/stock-data?code=${row.code}`}>{row.code}</Link>
                     <Link className="ml-2 text-[10px] text-primary hover:underline" to={candidateWorkspaceHref(row.code)}>候选研究</Link>
                   </td>
-                  <td className="px-4 py-2">{row.latest_date || "—"}</td>
+                  <td className="px-4 py-2">{row.latest_date || "—"}{row.status === "stale" && <span className="ml-1 text-amber-600">过期快照</span>}</td>
                   <td className="px-4 py-2">{metric(row, "latest_close")}</td>
                   <td className="px-4 py-2">{metric(row, "return_5d")}</td>
                   <td className="px-4 py-2">{metric(row, "return_20d")}</td>
@@ -670,16 +672,16 @@ export function Screener() {
           <GlassCard className="space-y-3 p-4" data-testid="full-market-summary">
             <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
               <span>全市场筛选数据</span>
-              <span className={fullMarketResult.status === "normal" ? "text-emerald-600" : "text-destructive"}>{fullMarketResult.status === "normal" ? "可用" : "不可用"}</span>
+              <span className={fullMarketResult.status === "normal" ? "text-emerald-600" : "text-destructive"}>{fullMarketResult.status === "normal" ? "可用" : fullMarketResult.status === "partial" ? "部分可用（含过期快照）" : "不可用"}</span>
               <span className="text-xs text-muted-foreground">As of：{fullMarketResult.as_of || "未知"}</span>
             </div>
             {fullMarketResult.coverage ? (
-              <p className="text-xs text-muted-foreground">覆盖：{fullMarketResult.coverage.start} 至 {fullMarketResult.coverage.end} · {fullMarketResult.coverage.row_count} 行 · {fullMarketResult.coverage.code_count} 个代码 · 当前横截面 {fullMarketResult.coverage.universe_count} 个代码</p>
+              <p className="text-xs text-muted-foreground">覆盖：{fullMarketResult.coverage.start} 至 {fullMarketResult.coverage.end} · {fullMarketResult.coverage.row_count} 行 · {fullMarketResult.coverage.code_count} 个代码 · 横截面 {fullMarketResult.coverage.universe_count} 个代码{fullMarketResult.coverage.current_count != null ? ` · 当期 ${fullMarketResult.coverage.current_count} · 过期 ${fullMarketResult.coverage.stale_count ?? 0}` : ""}</p>
             ) : <p className="text-xs text-destructive">本地研究数据不可用，全市场筛选不可用；没有逐票请求回退。</p>}
             <div className="grid gap-2 text-xs sm:grid-cols-2">
               {(["ma20", "ma60"] as const).map((key) => {
                 const breadth = fullMarketResult.breadth[key];
-                return <span key={key}>Breadth {key.toUpperCase()}：{breadth.breadth == null ? "不可评估" : `${(breadth.breadth * 100).toFixed(1)}%`} · 可评估 {breadth.evaluable_count} · 历史不足 {breadth.insufficient_count}</span>;
+                return <span key={key}>Breadth {key.toUpperCase()}：{breadth.breadth == null ? "不可评估" : `${(breadth.breadth * 100).toFixed(1)}%`} · 可评估 {breadth.evaluable_count} · 历史不足 {breadth.insufficient_count}{breadth.stale_count != null ? ` · 过期排除 ${breadth.stale_count}` : ""}</span>;
               })}
             </div>
             <p className="text-xs text-muted-foreground">Artifact：{fullMarketResult.provenance.artifact_sha256 || "未提供"} · Source：{fullMarketResult.provenance.source_name || fullMarketResult.provenance.source_kind || "未知"}</p>

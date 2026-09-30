@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Swords, Play, Square, Save, CheckCircle2, Circle, AlertTriangle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -38,57 +38,88 @@ export function Debate() {
   const [stages, setStages] = useState<StageBox[]>([]);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [analyzedCode, setAnalyzedCode] = useState("");
+  const [completed, setCompleted] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
+  useEffect(() => () => {
+    const controller = abortRef.current;
+    abortRef.current = null;
+    controller?.abort();
+  }, []);
+
   const reset = () => {
+    setCompleted(false);
     setStatus(""); setProgress([]); setMissing([]); setStages([]); setError(""); setSaved(false);
   };
 
   async function start() {
+    if (abortRef.current) return;
     const c = code.trim();
     if (!/^\d{6}$/.test(c)) { setError("请输入 6 位 A 股代码"); return; }
     reset();
+    setAnalyzedCode(c);
     setRunning(true);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    const active = () => abortRef.current === ctrl && !ctrl.signal.aborted;
+    let streamFailed = false;
     try {
       await debateStream(c, rounds, {
-        onStatus: setStatus,
+        onStatus: (message) => { if (active()) setStatus(message); },
         onDossierProgress: (title, ok, loaded, total) => {
+          if (!active()) return;
           setStatus(`正在拉取客观事实底稿… ${loaded}/${total}`);
           setProgress((p) => [...p, { title, ok }]);
         },
-        onDossierReady: (_sections, miss) => { setMissing(miss); setStatus("底稿就绪，辩论开始"); },
-        onStageStart: (stage, label) =>
-          setStages((s) => [...s, { stage, label, content: "", done: false }]),
-        onDelta: (stage, text) =>
-          setStages((s) => s.map((b) => (b.stage === stage && !b.done ? { ...b, content: b.content + text } : b))),
-        onStageDone: (stage, _label, content) =>
-          setStages((s) => s.map((b) => (b.stage === stage && !b.done ? { ...b, content, done: true } : b))),
-        onError: (message, stage) => setError(stage ? `${stage}：${message}` : message),
+        onDossierReady: (_sections, miss) => { if (active()) { setMissing(miss); setStatus("底稿就绪，辩论开始"); } },
+        onStageStart: (stage, label) => {
+          if (active()) setStages((s) => [...s, { stage, label, content: "", done: false }]);
+        },
+        onDelta: (stage, text) => {
+          if (active()) setStages((s) => s.map((b) => (b.stage === stage && !b.done ? { ...b, content: b.content + text } : b)));
+        },
+        onStageDone: (stage, _label, content) => {
+          if (active()) setStages((s) => s.map((b) => (b.stage === stage && !b.done ? { ...b, content, done: true } : b)));
+        },
+        onError: (message, stage) => {
+          if (active()) { streamFailed = true; setError(stage ? `${stage}：${message}` : message); }
+        },
       }, ctrl.signal);
-      setStatus("辩论完成");
+      if (active()) { setStatus(streamFailed ? "辩论失败" : "辩论完成"); setCompleted(!streamFailed); }
     } catch (e) {
+      if (abortRef.current !== ctrl) return;
       if (e instanceof DOMException && e.name === "AbortError") setStatus("已中止");
       else setError(e instanceof ApiError ? e.message : String(e));
     } finally {
-      setRunning(false);
-      abortRef.current = null;
+      if (abortRef.current === ctrl) {
+        setRunning(false);
+        abortRef.current = null;
+      }
     }
   }
 
   function stop() {
-    abortRef.current?.abort();
+    const controller = abortRef.current;
+    abortRef.current = null;
+    controller?.abort();
+    setStatus("已中止");
+    setCompleted(false);
     setRunning(false);
   }
 
   function save() {
     const body = stages.map((s) => `## ${s.label}\n\n${s.content}`).join("\n\n---\n\n");
-    addNote("多空辩论", `多空辩论 · ${code.trim()}`, body);
-    setSaved(true);
+    try {
+      addNote("多空辩论", `多空辩论 · ${analyzedCode}`, body);
+      setSaved(true);
+      setError("");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "研究记录保存失败");
+    }
   }
 
-  const finished = stages.length > 0 && stages.every((s) => s.done);
+  const finished = completed && stages.length > 0 && stages.every((s) => s.done);
 
   return (
     <div>

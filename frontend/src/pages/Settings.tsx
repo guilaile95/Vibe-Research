@@ -101,7 +101,13 @@ export function Settings() {
       toast.error("后台凭据保存失败");
       return;
     }
-    saveLlm(cfg);
+    try {
+      saveLlm(cfg);
+    } catch {
+      await refreshScheduledStatus();
+      toast.error("后台凭据已保存，但浏览器保存失败；请检查存储权限或空间后重试");
+      return;
+    }
     await refreshScheduledStatus();
     toast.success("已保存到本机浏览器和 Vibe 本机后台");
   };
@@ -123,7 +129,13 @@ export function Settings() {
       toast.error("后台凭据保存失败");
       return;
     }
-    saveLlm(cfg);
+    try {
+      saveLlm(cfg);
+    } catch {
+      await refreshScheduledStatus();
+      toast.error("后台凭据已保存，但浏览器保存失败；请检查存储权限或空间后重试");
+      return;
+    }
     await refreshScheduledStatus();
     toast.success(`已选「${m.name}」订阅，全站 AI 功能将调用 ${runtimeStatus?.runtime || m.name}`);
   };
@@ -148,7 +160,13 @@ export function Settings() {
       toast.error("后台凭据删除失败");
       return;
     }
-    clearLlm();
+    try {
+      clearLlm();
+    } catch {
+      await refreshScheduledStatus();
+      toast.error("后台凭据已清除，但浏览器凭据仍未清除；请检查存储权限后重试");
+      return;
+    }
     setApiKey("");
     setCliId("");
     await refreshScheduledStatus();
@@ -157,7 +175,12 @@ export function Settings() {
 
   const saveAccess = () => {
     const k = accessKey.trim();
-    saveAccessKey(k);
+    try {
+      saveAccessKey(k);
+    } catch {
+      toast.error(k ? "浏览器无法保存后端访问密钥，请检查存储权限或空间" : "浏览器无法清除后端访问密钥，请检查存储权限");
+      return;
+    }
     setAccessKey(k);
     toast.success(k ? "已保存后端访问密钥（存本地）" : "已清除后端访问密钥");
   };

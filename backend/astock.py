@@ -1,7 +1,7 @@
 """A股全栈数据层 —— 移植自 a-stock-data 工具包（五层数据源，自包含）。
 
 分级依赖：
-  - 行情（腾讯）        : 仅需标准库 urllib —— 永远可用
+  - 行情（腾讯）        : 仅需标准库 urllib，依赖上游可用性
   - 研报（东财）+ PDF   : 仅需 requests —— 轻量必装
   - 一致预期/新闻/公告  : akshare（惰性导入，缺失时优雅报错）
   - K线/财务/F10        : mootdx（惰性导入，缺失时优雅报错）
@@ -18,18 +18,18 @@ import re
 import threading
 import time
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
 
 def get_prefix(code: str) -> str:
-    """6 位代码 → 交易所前缀。5 开头是沪市基金/ETF（51/56/58 等），深市基金 15/16 开头走默认 sz。"""
+    """6 位代码 → 交易所前缀；北交所 92 / 历史 4、8 号段优先于沪 B 股 9。沪深 ETF 规则保留。"""
+    if code.startswith(("4", "8", "92")):
+        return "bj"
     if code.startswith(("6", "9", "5")):
         return "sh"
-    if code.startswith("8"):
-        return "bj"
     return "sz"
 
 
@@ -58,16 +58,32 @@ def _parse_gtimg(data: str) -> dict[str, dict]:
         if len(vals) < 53:
             continue
         code = key[2:]
+        if not re.fullmatch(r"(?:sh|sz|bj)[0-9]{6}", key) or vals[2] != code or not vals[1].strip():
+            continue
 
-        def num(i: int) -> float:
+        def num(i: int) -> float | None:
             try:
-                return float(vals[i]) if vals[i] else 0.0
+                value = float(vals[i])
+                return value if math.isfinite(value) else None
             except (ValueError, IndexError):
-                return 0.0
+                return None
+
+        price = num(3)
+        if price is None or price <= 0:
+            continue
+        data_time = None
+        try:
+            if re.fullmatch(r"[0-9]{14}", vals[30]):
+                data_time = datetime.strptime(vals[30], "%Y%m%d%H%M%S").replace(
+                    tzinfo=timezone(timedelta(hours=8))).isoformat()
+        except ValueError:
+            pass
 
         result[code] = {
             "name": vals[1],
-            "price": num(3),
+            "price": price,
+            "data_time": data_time,
+            "trade_date": data_time[:10] if data_time else None,
             "last_close": num(4),
             "open": num(5),
             "change_amt": num(31),
@@ -92,7 +108,8 @@ def _parse_gtimg(data: str) -> dict[str, dict]:
 def tencent_quote(codes: list[str]) -> dict[str, dict]:
     """批量个股实时行情：现价 / 涨跌 / PE / PB / 市值 / 换手 / 涨跌停。"""
     prefixed = [f"{get_prefix(c)}{c}" for c in codes]
-    return _parse_gtimg(_fetch_gtimg(prefixed))
+    parsed = _parse_gtimg(_fetch_gtimg(prefixed))
+    return {code: parsed[code] for code in codes if code in parsed}
 
 
 # A股大盘指数（前缀规则与个股不同，固定带前缀代码）

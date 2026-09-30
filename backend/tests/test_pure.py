@@ -32,6 +32,7 @@ def _gtimg_line(**overrides) -> str:
     # 构造一条腾讯行情返回行：v_sh600519="1~名~代码~价~..."（≥53 字段）。
     parts = ["0"] * 55
     parts[1] = overrides.get("name", "贵州茅台")
+    parts[2] = "600519"
     parts[3] = overrides.get("price", "1194.45")
     parts[39] = overrides.get("pe_ttm", "18.05")
     parts[44] = overrides.get("mcap", "15000")

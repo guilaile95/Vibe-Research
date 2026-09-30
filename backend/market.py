@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import time
+import copy
 from collections import Counter
 from concurrent.futures import Future
 from datetime import datetime, timezone, timedelta
@@ -346,7 +347,7 @@ _A_SHARE_SNAPSHOT_FLIGHT: Future | None = None
 _A_SHARE_SNAPSHOT_WAIT_SECONDS = 125  # 略长于上游 120 秒协作预算
 
 
-def get_a_share_snapshot() -> list[dict]:
+def get_a_share_snapshot_observation() -> dict:
     """全 A 股行情快照（共享缓存，TTL 同模块 5 分钟）。
 
     调用 ``astock.a_share_snapshot()``；空列表不缓存；异常向上抛出，不伪装成空市场。
@@ -358,7 +359,7 @@ def get_a_share_snapshot() -> list[dict]:
     with _A_SHARE_SNAPSHOT_LOCK:
         hit = _CACHE.get("a_share_snapshot")
         if hit and time.time() - hit[0] < _TTL:
-            return hit[1]
+            return copy.deepcopy(hit[1])
         flight = _A_SHARE_SNAPSHOT_FLIGHT
         leader = flight is None
         if leader:
@@ -366,15 +367,25 @@ def get_a_share_snapshot() -> list[dict]:
             _A_SHARE_SNAPSHOT_FLIGHT = flight
 
     if not leader:
-        return flight.result(timeout=_A_SHARE_SNAPSHOT_WAIT_SECONDS)
+        return copy.deepcopy(flight.result(timeout=_A_SHARE_SNAPSHOT_WAIT_SECONDS))
 
     try:
         snapshot = astock.a_share_snapshot()
+        # The source provides no authoritative market time. Retain the actual
+        # completed fetch instant separately; never re-stamp cache reads.
+        observed = datetime.now(BEIJING)
+        envelope = {
+            "rows": copy.deepcopy(snapshot),
+            "fetched_at": observed.strftime("%Y-%m-%d %H:%M:%S"),
+            "observed_at": observed.astimezone(timezone.utc).isoformat(),
+            "trade_date": None,
+            "data_time": None,
+        }
         if snapshot:
             with _A_SHARE_SNAPSHOT_LOCK:
-                _CACHE["a_share_snapshot"] = (time.time(), snapshot)
-        flight.set_result(snapshot)
-        return snapshot
+                _CACHE["a_share_snapshot"] = (time.time(), envelope)
+        flight.set_result(envelope)
+        return copy.deepcopy(envelope)
     except BaseException as exc:
         # 领先者中断也须唤醒本轮等待者，不留下永远 pending 的 Future。
         flight.set_exception(exc)
@@ -382,6 +393,11 @@ def get_a_share_snapshot() -> list[dict]:
     finally:
         with _A_SHARE_SNAPSHOT_LOCK:
             _A_SHARE_SNAPSHOT_FLIGHT = None
+
+
+def get_a_share_snapshot() -> list[dict]:
+    """Legacy rows API; each caller receives an isolated copy of the observation."""
+    return get_a_share_snapshot_observation()["rows"]
 
 
 def _stock_subset(s: dict, *, amount_required: bool) -> dict:
@@ -550,14 +566,15 @@ def _breadth_envelope(
     data: dict | None,
     warnings: list[str] | None = None,
     is_stale: bool = False,
+    observation: dict | None = None,
 ) -> dict:
     """市场广度统一状态信封（get_market_breadth 唯一出口形状）。"""
     return {
         "status": status,
         "source": _SOURCE,
-        "trade_date": None,
-        "data_time": None,
-        "fetched_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S"),
+        "trade_date": (observation or {}).get("trade_date"),
+        "data_time": (observation or {}).get("data_time"),
+        "fetched_at": (observation or {}).get("fetched_at"),
         "is_stale": is_stale,
         "warnings": list(warnings or []),
         "data": data,
@@ -599,12 +616,13 @@ def get_market_breadth() -> dict:
     - unavailable：空快照或获取/计算失败（data=None，不伪造全 0）
     """
     try:
-        snapshot = get_a_share_snapshot()
+        observation = get_a_share_snapshot_observation()
+        snapshot = observation["rows"]
     except Exception as e:  # noqa: BLE001 — 外部数据边界，转 unavailable
         return _breadth_envelope(
             "unavailable",
             data=None,
-            warnings=[f"全市场快照获取失败：{type(e).__name__}: {e}"],
+            warnings=["全市场快照暂不可用"],
             is_stale=False,
         )
 
@@ -622,7 +640,7 @@ def get_market_breadth() -> dict:
         return _breadth_envelope(
             "unavailable",
             data=None,
-            warnings=[f"全市场快照获取失败：{type(e).__name__}: {e}"],
+            warnings=["全市场快照暂不可用"],
             is_stale=False,
         )
 
@@ -641,12 +659,14 @@ def get_market_breadth() -> dict:
         return _breadth_envelope(
             "partial",
             data=breadth,
+            observation=observation,
             warnings=base_warns + partial_warns,
             is_stale=False,
         )
     return _breadth_envelope(
         "normal",
         data=breadth,
+        observation=observation,
         warnings=base_warns,
         is_stale=False,
     )
@@ -669,7 +689,10 @@ def get_cached_board_ranking(board_type: str) -> dict:
         raise ValueError(f"不支持的板块类型：{board_type}")
 
     def fetch():
-        return astock.board_ranking(board_type, top_n=_BOARD_CACHE_TOP_N)
+        result = astock.board_ranking(board_type, top_n=_BOARD_CACHE_TOP_N)
+        if isinstance(result, dict):
+            result = {**result, "fetched_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S")}
+        return result
 
     # valid：total>0 且有 ranked 才缓存；空/全不可用下次重试
     def _valid(raw) -> bool:
@@ -756,12 +779,14 @@ def get_board_ranking(board_type: str = "industry", top_n: int = 20) -> dict:
         return _breadth_envelope(
             "partial",
             data=data,
+            observation=raw,
             warnings=base_warns + [f"有 {unknown_count} 个板块缺少有效涨跌幅"],
             is_stale=False,
         )
     return _breadth_envelope(
         "normal",
         data=data,
+        observation=raw,
         warnings=base_warns,
         is_stale=False,
     )
@@ -802,7 +827,8 @@ def get_market_cloud(scope: str = "all", period: str = "today") -> dict:
         raise ValueError(f"不支持的周期：{period}（V1 仅支持 today）")
 
     try:
-        snapshot = get_a_share_snapshot()
+        observation = get_a_share_snapshot_observation()
+        snapshot = observation["rows"]
     except Exception:  # noqa: BLE001
         return _breadth_envelope(
             "unavailable",
@@ -907,5 +933,5 @@ def get_market_cloud(scope: str = "all", period: str = "today") -> dict:
         warnings.append(f"有 {len(no_industry)} 只股票无行业归属，未进入云图")
 
     if warnings:
-        return _breadth_envelope("partial", data=data, warnings=warnings, is_stale=False)
-    return _breadth_envelope("normal", data=data, warnings=[], is_stale=False)
+        return _breadth_envelope("partial", data=data, warnings=warnings, is_stale=False, observation=observation)
+    return _breadth_envelope("normal", data=data, warnings=[], is_stale=False, observation=observation)

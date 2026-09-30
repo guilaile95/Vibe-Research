@@ -47,7 +47,7 @@ export interface MarketCloudEnvelope {
   data: MarketCloudData | null;
   warnings: string[];
   is_stale: boolean;
-  fetched_at?: string;
+  fetched_at?: string | null;
   source?: string;
   trade_date?: string | null;
   data_time?: string | null;

@@ -139,6 +139,10 @@ def _kline_tencent(code: str, period: str, n: int) -> list[dict]:
     import requests
 
     prefix = astock.get_prefix(code)
+    if prefix == "bj":
+        # Tencent may return only the latest BSE bar, not requested history.
+        # Preserve the existing qualified daily-provider fallback.
+        raise ValueError("Tencent K-line history does not support BSE")
     sym = f"{prefix}{code}"
     r = requests.get(_TENCENT_KLINE, params={"param": f"{sym},{period},,,{n},qfq"},
                      headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
