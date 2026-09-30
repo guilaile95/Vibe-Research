@@ -198,3 +198,23 @@ def test_cancellation_between_tool_event_and_execution_skips_tool():
         with pytest.raises(chat.ModelTransportError, match='停止'):
             next(stream)
     execute.assert_not_called()
+
+
+@pytest.mark.parametrize('reason', ['length', 'content_filter', 'provider_cancelled'])
+@pytest.mark.parametrize('use_tools', [False, True])
+def test_pr353_abnormal_finish_contract_survives_done_marker(reason, use_tools):
+    terminal = ('data: ' + json.dumps({'choices': [{'delta': {}, 'finish_reason': reason}]}) + '\n').encode()
+    response = Response(frame({'content': 'incomplete'}), terminal, DONE)
+    events = []
+    with patch.object(chat, '_call_llm_stream', return_value=response):
+        with pytest.raises(chat.ModelTransportError):
+            for event in chat.stream_messages(CFG, [], use_tools=use_tools):
+                events.append(event)
+    assert not any(event['type'] == 'done' for event in events)
+    assert response.closed.is_set()
+
+
+@pytest.mark.parametrize('reason', [None, 'stop', 'tool_calls', 'function_call'])
+def test_pr353_compatible_gateway_and_tool_endings_remain_allowed(reason):
+    raw = ('data: ' + json.dumps({'choices': [{'delta': {}, 'finish_reason': reason}]})).encode()
+    assert chat._parse_sse_line(raw) == (False, {})

@@ -2249,7 +2249,15 @@ def announcements(code: str = Query(...)):
     if hit is not _CACHE_MISS:
         return {"data": hit}
     try:
-        data = astock.announcements(code)
+        data = astock.announcements(code, strict=True)
+        if not isinstance(data, list) or any(
+            not isinstance(row, dict)
+            or not isinstance(row.get("title"), str)
+            or not row["title"].strip()
+            or any(not isinstance(row.get(key), str) for key in ("date", "type", "url"))
+            for row in data
+        ):
+            raise ValueError("announcement provider returned malformed rows")
         _ANN_CACHE.set(code, data)
         try:
             import data_health_event_store as _dhes
@@ -2264,7 +2272,7 @@ def announcements(code: str = Query(...)):
             _dhes.safe_call(_dhes.record_failure, "announcements", "SOURCE_UNAVAILABLE")
         except Exception:
             pass
-        raise HTTPException(502, f"公告源异常：{e}") from e
+        raise HTTPException(502, "公告暂时无法加载，请稍后重试。") from e
 
 
 _FIN_CACHE = TTLCache()
@@ -2340,11 +2348,20 @@ def news(code: str = Query(...), limit: int = Query(20, ge=1, le=50)):
     """个股新闻（东财，需 akshare）。"""
     code = _validate(code)
     try:
-        return {"data": astock.stock_news(code, limit=limit)}
+        data = astock.stock_news(code, limit=limit, strict=True)
+        if not isinstance(data, list) or any(
+            not isinstance(row, dict)
+            or not isinstance(row.get("新闻标题"), str)
+            or not row["新闻标题"].strip()
+            or any(key in row and not isinstance(row[key], str) for key in ("发布时间", "文章来源", "新闻链接"))
+            for row in data
+        ):
+            raise ValueError("news provider returned malformed rows")
+        return {"data": data}
     except astock.DependencyMissing as e:
-        raise HTTPException(501, str(e)) from e
+        raise HTTPException(501, "新闻服务缺少 akshare 依赖，请安装后重试。") from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"新闻源异常：{e}") from e
+        raise HTTPException(502, "新闻暂时无法加载，请稍后重试。") from e
 
 
 @app.get("/api/info")

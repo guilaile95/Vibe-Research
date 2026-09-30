@@ -20,6 +20,8 @@ import { ApiError } from "@/lib/api";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { storageGet, storageSet, storageRemove } from "@/lib/storage";
 import { parseReportChatCoverage } from "@/lib/reportChatCoverage";
+import { applyChatToolResult, chatToolStatusLabel, parseStoredChatTools, type ChatToolUse } from "@/lib/chatToolStatus";
+import { parseNoteResearchMetadata, type NoteResearchMetadata } from "@/lib/researchNote";
 
 // 对话持久化。此前 msgs 只是组件内的 useState：切页面卸载、刷新、
 // 关标签页，问过的东西全没了——每轮对话是花了自己 API 额度换来的，丢掉的是真金白银。
@@ -34,14 +36,20 @@ const MAX_PERSISTED_MSGS = 40;
 const MAX_PERSISTED_CHARS = 80_000;
 
 type StoredMsg = ChatMsg & {
-  tools?: ToolUse[];
+  tools?: ChatToolUse[];
   sources?: ChatReportSource[];
   coverage?: ChatReportCoverage;
+  noteMetadata?: NoteResearchMetadata;
   // 流式中途被中止、只收到半截的回答。**不落盘、也不进下一轮 history**：
   // 否则刷新后它会以「完整回答」的身份被喂回模型，后续推理建立在残句上。
   // UI 仍然显示，用户能看到已经拿到的部分。
   partial?: boolean;
 };
+
+function loadNoteMetadata(value: unknown): NoteResearchMetadata | undefined {
+  try { return value === undefined ? undefined : parseNoteResearchMetadata(value); }
+  catch { return undefined; } // A damaged optional note link must not erase the conversation.
+}
 
 function loadChat(key: string): StoredMsg[] {
   const raw = storageGet(key);
@@ -56,6 +64,8 @@ function loadChat(key: string): StoredMsg[] {
         (m.role === "user" || m.role === "assistant"),
     ).map((m) => ({
       ...m,
+      tools: parseStoredChatTools(m.tools),
+      noteMetadata: loadNoteMetadata(m.noteMetadata),
       coverage: parseReportChatCoverage(m.coverage),
       sources: Array.isArray(m.sources) ? m.sources.filter(
         (source) => source && typeof source.report_id === "string" &&
@@ -129,6 +139,8 @@ interface Props {
   // ⚠️ 不换路由就能换标的的页面（如个股页）必须传入已解析的代码，否则对话会串台。
   scopeKey?: string;
   reportIds?: string[];
+  initialQuestion?: string;
+  noteMetadata?: NoteResearchMetadata;
 }
 
 const TOOL_LABEL: Record<string, string> = {
@@ -144,9 +156,7 @@ const argStr = (a: Record<string, unknown>): string => {
   return "";
 };
 
-interface ToolUse { name: string; arg: string }
-
-export function AskAiButton({ context, suggestions = [], label = "问 AI", scopeKey, reportIds = [] }: Props) {
+export function AskAiButton({ context, suggestions = [], label = "问 AI", scopeKey, reportIds = [], initialQuestion, noteMetadata }: Props) {
   const { pathname } = useLocation();
   const selectedLlm = loadLlm();
   const isCodexRuntime = selectedLlm?.provider === "cli-codex";
@@ -211,6 +221,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     abortRef.current?.abort();
     abortRef.current = null;
     setLoading(false);
+    setInput("");
     setEpoch(loadEpoch(chatKey));
     setChat({ key: chatKey, msgs: loadChat(chatKey) });
   }, [chatKey]);
@@ -281,7 +292,8 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     setMsgs([
       ...visibleHistory,
       { role: "user", content: q },
-      { role: "assistant", content: "", tools: [], partial: true },
+      { role: "assistant", content: "", tools: [], partial: true,
+        noteMetadata: noteMetadata ? loadNoteMetadata({ ...noteMetadata, question: q }) : undefined },
     ]);
     setLoading(true);
     const patchLast = (fn: (msg: StoredMsg) => StoredMsg) =>
@@ -295,7 +307,8 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     const alive = () => abortRef.current === ac && !ac.signal.aborted;
     try {
       await chatStream(history, context, {
-        onTool: (tool, args) => { if (alive()) patchLast((msg) => ({ ...msg, tools: [...(msg.tools || []), { name: tool, arg: argStr(args) }] })); },
+        onTool: (tool, args, callId) => { if (alive()) patchLast((msg) => ({ ...msg, tools: [...(msg.tools || []), { name: tool, arg: argStr(args), callId, status: "pending", truncated: false }] })); },
+        onToolResult: (result) => { if (alive()) patchLast((msg) => ({ ...msg, tools: applyChatToolResult(msg.tools || [], result) })); },
         onSources: (items, coverage) => { if (alive()) patchLast((msg) => ({ ...msg, sources: items, coverage })); },
         onDelta: (t) => { if (alive()) patchLast((msg) => ({ ...msg, content: msg.content + t })); },
       }, ac.signal, session, reportIds);
@@ -334,7 +347,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     <>
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={() => { if (initialQuestion !== undefined) setInput(initialQuestion); setOpen(true); }}
         className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-muted/90 px-3.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
       >
         <Sparkles className="h-3.5 w-3.5" />
@@ -435,7 +448,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                                 {m.tools.map((t, j) => (
                                   <span key={j} className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-[10px] text-muted-foreground">
                                     <Wrench className="h-2.5 w-2.5" />
-                                    {TOOL_LABEL[t.name] || t.name}{t.arg ? ` ${t.arg}` : ""}
+                                    {TOOL_LABEL[t.name] || t.name}{t.arg ? ` ${t.arg}` : ""} · {chatToolStatusLabel(t, loading && i === msgs.length - 1)}
                                   </span>
                                 ))}
                               </div>
@@ -448,6 +461,9 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                                 <div className="prose prose-sm dark:prose-invert max-w-none break-words text-foreground">
                                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
                                 </div>
+                                {m.partial && !(loading && i === msgs.length - 1) && (
+                                  <p className="mt-2 text-xs text-amber-600">回答未完成，不会作为完整记录保存或用于下一轮对话</p>
+                                )}
                                 {(m.coverage || (m.sources && m.sources.length > 0)) && (
                                   <div className="mt-3 break-words rounded-xl border border-border/50 bg-muted/40 p-3 text-xs text-muted-foreground">
                                     <p className="mb-1 font-medium text-foreground">检索依据</p>
@@ -477,8 +493,9 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                             ) : (
                               <p className="whitespace-pre-wrap break-words">{m.content}</p>
                             )}
-                            {m.content && !(loading && i === msgs.length - 1) && (
-                              <div className="mt-2"><SaveNoteButton kind="问AI" title={`问 AI · ${msgs[i - 1]?.content?.slice(0, 24) || "对话"}`} content={m.content} /></div>
+                            {m.content && !m.partial && !(loading && i === msgs.length - 1) && (
+                              <div className="mt-2"><SaveNoteButton kind="问AI" title={`问 AI · ${msgs[i - 1]?.content?.slice(0, 24) || "对话"}`} content={m.content}
+                                metadata={m.noteMetadata} /></div>
                             )}
                           </div>
                         )}

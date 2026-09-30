@@ -1,6 +1,6 @@
 // 用户 LLM 配置（只存本地 localStorage，不上传、不进仓库）+ 系统 AI 对话调用。
 
-import { ApiError, request, streamNdjson, type NdjsonStreamResult, type ReportChatSource, type ReportChatCoverage } from "./api.ts";
+import { ApiError, request, streamNdjson, type NdjsonStreamResult, type ReportChatSource, type ReportChatCoverage, type ChatToolResult } from "./api.ts";
 import { isCliProvider, type ProviderId } from "./ai-models.ts";
 import { storageSetChecked, storageRemoveChecked } from "./storage.ts";
 
@@ -57,7 +57,8 @@ export function hasLlm(): boolean {
 
 export interface ChatHandlers {
   onDelta?: (text: string) => void;             // 答案逐块吐字
-  onTool?: (tool: string, args: Record<string, unknown>) => void; // AI 调了某数据工具
+  onTool?: (tool: string, args: Record<string, unknown>, callId?: string) => void;
+  onToolResult?: (result: ChatToolResult) => void;
   onSources?: (items: ChatReportSource[], coverage?: ChatReportCoverage) => void;
 }
 

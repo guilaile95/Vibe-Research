@@ -54,7 +54,7 @@ _PARALLEL_WORKERS = 4
 
 # 判空时要跳过的「元信息」字段：它们描述数据本身，不构成观测值。
 # 少了这一步，`{"period":"近5年","metrics":{}}` 会因为 period 非空而被当成有数据。
-_META_KEYS = {"period", "unit", "note", "code", "generated_at", "tracks", "total_cached"}
+_META_KEYS = tools.PAYLOAD_META_KEYS
 
 # 注意措辞：这类项返回空时，代码分不出「真的没有这类事件」还是「数据源临时不可用」，
 # 所以不能断言「确实没有」——如实说明两种可能，并要求不得臆测。
@@ -62,33 +62,8 @@ NO_RECORD = "（未取到任何记录：可能确实没有此类事件，也可�
 
 
 def _payload_empty(value) -> bool:
-    """判断「有壳无肉」：剥掉元信息字段后没有任何实质观测值。
-
-    只看顶层是不够的——上游失败时工具常返回带外壳的空结果，例如估值分位在两个请求
-    都失败时返回 `{"period":"近5年","metrics":{}}`。若把它当成功，底稿会凭空多出一个
-    空小节、还不进缺口列表，模型就可能对着空壳发挥。
-    """
-    if value is None or value == "" or value == [] or value == {}:
-        return True
-    if isinstance(value, list):
-        return all(_payload_empty(x) for x in value)
-    if isinstance(value, dict):
-        for k, v in value.items():
-            if k in _META_KEYS:
-                continue
-            if isinstance(v, (list, dict)):
-                if not _payload_empty(v):
-                    return False
-            elif isinstance(v, bool):
-                if v:
-                    return False
-            elif isinstance(v, (int, float)):
-                if v:  # 0 视为无内容（如 total_blocks=0）
-                    return False
-            elif v:
-                return False
-        return True
-    return False  # 非空标量
+    """Compatibility entry point: preserve debate's existing count semantics."""
+    return tools.payload_empty(value, metadata_keys=_META_KEYS, zero_is_empty=True)
 
 
 def _fetch_section(spec: tuple[str, dict, str, bool, bool], code: str) -> dict:

@@ -220,11 +220,33 @@ def profit_forecast(code: str) -> list[dict]:
     return df.to_dict("records") if df is not None and not df.empty else []
 
 
-def stock_news(code: str, limit: int = 20) -> list[dict]:
-    """个股新闻（东财）。"""
+def stock_news(code: str, limit: int = 20, *, strict: bool = False) -> list[dict]:
+    """个股新闻（东财）；strict 区分合法空结果与缺失/畸形源响应。"""
     ak = _akshare()
     df = ak.stock_news_em(symbol=code)
-    return df.head(limit).to_dict("records") if df is not None and not df.empty else []
+    if not strict:
+        return df.head(limit).to_dict("records") if df is not None and not df.empty else []
+
+    # akshare already depends on pandas; keep the import lazy for other providers.
+    from pandas import DataFrame
+
+    if isinstance(df, list):
+        rows = df[:limit]
+    elif isinstance(df, DataFrame):
+        if len(df.index) and "新闻标题" not in df.columns:
+            raise ValueError("news provider response missing title column")
+        rows = df.head(limit).to_dict("records")
+    else:
+        raise ValueError("news provider response missing records")
+    if any(
+        not isinstance(row, dict)
+        or not isinstance(row.get("新闻标题"), str)
+        or not row["新闻标题"].strip()
+        or any(key in row and not isinstance(row[key], str) for key in ("发布时间", "文章来源", "新闻链接"))
+        for row in rows
+    ):
+        raise ValueError("news provider response contains malformed rows")
+    return rows
 
 
 def individual_info(code: str) -> dict:

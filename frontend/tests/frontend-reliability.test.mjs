@@ -7,6 +7,7 @@ import * as notes from '../src/lib/notes.ts';
 import * as llm from '../src/lib/llm.ts';
 import * as apiClient from '../src/lib/api.ts';
 import * as models from '../src/lib/ai-models.ts';
+import * as researchNote from '../src/lib/researchNote.ts';
 
 // Component behavior in a deterministic hook runner: real TSX handlers/effects and
 // storage modules, mocked network/UI dependencies. No browser or real credentials.
@@ -25,10 +26,12 @@ function harness(path, name, overrides = {}) {
     },
   };
   const generic = new Proxy({}, { get: (_, key) => key === '__esModule' ? true : key === 'default' ? 'stub' : () => null });
+  const searchParams = new URLSearchParams();
   const mods = {
     react: React,
+    'react-router-dom': { useSearchParams: () => [searchParams, () => {}], Link: 'link' },
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }), Fragment: 'fragment' },
-    '@/lib/api': apiClient, '@/lib/notes': notes, ...overrides,
+    '@/lib/api': apiClient, '@/lib/notes': notes, '@/lib/researchNote': researchNote, ...overrides,
   };
   const exports = {};
   const js = ts.transpileModule(readFileSync(new URL('../src/' + path, import.meta.url), 'utf8'), {
@@ -36,7 +39,7 @@ function harness(path, name, overrides = {}) {
   }).outputText;
   vm.runInNewContext(js, {
     exports, require: name => mods[name] ?? generic, AbortController, DOMException, Error, console, URLSearchParams, Map, Set, Date,
-    window: { setTimeout: fn => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id) }, confirm: () => true,
+    window: { setTimeout: fn => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), addEventListener() {}, removeEventListener() {} }, confirm: () => true,
   }, { filename: path });
   return {
     render(props = {}) { cursor = 0; const tree = exports[name](props); const current = pending; pending = []; current.forEach(fn => fn()); return tree; },
@@ -348,4 +351,83 @@ test('leaving Notes aborts reflection and ignores late callbacks', async () => {
   callbacks.onDelta('STALE REFLECTION'); callbacks.onError('STALE ERROR');
   d.resolve(); await pending;
   assert.doesNotMatch(label(h.render()), /STALE/);
+});
+
+test('candidate research explicitly selects sources, saves tentative notes, and resumes from the same stock context', () => {
+  const record = { id:'synthetic-evidence', subject_type:'stock', subject_id:'600519', deleted:0, claim:'Synthetic uncertainty', source_title:'Synthetic source', source_date:null, source_url:'https://example.com/research', classification:'unknown', confidence:'low' };
+  const returnTo = '/candidates/600519?return_to=%2Fscreener%3Fstrategy%3DSWING';
+  const props = { code:'600519', records:[record], evidenceStatus:'ready', returnTo, suggestedQuestion:'What should be checked?' };
+  const h = harness('components/campaign/CandidateResearchNote.tsx', 'CandidateResearchNote');
+  let tree = h.render(props);
+  let ai = nodes(tree).find(node => node.props?.scopeKey === '600519');
+  assert.match(ai.props.context, /没有选择证据/);
+  assert.doesNotMatch(ai.props.context, /Synthetic uncertainty/);
+  nodes(tree).find(node => node.type === 'input' && node.props.type === 'checkbox').props.onChange({target:{checked:true}});
+  find(tree, 'button', '使用建议问题').props.onClick();
+  tree = h.render(props);
+  ai = nodes(tree).find(node => node.props?.scopeKey === '600519');
+  assert.match(ai.props.context, /Synthetic uncertainty/);
+  assert.equal(ai.props.initialQuestion, 'What should be checked?');
+  assert.equal(ai.props.noteMetadata.sourceLinks[0].url, record.source_url);
+  nodes(tree).find(node => node.type === 'textarea' && node.props.placeholder.includes('下次打开')).props.onChange({target:{value:'Check the actual filing'}});
+  tree = h.render(props);
+  find(tree, 'button', '保存暂定研究').props.onClick();
+  tree = h.render(props);
+  assert.match(label(tree), /已保存暂定研究/);
+  assert.match(label(tree), /Check the actual filing/);
+  const saved = notes.loadNotes()[0];
+  assert.equal(saved.research.securityCode, '600519');
+  assert.equal(saved.research.question, 'What should be checked?');
+  assert.equal(saved.research.nextQuestion, 'Check the actual filing');
+  assert.equal(saved.research.returnTo, returnTo + '#candidate-research-note');
+  const reloaded = harness('components/campaign/CandidateResearchNote.tsx', 'CandidateResearchNote');
+  assert.match(label(reloaded.render(props)), /Check the actual filing/);
+  assert.doesNotMatch(label(harness('components/campaign/CandidateResearchNote.tsx', 'CandidateResearchNote').render({...props, code:'000001'})), /Check the actual filing/);
+  const params = new URLSearchParams({security_code:'600519', note:saved.id});
+  const notebook = harness('pages/Notes.tsx', 'Notes', {'react-router-dom':{useSearchParams:()=>[params,()=>{}], Link:'link'}});
+  const noteTree = notebook.render();
+  assert.match(label(noteTree), /用户暂定记录，尚未核验/);
+  assert.equal(find(noteTree, 'link', '回到当时的研究位置').props.to, saved.research.returnTo);
+});
+
+test('candidate note save failure stays retryable and never claims a record was saved', () => {
+  const h = harness('components/campaign/CandidateResearchNote.tsx', 'CandidateResearchNote');
+  const props = {code:'600519', records:[], evidenceStatus:'error', returnTo:'/candidates/600519'};
+  let tree = h.render(props);
+  assert.match(label(tree), /证据读取失败/);
+  nodes(tree).find(node => node.type === 'textarea' && node.props.placeholder.includes('目前')).props.onChange({target:{value:'Tentative user view'}});
+  tree = h.render(props);
+  globalThis.localStorage = {...workingStorage, setItem(){throw Error('quota');}};
+  find(tree, 'button', '保存暂定研究').props.onClick();
+  tree = h.render(props);
+  assert.match(label(tree), /无法保存/);
+  assert.doesNotMatch(label(tree), /已保存暂定研究/);
+  assert.equal(notes.loadNotes().length, 0);
+  globalThis.localStorage = workingStorage;
+  find(tree, 'button', '保存暂定研究').props.onClick();
+  assert.equal(notes.loadNotes().length, 1);
+});
+
+test('reflection of a stock-tagged note stays in the filtered research context without becoming a user conclusion', async () => {
+  const metadata = {securityCode:'600519', question:'Original question', sourceLinks:[{title:'Synthetic source', url:'https://example.com/source'}], returnTo:'/candidates/600519#candidate-research-note', tentativeView:'User view', nextQuestion:'User next step'};
+  const saved = notes.addNote('暂定研究', 'Stock-tagged note', 'Synthetic user view', metadata)[0];
+  const params = new URLSearchParams({security_code:'600519', note:saved.id});
+  const h = harness('pages/Notes.tsx', 'Notes', {
+    'react-router-dom':{useSearchParams:()=>[params,()=>{}], Link:'link'},
+    '@/lib/agents':{reflectStream:async (_content, _title, handlers)=>handlers.onDelta('Synthetic AI audit')},
+  });
+  await find(h.render(), 'button', '反思审计').props.onClick();
+  find(h.render(), 'button', '把审计结果存为新记录').props.onClick();
+  assert.match(label(h.render()), /反思 · Stock-tagged note/);
+  const audit = notes.loadNotes()[0];
+  assert.equal(audit.kind, '反思审计');
+  assert.equal(audit.research.securityCode, '600519');
+  assert.equal(audit.research.question, metadata.question);
+  assert.deepEqual(audit.research.sourceLinks, metadata.sourceLinks);
+  assert.equal(audit.research.returnTo, metadata.returnTo);
+  assert.equal(audit.research.tentativeView, undefined);
+  assert.equal(audit.research.nextQuestion, undefined);
+  const candidate = harness('components/campaign/CandidateResearchNote.tsx', 'CandidateResearchNote');
+  const tree = candidate.render({code:'600519', records:[], evidenceStatus:'ready', returnTo:'/candidates/600519'});
+  assert.match(label(tree), /反思 · Stock-tagged noteAI 原文，未经用户确认/);
 });

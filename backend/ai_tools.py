@@ -123,6 +123,31 @@ TOOLS: list[dict] = [
 
 TOOL_NAMES = [t["function"]["name"] for t in TOOLS]
 
+# Shared structural-empty detection. Debate retains its historical summary-count
+# semantics; chat explicitly treats real zero/false observations as data.
+PAYLOAD_META_KEYS = frozenset({"period", "unit", "note", "code", "generated_at", "tracks", "total_cached"})
+
+
+def payload_empty(value, *, metadata_keys=PAYLOAD_META_KEYS, zero_is_empty=True) -> bool:
+    if value is None or value == "" or value == [] or value == {}:
+        return True
+    if isinstance(value, list):
+        return all(payload_empty(item, metadata_keys=metadata_keys, zero_is_empty=zero_is_empty) for item in value)
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in metadata_keys:
+                continue
+            if isinstance(item, (list, dict)):
+                if not payload_empty(item, metadata_keys=metadata_keys, zero_is_empty=zero_is_empty):
+                    return False
+            elif isinstance(item, (bool, int, float)):
+                if item or not zero_is_empty:
+                    return False
+            elif item:
+                return False
+        return True
+    return False
+
 
 # ——— 各工具的执行实现（裁剪逻辑集中在这里） ———
 

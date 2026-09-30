@@ -290,3 +290,117 @@ def test_chat_no_hits_discloses_reasons_and_empty_selection_never_recalls(tmp_pa
     response = client.post("/api/chat", json={**body, "report_ids": []})
     assert [json.loads(line) for line in response.text.splitlines()] == [{"type": "done"}]
     assert seen[1] == "page"
+
+
+@pytest.mark.parametrize("question,topic", [
+    ("比较这两份报告对毛利率的分歧", "毛利率"),
+    ("请比较一下这两份研报在毛利率判断上的分歧？", "毛利率"),
+    ("这两份报告对毛利率有何不同？", "毛利率"),
+    ("对比所选报告中的毛利率", "毛利率"),
+    ("请帮我分析已选中的报告关于毛利率的观点。", "毛利率"),
+    ("上述资料在毛利率上是否一致？", "毛利率"),
+    ("请帮我总结这份报告里的毛利率变化", "毛利率"),
+    ("两篇研报对收入增长的判断有什么区别", "收入增长"),
+    ("这两份报告怎么看毛利率", "毛利率"),
+])
+def test_chinese_report_question_search_preserves_selected_sources(tmp_path, monkeypatch, question, topic):
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "reports")
+    # Isolate retrieval from Chinese PDF font encoding. PDF extraction itself is
+    # exercised above; these synthetic extracted pages have explicit provenance.
+    monkeypatch.setattr(fulltext, "_extract_pdf", lambda _path: (
+        fulltext.STATUS_SEARCHABLE,
+        [(1, "公司历史概况"), (2, "毛利率预计上升至 35%，因产品结构改善。收入增长预计 20%。")],
+        2, "",
+    ))
+    bullish = _upload("乐观报告.pdf", _pdf("overview", "synthetic Chinese extraction"))
+    bearish = _upload("谨慎报告.md", "毛利率预计下降至 20%，因价格竞争加剧。收入增长预计 8%。".encode())
+    unrelated = _upload("无关报告.md", "报告的观点分歧：库存周期尚未见底。".encode())
+    private = _upload("未选中报告.md", ("毛利率 " * 20 + "PRIVATE_UNSELECTED").encode())
+    selected = [bullish["id"], bearish["id"], unrelated["id"]]
+
+    hits = mr.search_report_text(question, report_ids=selected)
+    assert {(hit["report_id"], hit["page"]) for hit in hits} == {
+        (bullish["id"], 2), (bearish["id"], None),
+    }
+    assert all(topic in hit["snippet"] for hit in hits)
+    assert hits == mr.search_report_text(topic, report_ids=selected)
+    context, sources, coverage = mr.build_chat_report_context(hits, report_ids=selected)
+    assert {(source["title"], source["page"]) for source in sources} == {("乐观报告", 2), ("谨慎报告", None)}
+    assert coverage["selected_count"] == 3 and coverage["included_report_count"] == 2
+    assert coverage["uncovered_reports"][0]["report_id"] == unrelated["id"]
+    assert coverage["uncovered_reports"][0]["reason"] == "NO_MATCH"
+    assert "覆盖不足时明确比较不完整" in context
+    assert private["id"] not in context and "PRIVATE_UNSELECTED" not in context
+
+
+@pytest.mark.parametrize("provider", ["api", "cli-codex"])
+def test_chinese_comparison_reaches_both_chat_providers(tmp_path, monkeypatch, provider):
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "reports")
+    bullish = _upload("乐观报告.md", "毛利率预计上升，因产品结构改善。".encode())
+    bearish = _upload("谨慎报告.md", "毛利率预计下降，因价格竞争加剧。".encode())
+    missing = _upload("缺少该主题.md", "仅讨论库存。".encode())
+    private = _upload("未选中报告.md", "毛利率 PRIVATE_UNSELECTED".encode())
+    seen = []
+
+    def api_stream(_cfg, _messages, context):
+        seen.append(context)
+        yield {"type": "done"}
+
+    def codex_stream(**kwargs):
+        seen.append(kwargs["context"])
+        yield {"type": "done"}
+
+    monkeypatch.setattr(app_module.chat_layer, "run_chat_stream", api_stream)
+    monkeypatch.setattr(app_module.agent_runtime, "stream_chat", codex_stream)
+    monkeypatch.setattr(app_module.agent_runtime, "status", lambda: {"available": True, "status": "connected"})
+    response = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "比较这两份报告对毛利率的分歧"}],
+        "session": "chinese-reports-test",
+        "report_ids": [bullish["id"], bearish["id"], missing["id"]],
+        "llm": {"provider": provider, "model": "test", "baseURL": "https://example.com", "apiKey": "x"},
+    })
+    assert response.status_code == 200
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert events[-1] == {"type": "done"}
+    assert {source["report_id"] for source in events[0]["items"]} == {bullish["id"], bearish["id"]}
+    coverage = events[0]["coverage"]
+    assert coverage["included_report_count"] == 2 and coverage["excerpt_only"] is True
+    assert coverage["uncovered_reports"][0]["reason"] == "NO_MATCH"
+    assert len(seen) == 1 and "毛利率预计上升" in seen[0] and "毛利率预计下降" in seen[0]
+    assert "不代表已读取报告全文" in seen[0]
+    assert private["id"] not in response.text + seen[0] and "PRIVATE_UNSELECTED" not in seen[0]
+
+
+def test_chinese_question_expansion_is_bounded_and_requires_selection(tmp_path, monkeypatch):
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "reports")
+    report = _upload("selected.md", "毛利率稳定。汇兑差异较小。报告观点存在分歧。".encode())
+    _upload("unselected.md", "偿债能力良好。毛利率 净利润 PRIVATE_UNSELECTED".encode())
+    selected = [report["id"]]
+    question = "比较这两份报告对毛利率的分歧"
+
+    # Neither omitting the scope nor passing an empty/unknown selection may
+    # enable question expansion across the report library.
+    assert mr.search_report_text(question) == []
+    assert mr.search_report_text(question, report_ids=[]) == []
+    assert mr.search_report_text("毛利率", report_ids=[]) == []
+    assert mr.search_report_text(question, report_ids=["deleted"]) == []
+    assert len(mr.search_report_text("毛利率")) == 2  # Library keyword search is unchanged.
+    assert mr.search_report_text("比较这两份报告对偿债能力的分歧", report_ids=selected) == []
+    for unsupported in ["比较这两份报告的分歧", "总结这份报告的主要内容", "那它们呢？", "我想知道毛利率会怎么样"]:
+        assert fulltext._search_terms(unsupported, selected_reports=True) == unsupported.split()
+        assert mr.search_report_text(unsupported, report_ids=selected) == []
+    assert mr.search_report_text("比较这两份报告对毛利率，偿债能力的分歧", report_ids=selected) == []
+    assert mr.search_report_text("毛利率 净利润", report_ids=selected) == []  # Keep AND semantics.
+    assert mr.search_report_text("比较这两份报告对毛利率 净利润的分歧", report_ids=selected) == []
+    assert len(mr.search_report_text("请分析这两份报告的汇兑差异", report_ids=selected)) == 1
+
+    both = _upload("selected-both.md", "毛利率与净利润均稳定。".encode())
+    for separator in [" ", "和", "与", "以及", "、", "，"]:
+        combined = f"比较所选报告对毛利率{separator}净利润的分歧"
+        hits = mr.search_report_text(combined, report_ids=[*selected, both["id"]])
+        assert [hit["report_id"] for hit in hits] == [both["id"]]
+    assert mr.search_report_text("比较所选报告对毛利率和不存在主题的分歧", report_ids=selected) == []
+
+    for topic in ["率", "毛利率" * 30, " ".join([f"主题{i}" for i in range(9)])]:
+        bounded = f"比较这两份报告对{topic}的分歧"
+        assert fulltext._search_terms(bounded, selected_reports=True) == bounded.split()

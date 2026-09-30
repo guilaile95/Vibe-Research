@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Activity, AlertCircle, ExternalLink, FileText, Flame, Loader2, Newspaper, RefreshCw, Star, TrendingUp } from "lucide-react";
 import MarketIntelPanel from "@/components/market/MarketIntelPanel";
@@ -24,100 +24,121 @@ const TABS = [
 interface FeedRow { code: string; name: string; when: string; title: string; meta?: string; url?: string }
 const MAX_ROWS = 60;
 
-function WatchlistFeed({ kind }: { kind: "filings" | "news" }) {
-  const [codes, setCodes] = useState<string[]>([]);
-  const [rows, setRows] = useState<FeedRow[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [depNote, setDepNote] = useState<string | null>(null);
+type FeedKind = "filings" | "news";
+interface FeedState {
+  kind: FeedKind;
+  status: "loading" | "ready" | "partial" | "error" | "watchlist-empty";
+  codes: string[];
+  rows: FeedRow[];
+  error: string | null;
+}
 
-  const load = useCallback(async (nextCodes: string[]) => {
-    if (!nextCodes.length) { setRows([]); return; }
-    setLoading(true);
-    setErr(null);
-    setDepNote(null);
+const loadingFeed = (kind: FeedKind): FeedState => ({ kind, status: "loading", codes: [], rows: [], error: null });
+
+function validFeedItems(items: unknown, kind: FeedKind): items is Announcement[] | NewsItem[] {
+  if (!Array.isArray(items)) return false;
+  const titleKey = kind === "filings" ? "title" : "新闻标题";
+  const textKeys = kind === "filings" ? ["date", "type", "url"] : ["发布时间", "文章来源", "新闻链接"];
+  return items.every((item) => item && typeof item === "object"
+    && typeof item[titleKey] === "string" && item[titleKey].trim()
+    && textKeys.every((key) => (kind === "news" && !(key in item)) || typeof item[key] === "string"));
+}
+
+export function WatchlistFeed({ kind }: { kind: FeedKind }) {
+  const [state, setState] = useState<FeedState>(() => loadingFeed(kind));
+  const requestId = useRef(0);
+  // A tab switch must not display the preceding feed while its effect is pending.
+  const current = state.kind === kind ? state : loadingFeed(kind);
+  const { codes, rows, error } = current;
+  const loading = current.status === "loading";
+  const label = kind === "filings" ? "公告" : "新闻";
+
+  const refresh = useCallback(async () => {
+    const request = ++requestId.current;
+    const isCurrent = () => requestId.current === request;
+    setState(loadingFeed(kind));
+    let nextCodes: string[];
     try {
-      const nameOf: Record<string, string> = {};
-      try {
-        const quotes = await api.quote(nextCodes.join(","));
-        for (const code of nextCodes) if (quotes[code]?.name) nameOf[code] = quotes[code].name;
-      } catch {
-        // A missing quote name does not block public filings or news.
+      const result = await loadWatchAuthoritative();
+      if (!isCurrent()) return;
+      if (result.status !== "valid" && result.status !== "not_configured") {
+        setState({ ...loadingFeed(kind), status: "error", error: "关注列表无法读取，请到「今天」检查后重试。" });
+        return;
       }
+      if (!Array.isArray(result.codes) || result.codes.some((code) => typeof code !== "string" || !/^\d{6}$/.test(code))) {
+        throw new Error("Invalid watchlist response");
+      }
+      nextCodes = result.codes;
+    } catch {
+      if (isCurrent()) setState({ ...loadingFeed(kind), status: "error", error: "关注列表加载失败，请重试。" });
+      return;
+    }
+    if (!nextCodes.length) {
+      setState({ ...loadingFeed(kind), status: "watchlist-empty" });
+      return;
+    }
+    setState({ ...loadingFeed(kind), codes: nextCodes });
 
-      const output: FeedRow[] = [];
+    // Quote names are optional; fetch independently without delaying feed requests.
+    const [quotes, results] = await Promise.all([
+      api.quote(nextCodes.join(",")).catch(() => null),
+      Promise.allSettled(nextCodes.map(async (code) => {
+        const items = kind === "filings" ? await api.announcements(code) : await api.news(code);
+        if (!validFeedItems(items, kind)) throw new Error("Invalid feed response");
+        return { code, items };
+      })),
+    ]);
+    if (!isCurrent()) return;
+
+    const output: FeedRow[] = [];
+    let failures = 0;
+    let dependencies = 0;
+    for (const result of results) {
+      if (result.status === "rejected") {
+        failures += 1;
+        if (result.reason instanceof ApiError && result.reason.status === 501) dependencies += 1;
+        continue;
+      }
+      const { code, items } = result.value;
+      const quoteName = quotes?.[code]?.name;
+      const name = typeof quoteName === "string" && quoteName ? quoteName : code;
       if (kind === "filings") {
-        const results = await Promise.all(
-          nextCodes.map((code) => api.announcements(code).then((announcements) => ({ code, announcements })).catch(() => ({ code, announcements: [] as Announcement[] }))),
-        );
-        for (const { code, announcements } of results) {
-          for (const announcement of announcements) {
-            output.push({
-              code,
-              name: nameOf[code] || code,
-              when: announcement.date,
-              title: announcement.title.replace(/^[^:：]*[:：]/, ""),
-              meta: announcement.type,
-              url: announcement.url,
-            });
-          }
+        for (const item of items as Announcement[]) {
+          output.push({ code, name, when: item.date, title: item.title.replace(/^[^:：]*[:：]/, ""), meta: item.type, url: item.url });
         }
       } else {
-        let dependencyError: string | null = null;
-        const results = await Promise.all(
-          nextCodes.map((code) => api.news(code).then((news) => ({ code, news })).catch((cause) => {
-            if (cause instanceof ApiError && cause.status === 501) dependencyError = cause.message;
-            return { code, news: [] as NewsItem[] };
-          })),
-        );
-        for (const { code, news } of results) {
-          for (const item of news) {
-            output.push({ code, name: nameOf[code] || code, when: item.发布时间 || "", title: item.新闻标题 || "", url: item.新闻链接 });
-          }
+        for (const item of items as NewsItem[]) {
+          output.push({ code, name, when: item.发布时间 || "", title: item.新闻标题 || "", url: item.新闻链接 });
         }
-        if (dependencyError && output.length === 0) setDepNote(dependencyError);
       }
-
-      const timestamp = (value: string) => {
-        const raw = (value || "").trim();
-        let result = Date.parse(raw);
-        if (Number.isNaN(result)) result = Date.parse(raw.replace(" ", "T"));
-        return Number.isNaN(result) ? 0 : result;
-      };
-      output.sort((left, right) => timestamp(right.when) - timestamp(left.when));
-      setRows(output.slice(0, MAX_ROWS));
-    } catch (cause) {
-      setErr(cause instanceof ApiError ? cause.message : "加载失败");
-    } finally {
-      setLoading(false);
     }
+    const timestamp = (value: string) => {
+      const parsed = Date.parse(value.trim().replace(" ", "T"));
+      return Number.isNaN(parsed) ? 0 : parsed;
+    };
+    output.sort((left, right) => timestamp(right.when) - timestamp(left.when));
+    const allFailed = failures === nextCodes.length;
+    const feedLabel = kind === "filings" ? "公告" : "新闻";
+    let message: string | null = null;
+    if (failures) {
+      message = allFailed
+        ? `${feedLabel}加载失败（${failures}/${nextCodes.length} 只），请重试。`
+        : `部分${feedLabel}加载失败（${failures}/${nextCodes.length} 只），当前仅展示已成功获取的结果，请重试。`;
+      if (kind === "news" && dependencies) message += " 新闻服务缺少 akshare 依赖，请安装后重试。";
+    }
+    setState({ kind, codes: nextCodes, rows: output.slice(0, MAX_ROWS), status: allFailed ? "error" : failures ? "partial" : "ready", error: message });
   }, [kind]);
 
   useEffect(() => {
-    loadWatchAuthoritative()
-      .then((result) => {
-        setCodes(result.codes);
-        void load(result.codes);
-      })
-      .catch(() => {
-        setCodes([]);
-        void load([]);
-      });
-  }, [load]);
+    void refresh();
+    return () => { requestId.current += 1; };
+  }, [refresh]);
 
-  const refresh = () => {
-    loadWatchAuthoritative()
-      .then((result) => {
-        setCodes(result.codes);
-        void load(result.codes);
-      })
-      .catch(() => void load(codes));
-  };
-
-  if (!codes.length) {
+  if (current.status === "watchlist-empty") {
     return (
       <div className="rounded-lg border border-dashed border-border/70 p-8 text-center text-sm text-muted-foreground/70">
-        还没有关注股票。到<Link to="/daily-review" className="text-primary">「今天」</Link>加自选（6 位代码），这里会汇总它们的{kind === "filings" ? "公告" : "新闻"}。
+        还没有关注股票。到<Link to="/daily-review" className="text-primary">「今天」</Link>加自选（6 位代码），这里会汇总它们的{label}。
+        <button type="button" onClick={() => void refresh()} className="ml-2 text-primary hover:underline">刷新</button>
       </div>
     );
   }
@@ -126,22 +147,23 @@ function WatchlistFeed({ kind }: { kind: "filings" | "news" }) {
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Star className="h-3.5 w-3.5 text-primary/70" />关注 {codes.length} 只 · 共 {rows.length} 条{kind === "filings" ? "公告" : "新闻"}（近期）
+          <Star className="h-3.5 w-3.5 text-primary/70" />
+          {codes.length ? `关注 ${codes.length} 只 · ${loading ? `正在获取${label}` : `${error ? "已获取" : "共"} ${rows.length} 条${label}（近期）`}` : "关注列表"}
         </span>
-        <button type="button" onClick={refresh} disabled={loading} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">
+        <button type="button" onClick={() => void refresh()} disabled={loading} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          {loading ? "拉取中…" : "刷新"}
+          {loading ? "拉取中…" : error ? "重试" : "刷新"}
         </button>
       </div>
 
-      {err && <div className="mb-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"><AlertCircle className="h-4 w-4 shrink-0" />{err}</div>}
+      {error && <div role="alert" className="mb-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"><AlertCircle className="h-4 w-4 shrink-0" />{error}</div>}
 
-      {depNote ? (
-        <p className="py-6 text-center text-xs text-warning">{depNote}（安装后新闻即可用）</p>
-      ) : loading && rows.length === 0 ? (
-        <p className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在汇总关注股的{kind === "filings" ? "公告" : "新闻"}…</p>
-      ) : rows.length === 0 ? (
-        <p className="py-8 text-center text-sm text-muted-foreground/60">关注列表里的个股近期暂无{kind === "filings" ? "公告" : "新闻"}。</p>
+      {loading ? (
+        <p role="status" className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在汇总关注股的{label}…</p>
+      ) : current.status === "ready" && rows.length === 0 ? (
+        <p className="py-8 text-center text-sm text-muted-foreground/60">关注列表里的个股近期暂无{label}。</p>
+      ) : current.status === "partial" && rows.length === 0 ? (
+        <p className="py-8 text-center text-sm text-muted-foreground/60">已成功获取的个股近期暂无{label}，其余个股尚未获取成功。</p>
       ) : (
         <div className="space-y-2">
           {rows.map((row, index) => (

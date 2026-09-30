@@ -796,8 +796,8 @@ try {
     }
     if (pathname === "/api/evidence" && request.method() === "GET") {
       assert.equal(url.searchParams.get("subject_type"), "stock");
-      assert.equal(url.searchParams.get("subject_id"), "600519");
-      const items = evidenceRecords.filter((item) => !item.deleted);
+      assert.ok(["600519", "600520"].includes(url.searchParams.get("subject_id")));
+      const items = evidenceRecords.filter((item) => !item.deleted && item.subject_id === url.searchParams.get("subject_id"));
       await route.fulfill(ok({ items, total: items.length, limit: 200, offset: 0 }));
       return;
     }
@@ -901,8 +901,8 @@ try {
     if (pathname === "/api/campaigns" && request.method() === "GET") {
       const securityCode = url.searchParams.get("security_code");
       if (securityCode) {
-        assert.equal(securityCode, "600519", "Candidate Research must query the active security only");
-        await route.fulfill(ok(state.campaigns));
+        assert.ok(["600519", "600520"].includes(securityCode), "Candidate Research must query a fixture security only");
+        await route.fulfill(ok(state.campaigns.filter((item) => item.security_code === securityCode)));
       } else {
         await route.fulfill(ok(fixedCampaigns));
       }
@@ -1694,6 +1694,89 @@ try {
     false,
     "browser vertical must never call Trade activation backend",
   );
+  // Lightweight research is independent of formal setup. All model events are synthetic.
+  const formalWritesBeforeNotes = JSON.stringify(state.writeRequests);
+  evidenceRecords.push({ ...evidenceRecords[0], id: "research_note_fixture", deleted: 0, deleted_at: null,
+    claim: "合成研究资料：利润需要现金流核验", source_title: "合成资料来源", source_url: "https://example.com/research-fixture" });
+  const chatRequests = [];
+  let delayNextChat = false;
+  let releaseDelayedChat;
+  await page.route("**/api/chat", async (route) => {
+    chatRequests.push(route.request().postDataJSON());
+    const delayed = delayNextChat;
+    if (delayed) await new Promise((resolve) => { releaseDelayedChat = resolve; });
+    await route.fulfill({ status: 200, contentType: "application/x-ndjson", body: [
+      JSON.stringify({ type: "delta", text: delayed ? "DELAYED_A_ONLY" : "合成 AI 回答：先核对原始财报；当前资料不足。" }),
+      JSON.stringify({ type: "done", trace: [], rounds: 1 }),
+    ].join("\n") + "\n" }).catch(() => {}); // A navigation may already have aborted the synthetic request.
+  });
+  const noteResearchPath = `/candidates/600519?${new URLSearchParams({ return_to: discoveryReturnTo })}#candidate-research-note`;
+  await page.goto(`http://127.0.0.1:${port}${noteResearchPath}`, { waitUntil: "networkidle" });
+  await page.evaluate(() => {
+    localStorage.setItem("vr-llm", JSON.stringify({ provider: "cli-codex", model: "synthetic-test", baseURL: "", apiKey: "" }));
+    window.dispatchEvent(new Event("vr-llm-change"));
+  });
+  const researchNote = page.getByTestId("candidate-research-note");
+  await researchNote.getByText("选择给 AI 看的证据", { exact: false }).click();
+  const chosenSource = researchNote.getByRole("checkbox", { name: /合成研究资料：利润需要现金流核验/ });
+  assert.equal(await chosenSource.isChecked(), false, "no evidence is sent without explicit selection");
+  await chosenSource.check();
+  await researchNote.getByLabel("本次要核对的问题").fill("合成问题：盈利是否有现金流支持？");
+  await researchNote.getByRole("button", { name: "围绕这个问题问 AI", exact: true }).click();
+  const aiPanel = page.getByLabel("Vibe AI 对话");
+  assert.equal(await aiPanel.getByPlaceholder("询问 Vibe...").inputValue(), "合成问题：盈利是否有现金流支持？");
+  await aiPanel.getByRole("button", { name: "发送", exact: true }).click();
+  await aiPanel.getByText("合成 AI 回答：先核对原始财报；当前资料不足。", { exact: true }).waitFor();
+  assert.match(chatRequests[0].context, /合成研究资料：利润需要现金流核验/);
+  assert.equal(chatRequests[0].messages.at(-1).content, "合成问题：盈利是否有现金流支持？");
+  assert.equal(Object.hasOwn(chatRequests[0], "portfolio"), false);
+  await aiPanel.getByRole("button", { name: "关闭", exact: true }).click();
+  await chosenSource.uncheck();
+  await researchNote.getByLabel("本次要核对的问题").fill("后来的问题，不能覆盖旧回答来源");
+  await researchNote.getByRole("button", { name: "围绕这个问题问 AI", exact: true }).click();
+  await aiPanel.getByRole("button", { name: "存入沉淀", exact: true }).click();
+  const savedAi = await page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes"))[0]);
+  assert.equal(savedAi.research.question, "合成问题：盈利是否有现金流支持？");
+  assert.equal(savedAi.research.sourceLinks[0].url, "https://example.com/research-fixture", "answer retains its original selection after page inputs change");
+  await aiPanel.getByRole("button", { name: "关闭", exact: true }).click();
+  await researchNote.getByLabel("我的暂定看法", { exact: true }).fill("合成暂定观点：还需要核验现金流");
+  await researchNote.getByLabel("反证 / 不确定处", { exact: true }).fill("合成反证：经营现金流可能滞后");
+  await researchNote.getByLabel("下次核对", { exact: true }).fill("合成待办：核对下一期现金流");
+  await researchNote.getByRole("button", { name: "保存暂定研究", exact: true }).click();
+  await researchNote.getByRole("button", { name: "已保存暂定研究", exact: true }).waitFor();
+  const savedTentative = await page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes"))[0]);
+  await researchNote.getByRole("link", { name: "查看这只股票的研究记录 →", exact: true }).click();
+  await page.waitForURL((url) => url.pathname === "/notes" && url.searchParams.get("security_code") === "600519");
+  await page.getByText(savedTentative.title, { exact: true }).click();
+  const savedContext = page.getByTestId("note-research-context");
+  await savedContext.getByText("600519 · 用户暂定记录，尚未核验", { exact: true }).waitFor();
+  assert.match(await savedContext.innerText(), /合成待办：核对下一期现金流/);
+  await savedContext.getByRole("link", { name: "回到当时的研究位置 →", exact: true }).click();
+  await page.waitForURL((url) => url.pathname === "/candidates/600519" && url.hash === "#candidate-research-note");
+  assert.equal(new URL(page.url()).searchParams.get("return_to"), discoveryReturnTo);
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByTestId("candidate-research-note").getByText(/合成待办：核对下一期现金流/).waitFor();
+
+  // Navigate A→B in the SPA while A's model response is delayed. Inputs and transcript must reset.
+  await researchNote.getByLabel("本次要核对的问题").fill("A-only pending question");
+  await researchNote.getByRole("button", { name: "围绕这个问题问 AI", exact: true }).click();
+  delayNextChat = true;
+  await aiPanel.getByRole("button", { name: "发送", exact: true }).click();
+  for (let attempts = 0; !releaseDelayedChat && attempts < 100; attempts += 1) await page.waitForTimeout(10);
+  assert.equal(typeof releaseDelayedChat, "function", "delayed fixture request should be captured");
+  await page.evaluate(() => { history.pushState({}, "", "/candidates/600520#candidate-research-note"); window.dispatchEvent(new PopStateEvent("popstate")); });
+  await page.locator('[data-testid="candidate-workspace"][data-security-code="600520"]').waitFor();
+  releaseDelayedChat();
+  await page.waitForLoadState("networkidle");
+  assert.equal(await researchNote.getByLabel("本次要核对的问题").inputValue(), "");
+  assert.equal(await researchNote.getByLabel("我的暂定看法", { exact: true }).inputValue(), "");
+  assert.equal(await researchNote.getByRole("checkbox", { checked: true }).count(), 0);
+  await researchNote.getByRole("button", { name: "围绕这个问题问 AI", exact: true }).click();
+  assert.doesNotMatch(await aiPanel.innerText(), /DELAYED_A_ONLY|A-only pending question|合成 AI 回答/);
+  const researchAfterSwitch = await page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes")));
+  assert.equal(researchAfterSwitch.length, 2);
+  assert.ok(researchAfterSwitch.every((note) => note.research.securityCode === "600519"));
+  assert.equal(JSON.stringify(state.writeRequests), formalWritesBeforeNotes, "lightweight research must never write formal state; chat is intercepted separately");
   assert.deepEqual(pageErrors, []);
   console.log("candidate campaign browser vertical: PASS");
 } finally {

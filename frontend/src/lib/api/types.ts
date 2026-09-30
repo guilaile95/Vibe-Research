@@ -2103,9 +2103,17 @@ export interface DailyReviewAnalyzeRequest {
 }
 
 
+export interface ChatToolResult {
+  call_id: string;
+  tool: string;
+  status: "success" | "partial" | "empty" | "error";
+  truncated: boolean;
+}
+
 export interface NdjsonStreamHandlers {
   onDelta?: (text: string) => void;
-  onTool?: (tool: string, args: Record<string, unknown>) => void;
+  onTool?: (tool: string, args: Record<string, unknown>, callId?: string) => void;
+  onToolResult?: (result: ChatToolResult) => void;
   onSources?: (items: ReportChatSource[], coverage?: ReportChatCoverage) => void;
 }
 

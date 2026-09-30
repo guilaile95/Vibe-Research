@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
-import { AlertCircle, ArrowLeft, CheckCircle2, FileSearch, Loader2 } from "lucide-react";
+import { AlertCircle, ArrowLeft, FileSearch, Loader2 } from "lucide-react";
 import { CandidateCampaignPanel } from "@/components/campaign/CandidateCampaignPanel";
+import { CandidateResearchNote } from "@/components/campaign/CandidateResearchNote";
 import { ResearchEventCalendar } from "@/components/campaign/ResearchEventCalendar";
 import { NativeIntelSecurityContext } from "@/components/native-intel/NativeIntelSecurityContext";
 import { StockRelativeContextCard } from "@/components/stock/StockRelativeContextCard";
@@ -155,8 +156,14 @@ export function CandidateWorkspace() {
     <div className="space-y-6" data-testid="candidate-workspace" data-security-code={code}>
       <PageHeader
         title={`候选研究 · ${code}`}
-        subtitle="按三步核对事实、建立投资计划并形成正式决策；系统不会自动买入，也不会把信息不足猜成事实。"
+        subtitle="先核对资料、提问并留下暂定看法；需要正式决策时，再建立投资计划。"
         actions={(
+          <div className="flex flex-wrap items-center gap-3">
+          <Link
+            to={`/stock-data?${new URLSearchParams({ code, return_to: returnTo })}`}
+            className="text-xs text-primary hover:underline"
+            data-testid="candidate-open-stock-data"
+          >看个股数据</Link>
           <Link
             to={sourceReturnTo || `/stock-data?code=${encodeURIComponent(code)}`}
             className="inline-flex items-center gap-1.5 rounded border border-border/60 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
@@ -164,6 +171,7 @@ export function CandidateWorkspace() {
           >
             <ArrowLeft className="h-3.5 w-3.5" /> {discoveryStrategy ? "返回市场发现队列" : sourceReturnTo ? "返回来源" : "个股数据"}
           </Link>
+          </div>
         )}
       />
 
@@ -262,7 +270,7 @@ export function CandidateWorkspace() {
               >
                 新增证据
               </Link>
-              <Link to="/evidence" className="text-primary hover:underline">查看全部证据</Link>
+              <Link to={`/evidence?${new URLSearchParams({ subject_type: "stock", subject_id: code })}`} className="text-primary hover:underline">查看本股全部证据</Link>
             </div>
           </div>
           {evidence.status === "loading" ? (
@@ -276,7 +284,7 @@ export function CandidateWorkspace() {
                   <div key={item.key} className="rounded-md border border-border/50 bg-background/35 p-3 text-xs" data-evidence-coverage={item.key} data-evidence-gap={item.gap ? "yes" : "no"}>
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium">{item.label}</span>
-                      {item.gap ? <span className="text-warning">未覆盖</span> : <CheckCircle2 className="h-3.5 w-3.5 text-success" />}
+                      <span className={item.gap ? "text-warning" : "text-muted-foreground"}>{item.gap ? "未记录" : "已有记录，待核验"}</span>
                     </div>
                     <p className="mt-1 text-muted-foreground">已记录 {item.count} 条</p>
                   </div>
@@ -305,7 +313,8 @@ export function CandidateWorkspace() {
               <p className="mt-3 text-[11px] text-muted-foreground">当前共 {evidence.value.total} 条记录；证据类型来自原记录，本页不会擅自重新分类。</p>
               {evidenceGap?.highestImpactQuestion && (
                 <div className="mt-3 rounded-md border border-warning/30 bg-warning/5 p-3 text-xs" data-testid="candidate-highest-impact-question">
-                  <p className="font-medium text-warning">最高影响的下一研究问题</p>
+                  <p className="font-medium text-warning">建议先核对的问题</p>
+                  <p className="mt-1 text-muted-foreground">根据本地记录类型列出，未评估影响大小；可在下方选择自己的研究问题。</p>
                   <p className="mt-1">{evidenceGap.highestImpactQuestion}</p>
                   {evidenceGap.nextResearchQuestions.length > 1 && (
                     <ol className="mt-2 list-decimal space-y-1 pl-4 text-muted-foreground">
@@ -335,6 +344,15 @@ export function CandidateWorkspace() {
           )}
         </GlassCard>
       </section>
+
+      <CandidateResearchNote
+        key={code}
+        code={code}
+        records={evidence.value?.records ?? []}
+        evidenceStatus={evidence.status}
+        returnTo={returnTo}
+        suggestedQuestion={evidenceGap?.highestImpactQuestion}
+      />
 
       <div id="candidate-existing-research" tabIndex={-1} className="scroll-mt-6">
         <CandidateCampaignPanel code={code} workspace returnTo={returnTo} />

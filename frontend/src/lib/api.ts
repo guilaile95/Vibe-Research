@@ -7,6 +7,7 @@ import { storageSetChecked, storageRemoveChecked } from "./storage.ts";
 
 import type { MarketCloudEnvelope } from "./marketCloud.ts";
 import { parseReportChatCoverage } from "./reportChatCoverage.ts";
+import { parseChatToolResult } from "./chatToolStatus.ts";
 import type {
   CurrentThesisDelta,
   ThesisDeltaCreatePayload,
@@ -355,7 +356,16 @@ export function applyNdjsonLine(
       state.errorMessage = "后端响应完成顺序异常";
       return;
     }
-    handlers.onTool?.(String(event.tool || ""), event.args || {});
+    handlers.onTool?.(String(event.tool || ""), event.args || {},
+      typeof event.call_id === "string" ? event.call_id : undefined);
+  } else if (event.type === "tool_result") {
+    const result = parseChatToolResult(event);
+    if (state.sawDone || !result) {
+      state.sawError = true;
+      state.errorMessage = "后端工具结果格式或完成顺序错误";
+      return;
+    }
+    handlers.onToolResult?.(result);
   } else if (event.type === "sources") {
     if (state.sawDone || !Array.isArray(event.items) || event.items.length > 8) {
       state.sawError = true;
