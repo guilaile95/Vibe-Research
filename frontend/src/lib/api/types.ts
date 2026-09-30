@@ -1606,7 +1606,19 @@ export interface HkCashflow {
 // 产业信号 · GPU 租金（GET /api/signals/gpu-rent）
 // ---------------------------------------------------------------------------
 
+export interface GpuSourceHealth {
+  retrieved_at?: number | null;
+  sample_asof_ts?: number | null;
+  sample_freshness?: "fresh" | "stale" | "unavailable";
+  source_observed_at?: number | null;
+  source_freshness?: "unknown";
+  exporter_health?: "unknown";
+  completeness?: "unknown";
+}
+
 export interface GpuSpot {
+  health?: GpuSourceHealth;
+  count_health?: GpuSourceHealth;
   gpu: string; median?: number; asof_ts?: number;
   available_gpus?: number | null; total_gpus?: number | null;
   unavailable?: boolean; note?: string; err?: string;

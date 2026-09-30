@@ -126,40 +126,13 @@ TOOL_NAMES = [t["function"]["name"] for t in TOOLS]
 
 # ——— 各工具的执行实现（裁剪逻辑集中在这里） ———
 
-_TENCENT_KLINE = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 
 
 def _kline_tencent(code: str, period: str, n: int) -> list[dict]:
-    """腾讯前复权 K 线（备用源）。
+    """Existing AI qfq contract, with all-or-nothing sequence validation."""
+    import tencent_kline
 
-    mootdx 走 TCP 7709，在部分网络下连不通（实测本机返回空）；东财 push2his 的 kline 路径
-    也可能被拦。腾讯 HTTP 接口实测不封 IP（项目数据源分层里的首选行情源），拿它兜底。
-    返回字段顺序：日期, 开, 收, 高, 低, 成交量。
-    """
-    import requests
-
-    prefix = astock.get_prefix(code)
-    if prefix == "bj":
-        # Tencent may return only the latest BSE bar, not requested history.
-        # Preserve the existing qualified daily-provider fallback.
-        raise ValueError("Tencent K-line history does not support BSE")
-    sym = f"{prefix}{code}"
-    r = requests.get(_TENCENT_KLINE, params={"param": f"{sym},{period},,,{n},qfq"},
-                     headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
-    d = (r.json().get("data") or {}).get(sym) or {}
-    raw = d.get("qfq" + period) or d.get(period) or []
-    out = []
-    for it in raw:
-        if not isinstance(it, list) or len(it) < 6:
-            continue
-        def _f(x):
-            try:
-                return float(x)
-            except (TypeError, ValueError):
-                return None
-        out.append({"date": it[0], "open": _f(it[1]), "close": _f(it[2]),
-                    "high": _f(it[3]), "low": _f(it[4]), "volume": _f(it[5])})
-    return out
+    return tencent_kline.fetch(code, period, n, adjustment="qfq")
 
 
 def _kline(args: dict):
@@ -169,8 +142,7 @@ def _kline(args: dict):
     cat = {"day": 4, "week": 5, "month": 6}[period]
     n = max(5, min(int(args.get("count") or 60), 250))
     code = str(args["code"])
-    # 腾讯优先：HTTP、实测不封 IP、亚秒级返回；mootdx 走 TCP 7709，连不通时要等十几秒超时
-    # （实测本机就是这种情况），放在后面当备份而不是主路径。
+    # Preserve the existing qfq-first AI route; invalid batches use the fallback.
     try:
         rows = _kline_tencent(code, period, n)
     except Exception:  # noqa: BLE001 — 网络问题转备用源
@@ -210,15 +182,13 @@ def _fund_flow_today(code: str) -> list[dict]:
     主源 push2his 在部分网络下连不通（本机实测被拒），push2delay 这条延迟行情线路仍可达，
     代价是只给当天一条、拿不到历史。宁可给「今天」也不要整块缺失。
     """
-    import requests
-
     secid = f"{1 if code.startswith('6') else 0}.{code}"
     params = {"secid": secid, "fields1": "f1,f2,f3,f7",
               "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
               "lmt": "120", "klt": "101"}
     headers = {"User-Agent": astock.UA, "Referer": "https://quote.eastmoney.com/",
                "Origin": "https://quote.eastmoney.com"}
-    d = requests.get(_FFLOW_DELAY, params=params, headers=headers, timeout=12).json()
+    d = astock.em_get(_FFLOW_DELAY, params=params, headers=headers, timeout=12).json()
     out = []
     for line in (d.get("data") or {}).get("klines") or []:
         p = line.split(",")

@@ -18,6 +18,8 @@ import re
 import threading
 import time
 import urllib.request
+
+import push2_guard
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -385,12 +387,17 @@ def _mootdx_client():
 
 
 def kline(code: str, category: int = 4, offset: int = 60) -> list[dict]:
-    """K线：category 4=日 5=周 6=月 11=60分钟。
+    """HiThink daily first, mootdx next, bounded unadjusted Tencent fallback.
 
-    日线在配置 HiThink credential 时优先使用已资格认定的 direct API；
-    未配置、身份不覆盖、传输失败或契约失败时保留既有 mootdx 路径。
-    周/月/60 分钟不在本次 HiThink cutover 范围内。
+    Tencent only covers existing SH/SZ day/week/month HTTP routes. BSE and
+    60-minute failures remain explicit; financial/F10 mootdx paths are unchanged.
     """
+    if not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code):
+        raise ValueError("kline requires a six-digit security code")
+    if type(category) is not int or category not in (4, 5, 6, 11):
+        raise ValueError("unsupported kline category")
+    if type(offset) is not int or not 1 <= offset <= 2000:
+        raise ValueError("kline offset must be an integer between 1 and 2000")
     if category == 4:
         try:
             import hithink_finance_client as hithink
@@ -409,9 +416,23 @@ def kline(code: str, category: int = 4, offset: int = 60) -> list[dict]:
             raise hithink.HiThinkNotConfiguredError(
                 "HiThink is required for current BSE daily bars"
             )
-    client = _mootdx_client()
-    df = client.bars(symbol=code, category=category, offset=offset)
-    return df.to_dict("records") if df is not None and not df.empty else []
+    # Current BSE identifiers are unsupported by mootdx's exchange routing,
+    # and Tencent does not provide qualified BSE historical coverage.
+    if code.startswith("92"):
+        raise RuntimeError("No qualified BSE provider for this K-line period")
+    try:
+        client = _mootdx_client()
+        df = client.bars(symbol=code, category=category, offset=offset)
+        rows = df.to_dict("records") if df is not None and not df.empty else []
+        if rows:
+            return rows
+    except Exception:
+        pass
+    if category not in (4, 5, 6) or get_prefix(code) == "bj":
+        raise RuntimeError("No qualified fallback for this K-line route")
+    import tencent_kline
+
+    return tencent_kline.unadjusted_bars(code, {4: "day", 5: "week", 6: "month"}[category], offset)
 
 
 def finance(code: str) -> dict:
@@ -810,15 +831,33 @@ def em_get(url: str, params: dict | None = None, headers: dict | None = None, ti
             if deadline is not None and delay >= _snapshot_remaining(deadline):
                 raise RuntimeError("a_share_snapshot: refresh time budget exhausted")
             time.sleep(delay)
+        guarded = push2_guard.applies(url)
+        if guarded:
+            push2_guard.reserve()
         if deadline is not None:
-            # requests 的连接/读取超时不等于整体 deadline；返回后仍须核对预算。
+            # Include persisted budget lock waits before allowing network I/O.
             remaining = _snapshot_remaining(deadline)
             timeout = (min(timeout, remaining / 2), min(timeout, remaining / 2))
         try:
             _em_mode[0] = "direct"
             response = _em_session(True).get(url, params=params, headers=headers, timeout=timeout)
+        except Exception as exc:
+            if guarded and _is_transient_network_error(exc):
+                push2_guard.record("failure")
+            raise
         finally:
             _em_last_call[0] = time.monotonic()
+        if guarded:
+            status = getattr(response, "status_code", 200)
+            if status in (403, 429):
+                push2_guard.record("refusal")
+                response.close()
+                raise push2_guard.Push2Blocked("Push2 source refused the request; cooldown started")
+            if isinstance(status, int) and status >= 500:
+                push2_guard.record("failure")
+                response.close()
+                raise RuntimeError("Push2 upstream server error")
+            push2_guard.record("success")
         if deadline is not None:
             _snapshot_remaining(deadline)
         return response
@@ -828,10 +867,13 @@ def em_get(url: str, params: dict | None = None, headers: dict | None = None, ti
 
 def _is_transient_network_error(exc: BaseException) -> bool:
     """判断是否为可重试的瞬时网络错误（不含 JSON/结构/业务解析错误）。"""
+    if isinstance(exc, push2_guard.Push2Blocked):
+        return False
     # 按类型名兼容未 import 的异常类
     transient_names = {
         "ProxyError",
         "ConnectionError",
+        "ConnectionResetError",
         "ConnectTimeout",
         "ReadTimeout",
         "Timeout",
@@ -1076,13 +1118,8 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
     数据源：东财 ``/api/qt/clist/get``（经 ``em_get`` 串行限流）。
     失败不伪装成空市场：网络 / JSON / 结构异常抛出 ``RuntimeError``。
 
-    分页说明：
-    - 上游可能强制限制每页最多 100 条，即使请求 ``pz`` 更大；
-    - 在已知 ``total`` 且尚未取完时，**不得**因本页条数 < page_size 而提前结束
-      （否则只拿到第一页 100 条）；
-    - 已知 total 时仅完整抓取成功；提前空页报错，未知 total 时空页终止；
-    - 仅当 total 未知/为 0 时，才用「本页短于 page_size」作为取尽信号。
-    - 按 code 去重，保留首次出现顺序；缺 code 记录跳过。
+    每页必须有一致的非负整数 total，原始行数必须精确匹配。
+    重复证券或重叠页面整批失败；过滤行仍计入原始总数，不要求全部是 A 股。
     """
     if page_size < 1:
         raise ValueError("page_size must be >= 1")
@@ -1091,7 +1128,8 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
     out: list[dict] = []
     seen_codes: set[str] = set()
     fetched_raw = 0  # 原始 diff 条数（过滤/去重前），与上游 total 对齐
-    total: int | None = None  # None=尚未解析；0=未知/缺失
+    total: int | None = None
+    seen_raw_ids: set[tuple[str, str]] = set()
     host = _A_SHARE_CLIST_HOSTS[0]
     pn = 1
     prev_page_fingerprint: tuple[str, ...] | None = None
@@ -1159,21 +1197,26 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
                 f"a_share_snapshot page {pn}: data is not a dict ({type(data).__name__})"
             )
 
+        raw_total = data.get("total")
+        # bool is an int subclass; floats (including 3.0) are not count evidence.
+        if isinstance(raw_total, bool) or not (
+            isinstance(raw_total, int)
+            or isinstance(raw_total, str) and re.fullmatch(r"[0-9]+", raw_total)
+        ):
+            raise RuntimeError(f"a_share_snapshot: invalid total {raw_total!r}")
+        page_total = int(raw_total)
+        if page_total < 0:
+            raise RuntimeError(f"a_share_snapshot: invalid total {raw_total!r}")
         if total is None:
-            raw_total = data.get("total")
-            if raw_total is None:
-                total = 0  # 未知：仅靠空页/短页（在无可靠 total 时）结束
-            else:
-                try:
-                    total = int(raw_total)
-                except (TypeError, ValueError) as e:
-                    raise RuntimeError(
-                        f"a_share_snapshot: invalid total {raw_total!r}"
-                    ) from e
-                if total < 0:
-                    raise RuntimeError(
-                        f"a_share_snapshot: invalid total {raw_total!r}"
-                    )
+            total = page_total
+        elif page_total != total:
+            raise RuntimeError(f"a_share_snapshot page {pn}: total changed")
+
+        raw_diff = data.get("diff")
+        if isinstance(raw_diff, (list, dict)):
+            raw_values = raw_diff.values() if isinstance(raw_diff, dict) else raw_diff
+            if any(not isinstance(item, dict) for item in raw_values):
+                raise RuntimeError(f"a_share_snapshot page {pn}: invalid diff row")
 
         try:
             rows = _normalize_clist_diff(data.get("diff"))
@@ -1188,7 +1231,7 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
             )
 
         if not rows:
-            # 空页结束分页；退出时核对已知 total，拒绝提前结束的部分结果
+            # Empty pages still require exact final count; never publish partials.
             break
 
         # 重复页保护（同一批 code 指纹且无新增唯一股票）
@@ -1206,32 +1249,25 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
         prev_page_fingerprint = fingerprint
 
         fetched_raw += len(rows)
-        new_unique = 0
         for item in rows:
+            raw_code = str(item.get("f12") or "").strip()
+            if raw_code:
+                identity = (str(item.get("f13") or ""), raw_code)
+                if identity in seen_raw_ids:
+                    raise RuntimeError(f"a_share_snapshot page {pn}: overlapping security")
+                seen_raw_ids.add(identity)
             mapped = _map_a_share_row(item)
             if mapped is None:
                 continue
             code = mapped["code"]
             if code in seen_codes:
-                continue
+                raise RuntimeError(f"a_share_snapshot page {pn}: overlapping security")
             seen_codes.add(code)
             out.append(mapped)
-            new_unique += 1
 
-        if pn > 1 and new_unique == 0:
-            raise RuntimeError(
-                f"a_share_snapshot page {pn}: no new unique codes "
-                f"(fetched_raw={fetched_raw}, unique={len(out)}, total={total})"
-            )
-
-        # 终止：已达到上游 total（按原始条数，避免过滤导致永远 < total）
-        if total > 0 and fetched_raw >= total:
-            break
-
-
-        # total 未知时：本页短于请求页大小 → 视为末页
-        # total 已知且未取完：即使上游强制每页 100 < page_size，也必须继续翻页
-        if total <= 0 and len(rows) < page_size:
+        if fetched_raw > total:
+            raise RuntimeError("a_share_snapshot: raw count exceeds total")
+        if fetched_raw == total:
             break
 
         pn += 1
@@ -1243,7 +1279,7 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
         )
 
     _snapshot_remaining(deadline)
-    if total and fetched_raw < total:
+    if fetched_raw != total:
         raise RuntimeError(
             f"a_share_snapshot: incomplete data (fetched_raw={fetched_raw}, total={total})"
         )

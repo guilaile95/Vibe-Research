@@ -359,7 +359,9 @@ def get_a_share_snapshot_observation() -> dict:
     with _A_SHARE_SNAPSHOT_LOCK:
         hit = _CACHE.get("a_share_snapshot")
         if hit and time.time() - hit[0] < _TTL:
-            return copy.deepcopy(hit[1])
+            cached = copy.deepcopy(hit[1])
+            cached["is_cached"] = True
+            return cached
         flight = _A_SHARE_SNAPSHOT_FLIGHT
         leader = flight is None
         if leader:
@@ -376,6 +378,7 @@ def get_a_share_snapshot_observation() -> dict:
         observed = datetime.now(BEIJING)
         envelope = {
             "rows": copy.deepcopy(snapshot),
+            "is_cached": False,
             "fetched_at": observed.strftime("%Y-%m-%d %H:%M:%S"),
             "observed_at": observed.astimezone(timezone.utc).isoformat(),
             "trade_date": None,
@@ -814,6 +817,22 @@ def _filter_by_scope(snapshot: list[dict], scope: str) -> list[dict]:
     return snapshot
 
 
+def _market_cloud_envelope(status: str, **kwargs) -> dict:
+    """Add orthogonal provenance without changing the legacy breadth contract.
+
+    Cache reuse is not a stale signal. Missing provider market time remains
+    unknown even when the fetch itself completed successfully.
+    """
+    envelope = _breadth_envelope(status, **kwargs)
+    observation = kwargs.get("observation") or {}
+    envelope.update({
+        "is_cached": observation.get("is_cached"),
+        "observed_at": observation.get("observed_at"),
+        "market_time_unknown": not bool(envelope["trade_date"] and envelope["data_time"]),
+    })
+    return envelope
+
+
 def get_market_cloud(scope: str = "all", period: str = "today") -> dict:
     """市场云图状态信封：全 A 股按行业分组，面积=流通市值，颜色=涨跌幅。
 
@@ -830,7 +849,7 @@ def get_market_cloud(scope: str = "all", period: str = "today") -> dict:
         observation = get_a_share_snapshot_observation()
         snapshot = observation["rows"]
     except Exception:  # noqa: BLE001
-        return _breadth_envelope(
+        return _market_cloud_envelope(
             "unavailable",
             data=None,
             warnings=["全市场快照获取失败，市场热力暂不可用，请稍后重试。"],
@@ -838,7 +857,7 @@ def get_market_cloud(scope: str = "all", period: str = "today") -> dict:
         )
 
     if not isinstance(snapshot, list) or not snapshot:
-        return _breadth_envelope(
+        return _market_cloud_envelope(
             "unavailable",
             data=None,
             warnings=["全市场快照为空"],
@@ -866,7 +885,7 @@ def get_market_cloud(scope: str = "all", period: str = "today") -> dict:
                 missing_pct += 1
 
     if not valid:
-        return _breadth_envelope(
+        return _market_cloud_envelope(
             "unavailable",
             data=None,
             warnings=["无有效股票数据（缺流通市值或涨跌幅）"],
@@ -933,5 +952,5 @@ def get_market_cloud(scope: str = "all", period: str = "today") -> dict:
         warnings.append(f"有 {len(no_industry)} 只股票无行业归属，未进入云图")
 
     if warnings:
-        return _breadth_envelope("partial", data=data, warnings=warnings, is_stale=False, observation=observation)
-    return _breadth_envelope("normal", data=data, warnings=[], is_stale=False, observation=observation)
+        return _market_cloud_envelope("partial", data=data, warnings=warnings, is_stale=False, observation=observation)
+    return _market_cloud_envelope("normal", data=data, warnings=[], is_stale=False, observation=observation)

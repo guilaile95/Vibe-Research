@@ -48,7 +48,7 @@ def _fake_get_json(kalshi_markets=None, candles=None, settled=None,
             if "gpu_count" in query:
                 by = (counts or {}).get(gpu) or {}
                 return {"data": {"result": [
-                    {"metric": {"rented": k}, "value": [0, str(v)]} for k, v in by.items()]}}
+                    {"metric": {"rented": k}, "value": [1700086400, str(v)]} for k, v in by.items()]}}
             series = (hist or {}).get(gpu)
             return {"data": {"result": [] if series is None else [{"values": series}]}}
         if "/candlesticks" in url:
@@ -69,6 +69,7 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(signals, "CACHE_FILE", str(tmp_path / "signals_gpu.json"))
     monkeypatch.setattr(signals, "SEED_FILE", str(tmp_path / "seed.json"))
     monkeypatch.setattr("time.sleep", lambda s: None)
+    monkeypatch.setattr(signals.time, "time", lambda: 1700086400)
 
 
 # ——— 现货（曲线终点派生）———
@@ -102,7 +103,9 @@ def test_spot_from_history_propagates_states():
 def test_farm_count_parses_rented_groups(monkeypatch):
     monkeypatch.setattr(signals, "_get_json",
                         _fake_get_json(counts={"B200": {"no": 67, "any": 379}}))
-    assert signals._farm_count("B200") == {"available": 67, "total": 379}
+    count = signals._farm_count("B200")
+    assert count["available"] == 67 and count["total"] == 379
+    assert count["health"]["sample_asof_ts"] == 1700086400
     assert signals._farm_count("H100 SXM") is None  # 无分组结果 → None
 
 
@@ -575,3 +578,134 @@ def test_newsradar_normalize_url_reencodes_query():
     # 跟踪参数照剥、真实参数保留
     c = newsradar._normalize_url("https://x.com/p?utm_source=rss&id=1")
     assert c == "https://x.com/p?id=1"
+
+
+# Query sample time is not exporter collection time. Hosted exporter deployment
+# and collection/error metrics are intentionally unqualified in these fixtures.
+
+def test_fresh_scrape_does_not_prove_source_observation(monkeypatch):
+    monkeypatch.setattr(signals, "_get_json", _ok_get_json())
+    data = signals.fetch_gpu_rent()
+    for row in data["history"]["gpus"]:
+        assert row["health"]["sample_freshness"] == "fresh"
+        assert row["health"]["source_observed_at"] is None
+        assert row["health"]["source_freshness"] == "unknown"
+        assert row["health"]["exporter_health"] == "unknown"
+        assert row["health"]["completeness"] == "unknown"
+        assert not row.get("stale")
+    assert signals.load_cache()["history"] == data["history"]
+    assert data["generated_at_kind"] == "response_assembly_time"
+
+
+def test_http_success_old_series_and_counts_are_stale(monkeypatch):
+    monkeypatch.setattr(signals, "_get_json", _ok_get_json())
+    monkeypatch.setattr(signals.time, "time", lambda: 1700086400 + 3 * 86400)
+    data = signals.fetch_gpu_rent()
+    assert data["refresh_status"] == "partial"
+    assert data["section_status"]["B200"] == "stale"
+    assert data["section_status"]["B200_count"] == "stale"
+    assert data["spot"]["gpus"][0]["median"] == 6.0
+    assert data["spot"]["gpus"][0]["health"]["source_freshness"] == "unknown"
+    assert data["spot"]["gpus"][0]["count_health"]["sample_asof_ts"] == 1700086400
+
+
+def test_cache_ages_without_refresh(monkeypatch):
+    monkeypatch.setattr(signals, "_get_json", _ok_get_json())
+    data = signals.fetch_gpu_rent()
+    monkeypatch.setattr(signals.time, "time", lambda: 1700086400 + 3 * 86400)
+    loaded = signals.load_cache()
+    assert loaded["history"]["gpus"][0]["stale"]
+    assert loaded["spot"]["gpus"][0]["count_health"]["sample_freshness"] == "stale"
+    assert loaded["history"]["gpus"][0]["health"]["retrieved_at"] == 1700086400
+    assert loaded["generated_at"] == data["generated_at"]
+
+
+@pytest.mark.parametrize("payload", [
+    {"status": "error", "error": "private upstream text", "data": {"result": []}},
+    {"status": "success"}, {"data": {"result": None}},
+])
+def test_prometheus_http200_error_not_empty_market(monkeypatch, payload):
+    monkeypatch.setattr(signals, "_get_json", lambda *a, **kw: payload)
+    with pytest.raises(ValueError, match="统计查询"):
+        signals._farm_history("B200")
+    with pytest.raises(ValueError, match="统计查询"):
+        signals._farm_count("B200")
+
+
+def test_partial_history_reports_sampling_gaps_not_universe_completeness(monkeypatch):
+    end = 1700086400
+    monkeypatch.setattr(signals, "_get_json", _fake_get_json(hist={"B200": [
+        [end - 3 * 86400, "5"], [end - 86400, "NaN"], [end, "6"]]}))
+    row = signals._farm_history("B200")
+    assert row["health"]["history_coverage"] == "partial"
+    assert row["health"]["dropped_samples"] == 1
+    assert row["health"]["completeness"] == "unknown"
+    assert row["latest"] == 6
+
+
+def test_zero_counts_are_legitimate_and_not_global_offer_threshold(monkeypatch):
+    monkeypatch.setattr(signals, "_get_json", _fake_get_json(counts={"B200": {"no": 0, "any": 0}}))
+    count = signals._farm_count("B200")
+    assert count["available"] == count["total"] == 0
+    assert count["health"]["sample_freshness"] == "fresh"
+
+
+@pytest.mark.parametrize("value", ["NaN", "Inf", "-1", "1.5"])
+def test_invalid_counts_raise(monkeypatch, value):
+    monkeypatch.setattr(signals, "_get_json", _fake_get_json(counts={"B200": {"no": value}}))
+    with pytest.raises(ValueError, match="挂单卡数"):
+        signals._farm_count("B200")
+
+
+def test_partial_refresh_keeps_source_unknown_and_previous_values(monkeypatch):
+    monkeypatch.setattr(signals, "_get_json", _ok_get_json())
+    good = signals.fetch_gpu_rent()
+    inner = _ok_get_json()
+    def broken_farm(url, *args, **kwargs):
+        if url.startswith(signals.HIST_BASE):
+            return {"status": "error", "error": "fixture"}
+        return inner(url, *args, **kwargs)
+    monkeypatch.setattr(signals, "_get_json", broken_farm)
+    monkeypatch.setattr(signals.time, "time", lambda: 1700086400 + 60)
+    data = signals.fetch_gpu_rent()
+    assert data["refresh_status"] == "partial"
+    assert data["section_status"]["forward"] == "retrieved"
+    row = data["spot"]["gpus"][0]
+    assert row["median"] == good["spot"]["gpus"][0]["median"]
+    assert row["available_gpus"] == 67
+    assert row["count_health"]["sample_freshness"] == "stale"
+    assert row["health"]["retrieved_at"] == 1700086400
+    assert row["health"]["source_observed_at"] is None
+    assert signals.load_cache()["spot"]["gpus"][0]["health"]["source_freshness"] == "unknown"
+
+
+def test_empty_or_older_success_does_not_replace_newer_history(monkeypatch):
+    monkeypatch.setattr(signals, "_get_json", _ok_get_json())
+    good = signals.fetch_gpu_rent()
+    for hist in ({}, {g: [[1700000000, "99"]] for g in signals.SPOT_GPUS}):
+        monkeypatch.setattr(signals, "_get_json", _fake_get_json(hist=hist))
+        data = signals.fetch_gpu_rent()
+        assert data["spot"]["gpus"][0]["median"] == good["spot"]["gpus"][0]["median"]
+        assert data["spot"]["gpus"][0]["stale"]
+        assert data["errors"]
+
+
+@pytest.mark.parametrize("samples", [
+    [[1700086400, "1"], [1700086400, "2"]],
+    [[1700086400, "1"], [1700000000, "2"]],
+    [[float("inf"), "1"]], [[1700087400, "1"]],
+])
+def test_invalid_sample_times_are_not_current(monkeypatch, samples):
+    monkeypatch.setattr(signals, "_get_json", _fake_get_json(hist={"B200": samples}))
+    with pytest.raises(ValueError):
+        signals._farm_history("B200")
+
+
+def test_unqualified_exporter_metadata_does_not_claim_source_health(monkeypatch):
+    # Arbitrary metrics/metadata are not a qualified collection-time contract.
+    payload = {"status": "success", "collection_timestamp": 1700086400,
+               "api_errors": 0, "data": {"result": [{"values": [[1700086400, "6"]]}]}}
+    monkeypatch.setattr(signals, "_get_json", lambda *a, **kw: payload)
+    health = signals._farm_history("B200")["health"]
+    assert health["exporter_health"] == health["source_freshness"] == "unknown"
+    assert health["source_observed_at"] is None
