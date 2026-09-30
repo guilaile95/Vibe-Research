@@ -9,6 +9,7 @@ router, or frontend code.
 
 from __future__ import annotations
 
+from contextvars import copy_context
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -288,8 +289,10 @@ def _capability_results(
 
     for network_id in network_ids:
         thread = threading.Thread(
-            target=_worker,
-            args=(network_id,),
+            # Each worker gets its own copy: preserve request-local source
+            # read-only scope without leaking it to concurrent writable requests.
+            target=copy_context().run,
+            args=(_worker, network_id),
             name=f"ccd-capability-{network_id}",
             daemon=True,
         )

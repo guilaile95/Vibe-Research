@@ -5,6 +5,8 @@ transactions reserve budget before I/O across processes. Datacenter is isolated.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 import math
 import os
 import re
@@ -18,6 +20,23 @@ DAILY_LIMIT = 500
 REFUSAL_COOLDOWN = 3600
 FAILURE_COOLDOWN = 300
 FAILURE_THRESHOLD = 3
+
+
+_READ_ONLY = ContextVar("push2_read_only", default=False)
+
+
+def is_read_only() -> bool:
+    return _READ_ONLY.get()
+
+
+@contextmanager
+def read_only():
+    """Reuse observations but never mutate safety state or bypass accounting."""
+    token = _READ_ONLY.set(True)
+    try:
+        yield
+    finally:
+        _READ_ONLY.reset(token)
 
 
 class Push2Blocked(RuntimeError):
@@ -35,6 +54,8 @@ def _path() -> Path:
 
 
 def _update(*, reserve: bool, outcome: str | None = None) -> None:
+    if is_read_only():
+        raise Push2Blocked("Push2 refresh requires a writable source context")
     now = time.time()
     day = datetime.fromtimestamp(now, timezone.utc).date().isoformat()
     conn = None

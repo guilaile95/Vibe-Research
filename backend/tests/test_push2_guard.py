@@ -123,3 +123,161 @@ def test_ai_delay_route_cannot_bypass_source_cooldown(monkeypatch):
     with pytest.raises(guard.Push2Blocked):
         ai_tools._fund_flow_today("600519")
     assert calls == []
+
+
+def test_refused_request_does_not_mutate_persisted_safety_state(monkeypatch):
+    guard.record("refusal")
+    path = guard._path()
+    before = (path.read_bytes(), path.stat().st_mtime_ns)
+    calls = _transport(monkeypatch)
+    with pytest.raises(guard.Push2Blocked, match="cooldown"):
+        astock.em_get("https://push2.eastmoney.com/test", min_interval=0)
+    assert calls == []
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+
+
+def test_permitted_request_consumes_persisted_operational_budget(monkeypatch):
+    import sqlite3
+    calls = _transport(monkeypatch)
+    astock.em_get("https://push2.eastmoney.com/test", min_interval=0)
+    astock.em_get("https://push2.eastmoney.com/test", min_interval=0)
+    assert len(calls) == 2
+    with sqlite3.connect(guard._path()) as conn:
+        assert conn.execute("SELECT used FROM guard WHERE id=1").fetchone() == (2,)
+
+
+def test_read_only_blocks_before_storage_and_network(monkeypatch):
+    calls = _transport(monkeypatch)
+    with guard.read_only(), pytest.raises(guard.Push2Blocked, match="writable"):
+        astock.em_get("https://push2.eastmoney.com/test", min_interval=0)
+    assert calls == []
+    assert not guard._path().exists()
+    guard.reserve()
+    before = (guard._path().read_bytes(), guard._path().stat().st_mtime_ns)
+    with guard.read_only():
+        for operation in [guard.reserve, lambda: guard.record("success")]:
+            with pytest.raises(guard.Push2Blocked):
+                operation()
+    assert (guard._path().read_bytes(), guard._path().stat().st_mtime_ns) == before
+    assert not guard.is_read_only()
+
+
+def test_read_only_context_propagates_through_fastapi_threadpool(monkeypatch):
+    import asyncio
+    from starlette.concurrency import run_in_threadpool
+    calls = _transport(monkeypatch)
+
+    async def request():
+        with guard.read_only():
+            with pytest.raises(guard.Push2Blocked):
+                await run_in_threadpool(astock.em_get, "https://push2.eastmoney.com/test", min_interval=0)
+    asyncio.run(request())
+    assert calls == []
+    assert not guard._path().exists()
+
+
+def test_concurrent_read_only_and_writable_requests_are_isolated(monkeypatch):
+    from threading import Barrier
+    calls = _transport(monkeypatch)
+    barrier = Barrier(2)
+
+    def readonly():
+        with guard.read_only():
+            barrier.wait()
+            with pytest.raises(guard.Push2Blocked):
+                astock.em_get("https://push2.eastmoney.com/test", min_interval=0)
+
+    def writable():
+        barrier.wait()
+        astock.em_get("https://push2.eastmoney.com/test", min_interval=0)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a, b = pool.submit(readonly), pool.submit(writable)
+        a.result(); b.result()
+    assert len(calls) == 1
+
+
+def test_read_only_snapshot_reuses_cache_without_poisoning_normal_flight(monkeypatch):
+    import market
+    monkeypatch.setattr(market, "_CACHE", {})
+    monkeypatch.setattr(market, "_A_SHARE_SNAPSHOT_FLIGHT", None)
+    calls = []
+    monkeypatch.setattr(astock, "a_share_snapshot", lambda: calls.append(True) or [{"code": "600519"}])
+    with guard.read_only():
+        assert market.get_market_breadth()["status"] == "unavailable"
+    assert calls == []
+    assert market._A_SHARE_SNAPSHOT_FLIGHT is None
+    normal = market.get_a_share_snapshot_observation()
+    with guard.read_only():
+        cached = market.get_a_share_snapshot_observation()
+    assert calls == [True]
+    assert cached["rows"] == normal["rows"]
+    assert cached["fetched_at"] == normal["fetched_at"]
+    assert cached["is_cached"] is True
+
+
+def test_inbox_assembler_enters_and_restores_read_only_source_context():
+    import decision_inbox_runtime_assembler as inbox
+    from dataclasses import replace
+
+    def composition():
+        assert guard.is_read_only()
+        return {"evaluation_status": "NOT_EVALUATED"}
+    result = inbox.assemble_current_decision_inbox(
+        ports=replace(inbox.PRODUCTION_PORTS, composition_reader=composition))
+    assert result["evaluation_status"] == "NOT_EVALUATED"
+    assert not guard.is_read_only()
+
+
+def test_read_only_cold_snapshot_does_not_join_writable_inflight(monkeypatch):
+    import market
+    from concurrent.futures import Future
+    flight = Future()
+    monkeypatch.setattr(market, "_CACHE", {})
+    monkeypatch.setattr(market, "_A_SHARE_SNAPSHOT_FLIGHT", flight)
+    with guard.read_only(), pytest.raises(guard.Push2Blocked):
+        market.get_a_share_snapshot_observation()
+    assert market._A_SHARE_SNAPSHOT_FLIGHT is flight
+    assert not flight.done()
+    assert not guard._path().exists()
+
+
+def test_nested_source_context_remains_blocked_in_explicit_thread_handoff(monkeypatch):
+    from contextvars import copy_context
+    calls = _transport(monkeypatch)
+    with ThreadPoolExecutor(max_workers=1) as outer, ThreadPoolExecutor(max_workers=1) as inner:
+        def nested():
+            with guard.read_only():
+                return inner.submit(copy_context().run, guard.reserve).result()
+        with guard.read_only(), pytest.raises(guard.Push2Blocked):
+            outer.submit(copy_context().run, nested).result()
+    assert calls == []
+    assert not guard._path().exists()
+
+
+def test_inbox_capability_workers_preserve_source_context(monkeypatch):
+    import decision_inbox_runtime_assembler as inbox
+    import campaign_critical_data_runtime as cdr
+    from dataclasses import replace
+    calls = _transport(monkeypatch)
+    as_of = "2026-09-30T00:00:00Z"
+    dependency = cdr.market_sector_adapter.DEPENDENCY_ID
+    definition = {"required_dependency_ids": [dependency], "as_of": as_of}
+
+    def evaluator(_lake, definition):
+        try:
+            astock.em_get("https://push2.eastmoney.com/test", min_interval=0)
+            state = "USABLE"
+        except guard.Push2Blocked:
+            state = "UNKNOWN"
+        return {"dependency_id": dependency, "as_of": definition["as_of"], "state": state}
+
+    ports = replace(inbox.PRODUCTION_PORTS, market_sector_evaluator=evaluator)
+    with guard.read_only():
+        results = inbox._capability_results(definition, lake=None, ports=ports)
+    assert results[0]["state"] == "UNKNOWN"
+    assert calls == []
+    assert not guard._path().exists()
+    results = inbox._capability_results(definition, lake=None, ports=ports)
+    assert results[0]["state"] == "USABLE"
+    assert len(calls) == 1

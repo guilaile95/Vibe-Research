@@ -40,6 +40,7 @@ import copy
 from typing import Any, Callable, Mapping
 
 import campaign_service
+import push2_guard
 import campaign_critical_data_runtime as cdr
 import decision_assurance_projection as ra
 import decision_commit_runtime as dc_runtime
@@ -605,6 +606,7 @@ def _holding_setup_item(
 # 公共 API
 # ---------------------------------------------------------------------------
 
+@push2_guard.read_only()
 def assemble_current_decision_inbox(
     *,
     as_of: str | None = None,

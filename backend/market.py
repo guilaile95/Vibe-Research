@@ -16,6 +16,7 @@ from threading import Lock
 import astock
 import daily_review_errors
 import gstock
+import push2_guard
 
 BEIJING = timezone(timedelta(hours=8))
 _CACHE: dict = {}
@@ -362,6 +363,11 @@ def get_a_share_snapshot_observation() -> dict:
             cached = copy.deepcopy(hit[1])
             cached["is_cached"] = True
             return cached
+        # Read-only projections may reuse a completed observation, but must not
+        # lead/join a refresh whose persisted request budget can change underneath.
+        # Check before creating a shared flight so normal callers remain independent.
+        if push2_guard.is_read_only():
+            raise push2_guard.Push2Blocked("Push2 snapshot refresh is unavailable in read-only context")
         flight = _A_SHARE_SNAPSHOT_FLIGHT
         leader = flight is None
         if leader:
