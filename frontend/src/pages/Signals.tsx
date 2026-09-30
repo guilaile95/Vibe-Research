@@ -177,6 +177,8 @@ function GpuRentPanel() {
   const month = months[Math.min(activeMonth, Math.max(months.length - 1, 0))];
   const histGpus = data?.history?.gpus || [];
   const histStale = histGpus.filter((g) => g.stale);
+  // A failed series must stay visible even when an earlier series is only aged.
+  const histStaleObservation = histStale.find((g) => g.fetch_error) || histStale[0];
 
   // 主图：近一年三条日线。刻意不把 Kalshi 远期画进来——它按 Ornn 指数「整月平均」
   // 结算，与 Vast 日中位是两个市场两种口径，拼在一条线上会误导（实测就被看出"冲突"）。
@@ -303,7 +305,7 @@ function GpuRentPanel() {
           {/* ① 近一年走势 */}
           <div className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold">
             <LineChart className="h-4 w-4 text-primary" /> 近一年租金走势 · 每日中位价
-            {histStale.length > 0 && <StaleBadge observedAt={histStale[0].observed_at} fetchError={histStale[0].fetch_error} />}
+            {histStaleObservation && <StaleBadge observedAt={histStaleObservation.observed_at} fetchError={histStaleObservation.fetch_error} />}
           </div>
           <p className="mb-2 text-[11px] text-muted-foreground/70">
             {data!.history_source}

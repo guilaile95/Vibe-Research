@@ -11,3 +11,8 @@ test('GPU UI distinguishes sample age from failed retrieval and source collectio
   assert.ok(source.includes('历史/未验证卡数：'));
   assert.ok(!source.includes('这是市场状态，不是数据故障。'));
 });
+
+test('history badge prioritizes failed retrieval over another aged series', () => {
+  assert.ok(source.includes('histStale.find((g) => g.fetch_error) || histStale[0]'));
+  assert.ok(source.includes('fetchError={histStaleObservation.fetch_error}'));
+});
