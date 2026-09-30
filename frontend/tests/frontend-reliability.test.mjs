@@ -131,11 +131,14 @@ test('notes UI retains rows after failed delete and clear', () => {
   assert.match(label(tree), /Synthetic retained record/);
   assert.match(label(tree), /无法清除/);
 });
-test('notes save returns the same bounded list that survives reload', () => {
+test('notes save at capacity reports failure rather than silently evicting user research', () => {
   storage.set('vr-notes', JSON.stringify(Array.from({ length: notes.NOTES_LIMIT }, (_, i) => ({ id: String(i), kind:'test', title:'test', content:'test', ts:i }))));
-  const result = notes.addNote('test', 'new', 'new');
-  assert.equal(result.length, notes.NOTES_LIMIT);
-  assert.deepEqual(result, notes.loadNotes());
+  const raw = storage.get('vr-notes');
+  const h = harness('components/ui/SaveNoteButton.tsx', 'SaveNoteButton');
+  find(h.render(noteProps), 'button').props.onClick();
+  assert.match(label(h.render(noteProps)), /200 条上限/);
+  assert.doesNotMatch(label(h.render(noteProps)), /已存入沉淀/);
+  assert.equal(storage.get('vr-notes'), raw);
 });
 
 function startDebate(h, code = '600519') {

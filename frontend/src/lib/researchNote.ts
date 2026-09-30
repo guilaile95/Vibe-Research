@@ -13,6 +13,25 @@ export interface NoteResearchMetadata {
   nextQuestion?: string;
 }
 
+/** Sources describe supplied context, not proof that the model verified each source. */
+export function conversationNoteMetadata(
+  current: NoteResearchMetadata,
+  history: readonly (NoteResearchMetadata | undefined)[],
+): NoteResearchMetadata {
+  const parsed = parseNoteResearchMetadata(current);
+  const links = new Map((parsed.sourceLinks ?? []).map((link) => [link.url, link]));
+  for (const previous of history) {
+    if (!previous || previous.securityCode !== parsed.securityCode) continue;
+    for (const link of previous.sourceLinks ?? []) {
+      if (!links.has(link.url)) links.set(link.url, {
+        ...link, title: link.title.startsWith("历史轮次 · ") ? link.title : `历史轮次 · ${link.title}`,
+      });
+    }
+  }
+  if (links.size > 20) throw new Error("这段对话的研究来源已超过 20 条，请先保存已有回答并清空对话，再开始新的研究；本次未发送。");
+  return parseNoteResearchMetadata({ ...parsed, sourceLinks: [...links.values()] });
+}
+
 export function safeResearchSourceUrl(value: string): string | null {
   if (value.startsWith("/")) {
     const local = safeInternalReturnTo(value, "");

@@ -83,6 +83,7 @@ export function CandidateResearchNote({ code, records, evidenceStatus, returnTo,
         )}
       </details>
       <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">查看本次会带给 AI 的上下文</summary><pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap font-sans">{context}</pre></details>
+      <p className="text-xs text-muted-foreground">追问会沿用对话历史，保存回答时会保留历史来源并标注“历史轮次”；来源链接不代表 AI 已核验原文。更换证据后若要独立分析，请先清空 AI 对话。</p>
       <AskAiButton context={context} scopeKey={code} initialQuestion={question} noteMetadata={metadata} label="围绕这个问题问 AI" suggestions={question.trim() ? [question.trim()] : suggestedQuestion ? [suggestedQuestion] : ["先帮我梳理需要核对的事实，不作买卖建议"]} />
       <div className="grid gap-3 border-t border-border/50 pt-4 sm:grid-cols-3">
         {([

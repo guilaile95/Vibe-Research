@@ -373,7 +373,12 @@ async function main() {
     await page.getByTestId("portfolio-panel-advice").waitFor({ state: "visible", timeout: 15000 });
     const adviceBtn = page.getByRole("button", { name: /生成持仓|重新生成持仓/ }).first();
     if (await adviceBtn.isVisible().catch(() => false)) {
-      await adviceBtn.click();
+      const consent = page.waitForEvent("dialog");
+      const adviceClick = adviceBtn.click();
+      const consentDialog = await consent;
+      if (!consentDialog.message().includes("持股数量、成本、市值、盈亏")) throw new Error("Missing portfolio disclosure");
+      await consentDialog.accept();
+      await adviceClick;
       await page.waitForTimeout(3000);
       if (apiLog.advicePost < 1) {
         errors.push("advice button did not POST /api/portfolio/advice");

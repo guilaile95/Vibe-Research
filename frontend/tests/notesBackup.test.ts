@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  addNote,
+  deleteNote,
   NOTES_BACKUP_SCHEMA_VERSION,
   NOTES_LIMIT,
   createNotesBackupJson,
@@ -195,4 +197,22 @@ test("an empty validated backup can explicitly recover to an empty healthy colle
   assert.deepEqual(replaceCorruptedNotesFromBackupJson(createNotesBackupJson([]), ""), []);
   assert.deepEqual(loadNotesState(), { notes: [], error: "", corruptedRaw: null });
   assert.equal(storage.get("vr-notes"), "[]");
+});
+
+
+test("saving at capacity preserves every existing note and remains retryable after explicit cleanup", () => {
+  const current = Array.from({ length: NOTES_LIMIT }, (_, index) => note(`existing-${index}`, index));
+  const raw = JSON.stringify(current);
+  storage.set("vr-notes", raw);
+  assert.throws(() => addNote("暂定研究", "New", "Must not evict"), /先在研究记录页导出备份/);
+  assert.equal(storage.get("vr-notes"), raw);
+  deleteNote(current[0].id);
+  assert.equal(addNote("暂定研究", "New", "Explicitly freed room").length, NOTES_LIMIT);
+  assert.ok(loadNotesState().notes.some((entry) => entry.id === current[199].id));
+});
+
+test("over-limit legacy arrays cannot produce silently truncated exports or lose records on import", () => {
+  const current = Array.from({length: NOTES_LIMIT + 1}, (_, i) => note(`legacy-${i}`, i));
+  assert.throws(() => createNotesBackupJson(current), /未导出截断备份/);
+  assert.equal(mergeNotesFromBackup(current, [note('new', 9999)]).notes.length, current.length);
 });

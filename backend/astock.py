@@ -730,6 +730,10 @@ def full_valuation(code: str, *, valuation_reader=None) -> dict:
 
     out = {
         "name": q["name"], "code": code, "price": price,
+        # These timestamps describe the Tencent quote only, not fundamentals or forecasts.
+        "quote_source": "tencent",
+        "quote_data_time": q.get("data_time"),
+        "quote_trade_date": q.get("trade_date"),
         "mcap_yi": mcap_yi,
         "pe_ttm": pe_ttm,
         "pb": pb,
@@ -1611,18 +1615,29 @@ def stock_fund_flow_120d(code: str) -> list[dict]:
                    params=params, headers=headers, timeout=15).json()
     except Exception:
         return []
+    return _parse_fund_flow_rows(d)
+
+
+def _parse_fund_flow_rows(payload: dict) -> list[dict]:
+    """Shared history/delayed-source parsing; missing amounts are not zero."""
     rows = []
-    for line in d.get("data", {}).get("klines", []):
+    for line in (payload.get("data") or {}).get("klines") or []:
+        if not isinstance(line, str):
+            continue
         p = line.split(",")
+        if len(p) < 6:
+            # Keep a dated, truncated observation instead of silently filling its
+            # place with an older trading day when consumers form a window.
+            try:
+                datetime.strptime(p[0], "%Y-%m-%d")
+            except ValueError:
+                continue
+            p.extend([""] * (6 - len(p)))
         if len(p) >= 6:
-            def _f(x):
-                try:
-                    return float(x) if x not in ("-", "") else 0.0
-                except ValueError:
-                    return 0.0
             rows.append({
-                "date": p[0], "main_net": _f(p[1]), "small_net": _f(p[2]),
-                "mid_net": _f(p[3]), "large_net": _f(p[4]), "super_net": _f(p[5]),
+                "date": p[0], "main_net": _optional_float(p[1]), "small_net": _optional_float(p[2]),
+                "mid_net": _optional_float(p[3]), "large_net": _optional_float(p[4]),
+                "super_net": _optional_float(p[5]),
             })
     return rows
 

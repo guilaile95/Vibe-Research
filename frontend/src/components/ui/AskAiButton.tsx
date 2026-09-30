@@ -21,7 +21,7 @@ import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { storageGet, storageSet, storageRemove } from "@/lib/storage";
 import { parseReportChatCoverage } from "@/lib/reportChatCoverage";
 import { applyChatToolResult, chatToolStatusLabel, parseStoredChatTools, type ChatToolUse } from "@/lib/chatToolStatus";
-import { parseNoteResearchMetadata, type NoteResearchMetadata } from "@/lib/researchNote";
+import { conversationNoteMetadata, parseNoteResearchMetadata, type NoteResearchMetadata } from "@/lib/researchNote";
 
 // 对话持久化。此前 msgs 只是组件内的 useState：切页面卸载、刷新、
 // 关标签页，问过的东西全没了——每轮对话是花了自己 API 额度换来的，丢掉的是真金白银。
@@ -282,6 +282,16 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     // 未完成的轮次整轮不进 history（半截回答 + 它的提问）：
     // 模型会把残句当成自己上一轮的完整发言继续推理，孤立的提问则会被当成待答问题。
     const visibleHistory = boundedCompleteTurns(msgs);
+    let answerMetadata: NoteResearchMetadata | undefined;
+    try {
+      answerMetadata = noteMetadata ? conversationNoteMetadata(
+        { ...noteMetadata, question: q }, visibleHistory.map((message) => message.noteMetadata),
+      ) : undefined;
+    } catch (cause) {
+      setInput(q);
+      setErr(cause instanceof Error ? cause.message : "研究来源无法保存，本次未发送");
+      return;
+    }
     const history: ChatMsg[] = [
       ...visibleHistory.map(({ role, content }) => ({ role, content })),
       { role: "user", content: q },
@@ -293,7 +303,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
       ...visibleHistory,
       { role: "user", content: q },
       { role: "assistant", content: "", tools: [], partial: true,
-        noteMetadata: noteMetadata ? loadNoteMetadata({ ...noteMetadata, question: q }) : undefined },
+        noteMetadata: answerMetadata },
     ]);
     setLoading(true);
     const patchLast = (fn: (msg: StoredMsg) => StoredMsg) =>

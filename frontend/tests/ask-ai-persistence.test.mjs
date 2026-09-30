@@ -153,7 +153,8 @@ test("tool outcomes survive storage and partial answers cannot be saved as compl
 });
 
 test("research note metadata is captured per answer instead of read from the current selection", () => {
-  assert.match(source, /noteMetadata: noteMetadata \? loadNoteMetadata\(\{ \.\.\.noteMetadata, question: q \}\)/);
+  assert.match(source, /noteMetadata: answerMetadata/);
+  assert.match(source, /conversationNoteMetadata\([\s\S]*visibleHistory\.map/);
   assert.match(source, /noteMetadata: loadNoteMetadata\(m\.noteMetadata\)/);
   assert.match(source, /metadata=\{m\.noteMetadata\}/);
   assert.match(source, /if \(initialQuestion !== undefined\) setInput\(initialQuestion\); setOpen\(true\)/);

@@ -85,7 +85,7 @@ export function loadNotes(): Note[] {
 }
 
 function persist(notes: Note[]): void {
-  storageSetChecked(KEY, JSON.stringify(notes.slice(0, NOTES_LIMIT)));
+  storageSetChecked(KEY, JSON.stringify(notes));
   if (typeof window !== "undefined") window.dispatchEvent(new Event(NOTES_CHANGED_EVENT));
 }
 
@@ -93,10 +93,11 @@ export function createNotesBackupJson(
   notes: readonly Note[],
   exportedAt = new Date().toISOString(),
 ): string {
+  if (notes.length > NOTES_LIMIT) throw new Error(`本地记录超过 ${NOTES_LIMIT} 条，无法生成完整的标准备份；请先保留原始 vr-notes 数据，未导出截断备份。`);
   return `${JSON.stringify({
     schema_version: NOTES_BACKUP_SCHEMA_VERSION,
     exported_at: exportedAt,
-    notes: notes.slice(0, NOTES_LIMIT).map(({ id, kind, title, content, ts, research }) => ({
+    notes: notes.map(({ id, kind, title, content, ts, research }) => ({
       id,
       kind,
       title,
@@ -137,7 +138,7 @@ export function mergeNotesFromBackup(
   current: readonly Note[],
   imported: readonly Note[],
 ): NotesImportResult {
-  const existing = current.slice(0, NOTES_LIMIT);
+  const existing = [...current];
   const seen = new Set(existing.map((note) => note.id));
   const additions: Note[] = [];
 
@@ -191,7 +192,11 @@ export function addNote(kind: string, title: string, content: string, research?:
     ts: Date.now(),
     ...(research === undefined ? {} : { research: parseNoteResearchMetadata(research) }),
   };
-  const next = [note, ...readNotes()].slice(0, NOTES_LIMIT);
+  const current = readNotes();
+  if (current.length >= NOTES_LIMIT) {
+    throw new Error(`研究记录已达到 ${NOTES_LIMIT} 条上限；请先在研究记录页导出备份，再手动清理不需要的记录。已有记录未被删除。`);
+  }
+  const next = [note, ...current];
   persist(next);
   return next;
 }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import type { EvidenceRecord } from "../src/lib/api/types.ts";
-import { candidateResearchContext, candidateResearchSelection, candidateResearchSourceLinks, parseNoteResearchMetadata, safeResearchSourceUrl } from "../src/lib/researchNote.ts";
+import { conversationNoteMetadata, candidateResearchContext, candidateResearchSelection, candidateResearchSourceLinks, parseNoteResearchMetadata, safeResearchSourceUrl } from "../src/lib/researchNote.ts";
 import { addNote, createNotesBackupJson, importNotesBackupJson, loadNotesState, parseNotesBackupJson } from "../src/lib/notes.ts";
 
 const evidence = (id: string, overrides: Partial<EvidenceRecord> = {}): EvidenceRecord => ({
@@ -82,4 +82,19 @@ test("candidate journey mounts existing AI and local notes without formal-state 
   assert.match(page, /已有记录，待核验/);
   assert.doesNotMatch(page, /最高影响的下一研究问题|CheckCircle2/);
   assert.match(page, /<CandidateResearchNote\s+key=\{code\}/);
+});
+
+
+test("AI answer provenance retains historical sources without relabeling them as current selection", () => {
+  const a = { securityCode: "600519", sourceLinks: [{ title: "A", url: "https://example.com/a" }] };
+  const b = { securityCode: "600519", question: "Follow up", sourceLinks: [{ title: "B", url: "https://example.com/b" }] };
+  const result = conversationNoteMetadata(b, [a]);
+  assert.deepEqual(result.sourceLinks, [b.sourceLinks[0], { title: "历史轮次 · A", url: "https://example.com/a" }]);
+  assert.equal(result.question, "Follow up");
+  assert.equal(conversationNoteMetadata({ securityCode: "600519", sourceLinks: [] }, [result]).sourceLinks?.length, 2);
+  assert.deepEqual(conversationNoteMetadata(b, [{ ...a, securityCode: "000001" }]).sourceLinks, b.sourceLinks);
+  assert.deepEqual(conversationNoteMetadata(a, [result]).sourceLinks?.[0], a.sourceLinks[0]);
+  assert.equal(conversationNoteMetadata(b, [result]).sourceLinks?.[1].title, "历史轮次 · A");
+  assert.throws(() => conversationNoteMetadata(b, [{ ...a, sourceLinks: Array.from({length:20}, (_, i) => ({ title:String(i), url:`https://example.com/${i}` })) }]), /超过 20 条/);
+  assert.equal(a.sourceLinks[0].title, "A");
 });

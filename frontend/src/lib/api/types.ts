@@ -505,6 +505,9 @@ export interface Valuation {
   eps_26e: number | null; eps_27e: number | null; pe_26e: number | null;
   cagr_pct: number | null; peg: number | null; digest_years: number | null;
   analyst_count: number; forecast_note?: string;
+  quote_source?: string | null;
+  quote_data_time?: string | null;
+  quote_trade_date?: string | null;
 }
 
 
@@ -1525,7 +1528,7 @@ export interface HolderRow { date: string; holder_num: number; change_ratio: num
 
 export interface DividendRow { date: string; bonus_rmb: number; transfer_ratio: number; bonus_ratio: number | null; plan: string }
 
-export interface FundFlowRow { date: string; main_net: number; small_net: number; mid_net: number; large_net: number; super_net: number }
+export interface FundFlowRow { date: string; main_net: number | null; small_net: number | null; mid_net: number | null; large_net: number | null; super_net: number | null }
 
 export interface DtSeat { name: string; buy_amt: number; sell_amt: number; net: number }
 
