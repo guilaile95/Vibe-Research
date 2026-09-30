@@ -124,3 +124,9 @@ export async function chatStream(
 export function chat(messages: ChatMsg[], context: string): Promise<ChatResult> {
   return chatStream(messages, context);
 }
+
+// Manual, synthetic, no-tools probe of explicit draft values; never saves configuration.
+export function testModelConnection(llm: LlmConfig, signal?: AbortSignal): Promise<NdjsonStreamResult> {
+  if (llm.provider.startsWith("cli-")) throw new ApiError("订阅或旧版 CLI 暂不支持此限额连接测试", 400);
+  return streamNdjson("/ai/connection-test", { llm }, {}, signal);
+}

@@ -22,7 +22,7 @@ test("empty storage and unknown backend do not claim a working model", (t) => {
   const status = firstResearchStatus(readFirstResearchLocalState(), null);
   assert.match(status.browser, /未读取到完整配置/);
   assert.match(status.mirror, /状态未知/);
-  assert.match(status.model, /未验证模型调用/);
+  assert.match(status.model, /不代表模型已成功回答/);
   assert.match(status.research, /尚无本地研究记录/);
 });
 
@@ -32,7 +32,7 @@ test("saved credentials distinguish configured from model success and research",
   assert.doesNotMatch(JSON.stringify(local), /fixture-secret|fixture.invalid/);
   const status = firstResearchStatus(local, { configured: true, provider: "openai" });
   assert.match(status.browser, /已读取到保存/);
-  assert.match(status.model, /未验证/);
+  assert.match(status.model, /不代表模型已成功回答/);
   assert.match(status.capability, /受控查询工具/);
   assert.match(status.mirror, /不代表.*完全一致/);
   assert.match(status.research, /尚无/);
@@ -79,7 +79,7 @@ test("provider, research, cross-tab and focus changes refresh and clean up liste
   for (const event of [LLM_CHANGED_EVENT, NOTES_CHANGED_EVENT, "storage", "focus"]) target.dispatchEvent(new Event(event));
   assert.equal(calls, 4);
   assert.match(firstResearchStatus(state, null).capability, /当前页面上下文/);
-  assert.match(firstResearchStatus(state, null).model, /未验证/);
+  assert.match(firstResearchStatus(state, null).model, /不代表模型已成功回答/);
   unsubscribe();
   target.dispatchEvent(new Event(LLM_CHANGED_EVENT));
   assert.equal(calls, 4);
@@ -103,5 +103,5 @@ test("legacy CLI configuration never implies API tool support", (t) => {
   const status = firstResearchStatus(readFirstResearchLocalState(), null);
   assert.match(status.capability, /旧版 CLI 配置/);
   assert.doesNotMatch(status.capability, /API 对话/);
-  assert.match(status.model, /未验证/);
+  assert.match(status.model, /不代表模型已成功回答/);
 });

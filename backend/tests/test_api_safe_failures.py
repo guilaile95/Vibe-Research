@@ -32,7 +32,7 @@ def test_provider_failure_is_fixed_safe_502(monkeypatch,endpoint,provider):
 
 
 def test_generic_502_literals_never_interpolate_raw_caught_exceptions():
-    tree = ast.parse(Path(app_module.__file__).read_text())
+    tree = ast.parse(Path(app_module.__file__).read_text(encoding="utf-8"))
     for handler in (node for node in ast.walk(tree) if isinstance(node,ast.ExceptHandler) and node.name and isinstance(node.type,ast.Name) and node.type.id=="Exception"):
         for call in (node for node in ast.walk(handler) if isinstance(node,ast.Call)):
             if not isinstance(call.func,ast.Name) or call.func.id != 'HTTPException' or len(call.args)<2:

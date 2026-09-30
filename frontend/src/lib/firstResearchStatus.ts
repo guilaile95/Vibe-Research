@@ -32,7 +32,7 @@ export function firstResearchStatus(local: FirstResearchLocalState, mirror: Cred
       : !mirror.configured ? "尚未保存，请在下方保存配置"
       : local.provider && mirror.provider !== local.provider ? "与浏览器的接入方式不同，请重新保存以同步"
       : "后台已有配置（不代表与浏览器配置完全一致）",
-    model: "本页未验证模型调用；保存配置或登录成功不代表模型已成功回答",
+    model: "保存配置或登录成功不代表模型已成功回答；可在下方手动测试当前 API 配置",
     capability: local.provider === "cli-codex"
       ? "Codex 订阅基于当前页面上下文回答，不提供 Shell、磁盘、网页搜索或正式写入能力。"
       : local.provider?.startsWith("cli-")

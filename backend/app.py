@@ -1864,6 +1864,88 @@ class _LeadAnalysisStreamingResponse(_DisconnectAwareStreamingResponse):
                 await self.body_iterator.aclose()
 
 
+class AIConnectionTestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    llm: LLMConfig
+
+
+def _validate_probe_base_url(value: str) -> str:
+    """Probe disclosure and actual recipient must share unambiguous URL syntax."""
+    from urllib.parse import urlsplit
+    import ipaddress
+    import re
+    try:
+        if any(ord(char) <= 32 or ord(char) == 127 or char == "\\" for char in value):
+            raise ValueError()
+        parsed = urlsplit(value)
+        host = parsed.hostname or ""
+        if (parsed.scheme not in {"http", "https"} or not host or
+                parsed.username is not None or parsed.password is not None or
+                "?" in value or "#" in value or not host.isascii() or "%" in host):
+            raise ValueError()
+        # Force malformed ports to fail before any connection work.
+        _ = parsed.port
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            # Reject legacy integer/octal/hex IP aliases, which different URL
+            # stacks normalize differently and can bypass literal-IP checks.
+            if re.fullmatch(r"(?:0[xX][0-9a-fA-F]+|[0-9]+)(?:\.(?:0[xX][0-9a-fA-F]+|[0-9]+))*\.?", host):
+                raise ValueError()
+        return value
+    except (ValueError, TypeError):
+        raise HTTPException(400, "连接测试 Base URL 格式无效，请使用不含账号密码、查询参数或片段的明确 HTTP(S) 地址") from None
+
+
+@app.post("/api/ai/connection-test")
+async def test_ai_connection(req: AIConnectionTestRequest):
+    """One synthetic API request; no private context, state reads or writes."""
+    if req.llm.provider.strip().startswith("cli-"):
+        raise HTTPException(400, "连接测试仅支持 API Compatible 接入")
+    _require_llm_ready(req.llm)
+    _validate_probe_base_url(req.llm.baseURL)
+    disconnect_event = threading.Event()
+    cfg = {**req.llm.model_dump(), "_cancel_event": disconnect_event}
+
+    async def gen():
+        source = None
+        try:
+            source = chat_layer.stream_api_messages(
+                cfg, chat_layer.CONNECTION_TEST_MESSAGES,
+                limits=chat_layer.CONNECTION_TEST_LIMITS,
+            )
+            has_text = False
+            saw_done = False
+            async for event in source:
+                if disconnect_event.is_set():
+                    return
+                if saw_done or not isinstance(event, dict):
+                    raise ValueError("invalid probe event")
+                if event.get("type") == "delta" and isinstance(event.get("text"), str):
+                    has_text = has_text or bool(event["text"].strip())
+                elif event.get("type") == "done":
+                    saw_done = True
+                else:
+                    raise ValueError("invalid probe event")
+            if not has_text or not saw_done:
+                raise ValueError("incomplete probe")
+            if not disconnect_event.is_set():
+                yield json.dumps({"type": "done", "trace": [], "rounds": 1}) + "\n"
+        except Exception:
+            if not disconnect_event.is_set():
+                yield json.dumps({"type": "error", "message": "模型连接测试失败，请检查配置后重试"},
+                                 ensure_ascii=False) + "\n"
+        finally:
+            disconnect_event.set()
+            if source is not None:
+                with anyio.move_on_after(chat_layer.CONNECTION_TEST_LIMITS.cleanup_grace, shield=True):
+                    await source.aclose()
+
+    return _LeadAnalysisStreamingResponse(
+        gen(), media_type="application/x-ndjson", disconnect_event=disconnect_event,
+    )
+
+
 @app.post("/api/daily-review/lead-analysis")
 async def analyze_daily_review_lead(req: DailyReviewLeadRequest):
     """Display snapshot -> one lead -> no-tools stream; no AI result persistence."""

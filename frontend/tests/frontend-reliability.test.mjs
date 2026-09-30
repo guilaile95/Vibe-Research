@@ -8,6 +8,7 @@ import * as llm from '../src/lib/llm.ts';
 import * as apiClient from '../src/lib/api.ts';
 import * as models from '../src/lib/ai-models.ts';
 import * as researchNote from '../src/lib/researchNote.ts';
+import * as modelProbe from '../src/lib/modelConnectionProbe.ts';
 
 // Component behavior in a deterministic hook runner: real TSX handlers/effects and
 // storage modules, mocked network/UI dependencies. No browser or real credentials.
@@ -31,7 +32,7 @@ function harness(path, name, overrides = {}) {
     react: React,
     'react-router-dom': { useSearchParams: () => [searchParams, () => {}], Link: 'link' },
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }), Fragment: 'fragment' },
-    '@/lib/api': apiClient, '@/lib/notes': notes, '@/lib/researchNote': researchNote, ...overrides,
+    '@/lib/api': apiClient, '@/lib/notes': notes, '@/lib/researchNote': researchNote, '@/lib/modelConnectionProbe': modelProbe, ...overrides,
   };
   const exports = {};
   const js = ts.transpileModule(readFileSync(new URL('../src/' + path, import.meta.url), 'utf8'), {
@@ -248,10 +249,10 @@ test('credential helpers reject failed writes/removals rather than notifying suc
   assert.throws(() => apiClient.saveAccessKey(''), /无法清除/);
   assert.deepEqual(llm.loadLlm(), dummyConfig);
 });
-function settingsHarness(overrides = {}) {
+function settingsHarness(overrides = {}, llmOverrides = {}) {
   const messages = [];
   const h = harness('pages/Settings.tsx', 'Settings', {
-    '@/lib/llm': llm, '@/lib/ai-models': models,
+    '@/lib/llm': { ...llm, ...llmOverrides }, '@/lib/ai-models': models,
     sonner: { toast: { success: message => messages.push(['success', message]), error: message => messages.push(['error', message]) } },
     '@/lib/api': { ...apiClient, api: { getAiCredentialStatus: async () => ({ configured:true }), putAiCredential: async () => {}, deleteAiCredential: async () => {}, ...overrides } },
   });
@@ -433,4 +434,37 @@ test('reflection of a stock-tagged note stays in the filtered research context w
   const candidate = harness('components/campaign/CandidateResearchNote.tsx', 'CandidateResearchNote');
   const tree = candidate.render({code:'600519', records:[], evidenceStatus:'ready', returnTo:'/candidates/600519'});
   assert.match(label(tree), /反思 · Stock-tagged noteAI 原文，未经用户确认/);
+});
+
+
+test('Settings manual probe uses unsaved form values and changing an API key cancels stale success', async () => {
+  llm.saveLlm(dummyConfig);
+  const before = storage.get('vr-llm');
+  const pending = deferred(); const calls = []; let signal;
+  const { h } = settingsHarness({}, { testModelConnection: (cfg, s) => { calls.push(cfg); signal=s; return pending.promise; } });
+  h.render(); await tick();
+  let tree=h.render(); assert.equal(calls.length,0);
+  testId(tree,'wave5-model-input').props.onChange({target:{value:'unsaved-probe-model'}});
+  tree=h.render(); testId(tree,'model-connection-test-start').props.onClick();
+  testId(tree,'model-connection-test-start').props.onClick();
+  assert.equal(calls.length,1); assert.equal(calls[0].model,'unsaved-probe-model');
+  assert.equal(storage.get('vr-llm'),before);
+  tree=h.render(); testId(tree,'wave5-api-key-input').props.onChange({target:{value:'changed-fixture'}});
+  assert.equal(signal.aborted,true); pending.resolve({}); await tick();
+  assert.equal(testId(h.render(),'model-connection-test-result'),undefined);
+  assert.equal(storage.get('vr-llm'),before); h.unmount();
+});
+
+test('Settings cancellation is visible, and changing backend access key disables probing until saved', async () => {
+  llm.saveLlm(dummyConfig);
+  const pending=deferred(); let signal; let calls=0;
+  const {h}=settingsHarness({}, {testModelConnection:(_cfg,s)=>{calls++;signal=s;return pending.promise;}});
+  h.render(); await tick(); let tree=h.render();
+  testId(tree,'model-connection-test-start').props.onClick();
+  tree=h.render(); testId(tree,'model-connection-test-cancel').props.onClick();
+  assert.equal(signal.aborted,true); pending.resolve({}); await tick();
+  assert.match(label(h.render()),/已停止等待/);
+  tree=h.render(); nodes(tree).find(n=>n.type==='input' && n.props.placeholder?.includes('VR_API_KEY')).props.onChange({target:{value:'UNSAVED-BACKEND-KEY'}});
+  assert.equal(testId(h.render(),'model-connection-test-start').props.disabled,true);
+  assert.equal(calls,1); h.unmount();
 });
