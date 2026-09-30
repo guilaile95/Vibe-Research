@@ -1757,6 +1757,71 @@ try {
   await page.reload({ waitUntil: "networkidle" });
   await page.getByTestId("candidate-research-note").getByText(/合成待办：核对下一期现金流/).waitFor();
 
+  // Unsaved text stays in memory until explicitly saved or abandoned. No draft persistence.
+  const unsavedDialog = page.getByRole("dialog", { name: "研究内容尚未保存" });
+  const questionInput = researchNote.getByLabel("本次要核对的问题");
+  await questionInput.fill("   ");
+  await researchNote.getByRole("link", { name: "查看这只股票的研究记录 →", exact: true }).click();
+  await page.waitForURL((url) => url.pathname === "/notes");
+  await page.goBack();
+  await questionInput.fill("保留这个尚未保存的问题");
+  const candidateUrl = page.url();
+  for (const target of [
+    researchNote.getByRole("link", { name: "查看这只股票的研究记录 →", exact: true }),
+    page.getByTestId("candidate-existing-evidence").first(),
+    page.locator('a[href="/settings"]').first(),
+  ]) {
+    await target.click();
+    await unsavedDialog.waitFor();
+    assert.equal(page.url(), candidateUrl);
+    await unsavedDialog.getByRole("button", { name: "留下继续编辑", exact: true }).click();
+    assert.equal(await questionInput.inputValue(), "保留这个尚未保存的问题");
+  }
+  await page.evaluate(() => history.forward());
+  await unsavedDialog.waitFor();
+  await unsavedDialog.getByRole("button", { name: "留下继续编辑", exact: true }).click();
+  assert.equal(page.url(), candidateUrl);
+  assert.equal(await questionInput.inputValue(), "保留这个尚未保存的问题");
+  // Same-route section links preserve mounted inputs without asking to discard them.
+  await page.getByRole("navigation", { name: "候选研究快速接续" }).getByRole("link").first().click();
+  assert.equal(await unsavedDialog.isVisible(), false);
+  assert.equal(await questionInput.inputValue(), "保留这个尚未保存的问题");
+  // Refresh protection is browser-owned; explicitly decline this one test dialog.
+  const refreshDialog = page.waitForEvent("dialog");
+  const reloadAttempt = page.reload().catch(() => {});
+  const refresh = await refreshDialog;
+  assert.equal(refresh.type(), "beforeunload");
+  await refresh.dismiss();
+  await reloadAttempt;
+  assert.equal(await questionInput.inputValue(), "保留这个尚未保存的问题");
+  // Failed storage writes must not clear the guard or claim success.
+  await researchNote.getByLabel("我的暂定看法", { exact: true }).fill("尚未保存的合成看法");
+  await page.evaluate(() => {
+    window.__fixtureSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key === "vr-notes") throw new DOMException("Synthetic quota failure", "QuotaExceededError");
+      return window.__fixtureSetItem.call(this, key, value);
+    };
+  });
+  await researchNote.getByRole("button", { name: "保存暂定研究", exact: true }).click();
+  await researchNote.getByRole("alert").waitFor();
+  await researchNote.getByRole("link", { name: "查看这只股票的研究记录 →", exact: true }).click();
+  await unsavedDialog.waitFor();
+  await unsavedDialog.getByRole("button", { name: "留下继续编辑", exact: true }).click();
+  await page.evaluate(() => { Storage.prototype.setItem = window.__fixtureSetItem; delete window.__fixtureSetItem; });
+  // Actual history navigation, including repeated cancel and leave.
+  await page.goBack(); // Same-page hash history is safe and keeps the form mounted.
+  assert.equal(await unsavedDialog.isVisible(), false);
+  await page.evaluate(() => history.back());
+  await unsavedDialog.waitFor();
+  await unsavedDialog.press("Escape");
+  assert.equal(await questionInput.inputValue(), "保留这个尚未保存的问题");
+  await page.evaluate(() => history.back());
+  await unsavedDialog.waitFor();
+  await unsavedDialog.getByRole("button", { name: "放弃未保存内容并离开", exact: true }).click();
+  await page.waitForURL((url) => url.pathname === "/notes");
+  // Begin A with a real in-app return link to B (no synthetic history mutation).
+  await page.goto(`http://127.0.0.1:${port}/candidates/600519?return_to=${encodeURIComponent("/candidates/600520#candidate-research-note")}`, { waitUntil: "networkidle" });
   // Navigate A→B in the SPA while A's model response is delayed. Inputs and transcript must reset.
   await researchNote.getByLabel("本次要核对的问题").fill("A-only pending question");
   await researchNote.getByRole("button", { name: "围绕这个问题问 AI", exact: true }).click();
@@ -1764,7 +1829,14 @@ try {
   await aiPanel.getByRole("button", { name: "发送", exact: true }).click();
   for (let attempts = 0; !releaseDelayedChat && attempts < 100; attempts += 1) await page.waitForTimeout(10);
   assert.equal(typeof releaseDelayedChat, "function", "delayed fixture request should be captured");
-  await page.evaluate(() => { history.pushState({}, "", "/candidates/600520#candidate-research-note"); window.dispatchEvent(new PopStateEvent("popstate")); });
+  await aiPanel.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByTestId("candidate-stock-data-entry").click();
+  await unsavedDialog.waitFor();
+  await unsavedDialog.getByRole("button", { name: "留下继续编辑", exact: true }).click();
+  assert.equal(await questionInput.inputValue(), "A-only pending question");
+  await page.getByTestId("candidate-stock-data-entry").click();
+  await unsavedDialog.waitFor();
+  await unsavedDialog.getByRole("button", { name: "放弃未保存内容并离开", exact: true }).click();
   await page.locator('[data-testid="candidate-workspace"][data-security-code="600520"]').waitFor();
   releaseDelayedChat();
   await page.waitForLoadState("networkidle");

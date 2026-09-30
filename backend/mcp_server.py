@@ -1,8 +1,8 @@
 """Vibe-Research MCP server —— 把 A股数据工具暴露给 Claude Code 等 agent。
 
-零第三方依赖（纯标准库 JSON-RPC over stdio），复用 astock 数据层 +
-chat.py 里的工具定义。给「订阅接入 / 高手」通道用：agent 用自己的
-订阅额度直接调数据、多步分析，不占本产品成本。
+协议层使用标准库 JSON-RPC over stdio；数据模块仍依赖完整后端环境。
+复用 chat.py 的工具注册表及执行器，供外部 agent 调用。
+MCP 本身不调用模型；模型与数据服务的费用、额度由各接入服务决定。
 
 挂进 Claude Code：
     claude mcp add vibe-research -- /路径/backend/.venv/bin/python /路径/backend/mcp_server.py

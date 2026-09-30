@@ -277,6 +277,9 @@ def _ip_blocked(host: str) -> bool:
         ip = ipaddress.ip_address(host)
     except ValueError:
         return False  # 非字面 IP（域名）——交给 _check_base_url 决定是否解析核对
+    # IPv4-mapped IPv6 reaches the embedded IPv4 destination. Check that
+    # address against the same metadata/private policy before constructing HTTP.
+    ip = getattr(ip, "ipv4_mapped", None) or ip
     if any(ip in n for n in _METADATA_NETS):  # 云元数据 / 链路本地：SSRF 头号目标，始终禁
         return True
     if _PUBLIC_MODE and any(ip in n for n in _PRIVATE_NETS):  # 公网姿态再禁内网 / 本机

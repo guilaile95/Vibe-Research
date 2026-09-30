@@ -13,7 +13,7 @@ import * as modelProbe from '../src/lib/modelConnectionProbe.ts';
 // Component behavior in a deterministic hook runner: real TSX handlers/effects and
 // storage modules, mocked network/UI dependencies. No browser or real credentials.
 function harness(path, name, overrides = {}) {
-  const states = [], effects = [], refs = [], timers = new Map();
+  const states = [], effects = [], refs = [], timers = new Map(), listeners = new Map();
   let cursor = 0, pending = [], timerId = 0;
   const React = {
     useState(init) { const i = cursor++; if (!(i in states)) states[i] = typeof init === 'function' ? init() : init; return [states[i], value => { states[i] = typeof value === 'function' ? value(states[i]) : value; }]; },
@@ -30,7 +30,7 @@ function harness(path, name, overrides = {}) {
   const searchParams = new URLSearchParams();
   const mods = {
     react: React,
-    'react-router-dom': { useSearchParams: () => [searchParams, () => {}], Link: 'link' },
+    'react-router-dom': { useSearchParams: () => [searchParams, () => {}], Link: 'link', useBlocker: () => ({ state: 'unblocked' }) },
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }), Fragment: 'fragment' },
     '@/lib/api': apiClient, '@/lib/notes': notes, '@/lib/researchNote': researchNote, '@/lib/modelConnectionProbe': modelProbe, ...overrides,
   };
@@ -40,10 +40,12 @@ function harness(path, name, overrides = {}) {
   }).outputText;
   vm.runInNewContext(js, {
     exports, require: name => mods[name] ?? generic, AbortController, DOMException, Error, console, URLSearchParams, Map, Set, Date,
-    window: { setTimeout: fn => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), addEventListener() {}, removeEventListener() {} }, confirm: () => true,
+    window: { setTimeout: fn => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), addEventListener(type, fn) { listeners.set(type, fn); }, removeEventListener(type, fn) { if (listeners.get(type) === fn) listeners.delete(type); } }, confirm: () => true,
   }, { filename: path });
   return {
     render(props = {}) { cursor = 0; const tree = exports[name](props); const current = pending; pending = []; current.forEach(fn => fn()); return tree; },
+    emit(type, event) { listeners.get(type)?.(event); },
+    hasListener(type) { return listeners.has(type); },
     flushTimers() { const current = [...timers.values()]; timers.clear(); current.forEach(fn => fn()); },
     unmount() { effects.forEach(effect => effect?.cleanup?.()); },
   };
@@ -467,4 +469,80 @@ test('Settings cancellation is visible, and changing backend access key disables
   tree=h.render(); nodes(tree).find(n=>n.type==='input' && n.props.placeholder?.includes('VR_API_KEY')).props.onChange({target:{value:'UNSAVED-BACKEND-KEY'}});
   assert.equal(testId(h.render(),'model-connection-test-start').props.disabled,true);
   assert.equal(calls,1); h.unmount();
+});
+
+
+test('candidate unsaved guard follows only meaningful text, save success, and actual route changes', () => {
+  let shouldBlock;
+  const blocker = { state: 'unblocked', reset() { this.state = 'unblocked'; }, proceed() { this.state = 'proceeding'; } };
+  const h = harness('components/campaign/CandidateResearchNote.tsx', 'CandidateResearchNote', {
+    'react-router-dom': { Link: 'link', useBlocker: fn => { shouldBlock = fn; return blocker; } },
+  });
+  const props = { code:'600519', records:[], evidenceStatus:'ready', returnTo:'/candidates/600519' };
+  const route = (pathname, search = '', hash = '') => ({ pathname, search, hash });
+  const currentLocation = route('/candidates/600519');
+  const blocks = (nextLocation = route('/notes')) => shouldBlock({currentLocation, nextLocation});
+  const edit = (fieldLabel, text) => {
+    const field = find(h.render(props), 'label', fieldLabel);
+    nodes(field).find(node => ['input', 'textarea'].includes(node.type)).props.onChange({target:{value:text}});
+    return h.render(props);
+  };
+  h.render(props);
+  assert.equal(blocks(), false);
+  assert.equal(h.hasListener('beforeunload'), false);
+  edit('本次要核对的问题', '   ');
+  assert.equal(blocks(), false);
+  for (const field of ['本次要核对的问题', '我的暂定看法', '反证 / 不确定处', '下次核对']) {
+    edit(field, 'synthetic pending research');
+    assert.equal(blocks(), true, field);
+    assert.equal(h.hasListener('beforeunload'), true);
+    for (const destination of ['/notes', '/settings', '/evidence/fixture', '/candidates/000001']) assert.equal(blocks(route(destination)), true);
+    assert.equal(blocks(route('/candidates/600519', '', '#candidate-existing-research')), false);
+    assert.equal(blocks(route('/candidates/600519', '?return_to=/notes')), true);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      blocker.state = 'blocked';
+      find(h.render(props), 'button', '留下继续编辑').props.onClick();
+      assert.equal(blocker.state, 'unblocked');
+      assert.equal(blocks(), true);
+    }
+    edit(field, '');
+    assert.equal(blocks(), false);
+  }
+  edit('我的暂定看法', 'Save this');
+  const unload = {prevented:false, returnValue:undefined, preventDefault(){this.prevented=true;}};
+  h.emit('beforeunload', unload);
+  assert.equal(unload.prevented, true);
+  assert.equal(unload.returnValue, '');
+  globalThis.localStorage = {...workingStorage, setItem(){throw Error('quota');}};
+  find(h.render(props), 'button', '保存暂定研究').props.onClick();
+  h.render(props);
+  assert.equal(blocks(), true);
+  assert.equal(h.hasListener('beforeunload'), true);
+  globalThis.localStorage = workingStorage;
+  find(h.render(props), 'button', '保存暂定研究').props.onClick();
+  h.render(props);
+  assert.equal(blocks(), false);
+  assert.equal(h.hasListener('beforeunload'), false);
+  edit('我的暂定看法', '  Save this  ');
+  assert.equal(blocks(), false);
+  // Metadata refresh and changing selected evidence do not create pending text.
+  h.render({...props, evidenceStatus:'loading', returnTo:'/candidates/600519?return_to=/notes'});
+  assert.equal(blocks(), false);
+  const evidenceProps = {...props, records:[{id:'fixture', subject_type:'stock', subject_id:'600519', deleted:0, claim:'Synthetic evidence', source_title:'Fixture', source_url:'https://example.com/source', classification:'inference', confidence:'low'}]};
+  let refreshed = h.render(evidenceProps);
+  nodes(refreshed).find(node => node.props?.type === 'checkbox').props.onChange({target:{checked:true}});
+  h.render(evidenceProps);
+  assert.equal(blocks(), false);
+  h.render({...evidenceProps, records:[{...evidenceProps.records[0], source_title:'Updated fixture source'}]});
+  assert.equal(blocks(), false);
+  edit('我的暂定看法', 'Changed after save');
+  assert.equal(blocks(), true);
+  edit('我的暂定看法', 'Save this');
+  assert.equal(blocks(), false);
+  edit('下次核对', 'New question');
+  blocker.state = 'blocked';
+  find(h.render(props), 'button', '放弃未保存内容并离开').props.onClick();
+  assert.equal(blocker.state, 'proceeding');
+  h.unmount();
+  assert.equal(h.hasListener('beforeunload'), false);
 });

@@ -1,7 +1,7 @@
 """Vibe-Research 后端 —— A股数据层 HTTP 接口（FastAPI）。
 
 端点全部在 /api 下，前端 vite 代理 /api → localhost:8900。
-只读、无状态，按用户传入代码返回行情 / 研报 / 资金等数据。
+包含公开市场查询、本地研究与账户记录，以及受控 AI 调用；并非只读或无状态服务。
 
 启动：
     uvicorn app:app --host 127.0.0.1 --port 8900
@@ -2388,6 +2388,8 @@ class TTLCache:
         self._data: OrderedDict = OrderedDict()
         self._max = max_entries
         self._lock = threading.Lock()
+        self._flight_lock = threading.Lock()
+        self._flights = {}
 
     def get(self, key, ttl: float):
         with self._lock:
@@ -2408,6 +2410,37 @@ class TTLCache:
             self._data[key] = (time.time(), val)
             while len(self._data) > self._max:
                 self._data.popitem(last=False)
+
+    def get_or_fetch(self, key, ttl: float, fetch, *, wait_timeout: float = 120):
+        """Share an overlapping miss, without holding a global lock during I/O.
+
+        Failures belong only to that flight; a later independent call may retry.
+        A waiter timing out does not cancel the owner or start another fetch.
+        """
+        from concurrent.futures import Future
+        with self._flight_lock:
+            hit = self.get(key, ttl)
+            if hit is not _CACHE_MISS:
+                return hit
+            flight = self._flights.get(key)
+            owner = flight is None
+            if owner:
+                flight = Future()
+                self._flights[key] = flight
+        if not owner:
+            return flight.result(timeout=wait_timeout)
+        try:
+            value = fetch()
+            self.set(key, value)  # TTL begins when the actual fetch finishes.
+            flight.set_result(value)
+            return value
+        except BaseException as error:
+            flight.set_exception(error)
+            raise
+        finally:
+            with self._flight_lock:
+                if self._flights.get(key) is flight:
+                    del self._flights[key]
 
 
 _PCT_CACHE = TTLCache()
@@ -2614,12 +2647,7 @@ _DC_CACHE = TTLCache(max_entries=1024)  # key=(endpoint, code) -> (ts, data)
 
 def _cached(endpoint: str, code: str, ttl: int, fetch):
     key = (endpoint, code)
-    hit = _DC_CACHE.get(key, ttl)
-    if hit is not _CACHE_MISS:
-        return hit
-    data = fetch()
-    _DC_CACHE.set(key, data)
-    return data
+    return _DC_CACHE.get_or_fetch(key, ttl, fetch)
 
 
 @app.get("/api/margin")

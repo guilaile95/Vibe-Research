@@ -334,3 +334,23 @@ def test_ambiguous_probe_url_rejected_before_transport(monkeypatch, url):
 def test_cr_only_sse_lines_are_supported_with_the_same_budgets(monkeypatch):
     transport(monkeypatch, [(sse() + b"data: [DONE]\n\n").replace(b"\n", b"\r")])
     assert events(post()) == [DONE]
+
+
+@pytest.mark.parametrize('host', ['169.254.169.254', '::ffff:169.254.169.254', '::ffff:a9fe:a9fe', 'fe80::1'])
+def test_metadata_literals_fail_before_client_creation_even_without_proxy(monkeypatch, host):
+    client_factory = MagicMock(side_effect=AssertionError('HTTP client must not be created'))
+    monkeypatch.setattr(chat.httpx, 'AsyncClient', client_factory)
+    assert chat._ip_blocked(host)
+    address = f'[{host}]' if ':' in host else host
+    assert events(post({**LLM, 'baseURL': f'https://{address}/v1'})) == [ERROR]
+    client_factory.assert_not_called()
+
+
+@pytest.mark.parametrize('host', ['::ffff:127.0.0.1', '::ffff:192.168.1.1', '::ffff:10.0.0.1'])
+def test_mapped_private_addresses_follow_public_mode_policy(monkeypatch, host):
+    monkeypatch.setattr(chat, '_PUBLIC_MODE', True)
+    assert chat._ip_blocked(host)
+    with pytest.raises(RuntimeError, match='不允许'):
+        chat._check_base_url(f'https://[{host}]/v1')
+    monkeypatch.setattr(chat, '_PUBLIC_MODE', False)
+    assert not chat._ip_blocked(host)
