@@ -2111,6 +2111,7 @@ export interface ChatToolResult {
 }
 
 export interface NdjsonStreamHandlers {
+  onLeadContext?: (context: import("../leadAnalysisContext.ts").LeadAnalysisContext) => void;
   onDelta?: (text: string) => void;
   onTool?: (tool: string, args: Record<string, unknown>, callId?: string) => void;
   onToolResult?: (result: ChatToolResult) => void;

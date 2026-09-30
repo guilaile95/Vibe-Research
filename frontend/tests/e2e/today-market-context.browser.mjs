@@ -257,9 +257,9 @@ async function handleApi(route) {
         market_environment: {
           indices: { status: "normal", data: [{name: "上证指数", price: 3100, change_pct: 1.2}, {name: "深证成指", price: 10000, change_pct: -0.2}, {name: "创业板指", price: 2000, change_pct: 0.6}, {name: "科创50", price: 900, change_pct: 0.3}] },
           global_indices: {status: "unavailable", data: []},
-          breadth: {status: scenario === "truth-breadth-missing" ? "unavailable" : "normal", data: {up_count: 3200, down_count: 1800, total_amount: 1200000000000}},
+          breadth: {status: scenario === "truth-breadth-missing" ? "unavailable" : "normal", trade_date: scenario === "truth-current" ? "2026-08-28" : null, data_time: null, data: {up_count: 3200, down_count: 1800, total_amount: 1200000000000}},
         },
-        sector_rotation: {industry: {status: "partial", data: {top: [], bottom: []}}, highlights: {strongest_industry: {name: "半导体", change_pct: 2.5}, weakest_industry: {name: "银行", change_pct: -0.8}}},
+        sector_rotation: {industry: {status: "partial", trade_date: "2026-08-28", data_time: scenario === "truth-current" ? null : "2026-08-28 15:00:00", data: {top: [], bottom: []}}, highlights: {strongest_industry: {code: "BK1036", name: "半导体", change_pct: 2.5}, weakest_industry: {name: "银行", change_pct: -0.8}}},
         capital_activity: {amount_top: scenario === "truth-breadth-missing" ? [] : [{code: "600519", name: "贵州茅台", amount: 2000000000, change_pct: 1.2}]},
         short_term_emotion: {status: "normal", data: {date: "2026-08-29", zt_count: 45, dt_count: 3, max_boards: 4, lianban_stocks: []}},
         data_health: {components: {indices: "normal", turnover: scenario === "truth-current" ? "unavailable" : "normal", industry_boards: "partial"}},
@@ -281,6 +281,151 @@ async function handleApi(route) {
   return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "unavailable", data: null, warnings: [] }) });
 }
 
+function leadContext(kind, { name = "服务器新线索", stale = false } = {}) {
+  const subject = kind === "industry" ? "BK1036" : kind === "activity" ? "600519" : null;
+  return {
+    schema_version: "daily-review-lead-context.v1", kind,
+    subject: { code: subject, name },
+    source_path: kind === "industry" ? "sector_rotation.industry.data.top[0]"
+      : kind === "activity" ? "capital_activity.amount_top[0]" : "short_term_emotion.data",
+    source: { status: stale ? "partial" : "normal", source: "isolated-browser-fixture",
+      trade_date: null, data_time: null, fetched_at: "2026-08-29 11:03:00", is_stale: stale },
+    review_generated_at: "2026-08-29 11:04:00", cache_stale: stale,
+    facts: kind === "emotion" ? { zt_count: 0, max_boards: null } : { amount: 0, change_pct: null },
+    unknowns: ["源行情时间未知"],
+  };
+}
+
+/** Today lead -> isolated read-only analysis -> verified context, cancellation and fresh rerun. */
+async function checkLeadAnalysis(page, todayWrites) {
+  const dialog = page.getByTestId("lead-analysis-dialog");
+  const answer = dialog.getByTestId("lead-analysis-answer");
+  const source = dialog.getByTestId("lead-analysis-source");
+  const labels = { industry: "行业表现", activity: "成交活跃", emotion: "短线情绪" };
+  const contextEvent = (kind, options) => ({ type: "lead_context", context: leadContext(kind, options) });
+  const delta = (text) => ({ type: "delta", text });
+  const done = { type: "done", trace: [], rounds: 1 };
+  const emit = (index, events, finish = true) => page.evaluate(({ index, events, finish }) => {
+    const controller = window.__leadAnalysisRequests[index].controller;
+    controller.enqueue(new TextEncoder().encode(events.map((event) => JSON.stringify(event)).join("\n") + "\n"));
+    if (finish) controller.close();
+  }, { index, events, finish });
+  const requestCount = () => page.evaluate(() => window.__leadAnalysisRequests.length);
+  const start = async (kind, rerun = false) => {
+    const index = await requestCount();
+    await (rerun ? dialog.getByRole("button", { name: "重新读取并分析", exact: true })
+      : page.getByRole("button", { name: `AI 梳理${labels[kind]}`, exact: true })).click();
+    await dialog.waitFor();
+    await page.waitForFunction((count) => window.__leadAnalysisRequests.length === count + 1, index);
+    assert.equal(await source.count(), 0, "each request must discard the previous server context");
+    assert.equal(await answer.count(), 0, "each request must discard previous answer fragments");
+    const request = await page.evaluate((index) => {
+      const { body, method } = window.__leadAnalysisRequests[index];
+      return { body, method };
+    }, index);
+    assert.equal(request.method, "POST");
+    assert.deepEqual(Object.keys(request.body).sort(), ["kind", "llm", "subject"]);
+    assert.equal(request.body.kind, kind);
+    assert.equal(request.body.subject, leadContext(kind).subject.code);
+    return index;
+  };
+  const close = async () => {
+    await dialog.getByRole("button", { name: "关闭线索分析", exact: true }).click();
+    await dialog.waitFor({ state: "detached" });
+  };
+
+  await page.getByRole("button", { name: "AI 梳理行业表现", exact: true }).click();
+  await dialog.getByRole("link", { name: "设置中接入 AI", exact: true }).waitFor();
+  assert.equal(await requestCount(), 0, "missing configuration must not start analysis");
+  await close();
+  await page.evaluate(() => localStorage.setItem("vr-llm", JSON.stringify({
+    provider: "cli-codex", model: "isolated-browser-model", baseURL: "", apiKey: "",
+  })));
+  const savedBefore = await page.evaluate(() => ({ ...localStorage }));
+  const writesBefore = todayWrites.length;
+
+  const first = await start("industry");
+  await emit(first, [contextEvent("industry", { name: "服务器行业旧快照", stale: true }), delta("行业分析片段"), done]);
+  await dialog.locator('[data-testid="lead-analysis-answer"][data-state="complete"]').waitFor();
+  await source.getByText("分析对象：服务器行业旧快照（BK1036）", { exact: true }).waitFor();
+  await source.getByText("源交易日 未提供 · 行情时间 未提供", { exact: true }).waitFor();
+  await source.getByText("使用上次结果 · 时效待核验", { exact: true }).waitFor();
+  await source.locator("summary").click();
+  await source.locator("dd").getByText("0", { exact: true }).waitFor();
+  await source.locator("dd").getByText("未知", { exact: true }).waitFor();
+  await source.getByText("源行情时间未知", { exact: true }).waitFor();
+  assert.match(await source.innerText(), /抓取时间 2026-08-29 11:03:00；复盘生成 2026-08-29 11:04:00/);
+  assert.equal(await dialog.getByRole("button", { name: /保存/ }).count(), 0);
+
+  const refreshed = await start("industry", true);
+  const freshContext = leadContext("industry", { name: "服务器行业新快照" });
+  freshContext.source.trade_date = "2026-08-29";
+  freshContext.source.data_time = "2026-08-29 11:05:00";
+  await emit(refreshed, [{ type: "lead_context", context: freshContext }, delta("新行业分析"), done]);
+  await dialog.locator('[data-testid="lead-analysis-answer"][data-state="complete"]').waitFor();
+  await source.getByText("源交易日 2026-08-29 · 行情时间 2026-08-29 11:05:00", { exact: true }).waitFor();
+  assert.doesNotMatch(await dialog.innerText(), /旧快照|行业分析片段|使用上次结果/);
+  await close();
+
+  const stopped = await start("activity");
+  await emit(stopped, [contextEvent("activity"), delta("停止前片段")], false);
+  await answer.getByText("停止前片段", { exact: true }).waitFor();
+  await dialog.getByRole("button", { name: "停止", exact: true }).click();
+  await dialog.getByRole("alert").getByText("已停止；当前片段不是完整分析。", { exact: true }).waitFor();
+  assert.equal(await answer.getAttribute("data-state"), "incomplete");
+  assert.equal(await page.evaluate((index) => window.__leadAnalysisRequests[index].aborted, stopped), true);
+  const restarted = await start("activity", true);
+  await emit(stopped, [delta("停止后迟到片段"), done]);
+  await emit(restarted, [contextEvent("activity", { name: "重新读取成交线索" }), delta("重新分析完成"), done]);
+  await dialog.locator('[data-testid="lead-analysis-answer"][data-state="complete"]').waitFor();
+  await answer.getByText("重新分析完成", { exact: true }).waitFor();
+  assert.doesNotMatch(await dialog.innerText(), /停止前片段|停止后迟到片段/);
+  await close();
+
+  const closed = await start("emotion");
+  await emit(closed, [contextEvent("emotion", { name: "关闭前情绪" }), delta("关闭前片段")], false);
+  await answer.getByText("关闭前片段", { exact: true }).waitFor();
+  await close();
+  assert.equal(await page.evaluate((index) => window.__leadAnalysisRequests[index].aborted, closed), true);
+  const reopened = await start("emotion");
+  await emit(closed, [delta("关闭后迟到片段"), done]);
+  await emit(reopened, [contextEvent("emotion", { name: "重开后的情绪" }), delta("新的情绪分析"), done]);
+  await dialog.locator('[data-testid="lead-analysis-answer"][data-state="complete"]').waitFor();
+  await answer.getByText("新的情绪分析", { exact: true }).waitFor();
+  assert.doesNotMatch(await dialog.innerText(), /关闭前情绪|关闭前片段|关闭后迟到片段/);
+  await close();
+  const escaped = await start("emotion");
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+  assert.equal(await page.evaluate((index) => window.__leadAnalysisRequests[index].aborted, escaped), true);
+  await emit(escaped, [contextEvent("emotion"), delta("Escape 后迟到片段"), done]);
+
+  const mismatchedSubject = leadContext("activity");
+  mismatchedSubject.subject.code = "000001";
+  for (const [events, error, partial] of [
+    [[contextEvent("emotion"), delta("错类型不可见"), done], "返回的线索对象不一致，请刷新页面后重试", false],
+    [[{ type: "lead_context", context: mismatchedSubject }, delta("错对象不可见"), done], "返回的线索对象不一致，请刷新页面后重试", false],
+    [[contextEvent("activity"), contextEvent("activity"), delta("重复来源不可见"), done], "返回的线索对象不一致，请刷新页面后重试", false],
+    [[delta("无来源不可见"), done], "未收到线索来源，分析已停止", false],
+    [[{ type: "lead_context", context: {} }, done], "线索分析来源格式错误", false],
+    [[contextEvent("activity"), delta("未完成片段")], "后端响应流未返回完成信号", true],
+    [[contextEvent("activity"), delta("未完成片段"), { type: "error", message: "测试来源读取失败" }, done], "测试来源读取失败", true],
+    [[contextEvent("activity"), done], "分析未返回完整内容", false],
+  ]) {
+    const index = await start("activity");
+    await emit(index, events);
+    await dialog.getByRole("alert").getByText(error, { exact: true }).waitFor();
+    assert.equal(await answer.count(), partial ? 1 : 0);
+    if (partial) assert.equal(await answer.getAttribute("data-state"), "incomplete");
+    assert.doesNotMatch(await dialog.innerText(), /错类型不可见|错对象不可见|重复来源不可见|无来源不可见|Escape 后迟到片段/);
+    await close();
+  }
+
+  assert.equal(todayWrites.length, writesBefore, "lead analysis must not write notes, reviews, evidence or decisions");
+  assert.deepEqual(await page.evaluate(() => ({ ...localStorage })), savedBefore, "lead analysis must not persist draft fragments");
+  await page.evaluate(() => localStorage.removeItem("vr-llm"));
+}
+
 let server;
 let browser;
 try {
@@ -296,9 +441,19 @@ try {
     const originalFetch = window.fetch.bind(window);
     window.__marketCloudPendingScopes = [];
     window.__marketCloudAbortScopes = [];
+    window.__leadAnalysisRequests = [];
     window.fetch = (input, init) => {
       const rawUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const url = new URL(rawUrl, window.location.origin);
+      if (url.pathname === "/api/daily-review/lead-analysis") {
+        const entry = { body: JSON.parse(init.body), method: init.method, aborted: false, controller: null };
+        window.__leadAnalysisRequests.push(entry);
+        // Deliberately retain this stream after abort to exercise the UI's late-response guard.
+        init.signal.addEventListener("abort", () => { entry.aborted = true; }, { once: true });
+        return Promise.resolve(new Response(new ReadableStream({
+          start(controller) { entry.controller = controller; },
+        }), { headers: { "Content-Type": "application/x-ndjson" } }));
+      }
       const scope = url.pathname === "/api/market/cloud" ? url.searchParams.get("scope") : null;
       if (scope === "star") {
         window.__marketCloudPendingScopes.push(scope);
@@ -622,6 +777,7 @@ try {
   assert.equal(leadHref.pathname, "/candidates/600519");
   assert.equal(leadHref.searchParams.get("return_to"), "/daily-review#research-leads-title");
   await populatedLeads.getByText("涨停 45 家 · 跌停 3 家 · 最高 4 板", {exact: true}).waitFor();
+  await checkLeadAnalysis(page, todayWrites);
   await page.getByText("管理关注股票", {exact: true}).click();
   const watchCards = page.getByTestId("today-watch-manager-quotes");
   await watchCards.getByText("1456.78", {exact: true}).first().waitFor();
@@ -635,7 +791,8 @@ try {
   const amountLead = page.getByTestId("today-lead-成交活跃");
   await amountLead.getByText("贵州茅台 · 成交额 20.00 亿元 · 成交榜首位", {exact: true}).waitFor();
   assert.equal(await amountLead.getByText("数据暂不可用", {exact: true}).count(), 0, "legacy turnover failure must not mark snapshot amount facts unavailable");
-  await amountLead.getByText("全 A 快照 · 行情时间 未提供", {exact: true}).waitFor();
+  await amountLead.getByText("全 A 快照 · 交易日 2026-08-28 · 行情时间 未提供", {exact: true}).waitFor();
+  await page.getByTestId("today-lead-行业表现").getByText("行业排名 · 交易日 2026-08-28 · 行情时间 未提供", {exact: true}).waitFor();
   await page.locator("#market-detail-turnover > summary").getByText("正常", {exact: true}).waitFor();
 
   scenario = "truth-refresh-fail";
@@ -651,6 +808,8 @@ try {
 
   scenario = "truth-old";
   await page.reload({waitUntil: "domcontentloaded"});
+  await amountLead.getByText("全 A 快照 · 交易日 未提供 · 行情时间 未提供", {exact: true}).waitFor();
+  await page.getByTestId("today-lead-行业表现").getByText("行业排名 · 交易日 2026-08-28 · 行情时间 2026-08-28 15:00:00", {exact: true}).waitFor();
   await amountLead.getByText("上次结果 · 时效待核验", {exact: true}).waitFor();
   await page.locator("#market-detail-emotion > summary").getByText("上次结果 · 正常", {exact: true}).waitFor();
   assert.equal(await page.locator("[data-market-cloud]").getByText("上次结果", {exact: false}).count(), 0, "independent market cloud must retain its own freshness");

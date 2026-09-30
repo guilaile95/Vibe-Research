@@ -45,6 +45,50 @@ def test_ai_retains_qfq_lots_and_reuses_validation(monkeypatch):
         ai_tools._kline_tencent("600519", "day", 5)
 
 
+@pytest.mark.parametrize("series", [
+    {"qfqday": [], "day": [BAR]},
+    {"qfqday": [BAR, ["broken"]]},
+])
+def test_ai_summary_uses_only_fallback_after_adjusted_series_failure(monkeypatch, series):
+    state = install(monkeypatch, series)
+    fallback_rows = [
+        {"date": "2026-08-20", "close": 20.0},
+        {"date": "2026-08-21", "close": 22.0},
+    ]
+
+    def fallback(code, category, offset):
+        assert (code, category, offset) == ("600519", 4, 5)
+        return fallback_rows
+
+    monkeypatch.setattr(astock, "kline", fallback)
+    result = ai_tools._kline({"code": "600519", "count": 5})
+    assert result["summary"]["bars"] == 2
+    assert result["summary"]["first_close"] == 20
+    assert result["summary"]["last_close"] == 22
+    assert result["summary"]["change_pct"] == 10
+    assert [(row["date"], row["close"]) for row in result["recent"]] == [
+        (row["date"], row["close"]) for row in fallback_rows
+    ]
+    assert state["closed"]
+
+
+@pytest.mark.parametrize("fallback_failure", ["empty", "error"])
+def test_ai_summary_is_unavailable_when_all_sources_fail(monkeypatch, fallback_failure):
+    state = install(monkeypatch, {"qfqday": [BAR, ["broken"]]})
+
+    def fallback(*args, **kwargs):
+        if fallback_failure == "error":
+            raise RuntimeError("No qualified fallback")
+        return []
+
+    monkeypatch.setattr(astock, "kline", fallback)
+    result = ai_tools._kline({"code": "600519"})
+    assert "error" in result
+    assert "summary" not in result
+    assert "recent" not in result
+    assert state["closed"]
+
+
 @pytest.mark.parametrize("raw", [[], [["bad"]], [BAR, BAR], [BAR, ["2026-08-19", 10, 11, 12, 9, 23]],
                                  [["2999-01-01", 10, 11, 12, 9, 23]],
                                  [["2026-08-20", 10, 11, 12, 9, "nan"]],

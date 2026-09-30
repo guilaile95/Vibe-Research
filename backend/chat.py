@@ -17,6 +17,8 @@ import threading
 import uuid
 from urllib.parse import urlparse
 
+import anyio
+import httpx
 import requests
 
 import agent_runtime
@@ -377,18 +379,24 @@ def _resolve_base(cfg: dict) -> str:
     return base
 
 
-def _call_llm_stream(cfg: dict, messages: list, use_tools: bool):
+def _stream_request(cfg: dict, messages: list, use_tools: bool) -> dict:
+    """Share URL, payload and provider headers across both streaming transports."""
     _check_base_url(cfg.get("baseURL", ""))
     payload = {"model": cfg["model"], "messages": messages, "temperature": 0.3, "stream": True}
     if use_tools:
         payload["tools"] = TOOLS
         payload["tool_choice"] = "auto"
+    return {"url": f"{_resolve_base(cfg)}/chat/completions",
+            "headers": _request_headers(cfg), "json": payload}
+
+
+def _call_llm_stream(cfg: dict, messages: list, use_tools: bool):
+    request = _stream_request(cfg, messages, use_tools)
     _check_active(cfg)
     try:
         r = requests.post(
-            f"{_resolve_base(cfg)}/chat/completions",
-            headers=_request_headers(cfg),
-            json=payload, timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT), stream=True,
+            request.pop("url"), **request,
+            timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT), stream=True,
         )
     except requests.Timeout as exc:
         _check_active(cfg)
@@ -402,8 +410,8 @@ def _call_llm_stream(cfg: dict, messages: list, use_tools: bool):
     return r
 
 
-def _parse_sse_line(raw: bytes) -> tuple[bool, dict | None]:
-    line = raw.decode("utf-8", errors="replace").strip()
+def _parse_sse_line(raw: bytes | str, *, use_tools: bool = True) -> tuple[bool, dict | None]:
+    line = (raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw).strip()
     if not line.startswith("data:"):
         return False, None
     data = line[5:].strip()
@@ -431,14 +439,17 @@ def _parse_sse_line(raw: bytes) -> tuple[bool, dict | None]:
     # Reuse PR #353's completion contract without replacing this branch's
     # sanitized transport, Go headers, deadline or cancellation ownership.
     # Compatible gateways may omit finish_reason and finish with [DONE].
-    if choice.get("finish_reason") not in (None, "stop", "tool_calls", "function_call"):
+    reason = choice.get("finish_reason")
+    if reason not in (None, "stop") and not (use_tools and reason in ("tool_calls", "function_call")):
         raise ModelTransportError("模型响应未正常完成，请重试")
+    if not use_tools and (delta.get("tool_calls") or delta.get("function_call")):
+        raise ModelTransportError("当前模型响应不允许工具调用")
     if delta.get("content") is not None and not isinstance(delta["content"], str):
         raise ModelTransportError("模型响应格式无效")
     return False, delta
 
 
-def _iter_sse_deltas(resp):
+def _iter_sse_deltas(resp, *, use_tools: bool = True):
     """解析上游 SSE 流，逐个 yield choices[0].delta。
 
     按字节缓冲、只解码「完整行」——`\\n` 是 ASCII(0x0A)不会落在多字节 UTF-8 字符内部，
@@ -451,18 +462,83 @@ def _iter_sse_deltas(resp):
         buf += chunk
         while b"\n" in buf:
             raw, buf = buf.split(b"\n", 1)
-            done, delta = _parse_sse_line(raw)
+            done, delta = _parse_sse_line(raw, use_tools=use_tools)
             if done:
                 return
             if delta is not None:
                 yield delta
     if buf.strip():
-        done, delta = _parse_sse_line(buf)
+        done, delta = _parse_sse_line(buf, use_tools=use_tools)
         if done:
             return
         if delta is not None:
             yield delta
     raise ModelStreamIncompleteError()
+
+
+async def stream_api_messages(cfg: dict, messages: list):
+    """No-tools API stream whose socket lifetime is owned by the ASGI task.
+
+    Cancellation interrupts headers and body reads. Bound each await by the
+    shared turn deadline, without leaving a cancel scope open across yields:
+    the response may be closed from the ASGI cleanup task after send() fails.
+    """
+    cfg = {**cfg, "_deadline": time.monotonic() + _TURN_TIMEOUT,
+           "_session": cfg.get("_session") or uuid.uuid4().hex}
+    _check_active(cfg)
+    client = None
+    response = None
+    answered = False
+    try:
+        # Public-mode endpoint validation resolves DNS synchronously. It must not
+        # block ASGI disconnect handling, and cancelled preparation must never
+        # proceed to open a model connection when the worker eventually returns.
+        with anyio.fail_after(cfg["_deadline"] - time.monotonic()):
+            request = await anyio.to_thread.run_sync(
+                _stream_request, cfg, messages, False, abandon_on_cancel=True,
+            )
+        _check_active(cfg)
+        client = httpx.AsyncClient(timeout=httpx.Timeout(_READ_TIMEOUT, connect=_CONNECT_TIMEOUT))
+        with anyio.fail_after(cfg["_deadline"] - time.monotonic()):
+            response = await client.send(client.build_request("POST", **request), stream=True)
+        _check_active(cfg)
+        if response.status_code != 200:
+            raise ModelTransportError(f"模型接口 HTTP {response.status_code}")
+        lines = response.aiter_lines().__aiter__()
+        while True:
+            _check_active(cfg)
+            try:
+                with anyio.fail_after(cfg["_deadline"] - time.monotonic()):
+                    line = await anext(lines)
+            except StopAsyncIteration:
+                raise ModelStreamIncompleteError() from None
+            _check_active(cfg)
+            done, delta = _parse_sse_line(line, use_tools=False)
+            if done:
+                break
+            if delta is not None and delta.get("content"):
+                answered = answered or bool(delta["content"].strip())
+                yield {"type": "delta", "text": delta["content"]}
+        if not answered:
+            raise ModelTransportError("模型没有返回可用内容")
+    except (httpx.TimeoutException, TimeoutError) as exc:
+        _check_active(cfg)
+        raise ModelTransportError("模型响应超时") from exc
+    except httpx.HTTPError as exc:
+        _check_active(cfg)
+        raise ModelTransportError("模型连接中断，请重试") from exc
+    finally:
+        # Shield the first close: HTTPX marks a response closed before awaiting
+        # transport cleanup, so a later retry cannot finish an interrupted close.
+        with anyio.CancelScope(shield=True):
+            try:
+                if response is not None:
+                    await response.aclose()
+            finally:
+                if client is not None:
+                    await client.aclose()
+    _check_active(cfg)
+    yield {"type": "done", "trace": [], "rounds": 1}
 
 
 def prepare_daily_review_analysis(
@@ -536,7 +612,7 @@ def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
     if not use_tools:
         answered = False
         with _open_stream(cfg, messages, False) as resp:
-            for delta in _iter_sse_deltas(resp):
+            for delta in _iter_sse_deltas(resp, use_tools=False):
                 _check_active(cfg)
                 if delta.get("content"):
                     answered = True
@@ -615,7 +691,7 @@ def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
     # Keep final synthesis on the same cancellable, bounded streaming path.
     answered = False
     with _open_stream(cfg, work, False) as resp:
-        for delta in _iter_sse_deltas(resp):
+        for delta in _iter_sse_deltas(resp, use_tools=False):
             _check_active(cfg)
             if delta.get("content"):
                 answered = True
