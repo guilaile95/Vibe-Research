@@ -245,6 +245,8 @@ def _sectors() -> list[dict]:
 def get_overview() -> dict:
     """市场情绪 + 板块资金（含缓存）。资金轮动由前端从 sectors 头尾取。"""
     def build():
+        if push2_guard.is_read_only():
+            raise push2_guard.Push2Blocked("Push2 overview refresh is unavailable in read-only context")
         return {
             "sentiment": _sentiment(),
             "sectors": _sectors(),

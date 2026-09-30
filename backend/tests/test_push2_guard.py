@@ -281,3 +281,21 @@ def test_inbox_capability_workers_preserve_source_context(monkeypatch):
     results = inbox._capability_results(definition, lake=None, ports=ports)
     assert results[0]["state"] == "USABLE"
     assert len(calls) == 1
+
+
+def test_read_only_overview_cannot_publish_partial_cache(monkeypatch):
+    import market
+    monkeypatch.setattr(market, "_CACHE", {})
+    calls = []
+    monkeypatch.setattr(market, "_sentiment", lambda: calls.append("sentiment") or {"status": "normal", "zt": 4})
+    monkeypatch.setattr(market, "_sectors", lambda: calls.append("sectors") or [{"name": "test"}])
+    with guard.read_only(), pytest.raises(guard.Push2Blocked):
+        market.get_overview()
+    assert calls == []
+    assert "overview" not in market._CACHE
+    normal = market.get_overview()
+    with guard.read_only():
+        cached = market.get_overview()
+    assert calls == ["sentiment", "sectors"]
+    assert cached == normal
+    assert cached["sentiment"]["zt"] == 4
