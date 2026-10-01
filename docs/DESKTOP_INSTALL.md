@@ -13,6 +13,7 @@
 - ARM、32 位、macOS 暂不提供构建产物
 
 Linux 推荐通过软件安装器打开 `.deb`，或 `sudo apt install ./Vibe-Research-版本-linux-amd64.deb`。
+中文界面需要系统中文字体（Ubuntu / Debian 推荐 `fonts-noto-cjk`，`.deb` 声明此推荐依赖；压缩包请自行准备）。
 安装器会检查系统库；缺少系统依赖时仍需要系统软件源或事先准备好的离线依赖。
 压缩包需完整解压后运行 `vibe-research`，不能只移动其中单个可执行文件。
 安装 `.deb` 后可从系统应用菜单打开 Vibe Research；压缩包版从解压目录启动。
@@ -74,12 +75,14 @@ Electron、electron-builder 和 Playwright 使用 desktop/package-lock.json；No
 
 1. 无 UI 的协议、数据隔离、鉴权和进程生命周期测试
 2. 平台原生 Python/Node/前端打包、离线依赖自检（含 NumPy 运算和内存 DuckDB）与安装文件生成
-3. **解包后桌面可执行文件**的真实窗口 fixture smoke：沙箱、页面装载/刷新、私有 API 桥、单实例、
+3. 解包后桌面可执行文件的真实窗口 fixture smoke：沙箱、页面装载/刷新、私有 API 桥、单实例、
    localStorage 持久化、正常退出和主进程崩溃后的服务清理
+4. 在原生 runner 安装 `.deb` / NSIS，再运行安装位置中的程序；覆盖空格/中文路径、安装文件不可写或只读、
+   卸载和保留用户配置。所有检查成功后才上传安装包
 
 窗口 smoke 使用独立临时配置、禁用后台提供商抓取/调度，并拦截页面数据 API；不调用真实模型。
-它证明打包窗口与基础运行时契约，不等同于完整真实用户业务验收，也不等同于安装向导的人工验收。
-`.deb` / NSIS 实际安装、卸载、升级及更广泛发行版/显示服务器组合仍需在相应目标机器验证。
+它验证打包窗口、安装/卸载与基础运行时契约，不等同于完整真实用户业务验收。
+交互式安装向导、系统信誉提示、跨版本升级及更广泛发行版/显示服务器组合仍需在相应目标机器验证。
 窗口测试应在受支持的原生桌面或对应操作系统 CI runner 上运行。
 
 技术参考：[Electron 安全](https://www.electronjs.org/docs/latest/tutorial/security)、

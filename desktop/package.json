@@ -14,7 +14,8 @@
     "pack": "electron-builder --config electron-builder.config.cjs --dir --publish never",
     "dist": "electron-builder --config electron-builder.config.cjs --publish never",
     "test:native": "node test/native-smoke.mjs",
-    "install:electron": "install-electron"
+    "install:electron": "install-electron",
+    "test:installed": "node test/install-smoke.mjs"
   },
   "devDependencies": {
     "electron": "44.5.1",
@@ -48,7 +49,8 @@
       ],
       "category": "Office",
       "executableName": "vibe-research",
-      "maintainer": "Vibe Research contributors"
+      "maintainer": "Vibe Research contributors",
+      "syncDesktopName": true
     },
     "win": {
       "target": [
@@ -60,13 +62,20 @@
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": false
     },
     "artifactName": "Vibe-Research-${version}-${os}-${arch}.${ext}",
     "asarUnpack": [
       "src/supervisor.mjs",
       "src/processes.mjs"
-    ]
+    ],
+    "deb": {
+      "recommends": [
+        "fonts-noto-cjk"
+      ]
+    }
   },
-  "homepage": "https://github.com/guilaile95/Vibe-Research"
+  "homepage": "https://github.com/guilaile95/Vibe-Research",
+  "desktopName": "org.viberesearch.VibeResearch.desktop"
 }

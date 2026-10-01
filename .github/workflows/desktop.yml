@@ -53,6 +53,7 @@ jobs:
         run: |
           npm test
           python -m unittest discover -s build -p "test_*.py"
+          python -m unittest discover -s test -p "test_*.py"
       - name: Stage bundled native runtimes and frontend
         run: node desktop/build/stage.mjs --python python
       - name: Native frozen process ownership lifecycle
@@ -67,14 +68,24 @@ jobs:
         run: |
           npm run dist
           node build/checksums.mjs
+      - name: Install Chinese font support on Linux runner
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-cjk
       - name: Native Linux window fixture smoke (sandbox enabled)
         if: runner.os == 'Linux'
         working-directory: desktop
-        run: xvfb-run -a npm run test:native
+        run: python test/run-owned.py 480 xvfb-run -a node test/native-smoke.mjs
       - name: Native Windows window fixture smoke
         if: runner.os == 'Windows'
         working-directory: desktop
-        run: npm run test:native
+        run: python test/run-owned.py 480 node test/native-smoke.mjs
+      - name: Native installer roundtrip (installed window, uninstall, data preservation)
+        working-directory: desktop
+        env:
+          VR_DESKTOP_INSTALLER_ACCEPTANCE: '1'
+        run: npm run test:installed
       - name: Upload verified installers
         if: success()
         uses: actions/upload-artifact@v6
@@ -92,6 +103,8 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: vibe-desktop-smoke-${{ runner.os }}-${{ github.sha }}
-          path: desktop/release/smoke/**
+          path: |
+            desktop/release/smoke/**
+            desktop/release/smoke-installed/**
           if-no-files-found: ignore
           retention-days: 14
