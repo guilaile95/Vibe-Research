@@ -22,9 +22,11 @@ jobs:
           - os: ubuntu-22.04
             python: '3.11'
             backend: vibe-backend
+            unpacked: linux-unpacked
           - os: windows-2022
             python: '3.12'
             backend: vibe-backend.exe
+            unpacked: win-unpacked
     runs-on: ${{ matrix.os }}
     timeout-minutes: 50
     env:
@@ -63,11 +65,9 @@ jobs:
         run: |
           python -c "import os, subprocess; subprocess.run([os.environ['VR_DESKTOP_TEST_EXECUTABLE'], '--desktop-self-test'], check=True)"
           python -m unittest discover -s build -p "test_*.py"
-      - name: Build native installer and unpacked app
+      - name: Build native unpacked app
         working-directory: desktop
-        run: |
-          npm run dist
-          node build/checksums.mjs
+        run: npm run pack
       - name: Install Chinese font support on Linux runner
         if: runner.os == 'Linux'
         run: |
@@ -81,6 +81,11 @@ jobs:
         if: runner.os == 'Windows'
         working-directory: desktop
         run: python test/run-owned.py 480 node test/native-smoke.mjs
+      - name: Build installers from the exact tested unpacked app
+        working-directory: desktop
+        run: |
+          npm run dist -- --prepackaged "release/${{ matrix.unpacked }}"
+          node build/checksums.mjs
       - name: Native installer roundtrip (installed window, uninstall, data preservation)
         working-directory: desktop
         env:

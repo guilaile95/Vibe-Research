@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { _electron as electron } from 'playwright';
+import { electronMainPID } from './process-identity.mjs';
 
 if (process.platform === 'linux' && process.getuid?.() === 0) throw new Error('Native smoke must run as an ordinary non-root desktop user; sandbox bypass is prohibited');
 const executablePath = path.resolve(process.argv[2] || (process.platform === 'win32'
@@ -75,9 +76,11 @@ async function gone(pids) {
   assert.deepEqual(pids.filter(alive), [], 'owned services must not outlive desktop');
 }
 const knownOwned = new WeakMap();
+const mainPids = new WeakMap();
 async function closeBounded(application) {
   const processHandle = application.process();
-  const owned = new Set([processHandle.pid, ...(knownOwned.get(application) || [])]);
+  const mainPid = mainPids.get(application);
+  const owned = new Set([processHandle.pid, mainPid, ...(knownOwned.get(application) || [])].filter(Number.isInteger));
   try { for (const pid of descendants(processHandle.pid)) owned.add(pid); } catch {}
   let timer;
   try {
@@ -87,6 +90,7 @@ async function closeBounded(application) {
     ]);
     await gone([...owned]);
   } catch (error) {
+    try { if (mainPid) process.kill(mainPid, 'SIGKILL'); } catch {}
     try { processHandle.kill('SIGKILL'); } catch {}
     await gone([...owned]);
     throw error;
@@ -96,6 +100,9 @@ async function open(label) {
   await progress(`${label}: launch`);
   const application = await electron.launch({ executablePath, args: [`--user-data-dir=${profile}`], env: environment, timeout: 60_000 });
   try {
+  const mainPid = await electronMainPID(application);
+  mainPids.set(application, mainPid);
+  knownPids.add(mainPid);
   application.process().stderr?.on('data', data => process.stderr.write(data));
   const page = await application.firstWindow({ timeout: 60_000 });
   knownPids.add(application.process().pid);
@@ -173,10 +180,11 @@ try {
   await gone(owned);
   const restarted = await open('restart'); first = restarted;
   assert.equal(await restarted.page.evaluate(() => localStorage.getItem('desktop-smoke-persistence')), 'fixture');
-  const crashOwned = descendants(restarted.application.process().pid);
+  const crashMain = mainPids.get(restarted.application);
+  const crashOwned = [...new Set([crashMain, restarted.application.process().pid, ...descendants(crashMain)])];
   for (const pid of crashOwned) knownPids.add(pid);
   await progress('forced main-process crash and descendant cleanup');
-  process.kill(restarted.application.process().pid, 'SIGKILL'); first = null;
+  process.kill(crashMain, 'SIGKILL'); first = null;
   await gone(crashOwned);
   result = { platform: process.platform, packagedWindow: true,
     sandbox: true, backend: true, fixtureOnly: true, settingsReady: true, navigationReload: true,

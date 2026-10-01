@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSyn
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { allowedName, backendInput, frontendInput, agentInput, cleanBuildEnv, safeSource, copyBackend } from './stage.mjs';
+import { allowedName, backendInput, frontendInput, agentInput, cleanBuildEnv, safeSource, copyBackend, desktopHTML, ROOT } from './stage.mjs';
 
 test('private files and unsafe paths cannot become package inputs', () => {
   for (const name of ['../private.json', '/etc/passwd', 'frontend/.env.local', 'frontend/private/a.json', 'backend/x.db',
@@ -64,4 +64,18 @@ test('backend alias cannot collect an outside file', { skip: process.platform ==
     symlinkSync('../outside.txt', path.join(root, 'build/alias'));
     assert.throws(() => copyBackend(path.join(root, 'build'), path.join(root, 'out')), /escapes/);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('desktop HTML removes font network requests while web template stays unchanged', () => {
+  const template = path.join(ROOT, 'frontend/index.html');
+  const original = readFileSync(template, 'utf8');
+  assert.match(original, /fonts\.googleapis\.com/);
+  const result = desktopHTML(original);
+  assert.doesNotMatch(result, /fonts\.(googleapis|gstatic)\.com/);
+  assert.match(result, /href="\/favicon\.svg"/);
+  assert.match(result, /src="\/src\/main\.tsx"/);
+  assert.equal(readFileSync(template, 'utf8'), original);
+  assert.match(readFileSync(path.join(ROOT, 'frontend/tailwind.config.ts'), 'utf8'), /ui-monospace/);
+  assert.equal(desktopHTML('<link rel="stylesheet" href="/local.css">'), '<link rel="stylesheet" href="/local.css">');
+  assert.equal(desktopHTML("<link rel='preconnect' href='https://fonts.gstatic.com'>"), '');
 });

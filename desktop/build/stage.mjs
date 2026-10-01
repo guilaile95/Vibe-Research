@@ -1,6 +1,6 @@
 /** Native-host-only staging. Run from any cwd with Node >=22.6, Git, npm and Python. */
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync, realpathSync, statSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,6 +60,18 @@ function validateTree(root, relative = '') {
     if (entry.isDirectory()) validateTree(root, name);
   }
 }
+export function desktopHTML(html) {
+  // Desktop must not request a network font: the existing ui-monospace fallback
+  // works offline under the renderer's self-only stylesheet/font policy.
+  return html.replace(/<link\b[^>]*>/gi, tag => {
+    const href = /\bhref\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
+    if (!href) return tag;
+    try {
+      const host = new URL(href).hostname;
+      return ['fonts.googleapis.com', 'fonts.gstatic.com'].includes(host) ? '' : tag;
+    } catch { return tag; } // Preserve relative app assets.
+  });
+}
 export function copyBackend(source, destination) {
   // Materialize PyInstaller aliases explicitly: some Node/platform fs.cp
   // implementations preserve links even with dereference:true.
@@ -116,6 +128,8 @@ export function main(args = process.argv.slice(2)) {
     copyInputs(backendNames, source);
     const frontendStage = path.join(temp, 'web');
     copyInputs(tracked.filter(frontendInput), frontendStage);
+    const html = path.join(frontendStage, 'frontend/index.html');
+    writeFileSync(html, desktopHTML(readFileSync(html, 'utf8')));
     npmRun(['ci', '--include=dev', '--no-audit', '--no-fund'], path.join(frontendStage, 'frontend'));
     npmRun(['run', 'build'], path.join(frontendStage, 'frontend'));
     const dist = path.join(frontendStage, 'frontend/dist');

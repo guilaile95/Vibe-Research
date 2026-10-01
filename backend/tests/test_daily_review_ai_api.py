@@ -613,13 +613,18 @@ def test_analyze_disconnect_during_save_cancels_transaction(monkeypatch):
         ),
     )
     save_started = threading.Event()
-    disconnect_delivered = threading.Event()
+    disconnect_requested = threading.Event()
     persisted = threading.Event()
+    cancellation_observed = threading.Event()
 
     def save(_review, _markdown, _cfg, *, should_cancel=None):
         save_started.set()
-        assert disconnect_delivered.wait(timeout=2)
+        # receive() signals its intent before returning http.disconnect. Wait
+        # for the response to consume it and set the real cancellation event,
+        # rather than racing the event-loop thread from this save worker.
+        _cfg["_cancel_event"].wait(timeout=2)
         if should_cancel is not None and should_cancel():
+            cancellation_observed.set()
             raise RuntimeError("cancelled before commit")
         persisted.set()
         return {"trade_date": "2026-07-23"}
@@ -638,7 +643,7 @@ def test_analyze_disconnect_during_save_cancels_transaction(monkeypatch):
                 return {"type": "http.request", "body": body, "more_body": False}
             started = await asyncio.to_thread(save_started.wait, 2)
             assert started
-            disconnect_delivered.set()
+            disconnect_requested.set()
             return {"type": "http.disconnect"}
 
         async def send(message):
@@ -668,8 +673,9 @@ def test_analyze_disconnect_during_save_cancels_transaction(monkeypatch):
     asyncio.run(exercise_disconnect())
 
     assert save_started.is_set()
-    assert disconnect_delivered.is_set()
+    assert disconnect_requested.is_set()
     assert not persisted.is_set()
+    assert cancellation_observed.is_set()
     response_chunks = b"".join(
         message.get("body", b"")
         for message in sent
