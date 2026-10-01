@@ -1,0 +1,97 @@
+name: Standalone desktop
+
+on:
+  pull_request:
+    paths: ['desktop/**', 'backend/**', 'agent-runtime/**', 'frontend/**', '.github/workflows/desktop.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Desktop ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            python: '3.11'
+            backend: vibe-backend
+          - os: windows-2022
+            python: '3.12'
+            backend: vibe-backend.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 50
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH: '1'
+      VIBE_NATIVE_INTEL_DISABLE_SCHEDULER: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.19.0'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: backend/requirements-*.lock.txt
+      - name: Install desktop build tools
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run install:electron
+      - name: Isolated desktop contracts
+        working-directory: desktop
+        run: |
+          npm test
+          python -m unittest discover -s build -p "test_*.py"
+      - name: Stage bundled native runtimes and frontend
+        run: node desktop/build/stage.mjs --python python
+      - name: Native frozen process ownership lifecycle
+        working-directory: desktop
+        env:
+          VR_DESKTOP_TEST_EXECUTABLE: ${{ github.workspace }}/desktop/resources/backend/${{ matrix.backend }}
+        run: |
+          python -c "import os, subprocess; subprocess.run([os.environ['VR_DESKTOP_TEST_EXECUTABLE'], '--desktop-self-test'], check=True)"
+          python -m unittest discover -s build -p "test_*.py"
+      - name: Build native installer and unpacked app
+        working-directory: desktop
+        run: |
+          npm run dist
+          node build/checksums.mjs
+      - name: Native Linux window fixture smoke (sandbox enabled)
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        run: xvfb-run -a npm run test:native
+      - name: Native Windows window fixture smoke
+        if: runner.os == 'Windows'
+        working-directory: desktop
+        run: npm run test:native
+      - name: Upload verified installers
+        if: success()
+        uses: actions/upload-artifact@v6
+        with:
+          name: vibe-desktop-${{ runner.os }}-${{ github.sha }}
+          path: |
+            desktop/release/*.deb
+            desktop/release/*.tar.gz
+            desktop/release/*.exe
+            desktop/release/SHA256SUMS
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload native smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: vibe-desktop-smoke-${{ runner.os }}-${{ github.sha }}
+          path: desktop/release/smoke/**
+          if-no-files-found: ignore
+          retention-days: 14

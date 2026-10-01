@@ -1,0 +1,72 @@
+{
+  "name": "vibe-research-desktop",
+  "version": "0.1.3",
+  "private": true,
+  "description": "Vibe Research standalone desktop application",
+  "author": "Vibe Research contributors",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/main.mjs",
+  "scripts": {
+    "test": "node --test test/*.test.mjs build/stage.test.mjs",
+    "stage": "node build/stage.mjs",
+    "start": "electron .",
+    "pack": "electron-builder --config electron-builder.config.cjs --dir --publish never",
+    "dist": "electron-builder --config electron-builder.config.cjs --publish never",
+    "test:native": "node test/native-smoke.mjs",
+    "install:electron": "install-electron"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3",
+    "playwright": "1.58.2"
+  },
+  "build": {
+    "appId": "org.viberesearch.desktop",
+    "productName": "Vibe Research",
+    "asar": true,
+    "files": [
+      "src/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": ".",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "linux": {
+      "target": [
+        "deb",
+        "tar.gz"
+      ],
+      "category": "Office",
+      "executableName": "vibe-research",
+      "maintainer": "Vibe Research contributors"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "artifactName": "Vibe-Research-${version}-${os}-${arch}.${ext}",
+    "asarUnpack": [
+      "src/supervisor.mjs",
+      "src/processes.mjs"
+    ]
+  },
+  "homepage": "https://github.com/guilaile95/Vibe-Research"
+}

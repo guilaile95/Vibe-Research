@@ -115,7 +115,7 @@ function killProcessTree(child) {
         windowsHide: true,
         stdio: "ignore",
       });
-    } else if (child.pid) {
+    } else if (child.pid && child.spawnargs && !child.vibeSupervised) {
       process.kill(-child.pid, "SIGKILL");
     } else {
       child.kill("SIGKILL");
@@ -175,8 +175,9 @@ export class AgentRuntime {
       stdio: "ignore",
       shell: false,
       windowsHide: false,
-      detached: process.platform !== "win32",
+      detached: process.platform !== "win32" && this.sourceEnv.VR_DESKTOP_RUNTIME !== "1",
     });
+    child.vibeSupervised = this.sourceEnv.VR_DESKTOP_RUNTIME === "1";
     this.loginChild = child;
     const settle = (state) => {
       if (this.loginTimer) clearTimeout(this.loginTimer);

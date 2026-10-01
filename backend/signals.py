@@ -41,7 +41,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CACHE_DIR = os.path.join(HERE, ".cache")
+CACHE_DIR = os.path.join(os.environ.get("VR_DATA_DIR", HERE), ".cache")
 CACHE_FILE = os.path.join(CACHE_DIR, "signals_gpu.json")
 # 随仓库分发的数据快照（发版前刷新一份拷进来）：clone 下来不用先等 40 秒刷新，
 # 打开就有截至发布日的完整历史；用户点刷新后以 .cache 里自己拉的最新数据为准。

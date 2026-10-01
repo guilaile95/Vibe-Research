@@ -41,3 +41,12 @@ frontend/tsconfig.tsbuildinfo
 *.log
 .vscode/
 .idea/
+
+# Standalone desktop staging and installers (never private user data)
+!desktop/build/
+!desktop/build/**
+desktop/resources/
+desktop/release/
+desktop/.stage-*/
+desktop/.resources-staging/
+desktop/build/__pycache__/
