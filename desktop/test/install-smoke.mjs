@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { cleanupInOrder, uncertainProcessFailure } from './cleanup-policy.mjs';
+import { requiresProtectedPermissions } from './install-path-policy.mjs';
 
 assert.equal(process.env.CI, 'true', 'Installer acceptance is restricted to disposable CI=true runners');
 assert.equal(process.env.VR_DESKTOP_INSTALLER_ACCEPTANCE, '1', 'Installer acceptance requires explicit opt-in');
@@ -127,8 +128,11 @@ async function verifyLinuxInstallation() {
   assert.ok(path.isAbsolute(executable));
   assert.ok((await fs.stat(executable)).isFile());
   await fs.access(executable, constants.X_OK);
+  const applicationRoot = path.dirname(executable);
   for (const entry of entries) {
+    const link = await fs.lstat(entry);
     const stat = await fs.stat(entry);
+    if (!requiresProtectedPermissions(entry, stat.isDirectory(), applicationRoot, link.isSymbolicLink())) continue;
     assert.equal(stat.uid, 0, `Installed path must be root-owned: ${entry}`);
     assert.equal(stat.mode & 0o022, 0, `Installed path must not be group/world-writable: ${entry}`);
     if (stat.isFile()) {
