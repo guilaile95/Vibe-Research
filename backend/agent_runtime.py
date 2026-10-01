@@ -17,6 +17,10 @@ import requests
 
 _DEFAULT_URL = "http://127.0.0.1:8911"
 _SAFE_HOSTS = {"127.0.0.1", "::1", "localhost"}
+# This client is loopback-only. Never send private bearer/page context through
+# a corporate HTTP proxy or replace authentication via a user netrc file.
+_SESSION = requests.Session()
+_SESSION.trust_env = False
 
 
 class AgentRuntimeError(RuntimeError):
@@ -34,6 +38,11 @@ def _base_url() -> str:
     return raw
 
 
+def _runtime_headers() -> dict[str, str]:
+    token = os.environ.get("VR_AGENT_RUNTIME_TOKEN", "").strip()
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 def _safe_status_payload(payload: object) -> dict:
     if not isinstance(payload, dict):
         raise AgentRuntimeError("RUNTIME_BAD_RESPONSE", "Codex Subscription Runtime 返回无效")
@@ -49,7 +58,7 @@ def _safe_status_payload(payload: object) -> dict:
 
 def status() -> dict:
     try:
-        response = requests.get(f"{_base_url()}/status", timeout=4)
+        response = _SESSION.get(f"{_base_url()}/status", headers=_runtime_headers(), timeout=4)
         response.raise_for_status()
         return _safe_status_payload(response.json())
     except AgentRuntimeError:
@@ -67,7 +76,7 @@ def status() -> dict:
 
 def start_login() -> dict:
     try:
-        response = requests.post(f"{_base_url()}/login", json={}, timeout=8)
+        response = _SESSION.post(f"{_base_url()}/login", json={}, headers=_runtime_headers(), timeout=8)
         payload = response.json()
     except (requests.RequestException, ValueError) as exc:
         raise AgentRuntimeError("RUNTIME_UNAVAILABLE", "Codex Subscription Runtime 当前不可用") from exc
@@ -78,7 +87,7 @@ def start_login() -> dict:
 
 def cancel(session: str) -> bool:
     try:
-        response = requests.post(f"{_base_url()}/cancel", json={"session": session}, timeout=4)
+        response = _SESSION.post(f"{_base_url()}/cancel", json={"session": session}, headers=_runtime_headers(), timeout=4)
         return response.status_code < 400 and bool(response.json().get("cancelled"))
     except (requests.RequestException, ValueError, AttributeError):
         return False
@@ -103,9 +112,10 @@ def stream_chat(
     )
     watcher.start()
     try:
-        with requests.post(
+        with _SESSION.post(
             f"{_base_url()}/chat",
             json={"session": session, "message": message, "context": context, "history": list(history)},
+            headers=_runtime_headers(),
             stream=True,
             timeout=(4, 190),
         ) as response:

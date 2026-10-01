@@ -1,4 +1,5 @@
 import http from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 import { AgentRuntime, RuntimeError } from "./runtime.mjs";
@@ -33,8 +34,17 @@ async function readJson(req) {
   }
 }
 
-export function createAgentServer(runtime = new AgentRuntime()) {
+export function createAgentServer(runtime = new AgentRuntime(), token = process.env.VR_AGENT_RUNTIME_TOKEN || "") {
   return http.createServer(async (req, res) => {
+    if (token) {
+      const supplied = Buffer.from(req.headers.authorization || "");
+      const expected = Buffer.from(`Bearer ${token}`);
+      if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+        return json(res, 401, { error: "UNAUTHORIZED" });
+      }
+      // Desktop sidecar is main/backend-only: never grant browser-origin access.
+      if (req.headers.origin) return json(res, 403, { error: "ORIGIN_NOT_ALLOWED" });
+    }
     const url = new URL(req.url ?? "/", `http://${HOST}`);
     try {
       if (req.method === "GET" && url.pathname === "/health") {
@@ -94,7 +104,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const server = createAgentServer(runtime);
   const port = Number.parseInt(process.env.VR_AGENT_RUNTIME_PORT || String(DEFAULT_PORT), 10);
   server.listen(port, HOST, () => {
-    process.stdout.write(`vibe-agent-runtime ready on http://${HOST}:${port}\n`);
+    const actualPort = server.address().port;
+    process.stdout.write(process.env.VR_DESKTOP_RUNTIME === "1"
+      ? `${JSON.stringify({ type: "listening", service: "agent", port: actualPort })}\n`
+      : `vibe-agent-runtime ready on http://${HOST}:${actualPort}\n`);
   });
   const stop = () => {
     runtime.shutdown();

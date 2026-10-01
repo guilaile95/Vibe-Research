@@ -194,7 +194,7 @@ def test_agent_runtime_forwards_complete_history_as_conversation_data(monkeypatc
         captured.update(kwargs)
         return _StreamResponse([b'{"type":"done"}'])
 
-    monkeypatch.setattr(agent_runtime.requests, "post", post)
+    monkeypatch.setattr(agent_runtime._SESSION, "post", post)
     history = [
         {"role": "user", "content": "第一轮"},
         {"role": "assistant", "content": "上一轮回答"},
@@ -235,7 +235,7 @@ def test_api_compatible_chat_path_is_unchanged(monkeypatch):
 def test_agent_runtime_watchers_exit_after_normal_completion_and_error(monkeypatch):
     baseline = _watcher_count()
     monkeypatch.setattr(
-        agent_runtime.requests,
+        agent_runtime._SESSION,
         "post",
         lambda *_args, **_kwargs: _StreamResponse([b'{"type":"done"}']),
     )
@@ -253,7 +253,7 @@ def test_agent_runtime_watchers_exit_after_normal_completion_and_error(monkeypat
     _wait_for_watcher_count(baseline)
 
     monkeypatch.setattr(
-        agent_runtime.requests,
+        agent_runtime._SESSION,
         "post",
         lambda *_args, **_kwargs: _StreamResponse(status_code=500),
     )
@@ -286,7 +286,7 @@ def test_agent_runtime_user_cancel_calls_cancel_once_and_exits(monkeypatch):
 
     monkeypatch.setattr(agent_runtime, "cancel", fake_cancel)
     monkeypatch.setattr(
-        agent_runtime.requests,
+        agent_runtime._SESSION,
         "post",
         lambda *_args, **_kwargs: CancelledResponse(),
     )
@@ -335,7 +335,7 @@ def test_agent_runtime_http_disconnect_cancels_once_and_exits(monkeypatch):
 
     monkeypatch.setattr(agent_runtime, "cancel", fake_cancel)
     monkeypatch.setattr(
-        agent_runtime.requests,
+        agent_runtime._SESSION,
         "post",
         lambda *_args, **_kwargs: DisconnectResponse(),
     )
@@ -381,3 +381,43 @@ def test_agent_runtime_http_disconnect_cancels_once_and_exits(monkeypatch):
     asyncio.run(exercise_disconnect())
     _wait_for_watcher_count(baseline)
     assert calls == ["stock-600519"]
+
+
+def test_desktop_runtime_bearer_is_forwarded_only_to_loopback(monkeypatch):
+    monkeypatch.setenv("VR_AGENT_RUNTIME_TOKEN", "fixture-desktop-token")
+    monkeypatch.setenv("VR_AGENT_RUNTIME_URL", "http://127.0.0.1:19876")
+    calls = []
+
+    class Response:
+        status_code = 200
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return {"installed": True, "available": True, "state": "started", "cancelled": True}
+
+    def capture(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response()
+
+    monkeypatch.setattr(agent_runtime._SESSION, "get", capture)
+    monkeypatch.setattr(agent_runtime._SESSION, "post", capture)
+    agent_runtime.status()
+    agent_runtime.start_login()
+    agent_runtime.cancel("fixture")
+    assert len(calls) == 3
+    assert all(url.startswith("http://127.0.0.1:19876/") for url, _ in calls)
+    assert all(kwargs["headers"] == {"Authorization": "Bearer fixture-desktop-token"} for _, kwargs in calls)
+    monkeypatch.setenv("VR_AGENT_RUNTIME_URL", "https://example.org")
+    with pytest.raises(agent_runtime.AgentRuntimeError):
+        agent_runtime.start_login()
+    assert len(calls) == 3
+
+
+def test_loopback_runtime_client_ignores_proxy_environment(monkeypatch):
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:8080")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:8080")
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.invalid:8080")
+    monkeypatch.setenv("NO_PROXY", "")
+    assert agent_runtime._SESSION.trust_env is False
+    settings = agent_runtime._SESSION.merge_environment_settings("http://127.0.0.1:43210/chat", {}, None, None, None)
+    assert not settings["proxies"]
