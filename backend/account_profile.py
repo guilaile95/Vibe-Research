@@ -146,10 +146,13 @@ def save_account_profile(
     confirm_current: bool = False,
 ) -> dict:
     """原子写入账户资金；只有显式确认才产生正式 effective identity。"""
+    total_assets, available_cash = validate_account_payload({
+        "total_assets": total_assets, "available_cash": available_cash,
+    })
     moment = datetime.now(timezone.utc)
     payload = {
-        "total_assets": round(float(total_assets), 2),
-        "available_cash": round(float(available_cash), 2),
+        "total_assets": total_assets,
+        "available_cash": available_cash,
         "updated_at": _now(moment),
     }
     if confirm_current:
@@ -232,4 +235,8 @@ def validate_account_payload(raw: dict) -> tuple[float, float]:
     if cash > total:
         raise ValueError("可用现金不能大于账户总资产")
 
+    # Validate the exact currency values that will be persisted and read back.
+    total, cash = round(total, 2), round(cash, 2)
+    if total <= 0:
+        raise ValueError("账户总资产归一化到 2 位小数后必须大于 0")
     return total, cash

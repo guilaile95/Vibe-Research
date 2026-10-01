@@ -155,7 +155,8 @@ def test_boards_api_unexpected_error_502(monkeypatch):
     assert r.status_code == 502
     detail = r.json().get("detail", "")
     assert "板块排名异常" in detail
-    assert "timeout" in detail
+    assert "timeout" not in detail
+    assert "请稍后重试" in detail
 
 
 # ── 10 只调用一次 ───────────────────────────────────────────────────

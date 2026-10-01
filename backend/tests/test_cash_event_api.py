@@ -285,3 +285,105 @@ class TestCashCorrectionApi:
         assert ("PATCH", "/api/account/cash-events/{event_id}") not in paths
         assert ("PUT", "/api/account/cash-events/{event_id}") not in paths
         assert ("DELETE", "/api/account/cash-events/{event_id}") not in paths
+
+
+def test_cash_write_under_real_sqlite_contention_keeps_event_loop_responsive():
+    """Health progresses while an actual SQLite writer is waiting for its lock."""
+    import asyncio
+    import sqlite3
+    import threading
+    import time
+    import httpx
+
+    test_app = FastAPI()
+    test_app.include_router(cash_event_router.router)
+
+    @test_app.get("/health")
+    async def health():
+        return {"ok": True}
+
+    locked = threading.Event()
+    release = threading.Event()
+
+    def hold_write_lock():
+        conn = sqlite3.connect(svc.resolve_db_path())
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            locked.set()
+            release.wait(timeout=2)
+            conn.rollback()
+        finally:
+            conn.close()
+
+    holder = threading.Thread(target=hold_write_lock)
+    holder.start()
+    assert locked.wait(timeout=2)
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_app), base_url="http://test") as client:
+            pending = asyncio.create_task(client.post("/api/account/cash-events", json={
+                "event_type": "CASH_DEPOSIT", "amount": 2,
+            }))
+            started = time.monotonic()
+            try:
+                await asyncio.sleep(0.05)
+                response = await client.get("/health")
+                elapsed = time.monotonic() - started
+                assert response.status_code == 200
+                assert elapsed < 1, f"event loop blocked for {elapsed:.3f}s"
+                assert not pending.done(), "cash write must still be waiting on SQLite"
+            finally:
+                release.set()
+                result = await pending
+            assert result.status_code == 200
+            assert result.json()["data"]["amount"] == 2
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        release.set()
+        holder.join(timeout=3)
+    assert not holder.is_alive()
+
+
+@pytest.mark.parametrize("module_name,service_name,method,path,payload", [
+    ("cash_event_router", "create_cash_event", "POST", "/api/account/cash-events", {}),
+    ("cash_event_router", "list_cash_events", "GET", "/api/account/cash-events", None),
+    ("cash_event_router", "get_cash_event", "GET", "/api/account/cash-events/example", None),
+    ("cash_event_router", "correct_cash_event", "POST", "/api/account/cash-events/example/corrections", {}),
+    ("trade_ledger_router", "create_trade", "POST", "/api/trades", {}),
+    ("trade_ledger_router", "list_trades", "GET", "/api/trades", None),
+    ("trade_ledger_router", "get_trade", "GET", "/api/trades/example", None),
+    ("trade_ledger_router", "void_trade", "POST", "/api/trades/example/void", {"reason": "synthetic"}),
+    ("position_reality_router", "bootstrap_preview", "POST", "/api/position/bootstrap-preview", {}),
+    ("position_reality_router", "bootstrap_commit", "POST", "/api/position/bootstrap-commit", {}),
+    ("position_reality_router", "create_correction", "POST", "/api/position/correction", {}),
+    ("position_reality_router", "derive_positions", "GET", "/api/position/derived", None),
+    ("position_reality_router", "void_trade_with_cascade", "POST", "/api/position/trades/example/void", {"reason": "synthetic"}),
+    ("position_reality_router", "reconcile_positions", "GET", "/api/position/reconciliation", None),
+    ("account_reality_router", "get_account_reality", "GET", "/api/account/reality", None),
+])
+def test_whole_service_call_runs_outside_event_loop(monkeypatch, module_name, service_name, method, path, payload):
+    import asyncio
+    import importlib
+    import threading
+    import httpx
+
+    module = importlib.import_module(module_name)
+    service_threads = []
+    def service(*args, **kwargs):
+        service_threads.append(threading.get_ident())
+        return {"synthetic": True}
+    monkeypatch.setattr(module.svc, service_name, service)
+    test_app = FastAPI()
+    test_app.include_router(module.router)
+
+    async def exercise():
+        loop_thread = threading.get_ident()
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_app), base_url="http://test") as client:
+            response = await client.request(method, path, json=payload)
+        assert response.status_code in (200, 201)
+        assert response.json()["data"] == {"synthetic": True}
+        assert len(service_threads) == 1
+        assert service_threads[0] != loop_thread
+    asyncio.run(exercise())

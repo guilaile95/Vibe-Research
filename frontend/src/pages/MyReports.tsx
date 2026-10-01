@@ -70,8 +70,15 @@ export function MyReports() {
   const [view, setView] = useState<MyReportsBrowseGroup>("industry");
 
   const [q, setQ] = useState("");
-  const [searching, setSearching] = useState(false);
-  const [results, setResults] = useState<MyReportTextHit[] | null>(null);
+  const searching = Boolean(q.trim());
+  const [searchState, setSearchState] = useState<{
+    query: string; status: "loading" | "success" | "error"; results: MyReportTextHit[];
+  }>({ query: "", status: "loading", results: [] });
+  const [searchRetry, setSearchRetry] = useState(0);
+  const currentSearch = searchState.query === q.trim();
+  const searchLoading = !currentSearch || searchState.status === "loading";
+  const searchFailed = currentSearch && searchState.status === "error";
+  const results = currentSearch && searchState.status === "success" ? searchState.results : [];
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [indexBusy, setIndexBusy] = useState<string | null>(null);
 
@@ -123,18 +130,22 @@ export function MyReports() {
   }, []);
 
   useEffect(() => {
-    if (!q.trim()) {
-      setSearching(false);
-      setResults(null);
-      return;
-    }
-    setSearching(true);
+    const query = q.trim();
+    if (!query) return;
+    const controller = new AbortController();
     let alive = true;
-    api.searchMyReportText(q)
-      .then((r) => { if (alive) setResults(r); })
-      .catch(() => { if (alive) setResults([]); });
-    return () => { alive = false; };
-  }, [q]);
+    setSearchState({ query, status: "loading", results: [] });
+    const timer = window.setTimeout(() => {
+      api.searchMyReportText(query, undefined, 20, controller.signal)
+        .then((results) => { if (alive) setSearchState({ query, status: "success", results }); })
+        .catch(() => { if (alive) setSearchState({ query, status: "error", results: [] }); });
+    }, 250);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [q, searchRetry]);
 
   const refreshAll = async () => {
     await load();
@@ -597,7 +608,10 @@ export function MyReports() {
           <Search className="h-4 w-4 text-muted-foreground" />
           <input
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setSearchState({ query: e.target.value.trim(), status: "loading", results: [] });
+            }}
             placeholder="搜索研报正文…"
             className="w-40 rounded border border-border/50 bg-background px-2 py-1 text-sm placeholder:text-muted-foreground/50 sm:w-56"
           />
@@ -608,9 +622,19 @@ export function MyReports() {
       {searching && (
         <div className="mb-4 space-y-2">
           <p className="text-xs text-muted-foreground">
-            搜索「{q}」的结果（{results?.length ?? 0} 条）
+            搜索「{q.trim()}」{!searchLoading && !searchFailed ? `的结果（${results.length} 条）` : ""}
           </p>
-          {results && results.length > 0 ? (
+          {searchLoading ? (
+            <GlassCard><p className="py-6 text-center text-sm text-muted-foreground" role="status">正在搜索研报…</p></GlassCard>
+          ) : searchFailed ? (
+            <GlassCard>
+              <p role="alert" className="text-sm text-destructive">搜索失败，请重试。</p>
+              <button type="button" onClick={() => {
+                setSearchState({ query: q.trim(), status: "loading", results: [] });
+                setSearchRetry((value) => value + 1);
+              }} className="mt-2 text-sm text-primary">重试搜索</button>
+            </GlassCard>
+          ) : results.length > 0 ? (
             <GlassCard>
               <div className="divide-y divide-border/30">
                 {results.map((hit) => (

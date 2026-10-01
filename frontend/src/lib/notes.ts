@@ -1,7 +1,8 @@
 // 研究记录（沉淀）—— 把 AI 复盘 / 今日要点 / 问 AI 的结果存本地，形成个人投研记录。
 // 只存本地 localStorage，不上传、不进仓库。对应投研框架第 7 层「沉淀」。
 
-import { storageGet, storageSet, storageRemove } from "./storage.ts";
+import { storageGetChecked, storageSetChecked, storageRemoveChecked } from "./storage.ts";
+import { parseNoteResearchMetadata, type NoteResearchMetadata } from "./researchNote.ts";
 
 export interface Note {
   id: string;       // 记录身份
@@ -9,6 +10,7 @@ export interface Note {
   title: string;    // 如「每日复盘 2026-07-04」「AI 算力 今日要点」「问 AI · 600519」
   content: string; // markdown 正文
   ts: number;      // 保存时间戳(ms)
+  research?: NoteResearchMetadata;
 }
 
 export interface NotesImportResult {
@@ -17,8 +19,16 @@ export interface NotesImportResult {
   skipped: number;
 }
 
+export interface NotesState {
+  notes: Note[];
+  error: string;
+  // null means healthy or unreadable storage; an empty string is still corrupt data.
+  corruptedRaw: string | null;
+}
+
 export const NOTES_BACKUP_SCHEMA_VERSION = "vibe-notes.backup.v1";
 export const NOTES_LIMIT = 200;
+export const NOTES_CHANGED_EVENT = "vr-notes-changed";
 
 const KEY = "vr-notes";
 
@@ -34,37 +44,66 @@ function parseNote(value: unknown, index: number): Note {
   if (typeof title !== "string") throw new Error(`第 ${index + 1} 条研究记录 title 无效`);
   if (typeof content !== "string") throw new Error(`第 ${index + 1} 条研究记录 content 无效`);
   if (typeof ts !== "number" || !Number.isFinite(ts) || ts < 0) throw new Error(`第 ${index + 1} 条研究记录时间无效`);
-  return { id, kind, title, content, ts };
+  return { id, kind, title, content, ts, ...(value.research === undefined ? {} : { research: parseNoteResearchMetadata(value.research) }) };
 }
 
-export function loadNotes(): Note[] {
+function parseStoredNotes(raw: string | null): Note[] {
+  let value: unknown;
   try {
-    const value = JSON.parse(storageGet(KEY) || "[]");
-    return Array.isArray(value) ? value : [];
+    value = JSON.parse(raw ?? "[]");
   } catch {
-    return [];
+    throw new Error("本地研究记录格式无效，原始数据已保留");
+  }
+  if (!Array.isArray(value)) throw new Error("本地研究记录列表格式无效，原始数据已保留");
+  const notes = value.map(parseNote);
+  if (new Set(notes.map((note) => note.id)).size !== notes.length) {
+    throw new Error("本地研究记录包含重复 id，原始数据已保留");
+  }
+  return notes;
+}
+
+function readNotes(): Note[] {
+  return parseStoredNotes(storageGetChecked(KEY));
+}
+
+export function loadNotesState(): NotesState {
+  let raw: string | null;
+  try {
+    raw = storageGetChecked(KEY);
+  } catch (error) {
+    return { notes: [], error: error instanceof Error ? error.message : "无法读取研究记录", corruptedRaw: null };
+  }
+  try {
+    return { notes: parseStoredNotes(raw), error: "", corruptedRaw: null };
+  } catch (error) {
+    return { notes: [], error: error instanceof Error ? error.message : "研究记录格式无效", corruptedRaw: raw };
   }
 }
 
-function persist(notes: Note[]): string {
-  const serialized = JSON.stringify(notes.slice(0, NOTES_LIMIT));
-  storageSet(KEY, serialized);
-  return serialized;
+export function loadNotes(): Note[] {
+  return loadNotesState().notes;
+}
+
+function persist(notes: Note[]): void {
+  storageSetChecked(KEY, JSON.stringify(notes));
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(NOTES_CHANGED_EVENT));
 }
 
 export function createNotesBackupJson(
   notes: readonly Note[],
   exportedAt = new Date().toISOString(),
 ): string {
+  if (notes.length > NOTES_LIMIT) throw new Error(`本地记录超过 ${NOTES_LIMIT} 条，无法生成完整的标准备份；请先保留原始 vr-notes 数据，未导出截断备份。`);
   return `${JSON.stringify({
     schema_version: NOTES_BACKUP_SCHEMA_VERSION,
     exported_at: exportedAt,
-    notes: notes.slice(0, NOTES_LIMIT).map(({ id, kind, title, content, ts }) => ({
+    notes: notes.map(({ id, kind, title, content, ts, research }) => ({
       id,
       kind,
       title,
       content,
       ts,
+      ...(research === undefined ? {} : { research: parseNoteResearchMetadata(research) }),
     })),
   }, null, 2)}\n`;
 }
@@ -99,7 +138,7 @@ export function mergeNotesFromBackup(
   current: readonly Note[],
   imported: readonly Note[],
 ): NotesImportResult {
-  const existing = current.slice(0, NOTES_LIMIT);
+  const existing = [...current];
   const seen = new Set(existing.map((note) => note.id));
   const additions: Note[] = [];
 
@@ -125,34 +164,50 @@ export function mergeNotesFromBackup(
 
 export function importNotesBackupJson(raw: string): NotesImportResult {
   const imported = parseNotesBackupJson(raw);
-  const result = mergeNotesFromBackup(loadNotes(), imported);
-  const serialized = persist(result.notes);
-  if (storageGet(KEY) !== serialized) {
-    throw new Error("浏览器无法保存导入的研究记录，请检查存储权限或空间");
-  }
+  const result = mergeNotesFromBackup(readNotes(), imported);
+  persist(result.notes);
   return result;
 }
 
+// Recovery is deliberately separate from merge import. The caller confirms replacement
+// after validating the backup; stale views must never replace newer or healthy storage.
+export function replaceCorruptedNotesFromBackupJson(raw: string, expectedCorruptedRaw: string): Note[] {
+  const imported = parseNotesBackupJson(raw);
+  const current = loadNotesState();
+  if (current.corruptedRaw === null || current.corruptedRaw !== expectedCorruptedRaw) {
+    throw new Error("本地研究记录状态已变化或无法读取，请刷新后重试；未替换任何数据");
+  }
+  // A single setItem is atomic on quota failure. Never remove the original first.
+  persist(imported);
+  return imported;
+}
+
 // 新记录置顶。返回更新后的完整列表。
-export function addNote(kind: string, title: string, content: string): Note[] {
+export function addNote(kind: string, title: string, content: string, research?: NoteResearchMetadata): Note[] {
   const note: Note = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     kind,
     title,
     content,
     ts: Date.now(),
+    ...(research === undefined ? {} : { research: parseNoteResearchMetadata(research) }),
   };
-  const next = [note, ...loadNotes()];
+  const current = readNotes();
+  if (current.length >= NOTES_LIMIT) {
+    throw new Error(`研究记录已达到 ${NOTES_LIMIT} 条上限；请先在研究记录页导出备份，再手动清理不需要的记录。已有记录未被删除。`);
+  }
+  const next = [note, ...current];
   persist(next);
   return next;
 }
 
 export function deleteNote(id: string): Note[] {
-  const next = loadNotes().filter((note) => note.id !== id);
+  const next = readNotes().filter((note) => note.id !== id);
   persist(next);
   return next;
 }
 
 export function clearNotes() {
-  storageRemove(KEY);
+  storageRemoveChecked(KEY);
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(NOTES_CHANGED_EVENT));
 }

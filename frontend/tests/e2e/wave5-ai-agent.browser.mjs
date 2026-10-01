@@ -483,7 +483,10 @@ try {
   await page.locator('[data-testid="wave5-model-input"]').fill("fixture-model");
   await page.locator('[data-testid="wave5-api-key-input"]').fill("e2e-secret-never-log");
   await page.locator('[data-testid="wave5-save-api-btn"]').click();
-  await page.getByText("已保存到本机浏览器和 Vibe 本机后台").waitFor({ timeout: 10000 });
+  await page.getByText("配置已保存到本机浏览器和后台；尚未验证模型调用").waitFor({ timeout: 10000 });
+  await page.getByTestId("first-research-status").waitFor({ state: "visible" });
+  await page.getByText("查看配置状态与能力边界", { exact: true }).click();
+  await page.getByText("保存配置或登录成功不代表模型已成功回答；可在下方手动测试当前 API 配置", { exact: true }).waitFor({ state: "visible" });
 
   const stored = JSON.parse(await page.evaluate(() => localStorage.getItem("vr-llm") || "null"));
   assert.equal(stored.apiKey, "e2e-secret-never-log");
@@ -515,7 +518,28 @@ try {
   failCredentialPut = false;
   console.log("PASS: Scenario 9 - Settings save/clear syncs localStorage and backend; save failure is honest");
 
-  console.log("ALL 9 WAVE 5 BROWSER SCENARIOS PASSED!");
+  // Scenario 10: explicit synthetic probe; no real provider, configuration writes, or stored result.
+  const beforeProbeStorage = await page.evaluate(() => localStorage.getItem("vr-llm"));
+  let probeCalls = 0;
+  let probeBody = null;
+  await page.route("**/api/ai/connection-test", async route => {
+    probeCalls += 1;
+    probeBody = route.request().postDataJSON();
+    await route.fulfill({status:200, contentType:"application/x-ndjson", body:'{"type":"done","trace":[],"rounds":1}\n'});
+  });
+  await page.getByTestId("wave5-model-input").fill("unsaved-probe-model");
+  assert.equal(probeCalls, 0);
+  await page.getByTestId("model-connection-test-start").click();
+  await page.locator('[data-testid="model-connection-test-result"][data-probe-status="success"]').waitFor();
+  assert.equal(probeCalls, 1);
+  assert.equal(probeBody.llm.model, "unsaved-probe-model");
+  assert.equal(Object.keys(probeBody).join(","), "llm");
+  assert.equal(await page.evaluate(() => localStorage.getItem("vr-llm")), beforeProbeStorage);
+  assert.match(await page.getByTestId("model-connection-test-result").innerText(), /不验证模型质量/);
+  await page.getByTestId("wave5-api-key-input").fill("another-synthetic-key");
+  assert.equal(await page.getByTestId("model-connection-test-result").count(), 0);
+  console.log("PASS: Scenario 10 - manual draft-only probe, qualified result, and invalidation");
+  console.log("ALL 10 WAVE 5 BROWSER SCENARIOS PASSED!");
 } finally {
   if (browser) await browser.close();
   if (frontend) frontend.close();

@@ -28,6 +28,32 @@ STATUS_ARCHIVED = "ARCHIVED_NOT_SEARCHABLE"
 STATUS_ERROR = "INDEX_ERROR"
 _LOCK = threading.Lock()
 _SPACE_RE = re.compile(r"\s+")
+# This is deliberately a small question grammar, not semantic search.  Only
+# report-scoped questions may drop this framing; their remaining topic must
+# still occur literally in an indexed page.
+_REPORT_QUESTION_RE = re.compile(
+    r"^(?:(?:请(?:帮我|你)?|帮我)\s*)?"
+    r"(?P<action>比较|对比|分析|总结|梳理|解释)?(?:一下)?\s*"
+    r"(?:这|那|上述|所选(?:的)?|选中(?:的)?|已选(?:中)?(?:的)?)?"
+    r"(?:[一二两三四五六七八九十百\d]+)?(?:份|篇)?(?:报告|研报|资料)"
+    r"(?:之间)?\s*(?:中|里)?\s*"
+    r"(?P<predicate>怎么看|如何看待|怎么评价|如何评价|关于|对于|对|在|的)\s*"
+    r"(?P<topic>.+?)\s*[。！？?!]*$"
+)
+_REPORT_QUESTION_SUFFIX_RE = re.compile(
+    r"(?:"
+    r"(?:判断|观点|看法)?(?:方面|上)?的(?:分歧|差异|异同|不同|区别)(?:点|之处)?"
+    r"|(?:方面|上)?(?:的(?:判断|观点|看法))?(?:有何|有什么|有哪些)(?:分歧|差异|不同|区别)(?:点|之处)?"
+    r"|(?:方面|上)?的(?:判断|观点|看法)(?:如何|是什么)?"
+    r"|(?:方面|上)?(?:分别)?(?:怎么看|是否一致)"
+    r")$"
+)
+_REPORT_TOPIC_ASPECT_RE = re.compile(r"(?:的)?(?:变化情况|变化|走势|趋势|表现)(?:如何|怎么样)?$")
+_REPORT_TOPIC_SEPARATOR_RE = re.compile(r"\s+|以及|和|与|[、，,]")
+_GENERIC_REPORT_TOPICS = frozenset({
+    "分歧", "差异", "不同", "异同", "区别", "判断", "观点", "看法", "结论", "内容", "报告", "研报", "资料", "它们",
+    "全文", "摘要", "重点", "主要内容", "主要观点", "核心观点", "主要结论", "核心结论",
+})
 
 
 class ReportTextIndexError(RuntimeError):
@@ -276,6 +302,36 @@ def status_map(reports_dir: Path, reports: list[dict[str, Any]]) -> dict[str, di
     return result
 
 
+def _search_terms(value: str, *, selected_reports: bool) -> list[str]:
+    """Reduce supported Chinese report questions without inventing keywords.
+
+    Preserve ordinary whitespace-separated AND search, including unsupported
+    questions.  No topic, synonym expansion, or unrelated-report fallback is
+    inferred.  Limits keep the question grammar a bounded retrieval aid.
+    """
+    literal_terms = value.split()
+    match = _REPORT_QUESTION_RE.fullmatch(value) if selected_reports else None
+    if match is None:
+        return literal_terms
+    topic, suffix_count = _REPORT_QUESTION_SUFFIX_RE.subn("", match["topic"].strip(), count=1)
+    if not match["action"] and not suffix_count and match["predicate"] not in {
+        "怎么看", "如何看待", "怎么评价", "如何评价",
+    }:
+        return literal_terms
+    topic = _REPORT_TOPIC_ASPECT_RE.sub("", topic)
+    topic = topic.strip().strip('"\'“”‘’')
+    terms = list(dict.fromkeys(term for term in _REPORT_TOPIC_SEPARATOR_RE.split(topic) if term))
+    if (
+        not terms
+        or len(topic) > 80
+        or len(terms) > 8
+        or any(len(term) < 2 or term in _GENERIC_REPORT_TOPICS for term in terms)
+        or re.search(r"[。！？?!；;]", topic)
+    ):
+        return literal_terms
+    return terms
+
+
 def _snippet(text: str, terms: list[str]) -> str:
     folded = text.casefold()
     positions = [folded.find(term.casefold()) for term in terms]
@@ -303,7 +359,7 @@ def search(
     candidates = {}
     for report in reports:
         report_id = str(report.get("id") or "")
-        if requested and report_id not in requested:
+        if report_ids is not None and report_id not in requested:
             continue
         if symbol and symbol not in {str(report.get("info_code") or ""), str(report.get("external_id") or "")}:
             continue
@@ -312,7 +368,7 @@ def search(
         candidates[report_id] = report
     if not candidates:
         return []
-    terms = [term for term in value.split() if term]
+    terms = _search_terms(value, selected_reports=bool(requested))
     if not terms:
         raise ValueError("检索条件无效")
     conn = _connect_readonly(reports_dir)

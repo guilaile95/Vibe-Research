@@ -140,6 +140,7 @@ export type FullMarketFilter = {
 };
 
 export type FullMarketRow = {
+  status?: "normal" | "stale";
   code: string;
   latest_date: string | null;
   latest_close: number | null;
@@ -154,11 +155,13 @@ export type FullMarketRow = {
   current_volume: number | null;
   volume_ratio_20d: number | null;
   observations_count: number;
-  metric_status: Partial<Record<Exclude<FullMarketMetric, "code" | "latest_date">, "normal" | "INSUFFICIENT_HISTORY">>;
+  metric_status: Partial<Record<Exclude<FullMarketMetric, "code" | "latest_date">, "normal" | "INSUFFICIENT_HISTORY" | "STALE">>;
   [key: string]: unknown;
 };
 
 export type FullMarketBreadth = {
+  current_count?: number;
+  stale_count?: number;
   breadth: number | null;
   above_count: number;
   evaluable_count: number;
@@ -171,7 +174,7 @@ export type FullMarketResult = {
   dataset_id: string;
   provider_id: string;
   adjustment: string;
-  status: "normal" | "unavailable";
+  status: "normal" | "partial" | "unavailable";
   fetched_at: string | null;
   as_of: string | null;
   latest_date: string | null;
@@ -181,6 +184,8 @@ export type FullMarketResult = {
     row_count: number;
     code_count: number;
     universe_count: number;
+    current_count?: number;
+    stale_count?: number;
   } | null;
   provenance: {
     source_kind: string | null;

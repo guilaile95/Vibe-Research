@@ -1,7 +1,7 @@
 """Vibe-Research 后端 —— A股数据层 HTTP 接口（FastAPI）。
 
 端点全部在 /api 下，前端 vite 代理 /api → localhost:8900。
-只读、无状态，按用户传入代码返回行情 / 研报 / 资金等数据。
+包含公开市场查询、本地研究与账户记录，以及受控 AI 调用；并非只读或无状态服务。
 
 启动：
     uvicorn app:app --host 127.0.0.1 --port 8900
@@ -39,6 +39,7 @@ import chat as chat_layer
 import agent_runtime
 import ai_credential_router
 import daily_review
+import daily_review_lead
 import debate as debate_layer
 import gstock
 import hithink_finance_client as hithink
@@ -725,7 +726,8 @@ def chat(req: ChatReq):
     _require_llm_ready(req.llm)
 
     cfg = req.llm.model_dump()
-    # Codex Subscription 需要 ASGI disconnect → Agent Runtime cancel 传播；API 路径忽略。
+    cfg["_session"] = req.session
+    # Both API and Codex streams observe the same disconnect signal.
     disconnect_event = threading.Event()
     cfg["_cancel_event"] = disconnect_event
 
@@ -763,7 +765,7 @@ def chat(req: ChatReq):
                 yield json.dumps(ev, ensure_ascii=False) + "\n"
         except Exception as e:  # noqa: BLE001 — 运行时错误以流内事件上报，不中断连接
             if not disconnect_event.is_set():
-                yield json.dumps({"type": "error", "message": f"对话失败：{e}"}, ensure_ascii=False) + "\n"
+                yield json.dumps({"type": "error", "message": f"对话失败：{chat_layer.public_error_message(e)}"}, ensure_ascii=False) + "\n"
 
     return _DisconnectAwareStreamingResponse(
         gen(),
@@ -938,9 +940,9 @@ def _portfolio_payload() -> dict:
     except pf.PortfolioDataCorruptedError:
         raise
     except prs.PositionDerivationError as e:
-        raise HTTPException(502, f"Holding 权威派生失败：{e}") from e
+        raise HTTPException(502, "Holding 权威不可读或派生失败，请检查本地账本与数据健康。") from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"持仓读取异常：{e}") from e
+        raise HTTPException(502, "持仓读取异常，请稍后重试。") from e
     data.pop("authority_state", None)
     return data
 
@@ -1133,7 +1135,7 @@ def account_profile_get():
             "data": status.get("data"),
         }
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"账户资金读取异常：{e}") from e
+        raise HTTPException(502, "账户资金读取异常，请稍后重试。") from e
 
 
 @app.put("/api/account-profile")
@@ -1149,7 +1151,7 @@ def account_profile_save(req: AccountProfileIn):
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"账户资金保存异常：{e}") from e
+        raise HTTPException(502, "账户资金保存异常，请稍后重试。") from e
 
 
 # ---- 我的研报（用户上传自己的研报，存本地、不上传、不进开源仓库）----
@@ -1346,7 +1348,7 @@ def portfolio_refresh():
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"刷新失败：{e}") from e
+        raise HTTPException(502, "刷新失败，请稍后重试。") from e
 
 
 @app.get("/api/radar")
@@ -1355,7 +1357,7 @@ def radar():
     try:
         return {"data": newsradar.get_radar(force=False)}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"资讯雷达异常：{e}") from e
+        raise HTTPException(502, "资讯雷达异常，请稍后重试。") from e
 
 
 @app.post("/api/radar/refresh")
@@ -1364,7 +1366,7 @@ def radar_refresh():
     try:
         return {"data": newsradar.fetch_radar()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"资讯雷达刷新失败：{e}") from e
+        raise HTTPException(502, "资讯雷达刷新失败，请稍后重试。") from e
 
 
 @app.get("/api/signals/gpu-rent")
@@ -1373,7 +1375,7 @@ def signals_gpu_rent():
     try:
         return {"data": signals.get_gpu_rent(force=False)}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"GPU 租金信号异常：{e}") from e
+        raise HTTPException(502, "GPU 租金信号异常，请稍后重试。") from e
 
 
 @app.post("/api/signals/gpu-rent/refresh")
@@ -1382,7 +1384,7 @@ def signals_gpu_rent_refresh():
     try:
         return {"data": signals.fetch_gpu_rent()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"GPU 租金信号刷新失败：{e}") from e
+        raise HTTPException(502, "GPU 租金信号刷新失败，请稍后重试。") from e
 
 
 @app.get("/api/market/overview")
@@ -1391,7 +1393,7 @@ def market_overview():
     try:
         return {"data": market.get_overview()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"市场总览异常：{e}") from e
+        raise HTTPException(502, "市场总览异常，请稍后重试。") from e
 
 
 @app.get("/api/market/emotion")
@@ -1400,7 +1402,7 @@ def market_emotion():
     try:
         return {"data": market.get_short_term_emotion()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"短线情绪异常：{e}") from e
+        raise HTTPException(502, "短线情绪异常，请稍后重试。") from e
 
 
 @app.get("/api/market/turnover-top")
@@ -1409,7 +1411,7 @@ def market_turnover_top():
     try:
         return {"data": market.get_turnover_top()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"成交额榜异常：{e}") from e
+        raise HTTPException(502, "成交额榜异常，请稍后重试。") from e
 
 
 @app.get("/api/market/breadth")
@@ -1422,7 +1424,7 @@ def market_breadth():
     try:
         return {"data": market.get_market_breadth()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"市场广度异常：{e}") from e
+        raise HTTPException(502, "市场广度异常，请稍后重试。") from e
 
 
 @app.get("/api/market/boards")
@@ -1441,7 +1443,7 @@ def market_boards(
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"板块排名异常：{e}") from e
+        raise HTTPException(502, "板块排名异常，请稍后重试。") from e
 
 
 @app.get("/api/market/cloud")
@@ -1536,7 +1538,7 @@ def watchlist_get():
     try:
         return {"data": watchlist_store.get_watchlist_status()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"自选股读取异常：{e}") from e
+        raise HTTPException(502, "自选股读取异常，请稍后重试。") from e
 
 
 class WatchlistIn(BaseModel):
@@ -1570,7 +1572,7 @@ def watchlist_save(req: WatchlistIn):
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"自选股保存异常：{e}") from e
+        raise HTTPException(502, "自选股保存异常，请稍后重试。") from e
 
 
 class WatchlistImportLocalIn(BaseModel):
@@ -1595,7 +1597,7 @@ def watchlist_import_local(req: WatchlistImportLocalIn):
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"自选股并入异常：{e}") from e
+        raise HTTPException(502, "自选股并入异常，请稍后重试。") from e
 
 
 @app.get("/api/watchlist/anomalies")
@@ -1642,7 +1644,7 @@ def decision_cockpit_overview(
         # trade_date 非法 / 未来日等
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"驱动舱总览异常：{e}") from e
+        raise HTTPException(502, "驱动舱总览异常，请稍后重试。") from e
 
 
 @app.get("/api/decision-cockpit/today-actions")
@@ -1684,7 +1686,7 @@ def decision_cockpit_generate(req: TomorrowPlanGenerateIn):
     except DecisionCockpitSnapshotError as e:
         raise HTTPException(409, str(e)) from e
     except DecisionCockpitModelError as e:
-        raise HTTPException(502, f"明日计划解释生成失败：{e}") from e
+        raise HTTPException(502, "明日计划解释生成失败，请稍后重试。") from e
     except prs.PositionDerivationError:
         raise HTTPException(503, _HOLDING_AUTHORITY_UNPROVEN_READ_DETAIL) from None
     except DecisionCockpitError as e:
@@ -1715,7 +1717,7 @@ def decision_cockpit_current(
         plan = dc_get_current_plan(trade_date)
         return {"data": plan}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"读取当前计划异常：{e}") from e
+        raise HTTPException(502, "读取当前计划异常，请稍后重试。") from e
 
 
 @app.get("/api/decision-cockpit/tomorrow-plan/history")
@@ -1730,7 +1732,7 @@ def decision_cockpit_history(
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"计划历史异常：{e}") from e
+        raise HTTPException(502, "计划历史异常，请稍后重试。") from e
 
 
 @app.get("/api/decision-cockpit/tomorrow-plan/{plan_id}")
@@ -1744,7 +1746,7 @@ def decision_cockpit_get(plan_id: int):
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"读取计划异常：{e}") from e
+        raise HTTPException(502, "读取计划异常，请稍后重试。") from e
 
 
 class FreezePlanIn(BaseModel):
@@ -1762,7 +1764,7 @@ def decision_cockpit_freeze(plan_id: int, req: FreezePlanIn):
     except ValueError as e:
         raise HTTPException(409, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"冻结计划异常：{e}") from e
+        raise HTTPException(502, "冻结计划异常，请稍后重试。") from e
 
 
 @app.get("/api/daily-review")
@@ -1829,6 +1831,197 @@ def daily_review_refresh():
         raise
     except Exception:  # noqa: BLE001 — 不向客户端暴露内部细节
         raise HTTPException(502, "每日复盘刷新异常") from None
+
+
+class DailyReviewLeadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: daily_review_lead.LeadKind
+    subject: str | None = None
+    llm: LLMConfig
+
+    @model_validator(mode="after")
+    def validate_subject(self):
+        if self.kind == "emotion":
+            if self.subject is not None:
+                raise ValueError("emotion 不接受 subject")
+        elif not self.subject or not self.subject.strip():
+            raise ValueError("industry/activity 必须指定 subject")
+        elif self.kind == "activity" and not re.fullmatch(r"[0-9]{6}", self.subject):
+            raise ValueError("activity subject 必须为6位代码")
+        return self
+
+
+class _LeadAnalysisStreamingResponse(_DisconnectAwareStreamingResponse):
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # send() can fail while gen() is suspended at a yield, outside its
+            # own try/finally. Close it explicitly rather than waiting for GC.
+            self.disconnect_event.set()
+            with anyio.CancelScope(shield=True):
+                await self.body_iterator.aclose()
+
+
+class AIConnectionTestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    llm: LLMConfig
+
+
+def _validate_probe_base_url(value: str) -> str:
+    """Probe disclosure and actual recipient must share unambiguous URL syntax."""
+    from urllib.parse import urlsplit
+    import ipaddress
+    import re
+    try:
+        if any(ord(char) <= 32 or ord(char) == 127 or char == "\\" for char in value):
+            raise ValueError()
+        parsed = urlsplit(value)
+        host = parsed.hostname or ""
+        if (parsed.scheme not in {"http", "https"} or not host or
+                parsed.username is not None or parsed.password is not None or
+                "?" in value or "#" in value or not host.isascii() or "%" in host):
+            raise ValueError()
+        # Force malformed ports to fail before any connection work.
+        _ = parsed.port
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            # Reject legacy integer/octal/hex IP aliases, which different URL
+            # stacks normalize differently and can bypass literal-IP checks.
+            if re.fullmatch(r"(?:0[xX][0-9a-fA-F]+|[0-9]+)(?:\.(?:0[xX][0-9a-fA-F]+|[0-9]+))*\.?", host):
+                raise ValueError()
+        return value
+    except (ValueError, TypeError):
+        raise HTTPException(400, "连接测试 Base URL 格式无效，请使用不含账号密码、查询参数或片段的明确 HTTP(S) 地址") from None
+
+
+@app.post("/api/ai/connection-test")
+async def test_ai_connection(req: AIConnectionTestRequest):
+    """One synthetic API request; no private context, state reads or writes."""
+    if req.llm.provider.strip().startswith("cli-"):
+        raise HTTPException(400, "连接测试仅支持 API Compatible 接入")
+    _require_llm_ready(req.llm)
+    _validate_probe_base_url(req.llm.baseURL)
+    disconnect_event = threading.Event()
+    cfg = {**req.llm.model_dump(), "_cancel_event": disconnect_event}
+
+    async def gen():
+        source = None
+        try:
+            source = chat_layer.stream_api_messages(
+                cfg, chat_layer.CONNECTION_TEST_MESSAGES,
+                limits=chat_layer.CONNECTION_TEST_LIMITS,
+            )
+            has_text = False
+            saw_done = False
+            async for event in source:
+                if disconnect_event.is_set():
+                    return
+                if saw_done or not isinstance(event, dict):
+                    raise ValueError("invalid probe event")
+                if event.get("type") == "delta" and isinstance(event.get("text"), str):
+                    has_text = has_text or bool(event["text"].strip())
+                elif event.get("type") == "done":
+                    saw_done = True
+                else:
+                    raise ValueError("invalid probe event")
+            if not has_text or not saw_done:
+                raise ValueError("incomplete probe")
+            if not disconnect_event.is_set():
+                yield json.dumps({"type": "done", "trace": [], "rounds": 1}) + "\n"
+        except Exception:
+            if not disconnect_event.is_set():
+                yield json.dumps({"type": "error", "message": "模型连接测试失败，请检查配置后重试"},
+                                 ensure_ascii=False) + "\n"
+        finally:
+            disconnect_event.set()
+            if source is not None:
+                with anyio.move_on_after(chat_layer.CONNECTION_TEST_LIMITS.cleanup_grace, shield=True):
+                    await source.aclose()
+
+    return _LeadAnalysisStreamingResponse(
+        gen(), media_type="application/x-ndjson", disconnect_event=disconnect_event,
+    )
+
+
+@app.post("/api/daily-review/lead-analysis")
+async def analyze_daily_review_lead(req: DailyReviewLeadRequest):
+    """Display snapshot -> one lead -> no-tools stream; no AI result persistence."""
+    _require_llm_ready(req.llm)
+    try:
+        payload = await run_in_threadpool(daily_review.get_daily_review_for_display)
+        context = daily_review_lead.build_lead_context(payload, req.kind, req.subject)
+        messages = daily_review_lead.build_lead_messages(context)
+    except daily_review_lead.LeadContextError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from None
+    except Exception:
+        raise HTTPException(503, "当前线索数据暂不可用，请稍后重试") from None
+
+    disconnect_event = threading.Event()
+    cfg = req.llm.model_dump()
+    cfg["_cancel_event"] = disconnect_event
+
+    async def gen():
+        source = None
+        try:
+            yield json.dumps({"type": "lead_context", "context": context},
+                             ensure_ascii=False, allow_nan=False) + "\n"
+            if disconnect_event.is_set():
+                return
+            if cfg.get("provider") == "cli-codex":
+                source = iter(chat_layer.stream_messages(cfg, messages, use_tools=False))
+                events = iterate_in_threadpool(source)
+            else:
+                source = chat_layer.stream_api_messages(cfg, messages)
+                events = source
+            saw_done = False
+            has_text = False
+            async for event in events:
+                if disconnect_event.is_set():
+                    return
+                if not isinstance(event, dict):
+                    raise ValueError("invalid model event")
+                event_type = event.get("type")
+                if saw_done:
+                    raise ValueError("event after done")
+                if event_type == "delta":
+                    text = event.get("text")
+                    if not isinstance(text, str):
+                        raise ValueError("invalid model delta")
+                    has_text = has_text or bool(text.strip())
+                    yield json.dumps({"type": "delta", "text": text}, ensure_ascii=False) + "\n"
+                elif event_type == "done":
+                    saw_done = True
+                else:
+                    raise ValueError("unexpected model event")
+            if not saw_done or not has_text:
+                raise ValueError("incomplete model stream")
+            if not disconnect_event.is_set():
+                yield json.dumps({"type": "done", "trace": [], "rounds": 1}) + "\n"
+        except Exception:
+            if not disconnect_event.is_set():
+                yield json.dumps({"type": "error", "message": "单条线索AI解读失败，请稍后重试"},
+                                 ensure_ascii=False) + "\n"
+        finally:
+            disconnect_event.set()
+            aclose = getattr(source, "aclose", None)
+            if callable(aclose):
+                # Disconnect cancellation is already active; still finish cleanup
+                # if the generator was suspended while yielding a delta.
+                with anyio.CancelScope(shield=True):
+                    await aclose()
+            close = getattr(source, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+
+    return _LeadAnalysisStreamingResponse(
+        gen(), media_type="application/x-ndjson", disconnect_event=disconnect_event,
+    )
 
 
 class DailyReviewAnalyzeRequest(BaseModel):
@@ -2091,7 +2284,7 @@ def global_indices():
     try:
         return {"data": market.get_global_indices()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"全球指数异常：{e}") from e
+        raise HTTPException(502, "全球指数异常，请稍后重试。") from e
 
 
 @app.get("/api/global/stock")
@@ -2107,7 +2300,7 @@ def global_stock(symbol: str = Query(..., min_length=1, max_length=16)):
     except gstock.SearchUnavailable as e:
         raise HTTPException(503, str(e)) from None
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"美港股查询异常：{e}") from e
+        raise HTTPException(502, "美港股查询异常，请稍后重试。") from e
 
 
 @app.get("/api/global/hk/cashflow")
@@ -2123,7 +2316,7 @@ def global_hk_cashflow(symbol: str = Query(..., min_length=1, max_length=16)):
     except gstock.SearchUnavailable as e:
         raise HTTPException(503, str(e)) from None
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"港股现金流查询异常：{e}") from e
+        raise HTTPException(502, "港股现金流查询异常，请稍后重试。") from e
 
 
 @app.get("/api/indices")
@@ -2132,36 +2325,57 @@ def indices():
     try:
         return {"data": astock.index_quote()}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"指数行情异常：{e}") from e
+        raise HTTPException(502, "指数行情异常，请稍后重试。") from e
 
 
 @app.get("/api/quote")
 def quote(codes: str = Query(..., description="逗号分隔的 6 位代码")):
-    """实时行情：现价/涨跌/PE/PB/市值/换手/涨跌停。仅标准库，永远可用。"""
+    """实时行情：现价/涨跌/PE/PB/市值/换手/涨跌停；缺失或过期数据显式降级。"""
     lst = [c.strip() for c in codes.split(",") if c.strip()]
     if not lst or any(not c.isdigit() or len(c) != 6 for c in lst):
         raise HTTPException(400, "codes 必须是逗号分隔的 6 位数字")
     try:
-        data = astock.tencent_quote(lst)
+        import math
+        raw = astock.tencent_quote(lst)
+        data = {}
+        for code in lst:
+            row = raw.get(code) if isinstance(raw, dict) else None
+            if not isinstance(row, dict):
+                continue
+            price = row.get("price")
+            if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(price) or price <= 0:
+                continue
+            # Enforce JSON safety before health success, including alternate adapters.
+            try:
+                json.dumps(row, allow_nan=False)
+            except (ValueError, TypeError):
+                continue
+            data[code] = row
+        from trade_calendar import observation_trade_date_at
+        expected_date = observation_trade_date_at(datetime.now(timezone.utc).isoformat())
+        fresh = bool(data) and all(
+            expected_date is not None and row.get("trade_date") == expected_date
+            for row in data.values()
+        )
         # 健康事件：最近一次真实 quotes 调用（覆盖不持久化）
         try:
             import data_health_event_store as _dhes
             if not isinstance(data, dict) or not data:
                 _dhes.safe_call(_dhes.record_failure, "quotes", "SOURCE_UNAVAILABLE")
-            elif any(c not in data for c in lst):
+            elif any(c not in data for c in lst) or not fresh:
                 _dhes.safe_call(_dhes.record_partial, "quotes")
             else:
                 _dhes.safe_call(_dhes.record_success, "quotes")
         except Exception:
             pass
-        return {"data": data}
+        return {"data": data, "status": "unavailable" if not data else "normal" if fresh and all(c in data for c in lst) else "partial"}
     except Exception as e:  # noqa: BLE001 — 边界统一兜底
         try:
             import data_health_event_store as _dhes
             _dhes.safe_call(_dhes.record_failure, "quotes", "SOURCE_UNAVAILABLE")
         except Exception:
             pass
-        raise HTTPException(502, f"行情源异常：{e}") from e
+        raise HTTPException(502, "行情源暂不可用") from None
 
 
 _CACHE_MISS = object()
@@ -2174,6 +2388,8 @@ class TTLCache:
         self._data: OrderedDict = OrderedDict()
         self._max = max_entries
         self._lock = threading.Lock()
+        self._flight_lock = threading.Lock()
+        self._flights = {}
 
     def get(self, key, ttl: float):
         with self._lock:
@@ -2195,6 +2411,37 @@ class TTLCache:
             while len(self._data) > self._max:
                 self._data.popitem(last=False)
 
+    def get_or_fetch(self, key, ttl: float, fetch, *, wait_timeout: float = 120):
+        """Share an overlapping miss, without holding a global lock during I/O.
+
+        Failures belong only to that flight; a later independent call may retry.
+        A waiter timing out does not cancel the owner or start another fetch.
+        """
+        from concurrent.futures import Future
+        with self._flight_lock:
+            hit = self.get(key, ttl)
+            if hit is not _CACHE_MISS:
+                return hit
+            flight = self._flights.get(key)
+            owner = flight is None
+            if owner:
+                flight = Future()
+                self._flights[key] = flight
+        if not owner:
+            return flight.result(timeout=wait_timeout)
+        try:
+            value = fetch()
+            self.set(key, value)  # TTL begins when the actual fetch finishes.
+            flight.set_result(value)
+            return value
+        except BaseException as error:
+            flight.set_exception(error)
+            raise
+        finally:
+            with self._flight_lock:
+                if self._flights.get(key) is flight:
+                    del self._flights[key]
+
 
 _PCT_CACHE = TTLCache()
 
@@ -2213,7 +2460,7 @@ def valuation_percentile(code: str = Query(...)):
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"估值分位异常：{e}") from e
+        raise HTTPException(502, "估值分位异常，请稍后重试。") from e
 
 
 _ANN_CACHE = TTLCache()
@@ -2227,7 +2474,15 @@ def announcements(code: str = Query(...)):
     if hit is not _CACHE_MISS:
         return {"data": hit}
     try:
-        data = astock.announcements(code)
+        data = astock.announcements(code, strict=True)
+        if not isinstance(data, list) or any(
+            not isinstance(row, dict)
+            or not isinstance(row.get("title"), str)
+            or not row["title"].strip()
+            or any(not isinstance(row.get(key), str) for key in ("date", "type", "url"))
+            for row in data
+        ):
+            raise ValueError("announcement provider returned malformed rows")
         _ANN_CACHE.set(code, data)
         try:
             import data_health_event_store as _dhes
@@ -2242,7 +2497,7 @@ def announcements(code: str = Query(...)):
             _dhes.safe_call(_dhes.record_failure, "announcements", "SOURCE_UNAVAILABLE")
         except Exception:
             pass
-        raise HTTPException(502, f"公告源异常：{e}") from e
+        raise HTTPException(502, "公告暂时无法加载，请稍后重试。") from e
 
 
 _FIN_CACHE = TTLCache()
@@ -2285,7 +2540,7 @@ def financials(code: str = Query(...)):
             _dhes.safe_call(_dhes.record_failure, "financials", "SOURCE_UNAVAILABLE")
         except Exception:
             pass
-        raise HTTPException(502, f"财务摘要异常：{e}") from e
+        raise HTTPException(502, "财务摘要异常，请稍后重试。") from e
 
 
 @app.get("/api/valuation")
@@ -2297,7 +2552,7 @@ def valuation(code: str = Query(...)):
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"估值计算异常：{e}") from e
+        raise HTTPException(502, "估值计算异常，请稍后重试。") from e
 
 
 @app.get("/api/reports")
@@ -2310,7 +2565,7 @@ def reports(code: str = Query(...), pages: int = Query(2, ge=1, le=5)):
             r["pdfUrl"] = astock.pdf_url(r.get("infoCode", "")) if r.get("infoCode") else None
         return {"data": rows}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"研报源异常：{e}") from e
+        raise HTTPException(502, "研报源异常，请稍后重试。") from e
 
 
 @app.get("/api/news")
@@ -2318,11 +2573,20 @@ def news(code: str = Query(...), limit: int = Query(20, ge=1, le=50)):
     """个股新闻（东财，需 akshare）。"""
     code = _validate(code)
     try:
-        return {"data": astock.stock_news(code, limit=limit)}
+        data = astock.stock_news(code, limit=limit, strict=True)
+        if not isinstance(data, list) or any(
+            not isinstance(row, dict)
+            or not isinstance(row.get("新闻标题"), str)
+            or not row["新闻标题"].strip()
+            or any(key in row and not isinstance(row[key], str) for key in ("发布时间", "文章来源", "新闻链接"))
+            for row in data
+        ):
+            raise ValueError("news provider returned malformed rows")
+        return {"data": data}
     except astock.DependencyMissing as e:
-        raise HTTPException(501, str(e)) from e
+        raise HTTPException(501, "新闻服务缺少 akshare 依赖，请安装后重试。") from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"新闻源异常：{e}") from e
+        raise HTTPException(502, "新闻暂时无法加载，请稍后重试。") from e
 
 
 @app.get("/api/info")
@@ -2334,7 +2598,7 @@ def info(code: str = Query(...)):
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"基本面源异常：{e}") from e
+        raise HTTPException(502, "基本面源异常，请稍后重试。") from e
 
 
 @app.get("/api/disclosure")
@@ -2346,7 +2610,7 @@ def disclosure(code: str = Query(...)):
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"公告源异常：{e}") from e
+        raise HTTPException(502, "公告源异常，请稍后重试。") from e
 
 
 @app.get("/api/kline")
@@ -2358,7 +2622,7 @@ def kline(code: str = Query(...), category: int = Query(4), offset: int = Query(
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"K线源异常：{e}") from e
+        raise HTTPException(502, "K线源异常，请稍后重试。") from e
 
 
 @app.get("/api/finance")
@@ -2370,7 +2634,7 @@ def finance(code: str = Query(...)):
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"财务源异常：{e}") from e
+        raise HTTPException(502, "财务源异常，请稍后重试。") from e
 
 
 # ---------------------------------------------------------------------------
@@ -2383,12 +2647,7 @@ _DC_CACHE = TTLCache(max_entries=1024)  # key=(endpoint, code) -> (ts, data)
 
 def _cached(endpoint: str, code: str, ttl: int, fetch):
     key = (endpoint, code)
-    hit = _DC_CACHE.get(key, ttl)
-    if hit is not _CACHE_MISS:
-        return hit
-    data = fetch()
-    _DC_CACHE.set(key, data)
-    return data
+    return _DC_CACHE.get_or_fetch(key, ttl, fetch)
 
 
 @app.get("/api/margin")
@@ -2398,7 +2657,7 @@ def margin(code: str = Query(...)):
     try:
         return {"data": _cached("margin", code, 1800, lambda: astock.margin_trading(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"融资融券异常：{e}") from e
+        raise HTTPException(502, "融资融券异常，请稍后重试。") from e
 
 
 @app.get("/api/block-trade")
@@ -2408,7 +2667,7 @@ def block_trade(code: str = Query(...)):
     try:
         return {"data": _cached("block", code, 1800, lambda: astock.block_trade(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"大宗交易异常：{e}") from e
+        raise HTTPException(502, "大宗交易异常，请稍后重试。") from e
 
 
 @app.get("/api/holders")
@@ -2418,7 +2677,7 @@ def holders(code: str = Query(...)):
     try:
         return {"data": _cached("holders", code, 1800, lambda: astock.holder_num_change(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"股东户数异常：{e}") from e
+        raise HTTPException(502, "股东户数异常，请稍后重试。") from e
 
 
 @app.get("/api/dividend")
@@ -2428,7 +2687,7 @@ def dividend(code: str = Query(...)):
     try:
         return {"data": _cached("dividend", code, 1800, lambda: astock.dividend_history(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"分红送转异常：{e}") from e
+        raise HTTPException(502, "分红送转异常，请稍后重试。") from e
 
 
 @app.get("/api/fund-flow")
@@ -2439,7 +2698,7 @@ def fund_flow(code: str = Query(...)):
     try:
         return {"data": _cached("fundflow", code, 900, lambda: astock.stock_fund_flow_120d(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"资金流异常：{e}") from e
+        raise HTTPException(502, "资金流异常，请稍后重试。") from e
 
 
 @app.get("/api/dragon-tiger")
@@ -2449,7 +2708,7 @@ def dragon_tiger(code: str = Query(...)):
     try:
         return {"data": _cached("dt", code, 1800, lambda: astock.dragon_tiger_board(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"龙虎榜异常：{e}") from e
+        raise HTTPException(502, "龙虎榜异常，请稍后重试。") from e
 
 
 @app.get("/api/lockup")
@@ -2459,7 +2718,7 @@ def lockup(code: str = Query(...)):
     try:
         return {"data": _cached("lockup", code, 1800, lambda: astock.lockup_expiry(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"解禁日历异常：{e}") from e
+        raise HTTPException(502, "解禁日历异常，请稍后重试。") from e
 
 
 @app.get("/api/blocks")
@@ -2469,7 +2728,7 @@ def blocks(code: str = Query(...)):
     try:
         return {"data": _cached("blocks", code, 1800, lambda: astock.concept_blocks(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"板块归属异常：{e}") from e
+        raise HTTPException(502, "板块归属异常，请稍后重试。") from e
 
 
 @app.get("/api/hot-concepts")
@@ -2479,7 +2738,7 @@ def hot_concepts(code: str = Query(...)):
     try:
         return {"data": _cached("hotcon", code, 900, lambda: astock.hot_concepts(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"热门概念异常：{e}") from e
+        raise HTTPException(502, "热门概念异常，请稍后重试。") from e
 
 
 @app.get("/api/investor-qa")
@@ -2489,7 +2748,7 @@ def investor_qa(code: str = Query(...)):
     try:
         return {"data": _cached("irm", code, 900, lambda: astock.investor_qa(code))}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"互动易异常：{e}") from e
+        raise HTTPException(502, "互动易异常，请稍后重试。") from e
 
 
 @app.get("/api/industry")
@@ -2504,7 +2763,7 @@ def industry(top: int = Query(20, ge=5, le=50)):
         _DC_CACHE.set(key, data)
         return {"data": data}
     except Exception as e:  # noqa: BL001
-        raise HTTPException(502, f"行业排名异常：{e}") from e
+        raise HTTPException(502, "行业排名异常，请稍后重试。") from e
 
 
 # ---------------------------------------------------------------------------
@@ -2658,7 +2917,7 @@ def sector_research_data(sector_key: str):
             _dhes.safe_call(_dhes.record_failure, "sector_research", "SOURCE_UNAVAILABLE")
         except Exception:
             pass
-        raise HTTPException(502, f"板块动态数据异常：{e}") from e
+        raise HTTPException(502, "板块动态数据异常，请稍后重试。") from e
     return {"data": data}
 
 
@@ -2677,7 +2936,7 @@ def sector_research_market_context(sector_key: str | None = Query(None)):
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
     except Exception as e:  # noqa: BLE001 — unexpected orchestration failure
-        raise HTTPException(502, f"板块市场上下文异常：{type(e).__name__}") from e
+        raise HTTPException(502, "板块市场上下文暂不可用，请稍后重试。") from e
     _DC_CACHE.set(key, data)
     return {"data": data}
 
@@ -2725,7 +2984,7 @@ def sector_research_import(sector_key: str, body: SectorReportImportIn):
     except mr.ReportError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BL001
-        raise HTTPException(502, f"PDF 下载失败：{e}") from e
+        raise HTTPException(502, "PDF 下载失败，请稍后重试。") from e
     if not blob:
         raise HTTPException(502, "PDF 内容为空")
 

@@ -10,6 +10,8 @@ def test_get_prefix():
     assert astock.get_prefix("000001") == "sz"
     assert astock.get_prefix("300750") == "sz"
     assert astock.get_prefix("832000") == "bj"   # 8 开头北交所
+    assert astock.get_prefix("920982") == "bj"   # 现行北交所优先于沪 B 股 9 号段
+    assert astock.get_prefix("430047") == "bj"   # 历史北交所号段
     assert astock.get_prefix("510300") == "sh"   # 沪 ETF（issue #10：曾误判 sz → 行情为 0）
     assert astock.get_prefix("588000") == "sh"   # 科创 50 ETF
     assert astock.get_prefix("159915") == "sz"   # 深 ETF 15 开头走默认 sz
@@ -28,15 +30,16 @@ def test_pe_digestion():
     assert astock.pe_digestion(60, 0) == float("inf")    # 零增速永远消化不掉
 
 
-def _gtimg_line(**overrides) -> str:
-    # 构造一条腾讯行情返回行：v_sh600519="1~名~代码~价~..."（≥53 字段）。
+def _gtimg_line(*, code="600519", prefix="sh", **overrides) -> str:
+    # 响应头与正文默认使用相同代码；identity 仅用于构造身份错配。
     parts = ["0"] * 55
     parts[1] = overrides.get("name", "贵州茅台")
+    parts[2] = overrides.get("identity", code)
     parts[3] = overrides.get("price", "1194.45")
     parts[39] = overrides.get("pe_ttm", "18.05")
     parts[44] = overrides.get("mcap", "15000")
     parts[46] = overrides.get("pb", "6.41")
-    return 'v_sh600519="' + "~".join(parts) + '";'
+    return f'v_{prefix}{code}="' + "~".join(parts) + '";'
 
 
 def test_parse_gtimg():
@@ -54,3 +57,24 @@ def test_parse_gtimg_bad_line_ignored():
     # 字段不足 / 无引号的行应被安全跳过，不抛异常。
     assert astock._parse_gtimg("garbage;no_quotes_here;") == {}
     assert astock._parse_gtimg("") == {}
+
+
+def test_tencent_quote_routes_bse_and_preserves_response_identity(monkeypatch):
+    def fetch(symbols):
+        assert symbols == ["bj920982", "bj430047", "sh900001", "sh510300"]
+        return _gtimg_line(code="920982", prefix="bj", name="北交所样本", price="25.50")
+
+    monkeypatch.setattr(astock, "_fetch_gtimg", fetch)
+    quotes = astock.tencent_quote(["920982", "430047", "900001", "510300"])
+    assert list(quotes) == ["920982"]
+    assert quotes["920982"]["name"] == "北交所样本"
+    assert quotes["920982"]["price"] == 25.5
+
+
+def test_tencent_quote_rejects_mismatched_bse_response_identity(monkeypatch):
+    def fetch(symbols):
+        assert symbols == ["bj920982"]
+        return _gtimg_line(code="920982", prefix="bj", identity="600519")
+
+    monkeypatch.setattr(astock, "_fetch_gtimg", fetch)
+    assert astock.tencent_quote(["920982"]) == {}

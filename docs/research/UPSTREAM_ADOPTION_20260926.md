@@ -36,3 +36,24 @@ CNEquity 的[标的截面核验](https://github.com/rootSunc/CNEquity/commit/661
 ## 验证范围
 
 上游调查仅核对本地相关文档/代码/历史、公开 GitHub commits / compare / releases / 固定源码；未执行上游代码。适配实现的定向测试与隔离界面验收记录在对应 PR。真实全市场恢复仍未证实，未切换本机运行入口，也未启动正式 Product Reality 观察。
+
+## 内嵌数据工具包补充核查（2026-09-26 历史记录）
+
+前述五个来源之外，项目还内嵌两个实际使用的数据工具包。[#354](https://github.com/guilaile95/Vibe-Research/pull/354) 的补查以本地 `714343d` 的同步记录、当时内嵌版本和固定上游源码为依据，不把安装的所有 Skills 当作已吸收项目。
+
+| 来源 | 本地基准 | 当时核验坐标与结论 |
+| --- | --- | --- |
+| [a-stock-data](https://github.com/simonlin1212/a-stock-data) | 内嵌 3.7.1，对应上游 `f90d67853b8108f13d286e1df20b357e2c5198a9` | [固定比较](https://github.com/simonlin1212/a-stock-data/compare/f90d67853b8108f13d286e1df20b357e2c5198a9...f814dcfe209dd7958f4858f9d878d591ee85fb56)：8 个提交。当时最新功能版本 [3.10.0](https://github.com/simonlin1212/a-stock-data/commit/2e0ae6383c649b2bc5f68d3bc430d357f1c59ae7) 含腾讯逐笔；3.9.0 含腾讯 K 线、通达信盘后包及更多官方数据源；3.7.2 对齐北交所号段规则。该固定 HEAD 最后提交为文档更新。 |
+| [global-stock-data](https://github.com/simonlin1212/global-stock-data) | 内嵌 2.0.3 | [固定 HEAD](https://github.com/simonlin1212/global-stock-data/tree/5f27525709ab043b91e53d7a420ce6d46e66a0ce) 的 SKILL.md 与当时项目内嵌文件逐行比较，仅作者说明旁一处尾随空格不同，无新增可吸收的工具包功能。未整体重写本地 Skill。 |
+
+#354 独立适配北交所行情路由：`92`、历史 `4/8` 号段优先于沪 B 股 `9` 规则，避免把 `920982` 请求为 `sh920982`，保留沪深股票、沪 B 股及 ETF 规则。AI 工具拒绝腾讯不支持的北交所历史请求，交回既有 `astock.kline` 路径，是否可用仍取决于该路径的供应商资格认定。上游 [3.10.0 固定契约](https://github.com/simonlin1212/a-stock-data/blob/2e0ae6383c649b2bc5f68d3bc430d357f1c59ae7/SKILL.md) 说明腾讯可能只返回北交所最新一根日线，不能据此形成历史涨跌幅结论。
+
+当时的吸收决定是暂不将腾讯新 K 线用于主产品回退：默认前复权、无成交额和沪深覆盖范围与 HiThink 不复权日线及成交额契约不同。AI 工具已有腾讯前复权取数，并非该补丁新增能力。这是 9 月 26 日的历史结论，后续有界回退契约见下一节。官方盘后包、更多期货/可转债接口仍只是按产品需求核定的候选；上游新增端点或自报测试数不等于本项目已接入或验证。
+
+#354 还记录了一次后续全 A 分页实测：前 13 页各 100 行、源 total=5920；第 14 页主备主机各 3 次 `ConnectionError`，异常链包括 `MaxRetryError` / `ProtocolError`，总耗时 24.12 秒。最终拒绝返回不完整快照，未达到整轮时间预算。这是该 PR 的历史实测记录，本次整理未重复探测；该证据仍不能区分代理、限流或供应商根因，也不能证明全市场恢复。
+
+## 腾讯 K 线契约后续对齐
+
+[#355](https://github.com/guilaile95/Vibe-Research/pull/355) 的整批序列校验由 [#356](https://github.com/guilaile95/Vibe-Research/pull/356) 中的共享 `backend/tencent_kline.py` 承接，AI 工具保留前复权优先路径。指定对象、日期顺序、有限数值及 OHLC 任一校验失败，整批拒绝；前复权键存在但为空时，不借用原始价格。AI 统计只使用成功回退后的完整结果，所有来源失败时不生成涨跌幅摘要。
+
+主产品 `astock.kline` 保留 HiThink 合资格日线优先及既有 mootdx 路径，只在这些路径未提供数据时使用有界的腾讯不复权回退：仅沪深 `day/week/month`，最多 320 根，成交量由手转换为股，成交额保留未知（`None`）。该回退不支持北交所或 60 分钟，不扩大 HiThink 的资格认定，也不把前复权价格代入不复权契约。当前 `92` 号段北交所日线要求合资格 HiThink；没有合资格供应商时保持显式失败。历史 `4/8` 号段仍可进入既有 mootdx 路径，不应据此宣称全部北交所日线都强制走 HiThink。上述实现与离线测试不证明真实供应商恢复、全市场完整或正式 Product Reality 观察已经开始。

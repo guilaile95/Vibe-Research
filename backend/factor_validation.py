@@ -192,10 +192,27 @@ def _load_close_series(
     return series
 
 
+def _usable_full_market(envelope: dict[str, Any]) -> bool:
+    if envelope.get("status") == "normal":
+        return True
+    if envelope.get("status") != "partial":
+        return False
+    # Only the explicit mixed-date RDP contract is usable. A generic partial
+    # response is not evidence of a complete historical cross-section.
+    coverage = envelope.get("coverage")
+    if not isinstance(coverage, dict):
+        return False
+    current, stale, total = (coverage.get(key) for key in
+                             ("current_count", "stale_count", "universe_count"))
+    return (all(type(value) is int for value in (current, stale, total))
+            and current > 0 and stale > 0 and current + stale == total)
+
+
 def _all_full_market_rows(root: Path, as_of: str) -> dict[str, Any]:
     """Read one exact-as-of Full Market cross-section through its real contract."""
     rows: list[dict[str, Any]] = []
     offset = 0
+    first_provenance = None
     while True:
         page = rdp.query_full_market(
             root=root,
@@ -204,13 +221,23 @@ def _all_full_market_rows(root: Path, as_of: str) -> dict[str, Any]:
             limit=rdp._MAX_LIMIT,
             offset=offset,
         )
-        if page.get("status") != "normal":
+        if not _usable_full_market(page):
             return page
-        rows.extend(page.get("rows") or [])
+        if page.get("as_of") != as_of or page.get("latest_date") != as_of:
+            raise rdp.ResearchDataPlaneValidationError("Full Market date does not match factor date")
+        provenance = page.get("provenance")
+        if first_provenance is None:
+            first_provenance = provenance
+        elif provenance != first_provenance:
+            raise rdp.ResearchDataPlaneValidationError("Full Market pagination provenance changed")
+        page_rows = page.get("rows")
+        if not isinstance(page_rows, list) or any(not isinstance(row, dict) for row in page_rows):
+            raise rdp.ResearchDataPlaneValidationError("Full Market rows are invalid")
+        rows.extend(page_rows)
         next_offset = page.get("next_offset")
         if next_offset is None:
             return {**page, "rows": rows, "returned_rows": len(rows)}
-        if next_offset <= offset:
+        if type(next_offset) is not int or next_offset <= offset:
             raise rdp.ResearchDataPlaneValidationError(
                 "full-market pagination did not advance"
             )
@@ -453,7 +480,7 @@ def evaluate_rdp(
     excluded_total = 0
     for factor_date in effective_dates:
         market = _all_full_market_rows(root, factor_date)
-        if market.get("status") != "normal":
+        if not _usable_full_market(market):
             raise rdp.ResearchDataPlaneValidationError(
                 f"Full Market unavailable at factor date {factor_date}"
             )
@@ -465,6 +492,11 @@ def evaluate_rdp(
         parity_dates_checked += 1
         parity_rows_checked += len(rows)
         exact_rows, stale_source_row_count = _exact_date_rows(rows, factor_date)
+        if market.get("status") == "partial":
+            coverage = market["coverage"]
+            if (len(exact_rows) != coverage["current_count"]
+                    or stale_source_row_count != coverage["stale_count"]):
+                raise rdp.ResearchDataPlaneValidationError("Full Market partial coverage does not match rows")
         source_asof_row_count = len(rows)
         exact_date_universe_count = len(exact_rows)
         source_asof_rows_total += source_asof_row_count

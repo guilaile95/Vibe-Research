@@ -1,16 +1,16 @@
 # Vibe-Research Backend
 
-A股数据层 + 可插拔 AI 层。全部只读、无状态。
+市场数据查询、本地研究与决策/账户记录，以及可选 AI 层。包含受控写入与本地持久化，不能作为“全部只读、无状态”服务部署。权限与调用链见 [架构说明](../docs/ARCHITECTURE.md)。
 
 ## 安装
 
 ```bash
 cd backend
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements-linux-py311.lock.txt
 ```
 
-> 行情 + 研报只需 `fastapi / uvicorn / requests`（秒装、必可用）。
+> 上述为 Linux CPython 3.11 的锁定环境。Windows 请按 [根目录启动说明](../README.md#运行方式) 使用对应版本及锁文件。公开数据源可能限流、故障或变更，不保证安装后所有来源都可用。
 > 一致预期 / 新闻 / 公告需 `akshare`，K线 / 财务需 `mootdx`；未装时对应端点返回 501 + 安装提示，不影响其余功能。
 
 ## 1. HTTP API（给网页前端 + 系统 AI）
@@ -34,7 +34,8 @@ python3 -m venv .venv
 | `GET /api/finance?code=600519` | 季报财务快照（mootdx，前端未用 / 备用） | mootdx |
 | **资金面·筹码·信号（v3.3）** | `/api/margin` · `/block-trade` · `/holders` · `/dividend` · `/fund-flow` · `/dragon-tiger` · `/lockup` · `/blocks` · `/hot-concepts` · `/investor-qa` · `/industry` | requests |
 | `GET /api/market/overview` · `/api/radar` | 市场情绪+板块资金 · 资讯雷达 | akshare / stdlib |
-| `POST /api/chat` | 系统 AI 对话（function calling，AI 自己调数据工具） | requests |
+| `POST /api/chat` | 系统 AI 对话（API 模式可使用受控工具；订阅模式能力不同） | 依所选接入方式 |
+| `POST /api/ai/connection-test` | 手动固定合成请求、无工具、限时检测；不是模型质量评测 | httpx；[边界与费用](../docs/AI_CONNECTION_TEST.md) |
 
 > 上表为主要端点；完整路由清单见 `app.py`。要更全量的 A 股数据（打板 / ETF期权 / 全市场行业排名等），用根目录 [`a-stock-data/`](../a-stock-data/SKILL.md) 工具箱。
 
@@ -46,26 +47,24 @@ python3 -m venv .venv
   "llm": {"baseURL": "https://api.deepseek.com", "apiKey": "sk-…", "model": "deepseek-chat"}
 }
 ```
-`llm` 由前端从本地配置随请求带上，后端不持久化 key。
+`llm` 由前端随请求带上；此聊天请求本身不持久化 key。设置页的保存操作另会同步本机后台凭据，以支持已配置的定时功能；模型请求会将认证凭据发送给所选服务端，勿与“本地保存”混淆。
 
 ## 2. MCP Server（给 Claude Code / 高手 agent）
 
-零第三方依赖，复用同一套数据工具。挂进 Claude Code：
+协议层不引入额外 MCP 框架，但仍需上面完整的后端 Python 环境。挂进 Claude Code：
 
 ```bash
 claude mcp add vibe-research -- \
   "$(pwd)/.venv/bin/python" "$(pwd)/mcp_server.py"
 ```
 
-挂上后，你的 agent 直接拥有 `query_quote / query_valuation / query_reports / query_news` 四个工具，
-用你自己的订阅额度调数据、多步分析——无需 API key、不占本产品成本。
+工具清单由 `mcp_server.py` 从 `chat.TOOLS`（底层 `ai_tools.TOOLS`）动态生成，不再只有四个工具。通过 MCP 的 `tools/list` 查询当前注册清单。MCP 本身不调用模型；外部 agent 的模型费用及数据源额度由相应服务决定。
 
 ### 完整 A 股数据工具箱（随仓库自带）
 
-MCP 的 4 个工具是「零配置、开箱即用」的常用项。若 agent 需要更全的 A 股数据（龙虎榜 / 融资融券 / 大宗交易 / 股东户数 / 分红 / 资金流 / 解禁 / 概念板块 / 打板情绪 / ETF 期权 / 互动易 / 全市场行业排名 …共 **40 个端点**），本仓库根目录**自带完整数据源** [`a-stock-data/`](../a-stock-data/SKILL.md)（a-stock-data v3.3）：
-
+仓库另带 [a-stock-data](../a-stock-data/SKILL.md) 的数据源工具说明；能力、依赖和限制以该目录当前文档为准，不以历史端点数量作保证。
 - 要调哪个接口，直接看 [`a-stock-data/SKILL.md`](../a-stock-data/SKILL.md)——每个端点都有 copy-paste 即用的代码（内嵌全部调用逻辑，零第三方数据封装依赖，东财接口已内置限流防封）。
 - 运行依赖：`pip install mootdx requests pandas stockstats`（自包含，v3.0 起已移除 akshare）。
 - 仓库内置的是固定版本快照，可独立使用，无需额外下载。
-- 分工：**MCP 4 工具** = 网页 / 轻量常用；**自带数据源 40+ 端点** = agent 深度自助调研的全量工具箱。二者同源，按需取用。
+- 分工：MCP 暴露已注册的受控查询工具；数据源目录提供额外研究接口说明。不要把外部 agent 的能力等同于本产品受限的 Codex 页面聊天。
 

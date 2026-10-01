@@ -90,8 +90,103 @@ try {
   await panel.getByText("失败来源：失败测试源", { exact: false }).waitFor();
   await panel.getByText("固态电池产业化进展加速", { exact: true }).waitFor();
   await panel.locator('[aria-label="近 24 小时关注趋势"]').getByText(/固态电池.*1 条/).waitFor();
+  // Public feeds: real rendered controls, deterministic provider/watchlist results.
+  // Override only the public feed routes; the Native Intel vertical above retains
+  // its real isolated backend. No public provider or user data is accessed.
+  const unsafeDetail = "ProxyError https://provider.invalid/?token=secret SQL traceback";
+  let watchMode = "error";
+  let feedMode = "empty";
+  let releaseFilings;
+  let signalFilings;
+  let pendingFilings;
+  const json = (route, data, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(status === 200 ? { data } : { detail: data }) });
+  await page.route("**/api/watchlist", async (route) => {
+    if (watchMode === "error") return json(route, unsafeDetail, 502);
+    return json(route, {
+      status: watchMode === "corrupted" ? "corrupted" : "valid",
+      data: watchMode === "corrupted" ? null : { codes: watchMode === "empty" ? [] : ["000001", "000002"], updated_at: "2026-09-30T10:00:00Z" },
+      etag: watchMode === "corrupted" ? null : "synthetic-watchlist",
+    });
+  });
+  await page.route("**/api/quote?**", (route) => json(route, {}));
+  for (const endpoint of ["announcements", "news"]) {
+    await page.route(`**/api/${endpoint}?**`, async (route) => {
+      const code = new URL(route.request().url()).searchParams.get("code");
+      if (endpoint === "announcements" && feedMode === "delayed") {
+        signalFilings();
+        await pendingFilings;
+        return json(route, [{ title: "Old announcement must not render", date: "2026-09-30", type: "公告", url: "" }]);
+      }
+      if (feedMode === "failure" || (feedMode === "partial" && code === "000002")) return json(route, unsafeDetail, 502);
+      if (feedMode === "dependency") return json(route, unsafeDetail, 501);
+      if (feedMode === "malformed") return json(route, { unexpected: [] });
+      if (feedMode === "empty") return json(route, []);
+      return json(route, endpoint === "announcements"
+        ? [{ title: "Synthetic retained announcement", date: "2026-09-30", type: "公告", url: "" }]
+        : [{ 新闻标题: "Synthetic retained news", 发布时间: "2026-09-30 10:00" }]);
+    });
+  }
+  const assertNoFalseEmpty = async () => {
+    assert.equal(await page.getByText(/关注列表里的个股近期暂无|还没有关注股票/).count(), 0);
+    assert.doesNotMatch(await page.locator("body").innerText(), /ProxyError|provider\.invalid|SQL|traceback/);
+  };
+  await page.getByRole("button", { name: "公开新闻", exact: true }).click();
+  await page.getByRole("alert").getByText("关注列表加载失败，请重试。", { exact: true }).waitFor();
+  await assertNoFalseEmpty();
+  watchMode = "valid";
+  await page.getByRole("button", { name: "重试", exact: true }).click();
+  await page.getByText("关注列表里的个股近期暂无新闻。", { exact: true }).waitFor();
+
+  for (const [tab, label, title] of [["公开新闻", "新闻", "Synthetic retained news"], ["A股公告", "公告", "Synthetic retained announcement"]]) {
+    await page.getByRole("button", { name: tab, exact: true }).click();
+    await page.getByText(`关注列表里的个股近期暂无${label}。`, { exact: true }).waitFor();
+    feedMode = "partial";
+    await page.getByRole("button", { name: "刷新", exact: true }).click();
+    await page.getByRole("alert").getByText(`部分${label}加载失败（1/2 只）`, { exact: false }).waitFor();
+    await page.getByText(title, { exact: true }).waitFor();
+    await assertNoFalseEmpty();
+
+    for (const failure of ["failure", "malformed"]) {
+      feedMode = failure;
+      await page.getByRole("button", { name: "重试", exact: true }).click();
+      await page.getByRole("alert").getByText(`${label}加载失败（2/2 只）`, { exact: false }).waitFor();
+      assert.equal(await page.getByText(title, { exact: true }).count(), 0);
+      await assertNoFalseEmpty();
+    }
+    feedMode = "empty";
+    await page.getByRole("button", { name: "重试", exact: true }).click();
+    await page.getByText(`关注列表里的个股近期暂无${label}。`, { exact: true }).waitFor();
+  }
+
+  // A delayed old tab cannot overwrite the newly selected feed.
+  const filingsStarted = new Promise((resolve) => { signalFilings = resolve; });
+  pendingFilings = new Promise((resolve) => { releaseFilings = resolve; });
+  feedMode = "delayed";
+  await page.getByRole("button", { name: "刷新", exact: true }).click();
+  await filingsStarted;
+  feedMode = "success";
+  await page.getByRole("button", { name: "公开新闻", exact: true }).click();
+  await page.getByText("Synthetic retained news", { exact: true }).first().waitFor();
+  const oldRequestFinished = page.waitForResponse((response) => response.url().includes("/api/announcements?"));
+  releaseFilings();
+  await oldRequestFinished;
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await page.getByText("Old announcement must not render", { exact: true }).count(), 0);
+  assert.equal(await page.getByText("Synthetic retained news", { exact: true }).count(), 2);
+
+  feedMode = "dependency";
+  await page.getByRole("button", { name: "刷新", exact: true }).click();
+  await page.getByRole("alert").getByText("新闻服务缺少 akshare 依赖", { exact: false }).waitFor();
+  await assertNoFalseEmpty();
+  watchMode = "corrupted";
+  await page.getByRole("button", { name: "重试", exact: true }).click();
+  await page.getByRole("alert").getByText("关注列表无法读取", { exact: false }).waitFor();
+  await assertNoFalseEmpty();
+  watchMode = "empty";
+  await page.getByRole("button", { name: "重试", exact: true }).click();
+  await page.getByText("还没有关注股票。到", { exact: false }).waitFor();
   assert.deepEqual(pageErrors, []);
-  console.log("Native Intel rendered vertical: PASS");
+  console.log("Native Intel rendered vertical and public feed failure/retry contracts: PASS");
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (frontend) await new Promise((resolve) => frontend.close(resolve));

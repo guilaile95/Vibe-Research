@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import threading
 from datetime import datetime, timezone, timedelta
 from typing import Any
@@ -95,7 +96,11 @@ def _read_status_unlocked() -> dict:
     """在已持锁或只读路径下读取状态。"""
     path = _watchlist_path()
     if not os.path.exists(path):
-        return {"status": "not_configured", "data": None, "etag": None}
+        # An older interrupted save may have moved the live file to .bak.
+        # Read that snapshot without consuming or rewriting the recovery copy.
+        path = _bak_path(path)
+        if not os.path.exists(path):
+            return {"status": "not_configured", "data": None, "etag": None}
     try:
         with open(path, encoding="utf-8") as f:
             d = json.load(f)
@@ -126,21 +131,23 @@ def _atomic_write_unlocked(payload: dict) -> None:
     path = _watchlist_path()
     os.makedirs(_CACHE_DIR, exist_ok=True)
     tmp = path + f".tmp.{os.urandom(4).hex()}"
+    backup_tmp = tmp + ".bak"
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False)
-        try:
-            if os.path.exists(path):
-                os.replace(path, _bak_path(path))
-        except OSError:
-            pass
+        if os.path.exists(path):
+            # Never remove the live snapshot before publishing its replacement.
+            # Copy via a temporary file so a failed backup cannot truncate .bak.
+            shutil.copyfile(path, backup_tmp)
+            os.replace(backup_tmp, _bak_path(path))
         os.replace(tmp, path)
     finally:
-        try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except OSError:
-            pass
+        for temporary in (tmp, backup_tmp):
+            try:
+                if os.path.exists(temporary):
+                    os.remove(temporary)
+            except OSError:
+                pass
 
 
 def load_watchlist() -> list[str]:

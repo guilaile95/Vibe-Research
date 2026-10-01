@@ -1,6 +1,7 @@
 /**
  * 研究记录备份真实浏览器路径：
  * localStorage 记录 → 下载 JSON → 清空浏览器记录 → 导入恢复。
+ * 损坏记录 → 原文下载 → 无效/取消/配额失败保留原文 → 确认替换 → 恢复普通合并。
  * 不启动后端，不接触 Owner 数据，也不导出密钥或 AI 对话。
  */
 
@@ -140,6 +141,91 @@ try {
   await input.setInputFiles(downloadPath);
   await page.getByRole("status").getByText("没有新增记录；1 条记录已存在或超出上限。", { exact: true }).waitFor();
   assert.equal(await page.getByText("备份恢复验证", { exact: true }).count(), 1);
+
+  const corruptedRaw = ' \n{"broken":"原始研究记录\n';
+  await page.evaluate((value) => localStorage.setItem("vr-notes", value), corruptedRaw);
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("alert").getByText("本地研究记录格式无效，原始数据已保留", { exact: true }).waitFor();
+  assert.equal(await page.getByText(/还没有记录/).count(), 0, "损坏数据不能伪装成空记录");
+  assert.equal(await page.getByRole("button", { name: "导出备份", exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "导入备份", exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "从备份替换损坏记录", exact: true }).isEnabled(), true);
+
+  const [rawDownload] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "下载损坏原始数据", exact: true }).click(),
+  ]);
+  assert.match(rawDownload.suggestedFilename(), /^vibe-research-notes-corrupted-raw-.*\.txt$/);
+  const rawDownloadPath = await rawDownload.path();
+  assert.ok(rawDownloadPath);
+  assert.deepEqual(readFileSync(rawDownloadPath), Buffer.from(corruptedRaw, "utf8"));
+  assert.doesNotMatch(readFileSync(rawDownloadPath, "utf8"), /SECRET_LLM_CONFIG|SECRET_ACCESS_KEY|SECRET_CHAT_HISTORY/);
+  assert.equal(await page.evaluate(() => localStorage.getItem("vr-notes")), corruptedRaw);
+
+  let unexpectedDialog = false;
+  const rejectUnexpectedDialog = (dialog) => { unexpectedDialog = true; void dialog.dismiss(); };
+  page.on("dialog", rejectUnexpectedDialog);
+  await input.setInputFiles({ name: "invalid.json", mimeType: "application/json", buffer: Buffer.from("not-json") });
+  await page.getByRole("alert").getByText("备份文件不是有效的 JSON", { exact: true }).waitFor();
+  assert.equal(unexpectedDialog, false, "必须先完成校验再询问替换");
+  page.off("dialog", rejectUnexpectedDialog);
+  assert.equal(await page.evaluate(() => localStorage.getItem("vr-notes")), corruptedRaw);
+  await input.setInputFiles([]);
+  assert.equal(await page.evaluate(() => localStorage.getItem("vr-notes")), corruptedRaw, "取消文件选择不得写入");
+
+  page.once("dialog", (dialog) => {
+    assert.match(dialog.message(), /备份已校验，共 1 条研究记录/);
+    assert.match(dialog.message(), /完全替换/);
+    assert.match(dialog.message(), /仅替换研究记录/);
+    void dialog.dismiss();
+  });
+  await input.setInputFiles(downloadPath);
+  await page.getByRole("status").getByText("已取消替换，原始研究记录保持不变。", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => localStorage.getItem("vr-notes")), corruptedRaw);
+
+  await page.evaluate(() => {
+    window.__notesOriginalSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key === "vr-notes") throw new DOMException("Synthetic quota failure", "QuotaExceededError");
+      return window.__notesOriginalSetItem.call(this, key, value);
+    };
+  });
+  page.once("dialog", (dialog) => dialog.accept());
+  await input.setInputFiles(downloadPath);
+  await page.getByRole("alert").getByText("浏览器无法保存数据，请检查存储权限或空间", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => localStorage.getItem("vr-notes")), corruptedRaw);
+  assert.equal(await page.getByRole("button", { name: "从备份替换损坏记录", exact: true }).isEnabled(), true);
+  await page.evaluate(() => {
+    Storage.prototype.setItem = window.__notesOriginalSetItem;
+    delete window.__notesOriginalSetItem;
+  });
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await input.setInputFiles(downloadPath);
+  await page.getByRole("status").getByText("已从备份恢复 1 条研究记录，损坏数据已替换。", { exact: true }).waitFor();
+  await page.getByText("备份恢复验证", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "从备份替换损坏记录", exact: true }).count(), 0);
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByText("备份恢复验证", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "导入备份", exact: true }).isEnabled(), true);
+
+  const mergePayload = { ...payload, notes: [
+    { ...payload.notes[0], content: "不得覆盖已恢复记录" },
+    { ...payload.notes[0], id: "after-recovery", title: "恢复后普通导入", ts: 1788426000001 },
+  ] };
+  await input.setInputFiles({ name: "merge.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(mergePayload)) });
+  await page.getByRole("status").getByText("已导入 1 条研究记录，另有 1 条重复或超出上限。", { exact: true }).waitFor();
+  const finalStorage = await page.evaluate(() => ({
+    notes: JSON.parse(localStorage.getItem("vr-notes")),
+    llm: localStorage.getItem("vr-llm"),
+    key: localStorage.getItem("vr-access-key"),
+    chat: localStorage.getItem("vr-askai-chat:test"),
+  }));
+  assert.equal(finalStorage.notes.length, 2);
+  assert.equal(finalStorage.notes.find((item) => item.id === "note-backup-e2e").content, payload.notes[0].content);
+  assert.equal(finalStorage.llm, "SECRET_LLM_CONFIG");
+  assert.equal(finalStorage.key, "SECRET_ACCESS_KEY");
+  assert.equal(finalStorage.chat, "SECRET_CHAT_HISTORY");
 
   console.log("notes backup browser E2E: PASS");
 } finally {

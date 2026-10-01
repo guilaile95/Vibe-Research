@@ -60,13 +60,13 @@ def test_concurrent_snapshot_shares_one_fetch(monkeypatch, snapshot_state, outco
                 assert caught.value is failure
         else:
             first = leader.result(timeout=5)
-            assert follower.result(timeout=5) is first
+            assert follower.result(timeout=5) == first
             assert first == (snapshot if outcome == "success" else [])
 
     assert calls == 1
     if outcome != "success":
         assert "a_share_snapshot" not in market._CACHE
-    assert market.get_a_share_snapshot() is snapshot
+    assert market.get_a_share_snapshot() == snapshot
     assert calls == (1 if outcome == "success" else 2)
 
 
@@ -83,13 +83,13 @@ def test_snapshot_ttl_starts_at_fetch_completion(monkeypatch, snapshot_state):
         return snapshot
 
     monkeypatch.setattr(market.astock, "a_share_snapshot", fetch)
-    assert market.get_a_share_snapshot() is snapshot
+    assert market.get_a_share_snapshot() == snapshot
     assert market._CACHE["a_share_snapshot"][0] == 1120
     clock.now = 1120 + market._TTL - 1
-    assert market.get_a_share_snapshot() is snapshot
+    assert market.get_a_share_snapshot() == snapshot
     assert calls == 1
     clock.now += 1
-    assert market.get_a_share_snapshot() is snapshot
+    assert market.get_a_share_snapshot() == snapshot
     assert calls == 2
 
 
@@ -125,7 +125,7 @@ def test_waiter_timeout_keeps_leader_and_expired_cache(monkeypatch, snapshot_sta
                 assert market._CACHE["a_share_snapshot"] is stale
         finally:
             release.set()
-        assert leader.result(timeout=5) is new
+        assert leader.result(timeout=5) == new
 
-    assert market.get_a_share_snapshot() is new
+    assert market.get_a_share_snapshot() == new
     assert calls == 1

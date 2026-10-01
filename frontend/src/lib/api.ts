@@ -3,9 +3,12 @@
 // 纯类型定义见 ./api/types.ts；本文件仅保留运行时客户端。
 
 export type * from "./api/types.ts";
+import { storageSetChecked, storageRemoveChecked } from "./storage.ts";
 
 import type { MarketCloudEnvelope } from "./marketCloud.ts";
 import { parseReportChatCoverage } from "./reportChatCoverage.ts";
+import { parseLeadAnalysisContext } from "./leadAnalysisContext.ts";
+import { parseChatToolResult } from "./chatToolStatus.ts";
 import type {
   CurrentThesisDelta,
   ThesisDeltaCreatePayload,
@@ -211,12 +214,8 @@ export function loadAccessKey(): string {
 
 
 export function saveAccessKey(key: string) {
-  try {
-    if (key) localStorage.setItem(ACCESS_KEY, key);
-    else localStorage.removeItem(ACCESS_KEY);
-  } catch {
-    /* 隐私模式等场景 localStorage 不可用 */
-  }
+  if (key) storageSetChecked(ACCESS_KEY, key);
+  else storageRemoveChecked(ACCESS_KEY);
 }
 
 
@@ -358,7 +357,24 @@ export function applyNdjsonLine(
       state.errorMessage = "后端响应完成顺序异常";
       return;
     }
-    handlers.onTool?.(String(event.tool || ""), event.args || {});
+    handlers.onTool?.(String(event.tool || ""), event.args || {},
+      typeof event.call_id === "string" ? event.call_id : undefined);
+  } else if (event.type === "tool_result") {
+    const result = parseChatToolResult(event);
+    if (state.sawDone || !result) {
+      state.sawError = true;
+      state.errorMessage = "后端工具结果格式或完成顺序错误";
+      return;
+    }
+    handlers.onToolResult?.(result);
+  } else if (event.type === "lead_context") {
+    const context = parseLeadAnalysisContext(event.context);
+    if (state.sawDone || !context) {
+      state.sawError = true;
+      state.errorMessage = "线索分析来源格式错误";
+      return;
+    }
+    handlers.onLeadContext?.(context);
   } else if (event.type === "sources") {
     if (state.sawDone || !Array.isArray(event.items) || event.items.length > 8) {
       state.sawError = true;
@@ -903,10 +919,10 @@ export const api = {
     }),
   deleteReport: (id: string) => request<{ ok: boolean }>(`/myreports/${id}`, "DELETE"),
   // 注意：get()/request() 已自动加 /api 前缀，这里只传 /myreports/... 即可，禁止重复 /api。
-  searchMyReportText: (q: string, reportIds?: string[], limit = 20) => {
+  searchMyReportText: (q: string, reportIds?: string[], limit = 20, signal?: AbortSignal) => {
     const params = new URLSearchParams({ q, limit: String(limit) });
     for (const reportId of reportIds ?? []) params.append("report_ids", reportId);
-    return get<MyReportTextHit[]>(`/myreports/fulltext-search?${params.toString()}`);
+    return get<MyReportTextHit[]>(`/myreports/fulltext-search?${params.toString()}`, { signal });
   },
   previewMyReportTextIndex: (reportIds?: string[]) => {
     const params = new URLSearchParams();

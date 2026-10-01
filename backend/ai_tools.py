@@ -13,6 +13,9 @@ chat.py / mcp_server.py / debate.py 共用本模块，新增工具只需改这�
 
 from __future__ import annotations
 
+import math
+from datetime import date
+
 import astock
 import gstock
 import market
@@ -70,7 +73,7 @@ TOOLS: list[dict] = [
 
     # —— 资金面与筹码 ——
     _t("query_fund_flow",
-       "查个股资金流向：最近若干日主力/超大单/大单/中单/小单净流入，并附近 5 日、20 日累计主力净额。",
+       "查个股资金流向：最近若干日净流入，以及完整观测窗口的 5/20/60 日主力累计；缺失为 null，附有效数与观测数。",
        {**_CODE, "days": {"type": "integer", "description": "明细返回最近多少日，默认 10，最大 60"}},
        ["code"]),
     _t("query_margin", "查个股融资融券：融资余额、融资买入/偿还、融券余额趋势（最近若干期）。", _CODE, ["code"]),
@@ -123,39 +126,41 @@ TOOLS: list[dict] = [
 
 TOOL_NAMES = [t["function"]["name"] for t in TOOLS]
 
+# Shared structural-empty detection. Debate retains its historical summary-count
+# semantics; chat explicitly treats real zero/false observations as data.
+PAYLOAD_META_KEYS = frozenset({"period", "unit", "note", "code", "generated_at", "tracks", "total_cached"})
+
+
+def payload_empty(value, *, metadata_keys=PAYLOAD_META_KEYS, zero_is_empty=True) -> bool:
+    if value is None or value == "" or value == [] or value == {}:
+        return True
+    if isinstance(value, list):
+        return all(payload_empty(item, metadata_keys=metadata_keys, zero_is_empty=zero_is_empty) for item in value)
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in metadata_keys:
+                continue
+            if isinstance(item, (list, dict)):
+                if not payload_empty(item, metadata_keys=metadata_keys, zero_is_empty=zero_is_empty):
+                    return False
+            elif isinstance(item, (bool, int, float)):
+                if item or not zero_is_empty:
+                    return False
+            elif item:
+                return False
+        return True
+    return False
+
 
 # ——— 各工具的执行实现（裁剪逻辑集中在这里） ———
 
-_TENCENT_KLINE = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 
 
 def _kline_tencent(code: str, period: str, n: int) -> list[dict]:
-    """腾讯前复权 K 线（备用源）。
+    """Existing AI qfq contract, with all-or-nothing sequence validation."""
+    import tencent_kline
 
-    mootdx 走 TCP 7709，在部分网络下连不通（实测本机返回空）；东财 push2his 的 kline 路径
-    也可能被拦。腾讯 HTTP 接口实测不封 IP（项目数据源分层里的首选行情源），拿它兜底。
-    返回字段顺序：日期, 开, 收, 高, 低, 成交量。
-    """
-    import requests
-
-    prefix = astock.get_prefix(code)
-    sym = f"{prefix}{code}"
-    r = requests.get(_TENCENT_KLINE, params={"param": f"{sym},{period},,,{n},qfq"},
-                     headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
-    d = (r.json().get("data") or {}).get(sym) or {}
-    raw = d.get("qfq" + period) or d.get(period) or []
-    out = []
-    for it in raw:
-        if not isinstance(it, list) or len(it) < 6:
-            continue
-        def _f(x):
-            try:
-                return float(x)
-            except (TypeError, ValueError):
-                return None
-        out.append({"date": it[0], "open": _f(it[1]), "close": _f(it[2]),
-                    "high": _f(it[3]), "low": _f(it[4]), "volume": _f(it[5])})
-    return out
+    return tencent_kline.fetch(code, period, n, adjustment="qfq")
 
 
 def _kline(args: dict):
@@ -165,8 +170,7 @@ def _kline(args: dict):
     cat = {"day": 4, "week": 5, "month": 6}[period]
     n = max(5, min(int(args.get("count") or 60), 250))
     code = str(args["code"])
-    # 腾讯优先：HTTP、实测不封 IP、亚秒级返回；mootdx 走 TCP 7709，连不通时要等十几秒超时
-    # （实测本机就是这种情况），放在后面当备份而不是主路径。
+    # Preserve the existing qfq-first AI route; invalid batches use the fallback.
     try:
         rows = _kline_tencent(code, period, n)
     except Exception:  # noqa: BLE001 — 网络问题转备用源
@@ -206,51 +210,65 @@ def _fund_flow_today(code: str) -> list[dict]:
     主源 push2his 在部分网络下连不通（本机实测被拒），push2delay 这条延迟行情线路仍可达，
     代价是只给当天一条、拿不到历史。宁可给「今天」也不要整块缺失。
     """
-    import requests
-
     secid = f"{1 if code.startswith('6') else 0}.{code}"
     params = {"secid": secid, "fields1": "f1,f2,f3,f7",
               "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
               "lmt": "120", "klt": "101"}
     headers = {"User-Agent": astock.UA, "Referer": "https://quote.eastmoney.com/",
                "Origin": "https://quote.eastmoney.com"}
-    d = requests.get(_FFLOW_DELAY, params=params, headers=headers, timeout=12).json()
-    out = []
-    for line in (d.get("data") or {}).get("klines") or []:
-        p = line.split(",")
-        if len(p) < 6:
-            continue
-        def _f(x):
-            try:
-                return float(x)
-            except (TypeError, ValueError):
-                return 0.0
-        out.append({"date": p[0], "main_net": _f(p[1]), "small_net": _f(p[2]),
-                    "mid_net": _f(p[3]), "large_net": _f(p[4]), "super_net": _f(p[5])})
-    return out
+    d = astock.em_get(_FFLOW_DELAY, params=params, headers=headers, timeout=12).json()
+    return astock._parse_fund_flow_rows(d)
 
 
 def _fund_flow(args: dict):
     code = str(args["code"])
     rows = astock.stock_fund_flow_120d(code)
+    delayed = False
     if not rows:
         try:
             rows = _fund_flow_today(code)
         except Exception:  # noqa: BLE001
             rows = []
-        if rows:  # 备用源只有当日，明说清楚，别让模型误以为是完整历史
-            return {"unit": "元", "note": "主源不可达，以下仅为当日资金流，无历史累计",
-                    "recent": rows}
+        delayed = bool(rows)
     if not rows:
         return {"error": "无资金流数据"}
+    fields = ("main_net", "super_net", "large_net", "mid_net", "small_net")
+    # Also protect model-facing output when a reader returns non-finite values.
+    rows = [{"date": row.get("date"), **{
+        field: astock._optional_float(row.get(field)) for field in fields
+    }} for row in rows]
     days = max(1, min(int(args.get("days") or 10), 60))
-    tail = rows[-days:]
-    def _sum(n: int) -> float:
-        return round(sum(r.get("main_net", 0) for r in rows[-n:]) / 1e8, 3)
+    windows = {}
+    totals = {}
+    for n in (5, 20, 60):
+        window = rows[-n:]
+        amounts = [row["main_net"] for row in window if row["main_net"] is not None]
+        dates = [row["date"] for row in window]
+        try:
+            valid_dates = all(isinstance(d, str) and date.fromisoformat(d).isoformat() == d for d in dates)
+        except ValueError:
+            valid_dates = False
+        # Repeated or unordered dates cannot establish a complete trading-day window.
+        complete = (not delayed and len(window) == n and len(amounts) == n
+                    and valid_dates and dates == sorted(set(dates)))
+        total = sum(value / 1e8 for value in amounts) if complete else None
+        if total is not None and not math.isfinite(total):
+            complete, total = False, None
+        totals[f"main_net_{n}d_yi"] = round(total, 3) if total is not None else None
+        windows[f"{n}d"] = {
+            "expected_count": n, "observed_count": len(window), "valid_count": len(amounts),
+            "status": "success" if complete else "partial",
+        }
+    partial = (any(window["status"] == "partial" for window in windows.values())
+               or any(row[field] is None for row in rows[-days:] for field in fields))
     return {
+        "status": "partial" if partial else "success",
+        "source": "eastmoney_push2delay" if delayed else "eastmoney_push2his",
         "unit": "元（汇总项单位：亿元）",
-        "main_net_5d_yi": _sum(5), "main_net_20d_yi": _sum(20), "main_net_60d_yi": _sum(60),
-        "recent": _pick(tail, ("date", "main_net", "super_net", "large_net", "mid_net", "small_net"), days),
+        "note": ("主源不可达，以下仅为延迟源返回的资金流，无完整历史累计" if delayed else
+                 "累计按最近 N 条已返回日级观测计算，仅在观测数和有效主力净额数完整时提供；不证明连续交易日覆盖。null 表示未知，不得按零解释"),
+        **totals, "windows": windows,
+        "recent": _pick(rows[-days:], ("date", *fields), days),
     }
 
 

@@ -774,6 +774,7 @@ def query_full_market(
                 "SUM(CASE WHEN rn <= 20 THEN 1 ELSE 0 END) AS observations_20, "
                 "SUM(CASE WHEN rn <= 60 THEN 1 ELSE 0 END) AS observations_60 "
                 "FROM ranked GROUP BY code"
+                "), dated AS (SELECT *, latest_date = ? AS is_current FROM features"
                 "), computed AS ("
                 "SELECT code, latest_date, latest_close, "
                 "CASE WHEN observations_count >= 6 THEN latest_close / prior_5_close - 1 END AS return_5d, "
@@ -787,28 +788,29 @@ def query_full_market(
                 "current_volume, "
                 "CASE WHEN observations_20 >= 20 AND avg_volume_20d > 0 THEN current_volume / avg_volume_20d END AS volume_ratio_20d, "
                 "observations_count, "
-                "CASE WHEN observations_count >= 6 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS return_5d_status, "
-                "CASE WHEN observations_count >= 21 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS return_20d_status, "
-                "CASE WHEN observations_count >= 61 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS return_60d_status, "
-                "CASE WHEN observations_20 >= 20 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS ma20_status, "
-                "CASE WHEN observations_60 >= 60 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS ma60_status, "
-                "CASE WHEN observations_20 >= 20 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS close_vs_ma20_status, "
-                "CASE WHEN observations_60 >= 60 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS close_vs_ma60_status, "
-                "CASE WHEN observations_20 >= 20 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS avg_volume_20d_status, "
-                "CASE WHEN observations_20 >= 20 AND avg_volume_20d > 0 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS volume_ratio_20d_status "
-                "FROM features"
+                "CASE WHEN NOT is_current THEN 'STALE' WHEN observations_count >= 6 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS return_5d_status, "
+                "CASE WHEN NOT is_current THEN 'STALE' WHEN observations_count >= 21 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS return_20d_status, "
+                "CASE WHEN NOT is_current THEN 'STALE' WHEN observations_count >= 61 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS return_60d_status, "
+                "CASE WHEN NOT is_current THEN 'STALE' WHEN observations_20 >= 20 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS ma20_status, "
+                "CASE WHEN NOT is_current THEN 'STALE' WHEN observations_60 >= 60 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS ma60_status, "
+                "CASE WHEN NOT is_current THEN 'STALE' WHEN observations_20 >= 20 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS close_vs_ma20_status, "
+                "CASE WHEN NOT is_current THEN 'STALE' WHEN observations_60 >= 60 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS close_vs_ma60_status, "
+                "CASE WHEN NOT is_current THEN 'STALE' WHEN observations_20 >= 20 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS avg_volume_20d_status, "
+                "CASE WHEN NOT is_current THEN 'STALE' WHEN observations_20 >= 20 AND avg_volume_20d > 0 THEN 'normal' ELSE 'INSUFFICIENT_HISTORY' END AS volume_ratio_20d_status "
+                "FROM dated"
                 ") "
             )
-            cte_params = [str(artifact), target_date_text]
+            cte_params = [str(artifact), target_date_text, target_date_text]
             stats = connection.execute(
                 base_cte
                 + "SELECT COUNT(*), "
                 + "COUNT(*) FILTER (WHERE ma20_status = 'normal'), "
-                + "COUNT(*) FILTER (WHERE ma20_status != 'normal'), "
-                + "COUNT(*) FILTER (WHERE close_vs_ma20 > 0), "
+                + "COUNT(*) FILTER (WHERE ma20_status = 'INSUFFICIENT_HISTORY'), "
+                + "COUNT(*) FILTER (WHERE ma20_status = 'normal' AND close_vs_ma20 > 0), "
                 + "COUNT(*) FILTER (WHERE ma60_status = 'normal'), "
-                + "COUNT(*) FILTER (WHERE ma60_status != 'normal'), "
-                + "COUNT(*) FILTER (WHERE close_vs_ma60 > 0) FROM computed",
+                + "COUNT(*) FILTER (WHERE ma60_status = 'INSUFFICIENT_HISTORY'), "
+                + "COUNT(*) FILTER (WHERE ma60_status = 'normal' AND close_vs_ma60 > 0), "
+                + "COUNT(*) FILTER (WHERE ma20_status = 'STALE') FROM computed",
                 cte_params,
             ).fetchone()
             total_universe = int(stats[0] or 0)
@@ -818,6 +820,7 @@ def query_full_market(
             ma60_evaluable = int(stats[4] or 0)
             ma60_insufficient = int(stats[5] or 0)
             ma60_above = int(stats[6] or 0)
+            stale_count = int(stats[7] or 0)
 
             filter_clause = ""
             filter_params: list[Any] = []
@@ -868,6 +871,7 @@ def query_full_market(
             )
         }
         row["metric_status"] = metric_status
+        row["status"] = "stale" if row["latest_date"] != target_date_text else "normal"
         output_rows.append(row)
 
     def breadth_payload(evaluable: int, insufficient: int, above: int) -> dict[str, Any]:
@@ -876,6 +880,8 @@ def query_full_market(
             "above_count": above,
             "evaluable_count": evaluable,
             "insufficient_count": insufficient,
+            "stale_count": stale_count,
+            "current_count": total_universe - stale_count,
             "status": "normal" if evaluable else "INSUFFICIENT_HISTORY",
         }
 
@@ -884,7 +890,7 @@ def query_full_market(
         "dataset_id": manifest["dataset_id"],
         "provider_id": manifest.get("provider_id", PROVIDER_ID),
         "adjustment": manifest.get("adjustment", ADJUSTMENT),
-        "status": "normal",
+        "status": "partial" if stale_count else "normal",
         "fetched_at": manifest.get("imported_at"),
         "as_of": target_date_text,
         "latest_date": target_date_text,
@@ -894,6 +900,8 @@ def query_full_market(
             "row_count": manifest["row_count"],
             "code_count": manifest["code_count"],
             "universe_count": total_universe,
+            "current_count": total_universe - stale_count,
+            "stale_count": stale_count,
         },
         "provenance": _full_market_provenance(manifest),
         "breadth": {
@@ -908,6 +916,7 @@ def query_full_market(
             "Research Runtime 数据不是 Canonical Fact Authority。",
             "当前 schema 仅提供 volume；未声明 turnover、amount 或 liquidity amount。",
             "各指标在历史观测不足时返回 null，并标记 INSUFFICIENT_HISTORY。",
+            "旧日期行保留最后观测指标并标记 STALE；市场广度仅聚合同一 as_of 日期的行。",
         ],
     }
 

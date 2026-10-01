@@ -144,3 +144,19 @@ test("report sources stay visible metadata and never enter follow-up role/conten
   assert.match(source, /report_id=\{source\.report_id\}/);
   assert.match(source, /visibleHistory\.map\(\(\{ role, content \}\) => \(\{ role, content \}\)\)/);
 });
+
+test("tool outcomes survive storage and partial answers cannot be saved as complete notes", () => {
+  assert.match(source, /tools: parseStoredChatTools\(m\.tools\)/);
+  assert.match(source, /onToolResult:.*applyChatToolResult/);
+  assert.match(source, /chatToolStatusLabel\(t, loading && i === msgs\.length - 1\)/);
+  assert.match(source, /m\.content && !m\.partial &&/);
+});
+
+test("research note metadata is captured per answer instead of read from the current selection", () => {
+  assert.match(source, /noteMetadata: answerMetadata/);
+  assert.match(source, /conversationNoteMetadata\([\s\S]*visibleHistory\.map/);
+  assert.match(source, /noteMetadata: loadNoteMetadata\(m\.noteMetadata\)/);
+  assert.match(source, /metadata=\{m\.noteMetadata\}/);
+  assert.match(source, /if \(initialQuestion !== undefined\) setInput\(initialQuestion\); setOpen\(true\)/);
+  assert.match(source, /setInput\(""\);\s*setEpoch\(loadEpoch\(chatKey\)\)/);
+});

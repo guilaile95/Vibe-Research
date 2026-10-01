@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 import account_reality_service as svc
 
@@ -15,7 +16,7 @@ router = APIRouter(prefix="/api", tags=["account-reality"])
 @router.get("/account/reality")
 async def account_reality():
     try:
-        result = svc.get_account_reality()
+        result = await run_in_threadpool(svc.get_account_reality)
     except Exception:
         # 客户端脱敏：任何内部错误统一 500，不泄漏 traceback / SQL / 内部路径
         raise HTTPException(status_code=500, detail="内部错误")

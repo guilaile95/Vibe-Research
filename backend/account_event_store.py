@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -185,9 +186,13 @@ def _utc_now() -> str:
 
 def _connect(db_path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(Path(db_path)), timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 30000")
-    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 30000")
+        conn.execute("PRAGMA foreign_keys = ON")
+    except Exception:
+        conn.close()
+        raise
     return conn
 
 
@@ -195,9 +200,13 @@ def _connect_readonly(db_path: str | Path) -> sqlite3.Connection:
     path = Path(db_path).resolve()
     uri = f"{path.as_uri()}?mode=ro"
     conn = sqlite3.connect(uri, timeout=30.0, uri=True)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA query_only = ON")
-    conn.execute("PRAGMA busy_timeout = 30000")
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA query_only = ON")
+        conn.execute("PRAGMA busy_timeout = 30000")
+    except Exception:
+        conn.close()
+        raise
     return conn
 
 
@@ -361,7 +370,7 @@ def ensure_migrated(db_path: str | Path) -> None:
         path = Path(db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with _connect(path) as conn:
+            with closing(_connect(path)) as conn, conn:
                 _ensure_table(conn)
                 conn.commit()
         except sqlite3.DatabaseError as exc:
@@ -373,7 +382,7 @@ def insert_event(db_path: str | Path, event: dict[str, Any]) -> None:
         path = Path(db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with _connect(path) as conn:
+            with closing(_connect(path)) as conn, conn:
                 _ensure_table(conn)
                 conn.execute(_INSERT_SQL, (
                     event["event_id"],
@@ -409,7 +418,7 @@ def get_event(db_path: str | Path, event_id: str) -> dict[str, Any] | None:
     if not path.is_file():
         return None
     try:
-        with _connect_readonly(path) as conn:
+        with closing(_connect_readonly(path)) as conn, conn:
             if not _table_exists(conn):
                 return None
             row = conn.execute(_SELECT_BY_ID, (event_id,)).fetchone()
@@ -428,7 +437,7 @@ def list_events(
     if not path.is_file():
         return []
     try:
-        with _connect_readonly(path) as conn:
+        with closing(_connect_readonly(path)) as conn, conn:
             if not _table_exists(conn):
                 return []
             sql = _SELECT_LIST_BASE
@@ -458,7 +467,7 @@ def count_non_voided(
     if not path.is_file():
         return 0
     try:
-        with _connect_readonly(path) as conn:
+        with closing(_connect_readonly(path)) as conn, conn:
             if not _table_exists(conn):
                 return 0
             sql = _COUNT_BASE
@@ -489,7 +498,7 @@ def atomic_bootstrap(
         path = Path(db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with _connect(path) as conn:
+            with closing(_connect(path)) as conn, conn:
                 _ensure_table(conn)
                 conn.execute("BEGIN IMMEDIATE")
                 try:

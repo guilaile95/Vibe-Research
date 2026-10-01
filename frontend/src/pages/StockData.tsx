@@ -41,6 +41,10 @@ import { indicatorErrorMessage } from "@/lib/technicalIndicatorsView";
 import { buildEvidenceNewHref, candidateWorkspaceHref } from "@/lib/candidateCampaign";
 import { safeInternalReturnTo } from "@/lib/internalReturnTo";
 import { cn } from "@/lib/utils";
+import {
+  type EvidenceListState, type EvidenceState, resolveEvidenceList, evidenceListStatusText, evidenceStatusText, loadEvidenceSource,
+  reportEvidenceContext, announcementEvidenceContext, quoteEvidenceContext, summarizeStockFundFlow,
+} from "@/lib/stockDataEvidence";
 
 // 金额格式化（后端资金单位：元 / 万元）
 const yi = (v: number) => `${(v / 1e8).toFixed(2)} 亿`;
@@ -86,6 +90,12 @@ function Metric({ k, v, sub }: { k: string; v: string; sub?: string }) {
   );
 }
 
+function SourceStatus<T>({ label, state }: { label: string; state: EvidenceState<T> }) {
+  return <p className={cn("mb-2 text-xs", state.status === "error" || state.status === "unsupported" ? "text-warning" : "text-muted-foreground")} data-source={label} data-source-state={state.status}>
+    {label}：{evidenceStatusText(state)}
+  </p>;
+}
+
 // 估值历史分位带（理杏仁式）：绿=低估区 / 灰=合理区 / 红=高估区；只给位置，不划买卖。
 function ValBand({ label, m }: { label: string; m: ValMetric }) {
   const span = Math.max(m.max - m.min, 1e-6);
@@ -126,24 +136,37 @@ export function StockData() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [val, setVal] = useState<Valuation | null>(null);
-  const [reports, setReports] = useState<Report[]>([]);
-  const [news, setNews] = useState<NewsItem[]>([]);
-  const [pctl, setPctl] = useState<ValPercentile | null>(null);
+  const [reportResult, setReportResult] = useState<EvidenceListState<Report>>({ status: "idle", data: [] });
+  const reports = reportResult.data;
+  const [newsResult, setNewsResult] = useState<EvidenceListState<NewsItem>>({ status: "idle", data: [] });
+  const news = newsResult.data;
+  const [pctlResult, setPctlResult] = useState<EvidenceState<ValPercentile | null>>({ status: "idle", data: null });
+  const pctl = pctlResult.data;
   const [fin, setFin] = useState<Financials | null>(null);
   const [finError, setFinError] = useState<string | null>(null);
-  const [anns, setAnns] = useState<Announcement[]>([]);
-  const [depNote, setDepNote] = useState<string | null>(null);
+  const [announcementResult, setAnnouncementResult] = useState<EvidenceListState<Announcement>>({ status: "idle", data: [] });
+  const anns = announcementResult.data;
   // 资金面 / 筹码 / 信号（v3.3 并入）
-  const [margin, setMargin] = useState<MarginRow[]>([]);
-  const [blockT, setBlockT] = useState<BlockTradeRow[]>([]);
-  const [holders, setHolders] = useState<HolderRow[]>([]);
-  const [dividend, setDividend] = useState<DividendRow[]>([]);
-  const [fundFlow, setFundFlow] = useState<FundFlowRow[]>([]);
-  const [dt, setDt] = useState<DragonTiger | null>(null);
-  const [lockup, setLockup] = useState<Lockup | null>(null);
-  const [blocks, setBlocks] = useState<Blocks | null>(null);
-  const [hotCon, setHotCon] = useState<HotConcept[]>([]);
-  const [qa, setQa] = useState<QaRow[]>([]);
+  const [marginResult, setMarginResult] = useState<EvidenceListState<MarginRow>>({ status: "idle", data: [] });
+  const margin = marginResult.data;
+  const [blockTResult, setBlockTResult] = useState<EvidenceListState<BlockTradeRow>>({ status: "idle", data: [] });
+  const blockT = blockTResult.data;
+  const [holdersResult, setHoldersResult] = useState<EvidenceListState<HolderRow>>({ status: "idle", data: [] });
+  const holders = holdersResult.data;
+  const [dividendResult, setDividendResult] = useState<EvidenceListState<DividendRow>>({ status: "idle", data: [] });
+  const dividend = dividendResult.data;
+  const [fundFlowResult, setFundFlowResult] = useState<EvidenceListState<FundFlowRow>>({ status: "idle", data: [] });
+  const fundFlow = fundFlowResult.data;
+  const [dtResult, setDtResult] = useState<EvidenceState<DragonTiger | null>>({ status: "idle", data: null });
+  const dt = dtResult.data;
+  const [lockupResult, setLockupResult] = useState<EvidenceState<Lockup | null>>({ status: "idle", data: null });
+  const lockup = lockupResult.data;
+  const [blocksResult, setBlocksResult] = useState<EvidenceState<Blocks | null>>({ status: "idle", data: null });
+  const blocks = blocksResult.data;
+  const [hotConResult, setHotConResult] = useState<EvidenceListState<HotConcept>>({ status: "idle", data: [] });
+  const hotCon = hotConResult.data;
+  const [qaResult, setQaResult] = useState<EvidenceListState<QaRow>>({ status: "idle", data: [] });
+  const qa = qaResult.data;
   const [gstock, setGStock] = useState<GlobalStock | null>(null);  // 美股 / 港股
   const [cashflow, setCashflow] = useState<HkCashflow | null>(null);  // 港股现金流量表（仅港股）
   // 可选依赖面板：历史 K 线 / 季报财务 / 基本面 / 巨潮公告（缺失时 501 降级）
@@ -347,8 +370,10 @@ export function StockData() {
     setActiveCode(c);
     setTiQueryVersion((version) => version + 1);
     activeCodeRef.current = c;
-    setLoading(true); setErr(null); setDepNote(null); setVal(null); setReports([]); setNews([]); setPctl(null); setFin(null); setFinError(null); setAnns([]);
-    setMargin([]); setBlockT([]); setHolders([]); setDividend([]); setFundFlow([]); setDt(null); setLockup(null); setBlocks(null); setHotCon([]); setQa([]);
+    setLoading(true); setErr(null); setVal(null); setNewsResult({ status: "idle", data: [] }); setPctlResult({ status: "idle", data: null }); setFin(null); setFinError(null);
+    setReportResult({ status: "idle", data: [] });
+    setAnnouncementResult({ status: "idle", data: [] });
+    setMarginResult({ status: "idle", data: [] }); setBlockTResult({ status: "idle", data: [] }); setHoldersResult({ status: "idle", data: [] }); setDividendResult({ status: "idle", data: [] }); setFundFlowResult({ status: "idle", data: [] }); setDtResult({ status: "idle", data: null }); setLockupResult({ status: "idle", data: null }); setBlocksResult({ status: "idle", data: null }); setHotConResult({ status: "idle", data: [] }); setQaResult({ status: "idle", data: [] });
     setGStock(null);
     setCashflow(null);
     setStockRelativeContext(null);
@@ -378,16 +403,22 @@ export function StockData() {
 
     // A 股：竞态守卫（快速换代码时只让最新一次回填）+ 资金面/筹码独立回填、不阻塞主数据
     const ok = <T,>(set: (v: T) => void) => (v: T) => { if (rid === runIdRef.current) set(v); };
-    api.margin(c).then(ok(setMargin)).catch(() => {});
-    api.blockTrade(c).then(ok(setBlockT)).catch(() => {});
-    api.holders(c).then(ok(setHolders)).catch(() => {});
-    api.dividend(c).then(ok(setDividend)).catch(() => {});
-    api.fundFlow(c).then(ok(setFundFlow)).catch(() => {});
-    api.dragonTiger(c).then(ok(setDt)).catch(() => {});
-    api.lockup(c).then(ok(setLockup)).catch(() => {});
-    api.blocks(c).then(ok(setBlocks)).catch(() => {});
-    api.hotConcepts(c).then(ok(setHotCon)).catch(() => {});
-    api.investorQa(c).then(ok(setQa)).catch(() => {});
+    setReportResult({ status: "loading", data: [] });
+    setAnnouncementResult({ status: "loading", data: [] });
+    void resolveEvidenceList(api.reports(c), "研报数据暂不可用").then(ok(setReportResult));
+    void resolveEvidenceList(api.announcements(c), "公告数据暂不可用").then(ok(setAnnouncementResult));
+    void loadEvidenceSource(() => api.margin(c), [], "融资融券数据暂不可用", setMarginResult, () => rid === runIdRef.current);
+    void loadEvidenceSource(() => api.blockTrade(c), [], "大宗交易数据暂不可用", setBlockTResult, () => rid === runIdRef.current);
+    void loadEvidenceSource(() => api.holders(c), [], "股东户数数据暂不可用", setHoldersResult, () => rid === runIdRef.current);
+    void loadEvidenceSource(() => api.dividend(c), [], "分红数据暂不可用", setDividendResult, () => rid === runIdRef.current);
+    void loadEvidenceSource(() => api.fundFlow(c), [], "资金流向数据暂不可用", setFundFlowResult, () => rid === runIdRef.current);
+    void loadEvidenceSource(() => api.dragonTiger(c), null, "龙虎榜数据暂不可用", setDtResult, () => rid === runIdRef.current, (data) => !data || (data.records.length === 0 && data.seats.buy.length === 0 && data.seats.sell.length === 0));
+    void loadEvidenceSource(() => api.lockup(c), null, "限售解禁数据暂不可用", setLockupResult, () => rid === runIdRef.current, (data) => !data || (data.upcoming.length === 0 && data.history.length === 0));
+    void loadEvidenceSource(() => api.blocks(c), null, "板块归属数据暂不可用", setBlocksResult, () => rid === runIdRef.current, (data) => !data || (data.concept_tags.length === 0 && data.boards.length === 0));
+    void loadEvidenceSource(() => api.hotConcepts(c), [], "热门概念数据暂不可用", setHotConResult, () => rid === runIdRef.current);
+    void loadEvidenceSource(() => api.investorQa(c), [], "投资者互动数据暂不可用", setQaResult, () => rid === runIdRef.current);
+    void loadEvidenceSource(() => api.percentile(c), null, "估值历史分位数据暂不可用", setPctlResult, () => rid === runIdRef.current, (data) => !data || (!data.metrics.pe_ttm && !data.metrics.pb));
+    void loadEvidenceSource(() => api.news(c), [], "个股新闻数据暂不可用", setNewsResult, () => rid === runIdRef.current);
     // 顶部风险（影子模式）：独立加载/错误，不影响主页面数据
     setTopRiskLoading(true);
     setTopRiskErr(null);
@@ -411,29 +442,17 @@ export function StockData() {
     });
     // K 线 / 季报财务 / 基本面 / 巨潮公告：均为可选依赖，改为按需展开加载（避免每次查询都发 501）
     try {
-      // 行情+估值+研报+历史分位+财务+公告（新闻单独降级）
-      const [v, r, p, financialResult, a] = await Promise.all([
+      // 核心行情与财务；次级来源独立完成，不阻塞报价或相互等待
+      const [v, financialResult] = await Promise.all([
         api.valuation(c),
-        api.reports(c).catch(() => []),
-        api.percentile(c).catch(() => null),
         api.financials(c)
           .then((data) => ({ data, error: null as string | null }))
           .catch((e) => ({ data: null, error: e instanceof ApiError ? e.message : "财务数据暂不可用" })),
-        api.announcements(c).catch(() => []),
       ]);
       if (rid !== runIdRef.current) return;
       setVal(v);
-      setReports(r);
-      setPctl(p);
       setFin(financialResult.data);
       setFinError(financialResult.error);
-      setAnns(a);
-      try {
-        const n = await api.news(c);
-        if (rid === runIdRef.current) setNews(n);
-      } catch (e) {
-        if (rid === runIdRef.current && e instanceof ApiError && e.status === 501) setDepNote(e.message);
-      }
     } catch (e) {
       if (rid !== runIdRef.current) return;
       setErr(e instanceof ApiError ? e.message : "查询失败");
@@ -471,10 +490,12 @@ export function StockData() {
   const aiContext = val
     ? `个股：${val.name}（${val.code}）\n现价 ${val.price} · PE(TTM) ${fmt(val.pe_ttm)} · PB ${fmt(val.pb)} · 市值 ${fmt(val.mcap_yi, "亿")}\n` +
       `26E EPS ${val.eps_26e ?? "—"} · 前向PE ${val.pe_26e ?? "—"} · PEG ${val.peg ?? "—"} · 消化 ${val.digest_years ?? "—"}年 · 机构覆盖 ${val.analyst_count} 家\n` +
+      `估值历史分位：${evidenceStatusText(pctlResult)}\n` +
       (pctl?.metrics.pe_ttm ? `估值历史分位(近5年)：PE-TTM 处于 ${pctl.metrics.pe_ttm.percentile}% 分位、PB 处于 ${pctl.metrics.pb?.percentile ?? "—"}% 分位\n` : "") +
       (fin?.revenue ? `财务快照(报告期末${fin.period_end ?? "未知"}，披露日期未知，非PIT)：营收 ${fin.revenue}(同比${fin.revenue_yoy ?? "未知"})、净利润 ${fin.net_profit ?? "未知"}(同比${fin.net_profit_yoy ?? "未知"})、扣非净利润同比 ${fin.deduct_net_profit_yoy ?? "未知"}、ROE ${fin.roe ?? "未知"}、毛利率 ${fin.gross_margin ?? "未知"}、经营现金流 ${fin.operating_cash_flow ?? "未知"}、现金转化率 ${fin.cash_conversion_ratio ?? "未知"}、自由现金流 ${fin.free_cash_flow ?? "未知"}、资产负债率 ${fin.debt_ratio ?? "未知"}\n` : "") +
-      (anns.length ? `近期公告：${anns.slice(0, 5).map((a) => a.title.replace(/^[^:：]*[:：]/, "")).join("；")}\n` : "") +
-      `近期研报：${reports.slice(0, 5).map((r) => r.title).join("；") || "无"}`
+      `${quoteEvidenceContext(val)}\n` +
+      `${announcementEvidenceContext(announcementResult)}\n` +
+      reportEvidenceContext(reportResult)
     : "还没查询个股。输入代码后可让 AI 帮你分析。";
 
   const gAiContext = gstock
@@ -494,9 +515,10 @@ export function StockData() {
     ? `${candidateWorkspaceHref(activeCode)}${stockReturnPath ? `?${new URLSearchParams({ return_to: stockReturnPath }).toString()}` : ""}`
     : "";
 
-  // 资金 / 筹码两张卡的可见条件（与卡内原有条件一致，改为具名常量以便空页签占位复用）
-  const capitalCardVisible = margin.length > 0 || holders.length > 0 || fundFlow.length > 0 || dividend.length > 0;
-  const dragonTigerVisible = !!dt && dt.records.length > 0;
+  // 资金卡常驻以显示各来源状态；龙虎榜明细仅在本次接口返回数据时展示。
+  const fundFlowSummary = summarizeStockFundFlow(fundFlow);
+  const capitalCardVisible = /^\d{6}$/.test(activeCode);
+  const dragonTigerVisible = !!dt && (dt.records.length > 0 || dt.seats.buy.length > 0 || dt.seats.sell.length > 0);
   // 页签正文是否有块可渲染；仅用于正文为空时给一句占位说明，不加载任何数据
   const financialsTabHasBlocks = !!val || !!gstock?.metrics || !!(cashflow && cashflow.periods.length > 0);
   const tabHasNoBlocks = tab === "financials" ? !financialsTabHasBlocks : !val;
@@ -647,6 +669,7 @@ export function StockData() {
             ))}
           </div>
           <div className="mt-3 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-[11px] text-muted-foreground/60">
+            <p data-testid="stock-header-quote-source">{quoteEvidenceContext(val)}</p>
             <p data-testid="stock-header-pe-source">
               PE-TTM 来源 Eastmoney f115；缺失不显示为 0。
             </p>
@@ -715,9 +738,11 @@ export function StockData() {
                   <StockThesisPanel code={activeCode} />
 
                   {/* 板块归属 · 概念 */}
-                  {((blocks && blocks.concept_tags.length > 0) || hotCon.length > 0) && (
+                  {/^\d{6}$/.test(activeCode) && (
                     <GlassCard className="mb-4">
                       <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Boxes className="h-4 w-4 text-primary" /> 板块归属 · 概念</h3>
+                      <SourceStatus label="板块归属" state={blocksResult} />
+                      <SourceStatus label="热门概念" state={hotConResult} />
                       {blocks && blocks.concept_tags.length > 0 && (
                         <div className="mb-3 flex flex-wrap gap-1.5">
                           {blocks.concept_tags.slice(0, 24).map((t, i) => (
@@ -858,6 +883,7 @@ export function StockData() {
                       </GlassCard>
                     )}
 
+                    <SourceStatus label="估值历史分位" state={pctlResult} />
                     {pctl && (pctl.metrics.pe_ttm || pctl.metrics.pb) && (
                       <>
                         {/* 口径说明：历史分位（个股自身时间序列）与当前行业估值快照是两个口径，图上不混用 */}
@@ -884,9 +910,9 @@ export function StockData() {
               <>
                 <NativeIntelSecurityContext code={activeCode} />
 
-                {reports.length > 0 && (
-                  <GlassCard className="mb-4">
-                    <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><FileText className="h-4 w-4 text-primary" /> 近期研报（{reports.length}）</h3>
+                <GlassCard className="mb-4" data-testid="stock-reports-source-state">
+                    <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><FileText className="h-4 w-4 text-primary" /> 近期研报{reportResult.status === "success" ? `（${reports.length}）` : ""}</h3>
+                    <p className="mb-2 text-xs text-muted-foreground" data-source-state={reportResult.status}>{evidenceListStatusText(reportResult)}</p>
                     <div className="space-y-2">
                       {reports.slice(0, 12).map((r, i) => (
                         <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
@@ -901,12 +927,11 @@ export function StockData() {
                         </div>
                       ))}
                     </div>
-                  </GlassCard>
-                )}
+                </GlassCard>
 
-                {anns.length > 0 && (
-                  <GlassCard className="mb-4">
-                    <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Megaphone className="h-4 w-4 text-primary" /> 近期公告（{anns.length}）</h3>
+                <GlassCard className="mb-4" data-testid="stock-announcements-source-state">
+                    <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Megaphone className="h-4 w-4 text-primary" /> 近期公告{announcementResult.status === "success" ? `（${anns.length}）` : ""}</h3>
+                    <p className="mb-2 text-xs text-muted-foreground" data-source-state={announcementResult.status}>{evidenceListStatusText(announcementResult)}</p>
                     <div className="space-y-2">
                       {anns.slice(0, 12).map((a, i) => {
                         const title = a.title.replace(/^[^:：]*[:：]/, "") || a.title;
@@ -941,16 +966,12 @@ export function StockData() {
                         );
                       })}
                     </div>
-                  </GlassCard>
-                )}
+                </GlassCard>
 
                 <GlassCard>
                   <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Newspaper className="h-4 w-4 text-primary" /> 个股新闻</h3>
-                  {depNote ? (
-                    <p className="text-xs text-warning">{depNote}（安装后新闻/公告即可用）</p>
-                  ) : news.length === 0 ? (
-                    <p className="text-xs text-muted-foreground/60">暂无新闻</p>
-                  ) : (
+                  <SourceStatus label="个股新闻" state={newsResult} />
+                  {news.length > 0 && (
                     <div className="space-y-2">
                       {news.slice(0, 10).map((n, i) => {
                         const canCapture = /^\d{6}$/.test(activeCode);
@@ -987,6 +1008,7 @@ export function StockData() {
                 </GlassCard>
 
                 {/* 限售解禁 */}
+                <SourceStatus label="限售解禁" state={lockupResult} />
                 {lockup && (lockup.upcoming.length > 0 || lockup.history.length > 0) && (
                   <GlassCard className="mb-4">
                     <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><CalendarClock className="h-4 w-4 text-primary" /> 限售解禁</h3>
@@ -998,7 +1020,7 @@ export function StockData() {
                         ))}
                       </div>
                     ) : (
-                      <p className="mb-2 text-xs text-muted-foreground/70">未来 90 天无待解禁。</p>
+                      <p className="mb-2 text-xs text-muted-foreground/70">本次查询未返回未来 90 天待解禁记录。</p>
                     )}
                     {lockup.history.length > 0 && (
                       <div>
@@ -1012,14 +1034,15 @@ export function StockData() {
                 )}
 
                 {/* 投资者互动（互动易） */}
-                {qa.filter((q) => q.answer).length > 0 && (
+                <SourceStatus label="投资者互动" state={qaResult} />
+                {qa.length > 0 && (
                   <GlassCard className="mb-4">
                     <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><MessageSquare className="h-4 w-4 text-primary" /> 投资者互动（互动易）</h3>
                     <div className="space-y-3">
-                      {qa.filter((q) => q.answer).slice(0, 5).map((q, i) => (
+                      {qa.slice(0, 5).map((q, i) => (
                         <div key={i} className="border-b border-border/40 pb-3 text-sm last:border-0">
                           <p className="text-muted-foreground"><span className="mr-1.5 rounded bg-muted/50 px-1.5 py-0.5 text-[10px]">问</span>{q.question}</p>
-                          <p className="mt-1"><span className="mr-1.5 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary">答</span>{q.answer}</p>
+                          <p className="mt-1"><span className="mr-1.5 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary">答</span>{q.answer || "尚未返回答复"}</p>
                           <p className="mt-1 text-[11px] text-muted-foreground/60">{q.ask_time}</p>
                         </div>
                       ))}
@@ -1035,11 +1058,21 @@ export function StockData() {
                 {capitalCardVisible && (
                   <GlassCard className="mb-4">
                     <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Wallet className="h-4 w-4 text-primary" /> 资金面 · 筹码</h3>
+                    <SourceStatus label="融资融券" state={marginResult} />
+                    <SourceStatus label="股东户数" state={holdersResult} />
+                    <SourceStatus label="资金流向" state={fundFlowResult} />
+                    <SourceStatus label="分红" state={dividendResult} />
+                    <SourceStatus label="大宗交易" state={blockTResult} />
+
                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                       {margin[0] && <Metric k="融资余额" v={yi(margin[0].rzye)} sub={margin[0].date} />}
                       {margin[0] && <Metric k="融券余额" v={yi(margin[0].rqye)} />}
                       {holders[0] && <Metric k="股东户数" v={Number(holders[0].holder_num).toLocaleString()} sub={`环比 ${pct(holders[0].change_ratio)}`} />}
-                      {fundFlow.length > 0 && <Metric k="近20日主力净流入" v={yi(fundFlow.slice(-20).reduce((s, r) => s + r.main_net, 0))} />}
+                      {fundFlow.length > 0 && <Metric
+                        k="最近至多20条主力净流入合计"
+                        v={fundFlowSummary.total === null ? "未知（数据不完整）" : yi(fundFlowSummary.total)}
+                        sub={`有效 ${fundFlowSummary.valid}/${fundFlowSummary.observed} 条（目标20条）；最新 ${fundFlowSummary.latestDate ?? "未知"}；不代表连续20个交易日`}
+                      />}
                       {dividend[0] && <Metric k="最近派息(每10股)" v={`${dividend[0].bonus_rmb} 元`} sub={dividend[0].date} />}
                     </div>
                     {blockT.length > 0 && (
@@ -1061,6 +1094,7 @@ export function StockData() {
                 )}
 
                 {/* 龙虎榜 */}
+                <SourceStatus label="龙虎榜" state={dtResult} />
                 {dragonTigerVisible && (
                   <GlassCard className="mb-4">
                     <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Trophy className="h-4 w-4 text-primary" /> 龙虎榜（近30日 {dt.records.length} 次）</h3>
@@ -1090,10 +1124,6 @@ export function StockData() {
                       </div>
                     )}
                   </GlassCard>
-                )}
-
-                {!capitalCardVisible && !dragonTigerVisible && (
-                  <p className="text-xs text-muted-foreground/60">当前没有可展示的资金面 / 筹码数据。</p>
                 )}
               </>
             )}

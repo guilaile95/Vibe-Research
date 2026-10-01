@@ -490,10 +490,12 @@ export interface IntelDigestLatestResult {
 
 
 export interface Quote {
-  name: string; price: number; last_close: number; change_pct: number;
-  pe_ttm: number; pb: number; mcap_yi: number; turnover_pct: number;
-  limit_up: number; limit_down: number;
-  amount_wan?: number;
+  name: string; price: number; last_close: number | null; change_pct: number | null;
+  pe_ttm: number | null; pb: number | null; mcap_yi: number | null; turnover_pct: number | null;
+  limit_up: number | null; limit_down: number | null;
+  amount_wan?: number | null;
+  data_time?: string | null;
+  trade_date?: string | null;
 }
 
 
@@ -503,6 +505,9 @@ export interface Valuation {
   eps_26e: number | null; eps_27e: number | null; pe_26e: number | null;
   cagr_pct: number | null; peg: number | null; digest_years: number | null;
   analyst_count: number; forecast_note?: string;
+  quote_source?: string | null;
+  quote_data_time?: string | null;
+  quote_trade_date?: string | null;
 }
 
 
@@ -1523,7 +1528,7 @@ export interface HolderRow { date: string; holder_num: number; change_ratio: num
 
 export interface DividendRow { date: string; bonus_rmb: number; transfer_ratio: number; bonus_ratio: number | null; plan: string }
 
-export interface FundFlowRow { date: string; main_net: number; small_net: number; mid_net: number; large_net: number; super_net: number }
+export interface FundFlowRow { date: string; main_net: number | null; small_net: number | null; mid_net: number | null; large_net: number | null; super_net: number | null }
 
 export interface DtSeat { name: string; buy_amt: number; sell_amt: number; net: number }
 
@@ -1604,7 +1609,19 @@ export interface HkCashflow {
 // 产业信号 · GPU 租金（GET /api/signals/gpu-rent）
 // ---------------------------------------------------------------------------
 
+export interface GpuSourceHealth {
+  retrieved_at?: number | null;
+  sample_asof_ts?: number | null;
+  sample_freshness?: "fresh" | "stale" | "unavailable";
+  source_observed_at?: number | null;
+  source_freshness?: "unknown";
+  exporter_health?: "unknown";
+  completeness?: "unknown";
+}
+
 export interface GpuSpot {
+  health?: GpuSourceHealth;
+  count_health?: GpuSourceHealth;
   gpu: string; median?: number; asof_ts?: number;
   available_gpus?: number | null; total_gpus?: number | null;
   unavailable?: boolean; note?: string; err?: string;
@@ -2089,9 +2106,18 @@ export interface DailyReviewAnalyzeRequest {
 }
 
 
+export interface ChatToolResult {
+  call_id: string;
+  tool: string;
+  status: "success" | "partial" | "empty" | "error";
+  truncated: boolean;
+}
+
 export interface NdjsonStreamHandlers {
+  onLeadContext?: (context: import("../leadAnalysisContext.ts").LeadAnalysisContext) => void;
   onDelta?: (text: string) => void;
-  onTool?: (tool: string, args: Record<string, unknown>) => void;
+  onTool?: (tool: string, args: Record<string, unknown>, callId?: string) => void;
+  onToolResult?: (result: ChatToolResult) => void;
   onSources?: (items: ReportChatSource[], coverage?: ReportChatCoverage) => void;
 }
 

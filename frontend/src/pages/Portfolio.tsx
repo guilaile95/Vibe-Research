@@ -833,6 +833,16 @@ export function Portfolio() {
       setErr('请先在“接入 AI”中配置模型');
       return;
     }
+    let destination: string;
+    try {
+      destination = llm.provider.startsWith("cli-")
+        ? `${llm.provider} 当前登录或配置的模型服务`
+        : new URL(llm.baseURL).origin;
+    } catch {
+      setErr("无法确认模型接收端，请先检查 AI 配置");
+      return;
+    }
+    if (!confirm(`生成持仓建议会发送股票代码、持股数量、成本、市值、盈亏及你填写的补充要求到 ${destination}（模型：${llm.model}）。账户现金和总资产不包含在本次自动构建的模型上下文中；你自行输入的文字会原样发送。是否继续本次分析？`)) return;
     setErr(null);
     await usePortfolioAdviceTaskStore.getState().start(llm, adviceRequest);
   };
@@ -892,7 +902,7 @@ export function Portfolio() {
         <div data-testid="portfolio-authority-banner" data-authority="LEGACY_PORTFOLIO"
           className="mb-4 flex items-start gap-2 rounded-lg border border-success/25 bg-success/5 p-3 text-xs text-muted-foreground">
           <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
-          <span>持仓<b className="text-foreground">只存在你本地</b>，不上传、不进仓库（legacy 模式，尚未 bootstrap）。行情每半小时自动刷新，也可手动刷新。结构化操作建议由本地配置的 AI 生成，数量与盈亏以代码校验结果为准。</span>
+          <span>持仓记录<b className="text-foreground">保存在本地</b>，不进仓库（legacy 模式，尚未 bootstrap）。行情每半小时自动刷新，也可手动刷新。生成 AI 持仓建议时会将持仓上下文发送给你配置的模型服务，发送前会请你确认；数量与盈亏以代码校验结果为准。</span>
         </div>
       )}
 

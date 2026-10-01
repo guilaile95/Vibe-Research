@@ -627,6 +627,7 @@ function jsonErr(status, detail) {
  */
 function createApiMockController() {
   const state = {
+    secondaryFailures: false,
     klineDelayMs: 0,
     klineError: false,
     klineHold: null, // { resolve, code } pending fulfill
@@ -670,6 +671,11 @@ function createApiMockController() {
 
     const pathname = pathnameOf(url);
     const code = codeOf(url);
+    if (state.secondaryFailures && ["/api/margin", "/api/fund-flow"].includes(pathname)) {
+      await route.fulfill(jsonErr(pathname === "/api/fund-flow" ? 501 : 502, "SYNTHETIC_PRIVATE_PROVIDER_DETAIL"));
+      return;
+    }
+
 
     if (pathname.endsWith("/stock-relative-context")) {
       state.relativeContextCalls.push({ code, url, ts: Date.now() });
@@ -1908,6 +1914,23 @@ async function runSmoke(page, mock, errors) {
   }
   // restore normal TI for cleanliness
   mock.setTechnicalIndicatorsStatus("normal");
+  // Source-level failures stay visible instead of masquerading as no observations.
+  mock.state.secondaryFailures = true;
+  await fillCode(page, "000001");
+  await clickQuery(page);
+  await waitForStockHeader(page, "000001", "平安银行");
+  await openTab(page, "capital");
+  await page.locator('[data-source="融资融券"][data-source-state="error"]').waitFor();
+  await page.locator('[data-source="资金流向"][data-source-state="unsupported"]').waitFor();
+  const failedText = await page.locator('[data-source="融资融券"]').innerText();
+  if (!failedText.includes("不能据此判断没有记录")) errors.push("margin failure lost uncertainty");
+  if ((await page.locator("body").innerText()).includes("SYNTHETIC_PRIVATE_PROVIDER_DETAIL")) errors.push("source details leaked");
+  mock.state.secondaryFailures = false;
+  await clickQuery(page);
+  await waitForStockHeader(page, "000001", "平安银行");
+  await openTab(page, "capital");
+  await page.locator('[data-source="融资融券"][data-source-state="success"]').waitFor();
+  if (!(await page.locator('[data-source="融资融券"]').innerText()).includes("不能排除上游缺失")) errors.push("empty source falsely treated as complete absence");
 }
 
 async function main() {
@@ -1939,7 +1962,7 @@ async function main() {
       const sourceUrl = message.location().url || "unknown";
       // The existing K-line retry scenario intentionally returns one mocked
       // 500; do not treat that expected fixture transition as a page defect.
-      if (message.type() === "error" && !sourceUrl.includes("/api/kline")) {
+      if (message.type() === "error" && !sourceUrl.includes("/api/kline") && !(mock.state.secondaryFailures && /\/api\/(margin|fund-flow)(?:\?|$)/.test(sourceUrl))) {
         errors.push(`console.error: ${message.text()} @ ${sourceUrl}`);
       }
     });

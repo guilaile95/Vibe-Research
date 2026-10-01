@@ -1,11 +1,11 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Swords, Play, Square, Save, CheckCircle2, Circle, AlertTriangle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Disclaimer } from "@/components/ui/Disclaimer";
-import { debateStream, type DebateStage } from "@/lib/agents";
+import { debateStream, type DebateStage, type DossierStatus } from "@/lib/agents";
 import { addNote } from "@/lib/notes";
 import { ApiError } from "@/lib/api";
 
@@ -26,69 +26,101 @@ const STAGE_TONE: Record<DebateStage, string> = {
   referee: "border-border bg-background/40",
 };
 
-const DOSSIER_HINT = "多空双方拿到的是同一份接口实时拉取的数据，谁也不能靠编数字赢。";
+const DOSSIER_HINT = "多空双方使用同一份接口返回的数据；部分、过期、空结果和截断均须保留限制，不能补造数字。";
 
 export function Debate() {
   const [code, setCode] = useState("");
   const [rounds, setRounds] = useState(1);
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState("");
-  const [progress, setProgress] = useState<{ title: string; ok: boolean }[]>([]);
+  const [progress, setProgress] = useState<{ title: string; ok: boolean; status?: DossierStatus; truncated?: boolean }[]>([]);
   const [missing, setMissing] = useState<string[]>([]);
+  const [partial, setPartial] = useState<string[]>([]);
   const [stages, setStages] = useState<StageBox[]>([]);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [analyzedCode, setAnalyzedCode] = useState("");
+  const [completed, setCompleted] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
+  useEffect(() => () => {
+    const controller = abortRef.current;
+    abortRef.current = null;
+    controller?.abort();
+  }, []);
+
   const reset = () => {
-    setStatus(""); setProgress([]); setMissing([]); setStages([]); setError(""); setSaved(false);
+    setCompleted(false);
+    setStatus(""); setProgress([]); setMissing([]); setPartial([]); setStages([]); setError(""); setSaved(false);
   };
 
   async function start() {
+    if (abortRef.current) return;
     const c = code.trim();
     if (!/^\d{6}$/.test(c)) { setError("请输入 6 位 A 股代码"); return; }
     reset();
+    setAnalyzedCode(c);
     setRunning(true);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    const active = () => abortRef.current === ctrl && !ctrl.signal.aborted;
+    let streamFailed = false;
     try {
       await debateStream(c, rounds, {
-        onStatus: setStatus,
-        onDossierProgress: (title, ok, loaded, total) => {
+        onStatus: (message) => { if (active()) setStatus(message); },
+        onDossierProgress: (title, ok, loaded, total, status, truncated) => {
+          if (!active()) return;
           setStatus(`正在拉取客观事实底稿… ${loaded}/${total}`);
-          setProgress((p) => [...p, { title, ok }]);
+          setProgress((p) => [...p, { title, ok, status, truncated }]);
         },
-        onDossierReady: (_sections, miss) => { setMissing(miss); setStatus("底稿就绪，辩论开始"); },
-        onStageStart: (stage, label) =>
-          setStages((s) => [...s, { stage, label, content: "", done: false }]),
-        onDelta: (stage, text) =>
-          setStages((s) => s.map((b) => (b.stage === stage && !b.done ? { ...b, content: b.content + text } : b))),
-        onStageDone: (stage, _label, content) =>
-          setStages((s) => s.map((b) => (b.stage === stage && !b.done ? { ...b, content, done: true } : b))),
-        onError: (message, stage) => setError(stage ? `${stage}：${message}` : message),
+        onDossierReady: (_sections, miss, limited) => { if (active()) { setMissing(miss); setPartial(limited || []); setStatus("底稿就绪，辩论开始"); } },
+        onStageStart: (stage, label) => {
+          if (active()) setStages((s) => [...s, { stage, label, content: "", done: false }]);
+        },
+        onDelta: (stage, text) => {
+          if (active()) setStages((s) => s.map((b) => (b.stage === stage && !b.done ? { ...b, content: b.content + text } : b)));
+        },
+        onStageDone: (stage, _label, content) => {
+          if (active()) setStages((s) => s.map((b) => (b.stage === stage && !b.done ? { ...b, content, done: true } : b)));
+        },
+        onError: (message, stage) => {
+          if (active()) { streamFailed = true; setError(stage ? `${stage}：${message}` : message); }
+        },
       }, ctrl.signal);
-      setStatus("辩论完成");
+      if (active()) { setStatus(streamFailed ? "辩论失败" : "辩论完成"); setCompleted(!streamFailed); }
     } catch (e) {
+      if (abortRef.current !== ctrl) return;
       if (e instanceof DOMException && e.name === "AbortError") setStatus("已中止");
       else setError(e instanceof ApiError ? e.message : String(e));
     } finally {
-      setRunning(false);
-      abortRef.current = null;
+      if (abortRef.current === ctrl) {
+        setRunning(false);
+        abortRef.current = null;
+      }
     }
   }
 
   function stop() {
-    abortRef.current?.abort();
+    const controller = abortRef.current;
+    abortRef.current = null;
+    controller?.abort();
+    setStatus("已中止");
+    setCompleted(false);
     setRunning(false);
   }
 
   function save() {
     const body = stages.map((s) => `## ${s.label}\n\n${s.content}`).join("\n\n---\n\n");
-    addNote("多空辩论", `多空辩论 · ${code.trim()}`, body);
-    setSaved(true);
+    try {
+      addNote("多空辩论", `多空辩论 · ${analyzedCode}`, body);
+      setSaved(true);
+      setError("");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "研究记录保存失败");
+    }
   }
 
-  const finished = stages.length > 0 && stages.every((s) => s.done);
+  const finished = completed && stages.length > 0 && stages.every((s) => s.done);
 
   return (
     <div>
@@ -147,8 +179,8 @@ export function Debate() {
             ⏱ {rounds === 2
               ? "两轮约 3 分钟 · 5 次模型调用 · 约 6 万字进上下文"
               : "一轮约 100 秒 · 3 次模型调用 · 约 3.5 万字进上下文"}
-            （每个角色都会带上完整底稿）。其中拉底稿约 35 秒、走公开数据接口，不消耗 token。
-            省额度可用 Codex Subscription，或选中档 API 模型——数据已备齐，模型只做组织和表达。
+            （每个角色都会带上同一份底稿及其限制）。其中拉底稿约 35 秒、走公开数据接口，不消耗 token。
+            省额度可用 Codex Subscription，或选中档 API 模型——模型基于已返回数据组织和表达。
           </p>
         )}
 
@@ -165,13 +197,21 @@ export function Debate() {
             <div className="flex flex-wrap gap-x-4 gap-y-1.5">
               {progress.map((p) => (
                 <span key={p.title} className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-                  {p.ok
+                  {p.status === "partial" || p.truncated
+                    ? <AlertTriangle className="h-3 w-3 text-warning" />
+                    : p.status === "success" || (!p.status && p.ok)
                     ? <CheckCircle2 className="h-3 w-3 text-primary/70" />
                     : <Circle className="h-3 w-3 text-muted-foreground/40" />}
-                  {p.title}
+                  {p.title}{p.status === "partial" ? " · 部分数据" : p.status === "empty" ? " · 未取到记录" : p.status === "error" ? " · 获取失败" : ""}
+                  {p.truncated ? " · 已截断" : ""}
                 </span>
               ))}
             </div>
+            {partial.length > 0 && (
+              <p className="mt-2 text-[11px] text-warning">
+                部分数据：{partial.join("、")}（可用观测已保留，缺失、过期或截断部分不能据此推断）
+              </p>
+            )}
             {missing.length > 0 && (
               <p className="mt-2 text-[11px] text-warning">
                 未取到：{missing.join("、")}（双方立论时不得臆测这部分）

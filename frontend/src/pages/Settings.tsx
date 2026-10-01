@@ -3,9 +3,13 @@ import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal, Loader2, Refr
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { BackendRuntimeCard } from "@/components/settings/BackendRuntimeCard";
+import { FirstResearchStatusCard } from "@/components/settings/FirstResearchStatusCard";
 import { toast } from "sonner";
+import { createModelConnectionProbe, modelProbeDestination, canonicalModelProbeURL, type ProbeState } from "@/lib/modelConnectionProbe";
 import {
   clearLlm,
+  LLM_CHANGED_EVENT,
+  testModelConnection,
   getAgentRuntimeStatus,
   loadLlm,
   saveLlm,
@@ -34,6 +38,27 @@ export function Settings() {
   const [runtimeBusy, setRuntimeBusy] = useState(false);
 
   const providerOf = (id: string): ProviderId => aiModels.find((m) => m.id === id)?.provider ?? "openai-compatible";
+  const [probeState, setProbeState] = useState<ProbeState>({ status: "idle", message: "" });
+  const [probe] = useState(() => createModelConnectionProbe(testModelConnection, setProbeState));
+  const probeBaseURL = canonicalModelProbeURL(baseURL);
+  const probeDestination = modelProbeDestination(baseURL);
+  const probeAccessReady = accessKey.trim() === loadAccessKey();
+  const changeMode = (next: "api" | "subscription") => { probe.invalidate(); setMode(next); };
+  useEffect(() => {
+    const invalidate = () => probe.invalidate();
+    window.addEventListener(LLM_CHANGED_EVENT, invalidate);
+    window.addEventListener("storage", invalidate);
+    return () => {
+      window.removeEventListener(LLM_CHANGED_EVENT, invalidate);
+      window.removeEventListener("storage", invalidate);
+      probe.dispose();
+    };
+  }, [probe]);
+  const runProbe = () => {
+    if (mode !== "api" || !probeBaseURL || !probeAccessReady || !apiKey.trim() || !modelName.trim()) return;
+    void probe.start({ provider: providerOf(apiId), baseURL: probeBaseURL, apiKey: apiKey.trim(), model: modelName.trim() });
+  };
+
 
   const refreshRuntime = async () => {
     setRuntimeBusy(true);
@@ -64,6 +89,7 @@ export function Settings() {
   }, [runtimeStatus?.status]);
 
   const pickApiModel = (id: string) => {
+    probe.invalidate();
     const m = apiModels.find((x) => x.id === id);
     if (!m) return;
     setApiId(id);
@@ -101,9 +127,15 @@ export function Settings() {
       toast.error("后台凭据保存失败");
       return;
     }
-    saveLlm(cfg);
+    try {
+      saveLlm(cfg);
+    } catch {
+      await refreshScheduledStatus();
+      toast.error("后台凭据已保存，但浏览器保存失败；请检查存储权限或空间后重试");
+      return;
+    }
     await refreshScheduledStatus();
-    toast.success("已保存到本机浏览器和 Vibe 本机后台");
+    toast.success("配置已保存到本机浏览器和后台；尚未验证模型调用");
   };
 
   const saveSubscription = async () => {
@@ -123,9 +155,15 @@ export function Settings() {
       toast.error("后台凭据保存失败");
       return;
     }
-    saveLlm(cfg);
+    try {
+      saveLlm(cfg);
+    } catch {
+      await refreshScheduledStatus();
+      toast.error("后台凭据已保存，但浏览器保存失败；请检查存储权限或空间后重试");
+      return;
+    }
     await refreshScheduledStatus();
-    toast.success(`已选「${m.name}」订阅，全站 AI 功能将调用 ${runtimeStatus?.runtime || m.name}`);
+    toast.success(`已保存「${m.name}」订阅配置；尚未验证模型调用`);
   };
 
   const loginCodex = async () => {
@@ -142,13 +180,20 @@ export function Settings() {
   };
 
   const forget = async () => {
+    probe.invalidate();
     try {
       await api.deleteAiCredential();
     } catch {
       toast.error("后台凭据删除失败");
       return;
     }
-    clearLlm();
+    try {
+      clearLlm();
+    } catch {
+      await refreshScheduledStatus();
+      toast.error("后台凭据已清除，但浏览器凭据仍未清除；请检查存储权限后重试");
+      return;
+    }
     setApiKey("");
     setCliId("");
     await refreshScheduledStatus();
@@ -156,8 +201,14 @@ export function Settings() {
   };
 
   const saveAccess = () => {
+    probe.invalidate();
     const k = accessKey.trim();
-    saveAccessKey(k);
+    try {
+      saveAccessKey(k);
+    } catch {
+      toast.error(k ? "浏览器无法保存后端访问密钥，请检查存储权限或空间" : "浏览器无法清除后端访问密钥，请检查存储权限");
+      return;
+    }
     setAccessKey(k);
     toast.success(k ? "已保存后端访问密钥（存本地）" : "已清除后端访问密钥");
   };
@@ -167,6 +218,8 @@ export function Settings() {
       <PageHeader title="接入 AI" subtitle="配置一次，全站所有 AI 功能统一使用 Codex Subscription 或 API Compatible" />
 
       <BackendRuntimeCard />
+      <FirstResearchStatusCard mirror={scheduledStatus} />
+      {mode === "subscription" && <p className="mb-4 text-xs text-muted-foreground">Codex / 旧版 CLI 暂不支持此限额连接测试；登录成功不等于模型调用验证成功。</p>}
 
       <div className="mb-4 flex items-start gap-2 rounded-lg border border-success/25 bg-success/5 p-3 text-xs text-muted-foreground">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
@@ -175,7 +228,7 @@ export function Settings() {
 
       {/* 两种接入方式 */}
       <div className="mb-4 grid gap-3 sm:grid-cols-2">
-        <GlassCard glow={mode === "subscription"} onClick={() => setMode("subscription")}
+        <GlassCard glow={mode === "subscription"} onClick={() => changeMode("subscription")}
           className={mode === "subscription" ? "ring-1 ring-primary/40" : "opacity-80"}>
           <div className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-primary" />
@@ -185,7 +238,7 @@ export function Settings() {
           <p className="mt-1 text-xs text-muted-foreground">使用产品独立登录的 Codex / ChatGPT 订阅，<b className="text-foreground">免 API key</b>。所有 AI 功能统一走 Codex。</p>
         </GlassCard>
 
-        <GlassCard glow={mode === "api"} onClick={() => setMode("api")}
+        <GlassCard glow={mode === "api"} onClick={() => changeMode("api")}
           className={mode === "api" ? "ring-1 ring-primary/40" : "opacity-80"}
           data-testid="wave5-api-mode-card">
           <div className="flex items-center gap-2">
@@ -281,19 +334,31 @@ export function Settings() {
 
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Base URL</label>
-              <input data-testid="wave5-base-url-input" value={baseURL} onChange={(e) => setBaseURL(e.target.value)} placeholder="https://api.deepseek.com"
+              <input data-testid="wave5-base-url-input" value={baseURL} onChange={(e) => { probe.invalidate(); setBaseURL(e.target.value); }} placeholder="https://api.deepseek.com"
                 className="w-full rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
             </div>
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Model</label>
-              <input data-testid="wave5-model-input" value={modelName} onChange={(e) => setModelName(e.target.value)} placeholder="模型名称（豆包填 ep-… 接入点 ID）"
+              <input data-testid="wave5-model-input" value={modelName} onChange={(e) => { probe.invalidate(); setModelName(e.target.value); }} placeholder="模型名称（豆包填 ep-… 接入点 ID）"
                 className="w-full rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
             </div>
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">API Key</label>
-              <input data-testid="wave5-api-key-input" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-…"
+              <input data-testid="wave5-api-key-input" type="password" value={apiKey} onChange={(e) => { probe.invalidate(); setApiKey(e.target.value); }} placeholder="sk-…"
                 className="w-full rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
             </div>
+
+            <section className="rounded-lg border border-border p-3 text-xs" data-testid="model-connection-test">
+              <h3 className="font-medium">手动检测当前 API 配置</h3>
+              <p className="mt-2">接收端：{probeDestination || "请填写不含空白、账号密码、查询参数或片段的 HTTP(S) Base URL"}；模型：{modelName.trim() || "未填写"}</p>
+              <p className="mt-1 text-muted-foreground">点击后使用当前表单中的 API Key，仅发送一句固定测试请求，不发送持仓、研究或对话资料。只请求一次，不调用工具、不重试、不保存配置；请求最多 32 个输出 token，最多等待 15 秒。服务商可能收费，输出请求上限不等于金额保证；取消也不保证服务商停止计费。</p>
+              {!probeAccessReady && <p className="mt-2 text-warning">后端访问密钥修改后需先保存，再测试。</p>}
+              <div className="mt-3 flex gap-3">
+                <button type="button" data-testid="model-connection-test-start" onClick={runProbe} disabled={probeState.status === "pending" || !probeDestination || !probeAccessReady || !apiKey.trim() || !modelName.trim()} className="rounded border border-primary/40 px-3 py-2 text-primary disabled:opacity-50">测试当前配置（可能产生费用）</button>
+                {probeState.status === "pending" && <button type="button" data-testid="model-connection-test-cancel" onClick={() => probe.cancel()} className="text-muted-foreground">取消测试</button>}
+              </div>
+              {probeState.message && <p className="mt-2" role={probeState.status === "error" ? "alert" : "status"} data-testid="model-connection-test-result" data-probe-status={probeState.status}>{probeState.message}</p>}
+            </section>
 
             {existing && !existingIsCli && scheduledStatus && !scheduledStatus.configured ? (
               <p className="text-xs text-amber-600" data-testid="wave5-scheduled-credential-unsynced">
@@ -324,7 +389,7 @@ export function Settings() {
           本机自用没设鉴权就留空。同样只存本地浏览器。
         </p>
         <div className="flex items-center gap-2">
-          <input type="password" value={accessKey} onChange={(e) => setAccessKey(e.target.value)} placeholder="与后端 VR_API_KEY 保持一致"
+          <input type="password" value={accessKey} onChange={(e) => { probe.invalidate(); setAccessKey(e.target.value); }} placeholder="与后端 VR_API_KEY 保持一致"
             className="flex-1 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
           <button onClick={saveAccess} className="rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary hover:bg-primary/25">
             保存

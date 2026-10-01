@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 import account_event_store
 import cash_event_service as svc
@@ -31,7 +32,7 @@ async def _parse_json_body(request: Request) -> dict[str, Any]:
 async def create_cash_event(request: Request):
     try:
         payload = await _parse_json_body(request)
-        event = svc.create_cash_event(payload)
+        event = await run_in_threadpool(svc.create_cash_event, payload)
     except HTTPException:
         raise
     except svc.CashEventValidationError as exc:
@@ -46,7 +47,7 @@ async def create_cash_event(request: Request):
 @router.get("/account/cash-events")
 async def list_cash_events():
     try:
-        events = svc.list_cash_events()
+        events = await run_in_threadpool(svc.list_cash_events)
     except account_event_store.AccountEventCorruptedError:
         raise HTTPException(status_code=500, detail="内部错误")
     except Exception:
@@ -57,7 +58,7 @@ async def list_cash_events():
 @router.get("/account/cash-events/{event_id}")
 async def get_cash_event(event_id: str):
     try:
-        event = svc.get_cash_event(event_id)
+        event = await run_in_threadpool(svc.get_cash_event, event_id)
     except account_event_store.AccountEventCorruptedError:
         raise HTTPException(status_code=500, detail="内部错误")
     except Exception:
@@ -79,7 +80,7 @@ async def correct_cash_event(event_id: str, request: Request):
     except HTTPException:
         raise
     try:
-        result = svc.correct_cash_event(event_id, payload)
+        result = await run_in_threadpool(svc.correct_cash_event, event_id, payload)
     except svc.CashEventNotFoundError:
         raise HTTPException(status_code=404, detail="现金事件不存在")
     except svc.CashEventValidationError as exc:

@@ -10,6 +10,7 @@ import {
   formatPrice,
   type TreemapNode,
 } from "@/lib/marketCloud";
+import { marketObservationLabels } from "@/lib/dataHealthView";
 import { cn } from "@/lib/utils";
 import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 
@@ -52,7 +53,7 @@ export function MarketCloud({ embedded = false }: MarketCloudProps) {
         formatter: (params: { data?: TreemapNode; name?: string; value?: number }) => {
           const d = params.data;
           if (!d) return "";
-          const fetched = data?.fetched_at ? `<div style="margin-top:4px;color:#71717a;font-size:11px">数据更新：${data.fetched_at}</div>` : "";
+          const fetched = data?.fetched_at ? `<div style="margin-top:4px;color:#71717a;font-size:11px">抓取完成（北京时间）：${data.fetched_at}</div>` : "";
           if (d.node_type === "industry") {
             return `<div style="font-weight:600;margin-bottom:4px">${d.name}</div>` +
               `<div>股票数：${d.stock_count ?? "—"}</div>` +
@@ -159,12 +160,9 @@ export function MarketCloud({ embedded = false }: MarketCloudProps) {
             {status === "partial" && (
               <span className="rounded-md bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">部分数据缺失</span>
             )}
-            {status === "stale" && (
-              <span className="rounded-md bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">数据已过期</span>
-            )}
-            {data?.fetched_at && (
-              <span className="text-[11px] text-muted-foreground">更新于 {data.fetched_at.slice(11, 16)}</span>
-            )}
+            {!loading && !error && marketObservationLabels(data).map((label) => (
+              <span key={label} className="text-[11px] text-muted-foreground">{label}</span>
+            ))}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">一眼查看全市场结构；面积代表流通市值，红涨绿跌。</p>
         </div>

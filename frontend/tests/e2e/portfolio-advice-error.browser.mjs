@@ -116,6 +116,16 @@ function startStaticServer(dir, port) {
  * - 账户资金：account-authority-status / account-cash-reconciliation
  * - 持仓建议：生成持仓操作建议 / account-funding-authority-status / portfolio-advice-holding-*
  */
+async function confirmAdvice(page, name = /生成持仓操作建议|重新生成/) {
+  const prompt = page.waitForEvent("dialog");
+  const click = page.getByRole("button", { name }).click();
+  const dialog = await prompt;
+  assert.match(dialog.message(), /持股数量、成本、市值、盈亏/);
+  assert.match(dialog.message(), /10\.255\.255\.1/);
+  await dialog.accept();
+  await click;
+}
+
 async function openPortfolioTab(page, key) {
   const tab = page.getByTestId(`portfolio-tab-${key}`);
   await tab.waitFor({ state: "visible", timeout: 15000 });
@@ -292,7 +302,7 @@ async function run() {
         }),
       });
     });
-    await page.getByRole("button", { name: /生成持仓操作建议/ }).click();
+    await confirmAdvice(page, /生成持仓操作建议/);
     await page.getByText("持仓决策依据追溯").waitFor({ timeout: 15000 });
     assert.ok(await page.getByText("600519").first().isVisible(), "valid advice must render holding");
     await page.unroute("**/api/portfolio/advice");
@@ -306,7 +316,7 @@ async function run() {
         body: JSON.stringify(STRUCTURED_502),
       });
     });
-    await page.getByRole("button", { name: /生成持仓操作建议|重新生成/ }).click();
+    await confirmAdvice(page);
     const errorBox = page.locator("div.rounded-lg.border.border-destructive\\/30").first();
     await errorBox.waitFor({ timeout: 15000 });
     const errorText = await errorBox.innerText();
@@ -320,7 +330,7 @@ async function run() {
 
     // ---- D. 真实 Account Gate：partial 只阻断新增风险，不阻断减仓 ----------
     await page.unroute("**/api/portfolio/advice");
-    await page.getByRole("button", { name: /生成持仓操作建议|重新生成/ }).click();
+    await confirmAdvice(page);
     const authority = page.getByTestId("account-funding-authority-status");
     await authority.waitFor({ timeout: 15000 });
     assert.ok((await authority.innerText()).includes("ACCOUNT_COVERAGE_INCOMPLETE"));
@@ -368,7 +378,7 @@ async function run() {
       },
     });
     writeFileSync(accountRealityPath, JSON.stringify(canonicalReality("confirmation-a")), "utf8");
-    await page.getByRole("button", { name: /生成持仓操作建议|重新生成/ }).click();
+    await confirmAdvice(page);
     await page.getByTestId("portfolio-advice-holding-600519").getByText("建议买入数量").waitFor({ timeout: 15000 });
 
     writeFileSync(accountRealityPath, JSON.stringify(canonicalReality("confirmation-b")), "utf8");
