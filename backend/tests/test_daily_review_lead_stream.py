@@ -2,6 +2,7 @@
 import asyncio
 import json
 import threading
+from types import SimpleNamespace
 
 import anyio
 import httpx
@@ -143,17 +144,22 @@ def test_async_transport_preserves_go_headers_and_no_tools(monkeypatch):
 @pytest.mark.parametrize("phase", ["before_headers", "body_pause", "trickling"])
 def test_async_total_deadline_bounds_headers_body_and_trickling(monkeypatch, phase):
     monkeypatch.setattr(chat, "_TURN_TIMEOUT", 0.05)
+    started = asyncio.Event()
+    reading = asyncio.Event()
     closed = []
     interrupted = []
 
     class Body(httpx.AsyncByteStream):
         async def __aiter__(self):
             try:
+                started.set()
                 while True:
                     yield sse({"choices": [{"delta": {"content": "partial"}}]})
                     if phase == "body_pause":
                         await asyncio.Event().wait()
-                    await anyio.sleep(0.005)
+                    reading.set()
+                    # 50 ms expires inside a read, not between 7 ms chunks.
+                    await anyio.sleep(0.007)
             finally:
                 interrupted.append(True)
 
@@ -164,6 +170,7 @@ def test_async_total_deadline_bounds_headers_body_and_trickling(monkeypatch, pha
     async def handler(request):
         if phase == "before_headers":
             try:
+                started.set()
                 await asyncio.Event().wait()
             finally:
                 interrupted.append(True)
@@ -174,11 +181,45 @@ def test_async_total_deadline_bounds_headers_body_and_trickling(monkeypatch, pha
                         lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
 
     async def exercise():
+        loop = asyncio.get_running_loop()
+        ticks = 0
+        # Freeze elapsed time until the phase under test is entered. Request
+        # preparation / client setup may take longer than 50 ms on a busy runner;
+        # their cancellation is covered separately below. Keep real AnyIO cancel
+        # scopes and HTTPX cleanup, driven by the same clock as _check_active.
+        monkeypatch.setattr(loop, "time", lambda: ticks / 1000)
+        monkeypatch.setattr(chat, "time", SimpleNamespace(monotonic=loop.time))
+
+        async def advance_clock():
+            nonlocal ticks
+            await started.wait()
+            while True:
+                if phase == "trickling":
+                    # Only advance while reading, preserving the cancellation
+                    # assertion instead of expiring between yielded deltas.
+                    await reading.wait()
+                    reading.clear()
+                for _ in range(7):
+                    await asyncio.sleep(0)
+                    ticks += 1
+
         result = []
-        with pytest.raises(chat.ModelTransportError, match="超时"):
+
+        async def consume():
             async for event in chat.stream_api_messages(LLM, []):
                 result.append(event)
+
+        ticker = asyncio.create_task(advance_clock())
+        try:
+            with pytest.raises(chat.ModelTransportError, match="超时"):
+                await asyncio.wait_for(consume(), timeout=1)
+        finally:
+            ticker.cancel()
+            await asyncio.gather(ticker, return_exceptions=True)
+        assert started.is_set()
         assert all(event["type"] != "done" for event in result)
+        if phase == "trickling":
+            assert len(result) > 1
         assert interrupted == [True]
         assert closed == ([] if phase == "before_headers" else [True])
 
