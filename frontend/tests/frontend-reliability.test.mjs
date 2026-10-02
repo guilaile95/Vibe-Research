@@ -151,7 +151,10 @@ function startDebate(h, code = '600519') {
 test('completed Debate notes retain the analyzed ticker after input edits', async () => {
   let requested;
   const h = harness('pages/Debate.tsx', 'Debate', { '@/lib/agents': { debateStream: async (code, rounds, handlers) => {
-    requested = code; handlers.onStageStart('bull','bull'); handlers.onStageDone('bull','bull','Research for ' + code);
+    requested = code;
+    for (const stage of ['bull', 'bear', 'referee']) {
+      handlers.onStageStart(stage, stage); handlers.onStageDone(stage, stage, 'Research for ' + code);
+    }
   } } });
   await startDebate(h);
   let tree = h.render(); find(tree, 'input').props.onChange({ target: { value: '000001' } });
@@ -182,6 +185,28 @@ test('stopped Debate callbacks and finally cannot mutate the new run; unmount ab
   assert.equal(calls[1].signal.aborted, true);
   calls[1].resolve(); await fresh;
 });
+test('late successful Debate response cannot overwrite a completed retry or its saved ticker', async () => {
+  const calls = [];
+  const h = harness('pages/Debate.tsx', 'Debate', { '@/lib/agents': { debateStream: (code, rounds, handlers) => {
+    const d = deferred(); calls.push({ ...d, handlers }); return d.promise;
+  } } });
+  const old = startDebate(h);
+  find(h.render(), 'button', '中止').props.onClick();
+  const fresh = startDebate(h, '000001');
+  for (const stage of ['bull', 'bear', 'referee']) {
+    calls[1].handlers.onStageStart(stage, stage); calls[1].handlers.onStageDone(stage, stage, 'FRESH ' + stage);
+  }
+  calls[1].resolve(); await fresh;
+  calls[0].handlers.onStageStart('bull', 'STALE');
+  calls[0].handlers.onStageDone('bull', 'STALE', 'STALE');
+  calls[0].handlers.onError('STALE ERROR');
+  calls[0].resolve(); await old;
+  const tree = h.render(); assert.doesNotMatch(label(tree), /STALE/);
+  find(tree, 'button', '存入沉淀').props.onClick();
+  assert.match(notes.loadNotes()[0].title, /000001/);
+  assert.doesNotMatch(notes.loadNotes()[0].content, /STALE/);
+});
+
 test('failed or stopped Debate never advertises complete savable results', async () => {
   const h = harness('pages/Debate.tsx', 'Debate', { '@/lib/agents': { debateStream: async (code, rounds, handlers) => {
     handlers.onStageStart('bull','bull'); handlers.onStageDone('bull','bull','partial'); handlers.onError('provider failed');

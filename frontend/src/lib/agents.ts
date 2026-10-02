@@ -59,7 +59,35 @@ export async function debateStream(
   signal?: AbortSignal,
 ): Promise<void> {
   const llm = requireLlm();
-  await streamNdjson("/api/debate", { code, rounds, llm }, (ev) => dispatchDebate(ev, handlers), signal);
+  const expected: DebateStage[] = rounds >= 2
+    ? ["bull", "bear", "bull_rebut", "bear_rebut", "referee"]
+    : ["bull", "bear", "referee"];
+  const started = new Set<DebateStage>();
+  const completed = new Map<DebateStage, string>();
+  let ended = false, invalid = false, failed = false;
+  await streamNdjson("/api/debate", { code, rounds, llm }, (ev) => {
+    // A transport EOF is not the Debate protocol's successful terminal event.
+    if (ended) { invalid = true; return; }
+    if (ev.type === "stage") {
+      if (ev.stage !== expected[started.size] || started.has(ev.stage)) invalid = true;
+      started.add(ev.stage);
+    } else if (ev.type === "stage_done") {
+      if (!started.has(ev.stage) || completed.has(ev.stage) || typeof ev.content !== "string") invalid = true;
+      completed.set(ev.stage, ev.content);
+      if (ev.failed) failed = true;
+    } else if (ev.type === "error") {
+      failed = true;
+    } else if (ev.type === "done") {
+      ended = true;
+      if (ev.code !== code || completed.size !== expected.length || !Array.isArray(ev.stages)
+        || ev.stages.length !== expected.length
+        || !expected.every((stage, i) => ev.stages[i]?.stage === stage
+          && completed.has(stage) && ev.stages[i]?.content === completed.get(stage))) invalid = true;
+    }
+    dispatchDebate(ev, handlers);
+  }, signal);
+  signal?.throwIfAborted();
+  if (!ended || invalid || failed) throw new ApiError("辩论未完整结束，请重试；已收到的内容仅供参考", 502);
 }
 
 export interface ReflectHandlers {

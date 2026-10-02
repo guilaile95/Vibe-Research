@@ -91,7 +91,10 @@ export function Debate() {
     } catch (e) {
       if (abortRef.current !== ctrl) return;
       if (e instanceof DOMException && e.name === "AbortError") setStatus("已中止");
-      else setError(e instanceof ApiError ? e.message : String(e));
+      else {
+        setStatus("辩论失败");
+        if (!streamFailed) setError(e instanceof ApiError ? e.message : String(e));
+      }
     } finally {
       if (abortRef.current === ctrl) {
         setRunning(false);
@@ -110,6 +113,7 @@ export function Debate() {
   }
 
   function save() {
+    if (!finished || running || saved) return;
     const body = stages.map((s) => `## ${s.label}\n\n${s.content}`).join("\n\n---\n\n");
     try {
       addNote("多空辩论", `多空辩论 · ${analyzedCode}`, body);
