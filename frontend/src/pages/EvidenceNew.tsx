@@ -1,8 +1,9 @@
-import { useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useRef, useState } from "react";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Save, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { useUnsavedChanges } from "@/components/ui/UnsavedChangesDialog";
 import { api, ApiError } from "@/lib/api";
 import { mapEvidenceNewQuery } from "@/lib/candidateCampaign";
 import { safeInternalReturnTo } from "@/lib/internalReturnTo";
@@ -45,6 +46,11 @@ const nowLocal = () => {
 };
 
 export function EvidenceNew() {
+  const { search } = useLocation();
+  return <EvidenceNewForm key={search} />;
+}
+
+function EvidenceNewForm() {
   const nav = useNavigate();
   const [searchParams] = useSearchParams();
   const prefill = mapEvidenceNewQuery(searchParams);
@@ -67,17 +73,22 @@ export function EvidenceNew() {
     confidence: prefill.confidence,
   }));
   const [busy, setBusy] = useState(false);
+  const saving = useRef(false);
+  const baseline = useRef(JSON.stringify(form));
+  const { complete, dialog } = useUnsavedChanges(JSON.stringify(form) !== baseline.current, busy);
   const [err, setErr] = useState<string | null>(null);
 
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) =>
     setForm((p) => ({ ...p, [k]: v }));
 
   const submit = async () => {
+    if (saving.current) return;
     if (!form.subject_id.trim()) { setErr("请填写主体代码/标识"); return; }
     if (!form.claim.trim()) { setErr("请填写证据论断（claim）"); return; }
     if (!form.source_title.trim()) { setErr("请填写来源标题"); return; }
     if (!form.accessed_at) { setErr("请填写查阅时间"); return; }
 
+    saving.current = true;
     setBusy(true);
     setErr(null);
     try {
@@ -94,16 +105,19 @@ export function EvidenceNew() {
         confidence: form.confidence,
       };
       const r = await api.evidenceCreate(body);
+      complete();
       nav(returnTo || `/evidence/${r.id}`);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "保存失败");
     } finally {
+      saving.current = false;
       setBusy(false);
     }
   };
 
   return (
     <div>
+      {dialog}
       <Link to={returnTo || "/evidence"} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
         <ArrowLeft className="h-4 w-4" /> {returnToLabel}
       </Link>
@@ -117,6 +131,7 @@ export function EvidenceNew() {
       )}
 
       <GlassCard>
+        <fieldset disabled={busy}>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className={labelCls}>
             主体类型 <span className="text-destructive">*</span>
@@ -239,6 +254,7 @@ export function EvidenceNew() {
             取消
           </Link>
         </div>
+        </fieldset>
       </GlassCard>
     </div>
   );

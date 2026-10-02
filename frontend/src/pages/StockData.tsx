@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Search, FileText, Newspaper, Loader2, AlertCircle, LineChart, BarChart3, Megaphone,
   Wallet, Trophy, CalendarClock, Boxes, MessageSquare,
@@ -126,7 +126,9 @@ function ValBand({ label, m }: { label: string; m: ValMetric }) {
 
 export function StockData() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const urlCode = searchParams.get("code")?.trim().toUpperCase() ?? "";
   /** 当前页签；默认概览。切换页签只改视图，不写任何状态、不改 activeCode。 */
   const [tab, setTab] = useState<StockDataTab>("overview");
   const [code, setCode] = useState("");
@@ -362,9 +364,8 @@ export function StockData() {
     })();
   }, [activeCode, tiQueryVersion]);
 
-  const run = async (requestedCode?: string) => {
-    const c = (requestedCode ?? code).trim().toUpperCase();
-    if (!c) { setErr("请输入代码"); return; }
+  const run = useCallback(async (requestedCode: string) => {
+    const c = requestedCode.trim().toUpperCase();
     const rid = ++runIdRef.current;
     // 正式换股：绑定 activeCode，重置全部可选面板
     setActiveCode(c);
@@ -385,6 +386,8 @@ export function StockData() {
     setKline([]); setKlineErr(null); setFinance({}); setFinanceErr(null); setInfo({}); setInfoErr(null); setDisc([]); setDiscErr(null);
     setTiEnv(null); setTiLoading(false); setTiError(null);
     commitPanelStates(resetPanelStates());
+    // Back 到未查询的入口时，清空结果并使在途响应失效。
+    if (!c) { setLoading(false); return; }
 
     // 6 位纯数字 = A 股；否则（字母 / 港股短代码）走美股 / 港股（global-stock-data）
     if (!/^\d{6}$/.test(c)) {
@@ -459,17 +462,24 @@ export function StockData() {
     } finally {
       if (rid === runIdRef.current) setLoading(false);
     }
-  };
+  }, [commitPanelStates]);
 
-  const queryStartedRef = useRef(false);
   useEffect(() => {
-    if (queryStartedRef.current) return;
-    const initialCode = new URLSearchParams(window.location.search).get("code")?.trim().toUpperCase();
-    if (!initialCode || !/^\d{6}$/.test(initialCode)) return;
-    queryStartedRef.current = true;
-    setCode(initialCode);
-    void run(initialCode);
-  }, []);
+    if (urlCode === activeCodeRef.current) return;
+    setCode(urlCode);
+    void run(urlCode);
+  }, [urlCode, run]);
+
+  const submitQuery = () => {
+    const c = code.trim().toUpperCase();
+    if (!c) { setErr("请输入代码"); return; }
+    setCode(c);
+    // 换股 push 一条历史；同股重试保留当前条目。URL effect 是换股查询唯一入口。
+    if (c === urlCode) { void run(c); return; }
+    const params = new URLSearchParams(searchParams);
+    params.set("code", c);
+    navigate({ pathname: location.pathname, search: `?${params.toString()}`, hash: location.hash });
+  };
 
   // 常驻带只放核心报价与估值：现价 / PE(TTM) / PB / 总市值。
   const coreMetrics: { k: string; v: string; testId?: string }[] = val ? [
@@ -529,12 +539,12 @@ export function StockData() {
       <input
         value={code}
         onChange={(e) => setCode(e.target.value.replace(/[^a-zA-Z0-9.]/g, "").toUpperCase().slice(0, 12))}
-        onKeyDown={(e) => e.key === "Enter" && run()}
+        onKeyDown={(e) => e.key === "Enter" && submitQuery()}
         placeholder="A 股 6 位代码，或美股/港股/韩股（AAPL / 00700 / 005930.KS）"
         className="w-80 min-w-0 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
       />
       <button
-        onClick={() => void run()}
+        onClick={submitQuery}
         disabled={loading}
         className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
       >
