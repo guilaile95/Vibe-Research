@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import pytest
 
 import astock
 
@@ -145,3 +146,74 @@ def test_financial_health_keeps_core_snapshot_when_optional_cashflow_fails(monke
         isinstance(value, float) and not math.isfinite(value)
         for value in result.values()
     )
+
+
+@pytest.mark.parametrize("value", [0, 0.0, "0", " 0 "])
+def test_zero_summary_and_statement_values_are_real_facts(monkeypatch, value):
+    source = _Ak()
+    source.stock_financial_abstract_ths = lambda **kw: _Frame([
+        _summary("2025-12-31", **{"营业总收入": value})
+    ])
+    source.stock_financial_cash_new_ths = lambda **kw: _Frame(_metrics("2025-12-31", {
+        "act_cash_flow_net": value, "pay_fixed_assets_etc_cash": value,
+    }))
+    monkeypatch.setattr(astock, "_akshare", lambda: source)
+    result = astock.financials("600519", include_health=True)
+    assert result["revenue"] == value
+    assert result["operating_cash_flow"] == 0.0
+    assert result["capital_expenditure"] == 0.0
+    assert result["free_cash_flow"] == 0.0
+    assert result["cash_conversion_ratio"] == 0.0
+    assert result["free_cash_flow_margin"] == 0.0
+
+
+@pytest.mark.parametrize("value", [False, True, None, "", "false", " FALSE ", "null", "none"])
+def test_boolean_and_missing_values_never_become_zero_or_one(monkeypatch, value):
+    source = _Ak()
+    source.stock_financial_abstract_ths = lambda **kw: _Frame([
+        _summary("2025-12-31", **{"营业总收入": value})
+    ])
+    source.stock_financial_cash_new_ths = lambda **kw: _Frame(_metrics("2025-12-31", {
+        "act_cash_flow_net": value, "pay_fixed_assets_etc_cash": "40",
+    }))
+    monkeypatch.setattr(astock, "_akshare", lambda: source)
+    result = astock.financials("600519", include_health=True)
+    assert result["revenue"] is None
+    assert result["operating_cash_flow"] is None
+    assert result["capital_expenditure"] == 40.0
+    assert result["cash_conversion_ratio"] is None
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf"), "NaN", "inf", "-Infinity"])
+def test_nonfinite_values_do_not_escape_summary_or_statement(monkeypatch, value):
+    source = _Ak()
+    source.stock_financial_abstract_ths = lambda **kw: _Frame([
+        _summary("2025-12-31", **{"每股经营现金流": value})
+    ])
+    source.stock_financial_cash_new_ths = lambda **kw: _Frame(_metrics("2025-12-31", {
+        "act_cash_flow_net": value,
+    }))
+    monkeypatch.setattr(astock, "_akshare", lambda: source)
+    result = astock.financials("600519", include_health=True)
+    assert result["op_cf_ps"] is None
+    assert result["operating_cash_flow"] is None
+    assert "cashflow_unavailable" in result["data_quality"]["warnings"]
+
+
+def test_zero_denominator_stays_unknown_and_unit_string_rejects_statement(monkeypatch):
+    source = _Ak()
+    source.stock_financial_benefit_new_ths = lambda **kw: _Frame(_metrics("2025-12-31", {
+        "operating_income_total": "0", "net_profit": 0,
+    }))
+    monkeypatch.setattr(astock, "_akshare", lambda: source)
+    result = astock.financials("600519", include_health=True)
+    assert result["revenue_amount"] == result["net_profit_amount"] == 0
+    assert result["cash_conversion_ratio"] is None
+    assert result["free_cash_flow_margin"] is None
+    source.stock_financial_cash_new_ths = lambda **kw: _Frame(_metrics("2025-12-31", {
+        "act_cash_flow_net": "300亿",
+    }))
+    result = astock.financials("600519", include_health=True)
+    assert result["revenue"] == "100亿"
+    assert result["operating_cash_flow"] is None
+    assert "cashflow_unavailable" in result["data_quality"]["warnings"]

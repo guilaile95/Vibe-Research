@@ -10,7 +10,7 @@ import json
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import decision_trace_store as trace_store
 
@@ -44,16 +44,20 @@ def save_signal_ledger_bundle(
     market_status: str | None = None,
     source_fingerprint: str | None = None,
     db_path: str | Path | None = None,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> None:
     """Save signal entries and decision outcomes atomically into decision_trace DB.
 
     Optional schema_version / market_status / source_fingerprint default to prior
     values for backward-compatible callers. No schema migration.
     """
+    trace_store._check_write_cancelled(should_cancel)
     path = trace_store.resolve_decision_trace_db_path(db_path)
     trace_store.init_db(path)
 
     with _LOCK:
+        trace_store._check_write_cancelled(should_cancel)
         try:
             conn = trace_store._get_write_connection(path)
             try:
@@ -146,6 +150,7 @@ def save_signal_ledger_bundle(
                                 do["created_at"],
                             ),
                         )
+                    trace_store._check_write_cancelled(should_cancel)
             finally:
                 conn.close()
         except sqlite3.DatabaseError as exc:

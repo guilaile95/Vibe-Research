@@ -499,10 +499,18 @@ def financials(code: str, *, include_health: bool = False) -> dict:
     summary_rows = df.to_dict("records")
 
     def present(value):
-        if value in (False, "false", "", None):
+        if isinstance(value, bool) or value is None or value in ("false", ""):
             return None
         if isinstance(value, float) and not math.isfinite(value):
             return None
+        if isinstance(value, str):
+            if value.strip().lower() in ("", "false", "null", "none"):
+                return None
+            try:
+                if not math.isfinite(float(value)):
+                    return None
+            except ValueError:
+                pass  # Summary values may include source units, e.g. 100亿 or 8%.
         return value
 
     def summary(row: dict) -> dict:
@@ -550,7 +558,9 @@ def financials(code: str, *, include_health: bool = False) -> dict:
             if metric in bucket:
                 raise ValueError(f"{source} contains duplicate period metric")
             value = raw.get("value")
-            if value in (False, "false", "", None):
+            if isinstance(value, bool) or value is None or (
+                isinstance(value, str) and value.strip().lower() in ("false", "", "null", "none")
+            ):
                 bucket[metric] = None
                 continue
             try:

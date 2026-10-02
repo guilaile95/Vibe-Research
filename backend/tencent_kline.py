@@ -13,7 +13,8 @@ URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 MAX_COUNT = 320
 
 
-def fetch(code: str, period: str, count: int, *, adjustment: str) -> list[dict]:
+def fetch(code: str, period: str, count: int, *, adjustment: str,
+          require_adjustment: bool = False) -> list[dict]:
     import requests
 
     if not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code):
@@ -41,7 +42,8 @@ def fetch(code: str, period: str, count: int, *, adjustment: str) -> list[dict]:
     # request. A present-but-empty qfq key is never substituted. Raw requests
     # never consume any adjusted key.
     key = adjustment + period
-    raw = series[key] if key in series else series.get(period) if adjustment else None
+    raw = (series[key] if key in series else
+           series.get(period) if adjustment and not require_adjustment else None)
     if not isinstance(raw, list) or not raw or len(raw) > count:
         raise ValueError("Tencent K-line series is missing or exceeds the request")
     today = datetime.now(timezone(timedelta(hours=8))).date()

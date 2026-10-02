@@ -14,7 +14,7 @@ chat.py / mcp_server.py / debate.py 共用本模块，新增工具只需改这�
 from __future__ import annotations
 
 import math
-from datetime import date
+from datetime import date, datetime, timezone
 
 import astock
 import gstock
@@ -57,7 +57,7 @@ TOOLS: list[dict] = [
        "查个股 PE-TTM / PB 的历史估值分位：当前值 + 近五年 20/50/80 分位带 + 当前所处百分位。判断估值贵贱先用这个。",
        _CODE, ["code"]),
     _t("query_kline",
-       "查个股 K 线并附区间统计（起止价、区间涨跌幅、最高/最低、振幅）。判断价格位置与趋势用。",
+       "查个股前复权 K 线并附区间统计与来源/末根日期。无同口径数据时明确不可用。",
        {**_CODE,
         "period": {"type": "string", "enum": ["day", "week", "month"], "description": "周期，默认 day"},
         "count": {"type": "integer", "description": "取最近多少根，默认 60，最大 250"}},
@@ -160,28 +160,30 @@ def _kline_tencent(code: str, period: str, n: int) -> list[dict]:
     """Existing AI qfq contract, with all-or-nothing sequence validation."""
     import tencent_kline
 
-    return tencent_kline.fetch(code, period, n, adjustment="qfq")
+    return tencent_kline.fetch(code, period, n, adjustment="qfq", require_adjustment=True)
 
 
 def _kline(args: dict):
     period = str(args.get("period") or "day")
     if period not in ("day", "week", "month"):
         period = "day"
-    cat = {"day": 4, "week": 5, "month": 6}[period]
     n = max(5, min(int(args.get("count") or 60), 250))
     code = str(args["code"])
-    # Preserve the existing qfq-first AI route; invalid batches use the fallback.
+    metadata = {"code": code, "period": period, "adjustment": "qfq",
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+                "latest_bar_date": None}
+    # astock.kline owns an unadjusted contract. Do not compare its raw prices
+    # across corporate actions when the AI requested a qfq series.
     try:
         rows = _kline_tencent(code, period, n)
-    except Exception:  # noqa: BLE001 — 网络问题转备用源
+    except Exception:  # noqa: BLE001 — no verified qfq fallback exists
         rows = []
+    metadata["fetched_at"] = datetime.now(timezone.utc).isoformat()
     if not rows:
-        try:
-            rows = astock.kline(code, category=cat, offset=n)
-        except Exception:  # noqa: BLE001
-            rows = []
-    if not rows:
-        return {"error": "K 线数据源当前不可达（mootdx 与备用源均无返回）"}
+        return {**metadata, "status": "unavailable", "source": None,
+                "fallback": {"used": False, "status": "disabled",
+                             "reason": "unsupported_adjustment"},
+                "error": "前复权 K 线当前不可用；后备源仅提供原始价格，无法按相同复权口径比较"}
     closes = [r.get("close") for r in rows if isinstance(r.get("close"), (int, float))]
     highs = [r.get("high") for r in rows if isinstance(r.get("high"), (int, float))]
     lows = [r.get("low") for r in rows if isinstance(r.get("low"), (int, float))]
@@ -198,7 +200,10 @@ def _kline(args: dict):
             stat["drawdown_from_high_pct"] = round((last - stat["highest"]) / stat["highest"] * 100, 2)
     # 明细只回最近 30 根，避免长周期请求把上下文撑爆
     detail = _pick(rows[-30:], ("date", "open", "close", "high", "low", "volume"), 30)
-    return {"summary": stat, "recent": detail}
+    return {**metadata, "status": "success", "source": "tencent_fqkline",
+            "latest_bar_date": rows[-1]["date"],
+            "fallback": {"used": False, "status": "not_needed"},
+            "summary": stat, "recent": detail}
 
 
 _FFLOW_DELAY = "https://push2delay.eastmoney.com/api/qt/stock/fflow/daykline/get"

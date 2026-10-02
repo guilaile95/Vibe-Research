@@ -11,6 +11,7 @@ import json
 from typing import Any, Callable
 
 import ai_result_service
+import ai_result_store
 import account_reality_service
 import chat
 import daily_review
@@ -41,6 +42,21 @@ class PortfolioAdviceMarketDataError(RuntimeError):
 
 class PortfolioAdviceModelError(RuntimeError):
     """模型调用或流式协议失败。"""
+
+
+class PortfolioAdviceCancelledError(RuntimeError):
+    """The request disconnected before the next generation/write stage."""
+
+
+def _cancel_callback(cfg: Any) -> Callable[[], bool] | None:
+    event = cfg.get("_cancel_event") if isinstance(cfg, dict) else getattr(cfg, "_cancel_event", None)
+    return event.is_set if event is not None else None
+
+
+def _check_cancelled(cfg: Any) -> None:
+    should_cancel = _cancel_callback(cfg)
+    if should_cancel is not None and should_cancel():
+        raise PortfolioAdviceCancelledError("生成已停止")
 
 
 class PortfolioAdviceModelOutputError(ValueError):
@@ -378,8 +394,10 @@ def _default_model_runner(cfg: Any, messages: list[dict[str, str]]) -> str:
             elif etype == "done":
                 break
     except PortfolioAdviceModelError:
+        _check_cancelled(cfg)
         raise
     except Exception as exc:  # noqa: BLE001
+        _check_cancelled(cfg)
         # 保留 __cause__ 供 public_model_error_detail 分类；对外 message 已是安全文案
         raise PortfolioAdviceModelError(public_model_error_detail(exc)) from exc
     return "".join(parts)
@@ -407,7 +425,9 @@ def generate_portfolio_advice(
     dict
         ``validate_portfolio_advice`` 的权威结果（无 t_trade）。
     """
+    _check_cancelled(cfg)
     prepared = prepare_portfolio_advice_messages(user_request)
+    _check_cancelled(cfg)
     messages = prepared["messages"]
     context = prepared["context"]
 
@@ -415,11 +435,16 @@ def generate_portfolio_advice(
 
     try:
         raw_text = runner(cfg, messages)
+        _check_cancelled(cfg)
+    except PortfolioAdviceCancelledError:
+        raise
     except PortfolioAdviceModelError:
+        _check_cancelled(cfg)
         raise
     except PortfolioAdviceModelOutputError:
         raise
     except Exception as exc:  # noqa: BLE001
+        _check_cancelled(cfg)
         raise PortfolioAdviceModelError(public_model_error_detail(exc)) from exc
 
     if raw_text is None:
@@ -470,6 +495,9 @@ def generate_portfolio_advice(
             _VALIDATOR_FAIL_MSG, stage="internal", reason=_VALIDATOR_FAIL_MSG
         ) from exc
 
+    _check_cancelled(cfg)
+    should_cancel = _cancel_callback(cfg)
+    cancel_kwargs = {"should_cancel": should_cancel} if should_cancel is not None else {}
     try:
         ai_result_service.save_portfolio_advice(
             prepared["portfolio"],
@@ -477,7 +505,10 @@ def generate_portfolio_advice(
             authoritative,
             cfg,
             input_fingerprint=prepared["input_fingerprint"],
+            **cancel_kwargs,
         )
+    except ai_result_store.AiResultWriteCancelledError as exc:
+        raise PortfolioAdviceCancelledError("生成已停止") from exc
     except ai_result_service.AiResultValidationError as exc:
         raise PortfolioAdvicePersistError(
             "持仓建议结果保存失败", stage="save_validation"
@@ -487,23 +518,28 @@ def generate_portfolio_advice(
             "持仓建议结果保存失败", stage="save"
         ) from exc
 
+    _check_cancelled(cfg)
     try:
         decision_evidence_service.archive_decision_evidence(
             authoritative,
             context_data=prepared.get("context"),
+            **cancel_kwargs,
         )
     except Exception as exc:  # noqa: BLE001
         import logging
         logging.getLogger(__name__).warning("Archive decision evidence failed: %s", exc)
 
+    _check_cancelled(cfg)
     try:
         signal_ledger_service.archive_signal_ledger(
             authoritative,
             context_data=prepared.get("context"),
+            **cancel_kwargs,
         )
     except Exception as exc:  # noqa: BLE001
         import logging
         logging.getLogger(__name__).warning("Archive signal ledger failed: %s", exc)
 
+    _check_cancelled(cfg)
     return authoritative
 
