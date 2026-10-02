@@ -21,7 +21,11 @@ test("debate stream preserves partial/empty/error status and separate gaps, incl
     { type: "dossier_progress", title: "旧版", ok: true, loaded: 5, total: 5 },
     { type: "dossier", sections: [{ title: "部分", tool: "query_quote", status: "partial", truncated: true }], missing: ["失败"], partial: ["部分"] },
     { type: "dossier", sections: [], missing: [] },
-    { type: "done" },
+    ...["bull", "bear", "referee"].flatMap(stage => [
+      { type: "stage", stage, label: stage },
+      { type: "stage_done", stage, label: stage, content: "synthetic" },
+    ]),
+    { type: "done", code: "600519", stages: ["bull", "bear", "referee"].map(stage => ({ stage, content: "synthetic" })) },
   ].map((event) => JSON.stringify(event)).join("\n") + "\n"));
   const previousStorage = globalThis.localStorage;
   globalThis.localStorage = { getItem: (key) => key === "vr-llm" ? JSON.stringify({ provider: "codex-subscription", model: "fixture", baseURL: "https://example.invalid", apiKey: "fixture" }) : null };
