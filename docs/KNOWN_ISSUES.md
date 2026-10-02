@@ -24,6 +24,17 @@ visible. Missing data must not become zero, neutral, healthy or invented certain
 The system is not a reliable real-time terminal and does not provide 24/7 protection. Its default mode
 runs when the local application is open.
 
+## AI output and report excerpts need separate acceptance
+
+AI configuration, transport tests and deterministic fixtures do not establish real-model answer
+quality. Missing credentials, unavailable providers or unapproved spending leave that evaluation
+`NOT_EVALUATED`; record the gap and ask for the required setup rather than silently changing providers.
+
+MyReports indexes source documents but supplies bounded excerpts to the model. A citation or report
+count does not prove full-text coverage, OCR fidelity or capture of a later correction. Return to the
+source to verify conclusions. Dated repair status and its exact evidence belong in the
+[delivery snapshot](research/PROJECT_STATUS_20261002.md), not a blanket stable-version guarantee.
+
 ## Account and execution facts remain manual
 
 Vibe does not connect to a broker and does not place, cancel or infer orders. Holdings, cash events and
