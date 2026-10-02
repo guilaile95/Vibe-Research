@@ -1,6 +1,6 @@
 # Vibe-Research
 
-个人投资研究与决策辅助项目。
+本地优先的个人投资研究与决策工作台：看市场、整理证据、记录判断、跟踪复盘。
 
 [![CI](https://github.com/guilaile95/Vibe-Research/actions/workflows/ci.yml/badge.svg?branch=feature%2Fresearch-system-v01)](https://github.com/guilaile95/Vibe-Research/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -15,7 +15,11 @@
 Vibe-Research 整合公开市场数据、研究记录、持仓与账户信息、决策记录及可选的
 AI 辅助能力。它不是自动交易、荐股或收益预测系统；最终判断与执行由使用者负责。
 
+[开始运行](docs/GETTING_STARTED.md) · [文档导航](docs/README.md) · [进度与验证范围](docs/research/PROJECT_STATUS_20261002.md) · [已知限制](docs/KNOWN_ISSUES.md)
+
 ![每日复盘界面](docs/screenshots/daily-review.png)
+
+*界面示例；截图不代表当前行情、完整功能验收或最新设计原型已落地。*
 
 ## 关于本仓库
 
@@ -37,19 +41,27 @@ AI 位于研究与决策工作流中，用于整理上下文和辅助推理，�
 个人决策。Data provides facts; evidence supports or weakens a thesis; AI organizes
 reasoning; the user owns the final decision.
 
-## 当前主要功能
+## 能做什么，如何判断是否适用
 
-- 市场环境、每日复盘、历史快照与比较；
-- A 股个股数据、全球指数及美股 / 港股子集；
-- 板块研究、Native Intel、公告、研报与个人研报归档；
-- 自选股、持仓、账户资金与执行约束；
-- Thesis、Evidence、Decision Evidence 与 Signal Ledger；
-- Trade Ledger、Decision Feedback、Decision Performance 与 Performance Attribution；
-- Data Health、OpenAI-compatible API、Codex 订阅 Agent Runtime、本机 CLI 与 MCP 辅助入口。
+| 研究任务 | 已有入口 | 使用边界 |
+| --- | --- | --- |
+| 看市场与找线索 | 每日复盘、市场/板块、Discovery、Native Intel、自选 | 公开来源可能延迟、缺失或限流；先看时间和来源 |
+| 研究一个对象 | 个股数据、候选研究、Evidence、Thesis、个人研报 | 摘录和引用帮助回查，不保证覆盖全文或后文更正 |
+| 留下决策依据 | Campaign、确定性 Preview、Frozen Decision | 正式决定由用户明确确认，AI 输出只是草稿 |
+| 跟踪执行与复盘 | 持仓、账户、手工交易归属、Outcome 与反馈 | 无券商或自动交易；账户事实需要用户维护 |
+| 辅助整理材料 | 可选 API、Codex 订阅 Runtime、本机 CLI | 真实答案质量与成本需单独评估，配置成功不等于质量通过 |
 
-当前恢复坐标见 [`docs/CURRENT_STAGE.md`](docs/CURRENT_STAGE.md)，架构与边界见
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。实时工程状态始终以 GitHub 的稳定分支、
-Issues、PR 和 CI 为准；Draft PR 或研究分支不代表稳定版本。
+研究留痕和决策边界是现有基础；行情可靠性、真实模型研究质量与长期使用价值仍待验收。
+工程测试不代替真实行情、真实模型或用户自然任务观察。
+
+## 版本与当前进度
+
+公开稳定线为 [`feature/research-system-v01`](https://github.com/guilaile95/Vibe-Research/tree/feature/research-system-v01)。
+截至 2026-10-02，可靠性与研究修复 #356–#360 仍为 Draft、未合并；本地组合源码已集成，运行服务未切换。
+全功能矩阵正在补测，17 个离线 AI 案例已有准备，真实模型调用仍为 0（`NOT_EVALUATED`）；多页设计仍是原型。
+
+具体提交、CI、修复范围与后续任务集中在 [带日期的状态快照](docs/research/PROJECT_STATUS_20261002.md)。
+接管任务读 [恢复坐标](docs/CURRENT_STAGE.md)；实时工程事实以 GitHub 分支、PR 和检查结果为准。
 
 ## 数据与隐私
 
@@ -63,79 +75,18 @@ Issues、PR 和 CI 为准；Draft PR 或研究分支不代表稳定版本。
 “本地优先”描述的是存储与运行边界，不表示所有功能都离线。市场数据接口与所配置的
 AI 服务可能产生外部网络请求；使用前应自行确认相应服务的条款和数据处理方式。
 
-## 运行方式
+## 开始运行
 
-稳定分支当前验证的环境为：
-
-- Linux / Ubuntu：CPython 3.11；
-- Windows：PowerShell 7 + CPython 3.12.10；
-- 前端 CI：Node.js 22。
-
-### Windows 一键启动（推荐）
-
-先安装 PowerShell 7、Python 3.12 和 Node.js 22。之后在仓库根目录双击：
-
-```text
-Start-Vibe.cmd
-```
-
-它只通过 `pwsh.exe` 运行，会自动：
-
-1. 创建或复用 `backend\.venv`；
-2. 按 Windows exact lock 同步后端依赖；
-3. 按 `package-lock.json` 同步前端依赖；
-4. 启动三个进程：Backend（:8900）、Agent Runtime（:8911）与 Frontend（:5899）；
-5. 等待三个服务真实就绪；
-6. 自动打开 `http://127.0.0.1:5899`。
-
-首次安装依赖会比后续启动更久。保持启动窗口开启；按 `Ctrl+C` 会停止本次启动器创建的
-服务。日志和依赖指纹保存在被 Git 忽略的 `.vibe-runtime/`。
-
-也可以显式通过 PowerShell 7 运行：
+Windows 需要 PowerShell 7、Python 3.12 和 Node.js 22.6+；新安装从稳定分支获取源码：
 
 ```powershell
+git clone --branch feature/research-system-v01 --single-branch https://github.com/guilaile95/Vibe-Research.git
+Set-Location Vibe-Research
 pwsh.exe -NoLogo -NoProfile -File .\start-vibe.ps1
 ```
 
-强制重新核对依赖使用 `-Setup`；不自动打开浏览器使用 `-NoBrowser`。
-
-Native Intel 在首次或陈旧启动时会在后台刷新。应用不再等待整轮网络抓取后才开放；
-刷新完成前，资讯页面会诚实显示 `unavailable / stale / partial`，不会伪装成正常空数据。
-
-### Linux
-
-```bash
-git clone https://github.com/guilaile95/Vibe-Research.git
-cd Vibe-Research/backend
-python3.11 -m venv .venv
-.venv/bin/python -m pip install -r requirements-linux-py311.lock.txt
-.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8900
-```
-
-### Windows PowerShell 7（手动方式）
-
-```powershell
-git clone https://github.com/guilaile95/Vibe-Research.git
-Set-Location Vibe-Research\backend
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev-windows-py312.lock.txt
-.\.venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8900
-```
-
-Windows authority lock 同时包含运行与开发测试依赖；项目没有单独维护 Windows
-runtime-only lock。平台依赖合同见
-[`docs/DEPENDENCY_REPRODUCIBILITY.md`](docs/DEPENDENCY_REPRODUCIBILITY.md)。
-
-另开终端启动前端：
-
-```powershell
-Set-Location Vibe-Research\frontend
-npm.cmd ci
-npm.cmd run dev
-```
-
-默认访问地址为 `http://localhost:5899`，后端为 `http://127.0.0.1:8900`。
-多数数据能力依赖公开网络接口，实际可用性会受来源状态、限流与网络环境影响。
+也可在仓库根目录双击 `Start-Vibe.cmd`。启动器安装或复用依赖，检查后端、Agent Runtime 与前端，打开 `http://127.0.0.1:5899`。
+已有工作区先保留自己的编辑并核对版本。完整的 [Windows / Linux 手动运行、健康检查与 AI 配置](docs/GETTING_STARTED.md) 集中在运行指南；不要把源码更新视为服务已切换。
 
 ## 项目结构
 
@@ -159,7 +110,7 @@ AI 功能是可选的。稳定版本包含：
 - OpenAI-compatible API 配置；
 - Codex 订阅接入：本机 Agent Runtime（`agent-runtime/` + `backend/agent_runtime.py`，:8911）
   提供的 page-aware Ask AI；
-- MyReports 全文检索与提问，回答附来源与页码引用；
+- MyReports 全文索引、摘录检索与提问，提供来源与页码引用入口；引用不等于全文结论已核实；
 - 调用本机已安装 CLI 的运行路径；
 - `backend/mcp_server.py` 提供的 MCP 数据工具入口。
 
@@ -168,8 +119,8 @@ Agent Runtime 的真实边界：它是页面上下文内的文本生成器（pag
 无本地磁盘直接访问、不接 Vibe MCP 工具、无插件与外部技能、无多智能体、不写 Formal authority；
 输出一律为 `NON_AUTHORITATIVE_AI_DRAFT`。
 
-具体模型、CLI 和外部端点由使用者自行配置。模型密钥不应写入仓库；相关运行说明见
-[`backend/README.md`](backend/README.md)。
+具体模型、CLI 和外部端点由使用者自行配置。模型密钥不应写入仓库；配置与运行说明见
+[运行指南](docs/GETTING_STARTED.md)，接口参考见 [后端说明](backend/README.md)。
 
 ## 项目状态
 
