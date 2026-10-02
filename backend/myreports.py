@@ -530,6 +530,7 @@ def _index_entry(entry: dict) -> dict:
         "text_index_error": result["error_code"],
         "indexed_at": result["indexed_at"],
         "page_count": result["page_count"],
+        "file_sha256": result["file_sha256"],
     }
 
 
@@ -1105,10 +1106,15 @@ def preview_text_index(report_ids: list[str] | None = None) -> dict:
 
 def index_report_text(report_id: str) -> dict:
     with _LOCK:
-        report = next((entry for entry in _load_index() if entry.get("id") == report_id), None)
+        items = _load_index()
+        report = next((entry for entry in items if entry.get("id") == report_id), None)
         if report is None:
             raise ReportError("研报不存在")
-        return _index_entry(report)
+        result = _index_entry(report)
+        if result["text_index_status"] == fulltext.STATUS_SEARCHABLE and report.get("file_sha256") != result["file_sha256"]:
+            report["file_sha256"] = result["file_sha256"]
+            _save_index(items)
+        return result
 
 
 def batch_index_report_text(report_ids: list[str]) -> dict:
@@ -1167,10 +1173,28 @@ def build_chat_report_context(
     hits = [hit for hit in hits if hit.get("report_id") in selected_set]
     matched = {hit["report_id"] for hit in hits}
     hit_limit_reached = len(hits) >= CHAT_REPORT_HIT_LIMIT
+    reports = {report["id"]: report for report in _load_index_raw() if report.get("id") in selected_set} if selected else {}
+    try:
+        statuses = fulltext.status_map(REPORTS_DIR, list(reports.values()), verify_source=True)
+    except fulltext.ReportTextIndexCorruptedError:
+        statuses = {rid: {"text_index_status": fulltext.STATUS_ERROR} for rid in reports}
+    # Recheck immediately before model-context construction: hits can outlive
+    # their original file or index generation. Invalidated hits consume no budget.
+    rejected = set()
+    current_hits = []
+    for hit in hits:
+        state = statuses.get(hit["report_id"], {})
+        if (state.get("text_index_status") != fulltext.STATUS_SEARCHABLE
+                or not hit.get("file_sha256")
+                or hit["file_sha256"] != state.get("text_index_sha256")):
+            rejected.add(hit["report_id"])
+        else:
+            current_hits.append(hit)
     blocks = []
     sources = []
     used_chars = 0
-    for hit in hits:
+    excerpt_truncated = False
+    for hit in current_hits:
         page = hit.get("page") if hit.get("page") is not None else "页码不可用"
         citation = f"[{hit.get('title')} | report_id={hit.get('report_id')} | page={page}]"
         block = f"\n{citation}\n{str(hit.get('snippet') or '')}"
@@ -1178,36 +1202,39 @@ def build_chat_report_context(
             break
         blocks.append(block)
         used_chars += len(block)
+        excerpt_truncated = excerpt_truncated or bool(hit.get("excerpt_truncated", True))
         sources.append({
             "report_id": str(hit.get("report_id") or ""),
             "title": str(hit.get("title") or hit.get("name") or "未命名研报"),
             "page": hit.get("page") if isinstance(hit.get("page"), int) else None,
         })
     included = {source["report_id"] for source in sources}
-    truncated = len(sources) < len(hits)
-    reports = {report["id"]: report for report in list_reports() if report.get("id") in selected_set} if selected else {}
+    truncated = len(sources) < len(current_hits)
     reason_messages = {
         "NOT_FOUND": "所选报告不存在或已删除",
-        fulltext.STATUS_NOT_INDEXED: "尚未建立可用正文索引",
+        fulltext.STATUS_NOT_INDEXED: "原文或索引已变化，或尚无可用正文索引；请确认原文件存在并重新建立索引",
         fulltext.STATUS_OCR_REQUIRED: "扫描资料需先完成 OCR",
         fulltext.STATUS_ARCHIVED: "归档格式不支持正文检索",
         fulltext.STATUS_ERROR: "正文索引错误，需重建索引",
         "NO_MATCH": "未命中与本次问题相关的片段",
         "NO_MATCH_OR_HIT_LIMIT": "未命中相关片段或未进入检索前 8 个片段，当前结果无法区分",
         "CONTEXT_LIMIT": "已检索命中，但因上下文字数上限未送入模型",
+        "STALE_HIT": "检索片段已失效，请重新检索；必要时先重新建立正文索引",
     }
     uncovered = []
     for report_id in selected:
         if report_id in included:
             continue
         report = reports.get(report_id)
-        status = (report or {}).get("text_index_status")
-        if report_id in matched:
-            reason = "CONTEXT_LIMIT"
-        elif report is None:
+        status = statuses.get(report_id, {}).get("text_index_status")
+        if report is None:
             reason = "NOT_FOUND"
-        elif status in reason_messages:
+        elif status in reason_messages and status != fulltext.STATUS_SEARCHABLE:
             reason = status
+        elif report_id in rejected:
+            reason = "STALE_HIT"
+        elif report_id in matched:
+            reason = "CONTEXT_LIMIT"
         else:
             reason = "NO_MATCH_OR_HIT_LIMIT" if hit_limit_reached else "NO_MATCH"
         uncovered.append({
@@ -1226,14 +1253,20 @@ def build_chat_report_context(
         "hit_limit_reached": hit_limit_reached,
         "context_truncated": truncated,
         "excerpt_only": True,
+        "content_coverage": "EXCERPTS_ONLY",
+        "excerpt_truncated": excerpt_truncated,
+        "rejected_hit_count": len(hits) - len(current_hits),
         "uncovered_reports": uncovered,
     }
     disclosure = (
         f"已选中 {len(selected)} 份资料；本次检索实际命中 {len(matched)} 份报告、{len(hits)} 个片段；"
-        f"实际送入模型 {len(included)} 份报告、{len(sources)} 个片段。"
+        f"实际送入模型的是 {len(included)} 份报告中的 {len(sources)} 个片段。"
         f"检索片段上限 {CHAT_REPORT_HIT_LIMIT}：{'已达到' if hit_limit_reached else '未达到'}；"
         f"上下文字数截断：{'有' if truncated else '无'}。"
         "仅提供检索摘录（每片段最多 320 字符），不代表已读取报告全文。"
+        f"片段内部原文省略：{'有' if excerpt_truncated else '本次片段未省略'}。"
+        "报告计数只代表至少一个片段被纳入，不代表正文或最终结论已覆盖；"
+        "未提供的位置可能包含补充、更正或反证，不能据此确认已核对全部资料或最终结论。"
     )
     context_lines = [
         "【本地研报资料覆盖】",

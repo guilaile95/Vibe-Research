@@ -171,9 +171,11 @@ def test_failed_or_corrupt_index_preserves_original(tmp_path, monkeypatch):
     before = source.read_bytes()
 
     monkeypatch.setattr(fulltext, "extract", lambda *_args: (_ for _ in ()).throw(RuntimeError("interrupted")))
-    with pytest.raises(RuntimeError, match="interrupted"):
+    with pytest.raises(fulltext.ReportTextIndexError, match="重新建立索引"):
         mr.index_report_text(report["id"])
     assert source.read_bytes() == before
+    assert mr.list_reports()[0]["text_index_status"] == "INDEX_ERROR"
+    assert mr.search_report_text("original") == []
 
     (reports_dir / fulltext.INDEX_NAME).write_bytes(b"corrupt")
     listed = mr.list_reports()
@@ -369,6 +371,42 @@ def test_chinese_comparison_reaches_both_chat_providers(tmp_path, monkeypatch, p
     assert len(seen) == 1 and "毛利率预计上升" in seen[0] and "毛利率预计下降" in seen[0]
     assert "不代表已读取报告全文" in seen[0]
     assert private["id"] not in response.text + seen[0] and "PRIVATE_UNSELECTED" not in seen[0]
+
+
+@pytest.mark.parametrize("provider", ["api", "cli-codex"])
+def test_partial_excerpt_disclosure_reaches_both_chat_providers(tmp_path, monkeypatch, provider):
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "reports")
+    # Deliberately reproduce a later correction outside the existing snippet.
+    # These streams capture transport only; they do not simulate understanding.
+    body = "catalyst preliminary revenue 100. " + "background " * 70 + "catalyst correction: final revenue 80."
+    report = _upload("correction.txt", body.encode())
+    seen = []
+
+    def api_stream(_cfg, _messages, context):
+        seen.append(context)
+        yield {"type": "done"}
+
+    def codex_stream(**kwargs):
+        seen.append(kwargs["context"])
+        yield {"type": "done"}
+
+    monkeypatch.setattr(app_module.chat_layer, "run_chat_stream", api_stream)
+    monkeypatch.setattr(app_module.agent_runtime, "stream_chat", codex_stream)
+    monkeypatch.setattr(app_module.agent_runtime, "status", lambda: {"available": True, "status": "connected"})
+    response = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "catalyst"}],
+        "session": "partial-excerpts", "report_ids": [report["id"]],
+        "llm": {"provider": provider, "model": "test", "baseURL": "https://example.com", "apiKey": "x"},
+    })
+    assert response.status_code == 200
+    events = [json.loads(line) for line in response.text.splitlines()]
+    coverage = events[0]["coverage"]
+    assert coverage["selected_count"] == coverage["included_report_count"] == 1
+    assert coverage["uncovered_reports"] == []
+    assert coverage["context_truncated"] is False and coverage["excerpt_truncated"] is True
+    assert coverage["content_coverage"] == "EXCERPTS_ONLY"
+    assert "preliminary revenue 100" in seen[0] and "final revenue 80" not in seen[0]
+    assert "不代表正文或最终结论已覆盖" in seen[0] and "更正或反证" in seen[0]
 
 
 def test_chinese_question_expansion_is_bounded_and_requires_selection(tmp_path, monkeypatch):
