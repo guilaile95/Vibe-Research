@@ -519,6 +519,7 @@ def save_portfolio_advice(
     cfg: Any,
     *,
     input_fingerprint: str | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(review, dict):
         raise AiResultValidationError("review 必须是对象")
@@ -557,7 +558,9 @@ def save_portfolio_advice(
         "model_name": model,
         "input_fingerprint": fingerprint,
     }
-    return ai_result_store.upsert_result(review_history.resolve_review_db_path(), record)
+    return ai_result_store.upsert_result(
+        review_history.resolve_review_db_path(), record, should_cancel=should_cancel
+    )
 
 
 def _cached_display_trade_date() -> str | None:

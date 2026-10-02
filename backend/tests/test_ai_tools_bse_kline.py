@@ -7,20 +7,14 @@ import astock
 
 
 @pytest.mark.parametrize("code", ["920982", "430047", "832000"])
-def test_bse_history_uses_existing_qualified_fallback(monkeypatch, code):
+def test_bse_history_is_unavailable_without_verified_qfq_source(monkeypatch, code):
     monkeypatch.setattr(requests, "get", lambda *a, **kw: pytest.fail("Tencent BSE request was made"))
-    rows = [{"date": "2026-09-24", "close": 20.0}, {"date": "2026-09-25", "close": 21.0}]
-
-    def fallback(symbol, category, offset):
-        assert (symbol, category, offset) == (code, 4, 20)
-        return rows
-
-    monkeypatch.setattr(astock, "kline", fallback)
+    monkeypatch.setattr(astock, "kline", lambda *a, **kw: pytest.fail("Unadjusted BSE fallback was made"))
     result = ai_tools._kline({"code": code, "period": "day", "count": 20})
-    assert [(row["date"], row["close"]) for row in result["recent"]] == [
-        ("2026-09-24", 20.0), ("2026-09-25", 21.0),
-    ]
-    assert result["summary"]["bars"] == 2
+    assert result["status"] == "unavailable"
+    assert result["adjustment"] == "qfq"
+    assert result["fallback"]["reason"] == "unsupported_adjustment"
+    assert "recent" not in result
 
 
 def test_bse_unavailable_provider_does_not_return_latest_bar_as_history(monkeypatch):

@@ -971,7 +971,40 @@ class PortfolioAdviceRequest(BaseModel):
 
 
 @app.post("/api/portfolio/advice")
-def portfolio_advice(req: PortfolioAdviceRequest):
+async def portfolio_advice(req: PortfolioAdviceRequest, request: Request):
+    cancel_event = threading.Event()
+    cfg = req.llm.model_dump()
+    cfg["_cancel_event"] = cancel_event
+    result = None
+    error = None
+
+    async def watch_disconnect():
+        while True:
+            message = await request.receive()
+            if message["type"] == "http.disconnect":
+                cancel_event.set()
+                return
+
+    try:
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(watch_disconnect)
+            try:
+                result = await anyio.to_thread.run_sync(
+                    lambda: _portfolio_advice_response(req, cfg), abandon_on_cancel=True
+                )
+            except Exception as exc:
+                # Raise outside the task group to preserve HTTPException status mapping.
+                error = exc
+            finally:
+                task_group.cancel_scope.cancel()
+    finally:
+        cancel_event.set()
+    if error is not None:
+        raise error
+    return result
+
+
+def _portfolio_advice_response(req: PortfolioAdviceRequest, cfg: dict):
     """独立持仓操作建议（普通 JSON，非流式）。
 
     服务器链路：校验 LLM → get_portfolio → generate_daily_review → context → 模型 → validator → save。
@@ -987,10 +1020,12 @@ def portfolio_advice(req: PortfolioAdviceRequest):
     _require_llm_ready(req.llm)
     try:
         result = portfolio_advice_service.generate_portfolio_advice(
-            req.llm.model_dump(),
+            cfg,
             user_request=req.user_request,
         )
         return {"data": result}
+    except portfolio_advice_service.PortfolioAdviceCancelledError:
+        raise HTTPException(499, "生成已停止") from None
     except portfolio_advice_service.PortfolioAdviceUnavailableError as e:
         raise HTTPException(409, str(e)) from e
     except portfolio_advice_service.PortfolioAdviceMarketDataError as e:

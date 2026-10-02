@@ -1,11 +1,14 @@
 """Offline route, adjustment, unit and whole-batch validation contracts."""
 from copy import deepcopy
 from types import SimpleNamespace
+import json
 
 import pytest
 import requests
 import ai_tools
 import astock
+import chat
+import debate
 import hithink_finance_client as hithink
 import tencent_kline as tencent
 
@@ -46,30 +49,53 @@ def test_ai_retains_qfq_lots_and_reuses_validation(monkeypatch):
 
 
 @pytest.mark.parametrize("series", [
+    {"day": [BAR]},
     {"qfqday": [], "day": [BAR]},
     {"qfqday": [BAR, ["broken"]]},
 ])
-def test_ai_summary_uses_only_fallback_after_adjusted_series_failure(monkeypatch, series):
+def test_ai_summary_never_substitutes_unadjusted_fallback(monkeypatch, series):
     state = install(monkeypatch, series)
-    fallback_rows = [
-        {"date": "2026-08-20", "close": 20.0},
-        {"date": "2026-08-21", "close": 22.0},
-    ]
 
-    def fallback(code, category, offset):
-        assert (code, category, offset) == ("600519", 4, 5)
-        return fallback_rows
+    def fallback(*args, **kwargs):
+        pytest.fail("AI qfq requests must not call the unadjusted contract")
 
     monkeypatch.setattr(astock, "kline", fallback)
     result = ai_tools._kline({"code": "600519", "count": 5})
-    assert result["summary"]["bars"] == 2
-    assert result["summary"]["first_close"] == 20
-    assert result["summary"]["last_close"] == 22
-    assert result["summary"]["change_pct"] == 10
-    assert [(row["date"], row["close"]) for row in result["recent"]] == [
-        (row["date"], row["close"]) for row in fallback_rows
-    ]
+    assert result["status"] == "unavailable"
+    assert result["adjustment"] == "qfq"
+    assert result["source"] is result["latest_bar_date"] is None
+    assert result["fallback"] == {"used": False, "status": "disabled", "reason": "unsupported_adjustment"}
+    assert "summary" not in result and "recent" not in result
     assert state["closed"]
+
+
+@pytest.mark.parametrize("available", [False, True])
+def test_ai_kline_tool_envelope_does_not_count_metadata_as_observations(monkeypatch, available):
+    install(monkeypatch, {"qfqday": [BAR]} if available else {"day": [BAR]})
+    monkeypatch.setattr(astock, "kline", lambda *_a, **_kw: pytest.fail("Raw fallback invoked"))
+    result = ai_tools.exec_tool("query_kline", {"code": "600519", "count": 5})
+    serialized, status, truncated = chat._serialize_tool_result(result)
+    envelope = json.loads(serialized)
+    assert status == ("success" if available else "error")
+    assert envelope["data"]["status"] == ("success" if available else "unavailable")
+    assert envelope["data"]["adjustment"] == "qfq"
+    assert not truncated
+    section = debate._fetch_section(("query_kline", {"count": 5}, "K线", True, False), "600519")
+    assert section["status"] == ("success" if available else "error")
+    assert section["ok"] is available
+    assert section["data"]["adjustment"] == "qfq"
+
+
+def test_ai_adjusted_summary_discloses_source_and_distinct_timestamps(monkeypatch):
+    install(monkeypatch, {"qfqday": [BAR, ["2026-08-21", "11", "12.1", "13", "10", "24"]],
+                          "day": [["2026-08-20", "20", "22", "24", "18", "23"]]})
+    result = ai_tools._kline({"code": "600519", "count": 5})
+    assert result["summary"]["change_pct"] == 10
+    assert result["source"] == "tencent_fqkline"
+    assert result["adjustment"] == "qfq"
+    assert result["latest_bar_date"] == "2026-08-21"
+    assert result["fetched_at"] != result["latest_bar_date"]
+    assert result["fallback"] == {"used": False, "status": "not_needed"}
 
 
 @pytest.mark.parametrize("fallback_failure", ["empty", "error"])
