@@ -212,6 +212,34 @@ async function main() {
       const dimensions = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
       assert.ok(dimensions.scroll <= dimensions.client + 2, `${viewport.name} overflow: ${JSON.stringify(dimensions)}`);
 
+      // A reversed draft must never become the applied request window.
+      const calendar = page.getByTestId("research-event-calendar");
+      const from = calendar.getByLabel("起始日期（自然日）");
+      const to = calendar.getByLabel("结束日期（自然日）");
+      const initialFrom = await from.inputValue();
+      const initialTo = await to.inputValue();
+      const calendarRequests = [];
+      page.on("request", request => {
+        if (new URL(request.url()).pathname === "/api/research-events") calendarRequests.push(request.url());
+      });
+      await from.fill("2026-12-31");
+      await to.fill("2026-01-01");
+      await calendar.getByRole("button", { name: "应用范围" }).click();
+      await calendar.getByTestId("research-event-window-error").waitFor({ timeout: 3000 });
+      assert.equal(await from.isVisible(), true);
+      assert.equal(await to.isVisible(), true);
+      assert.equal(calendarRequests.length, 0, "invalid range was sent to API");
+      await Promise.all([
+        page.waitForResponse(r => new URL(r.url()).pathname === "/api/research-events"),
+        calendar.getByTestId("research-event-calendar-refresh").click(),
+      ]);
+      assert.ok(calendarRequests.every(url => !url.includes("2026-12-31")), "refresh submitted invalid draft");
+      await from.fill(initialFrom);
+      await to.fill(initialTo);
+      await calendar.getByRole("button", { name: "应用范围" }).click();
+      await calendar.getByTestId("research-event-partial").waitFor();
+      assert.equal(await calendar.getByTestId("research-event-window-error").count(), 0);
+
       if (viewport.name === "desktop-1440") {
         const typeFilter = page.getByLabel("事件类型");
         await typeFilter.selectOption("ANNOUNCEMENT");
