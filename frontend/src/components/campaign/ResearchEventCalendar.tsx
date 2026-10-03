@@ -16,6 +16,7 @@ import {
   groupResearchEvents,
   researchEventStateLabel,
   researchEventTypeLabel,
+  researchEventWindowError,
   shouldApplyResearchEventResponse,
   type ResearchEventFilters,
 } from "@/lib/researchEventCalendar";
@@ -183,6 +184,7 @@ export function ResearchEventCalendar({
   const [data, setData] = useState<ResearchEventCalendarData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [windowError, setWindowError] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [appliedWindow, setAppliedWindow] = useState<{ date_from?: string; date_to?: string }>({});
@@ -237,6 +239,9 @@ export function ResearchEventCalendar({
 
   const applyWindow = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const validationError = researchEventWindowError(dateFrom, dateTo);
+    setWindowError(validationError);
+    if (validationError) return;
     setAppliedWindow({ date_from: dateFrom || undefined, date_to: dateTo || undefined });
   };
 
@@ -261,7 +266,7 @@ export function ResearchEventCalendar({
         </div>
         <button
           type="button"
-          onClick={() => setAppliedWindow({ date_from: dateFrom || undefined, date_to: dateTo || undefined })}
+          onClick={() => setAppliedWindow((current) => ({ ...current }))}
           className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
           data-testid="research-event-calendar-refresh"
         >
@@ -269,6 +274,21 @@ export function ResearchEventCalendar({
           刷新事件日历
         </button>
       </div>
+
+      <form className="grid min-w-0 gap-2 rounded-md border border-border/50 bg-background/20 p-3 sm:grid-cols-[repeat(2,minmax(0,1fr))_auto]" onSubmit={applyWindow}>
+        <label className="grid min-w-0 gap-1 text-[11px] text-muted-foreground">
+          起始日期（自然日）
+          <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="min-w-0 rounded border border-border/60 bg-background px-2 py-1.5 text-xs text-foreground" />
+        </label>
+        <label className="grid min-w-0 gap-1 text-[11px] text-muted-foreground">
+          结束日期（自然日）
+          <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="min-w-0 rounded border border-border/60 bg-background px-2 py-1.5 text-xs text-foreground" />
+        </label>
+        <button type="submit" className="self-end rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90">应用范围</button>
+      </form>
+      {windowError && (
+        <p role="alert" data-testid="research-event-window-error" className="text-xs text-red-600">{windowError}</p>
+      )}
 
       {loading && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true">
@@ -304,18 +324,6 @@ export function ResearchEventCalendar({
               部分来源读取失败；下方仍保留已成功取得的事件。
             </div>
           )}
-
-          <form className="grid min-w-0 gap-2 rounded-md border border-border/50 bg-background/20 p-3 sm:grid-cols-[repeat(2,minmax(0,1fr))_auto]" onSubmit={applyWindow}>
-            <label className="grid min-w-0 gap-1 text-[11px] text-muted-foreground">
-              起始日期（自然日）
-              <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="min-w-0 rounded border border-border/60 bg-background px-2 py-1.5 text-xs text-foreground" />
-            </label>
-            <label className="grid min-w-0 gap-1 text-[11px] text-muted-foreground">
-              结束日期（自然日）
-              <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="min-w-0 rounded border border-border/60 bg-background px-2 py-1.5 text-xs text-foreground" />
-            </label>
-            <button type="submit" className="self-end rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90">应用范围</button>
-          </form>
 
           <div className={`grid min-w-0 gap-2 ${scoped ? "sm:grid-cols-2" : "sm:grid-cols-3"}`} data-testid="research-event-filters">
             {!scoped && (

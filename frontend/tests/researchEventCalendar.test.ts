@@ -10,6 +10,7 @@ import {
   researchEventGroupKey,
   researchEventStateLabel,
   researchEventTypeLabel,
+  researchEventWindowError,
   shouldApplyResearchEventResponse,
 } from "../src/lib/researchEventCalendar.ts";
 
@@ -105,3 +106,16 @@ test("date-only and unknown dates remain explicit", () => {
   assert.equal(formatResearchEventDate(null), "日期未知");
   assert.equal(groupResearchEvents([event({ event_id: "unknown", event_date: null, date_semantics: "UNKNOWN" })], "2026-09-09")[0].key, "UNKNOWN");
 });
+
+for (const [from, to, invalid] of [
+  ["2026-12-31", "2026-01-01", true],
+  ["2026-10-01", "2026-10-31", false],
+  ["2026-10-03", "2026-10-03", false],
+  ["", "2026-10-03", false],
+  ["2026-10-03", "", false],
+  ["", "", false],
+] as const) {
+  test(`calendar date window ${from || "default"} to ${to || "default"}`, () => {
+    assert.equal(Boolean(researchEventWindowError(from, to)), invalid);
+  });
+}

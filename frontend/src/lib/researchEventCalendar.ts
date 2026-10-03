@@ -137,3 +137,10 @@ export function dateInputToday(): string {
   const today = startOfDay(new Date());
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 }
+
+/** Date inputs use ISO calendar dates; empty bounds retain API defaults. */
+export function researchEventWindowError(dateFrom: string, dateTo: string): string {
+  return dateFrom && dateTo && dateFrom > dateTo
+    ? "起始日期不能晚于结束日期，请修改后再应用。"
+    : "";
+}
