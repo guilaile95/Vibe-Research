@@ -25,7 +25,7 @@ import urllib.parse
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 _LOCK = threading.Lock()
 
@@ -273,14 +273,21 @@ def get_default_db_path() -> Path:
     return base / DB_FILENAME
 
 
-def _connect(db_path: str | Path) -> sqlite3.Connection:
+@contextmanager
+def _connect(db_path: str | Path) -> Iterator[sqlite3.Connection]:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 30000")
-    conn.execute("PRAGMA journal_mode = WAL")
-    return conn
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 30000")
+        conn.execute("PRAGMA journal_mode = WAL")
+        # SQLite's context manager commits/rolls back but does not close. Keep
+        # transaction semantics while releasing WAL/SHM handles before returning.
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def initialize_store(db_path: str | Path | None = None) -> None:
