@@ -217,3 +217,38 @@ def test_zero_denominator_stays_unknown_and_unit_string_rejects_statement(monkey
     assert result["revenue"] == "100亿"
     assert result["operating_cash_flow"] is None
     assert "cashflow_unavailable" in result["data_quality"]["warnings"]
+
+
+def test_statement_calls_keep_explicit_cumulative_period_mode(monkeypatch):
+    source = _Ak()
+    calls = []
+    for name in ("stock_financial_abstract_ths", "stock_financial_benefit_new_ths",
+                 "stock_financial_cash_new_ths", "stock_financial_debt_new_ths"):
+        original = getattr(source, name)
+        def wrapped(*, symbol, indicator, _name=name, _original=original):
+            calls.append((_name, symbol, indicator))
+            return _original(symbol=symbol, indicator=indicator)
+        setattr(source, name, wrapped)
+    monkeypatch.setattr(astock, "_akshare", lambda: source)
+    result = astock.financials("600519", include_health=True)
+    assert len(calls) == 4
+    assert all(symbol == "600519" and indicator == "按报告期" for _, symbol, indicator in calls)
+    assert result["data_quality"]["report_basis"] == "cumulative_report_period"
+    assert result["data_quality"]["point_in_time_supported"] is False
+
+
+@pytest.mark.parametrize("defect", ["duplicate", "invalid_date"])
+def test_ambiguous_statement_rows_do_not_choose_an_arbitrary_value(monkeypatch, defect):
+    source = _Ak()
+    rows = _metrics("2025-12-31", {"act_cash_flow_net": 300, "pay_fixed_assets_etc_cash": 40})
+    if defect == "duplicate":
+        rows.append({**rows[0], "value": 999})
+    else:
+        rows[0]["report_date"] = "FY2025"
+    source.stock_financial_cash_new_ths = lambda **kwargs: _Frame(rows)
+    monkeypatch.setattr(astock, "_akshare", lambda: source)
+    result = astock.financials("600519", include_health=True)
+    assert result["free_cash_flow"] is None
+    assert result["cash_conversion_ratio"] is None
+    assert result["revenue"] == "100亿"
+    assert "cashflow_unavailable" in result["data_quality"]["warnings"]

@@ -2,6 +2,7 @@ import { ClipboardList } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import type { FinancialPeriod, Financials } from "@/lib/api";
 import {
+  financialObservationPresent,
   formatFinancialAmount,
   formatFinancialRatio,
   fundamentalHealthState,
@@ -12,11 +13,11 @@ interface Props {
   error: string | null;
 }
 
-function Fact({ label, value, sub }: { label: string; value: string | null | undefined; sub?: string }) {
+function Fact({ label, value, sub }: { label: string; value: string | number | null | undefined; sub?: string }) {
   return (
     <div className="rounded-lg bg-muted/30 p-3">
       <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-0.5 font-mono text-base font-bold">{value || "未知"}</p>
+      <p className="mt-0.5 font-mono text-base font-bold">{financialObservationPresent(value) ? value : "未知"}</p>
       {sub && <p className="mt-0.5 text-[11px] text-muted-foreground">{sub}</p>}
     </div>
   );
