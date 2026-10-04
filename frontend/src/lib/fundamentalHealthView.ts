@@ -2,12 +2,17 @@ import type { Financials } from "@/lib/api";
 
 export type FundamentalHealthState = "normal" | "partial" | "empty" | "error";
 
+export function financialObservationPresent(value: unknown): value is string | number {
+  return typeof value === "number" ? Number.isFinite(value)
+    : typeof value === "string" && value.trim().length > 0;
+}
+
 export function fundamentalHealthState(
   financials: Financials | null,
   error: string | null,
 ): FundamentalHealthState {
   if (error) return "error";
-  if (!financials || (!financials.revenue && !financials.net_profit)) return "empty";
+  if (!financials || (!financialObservationPresent(financials.revenue) && !financialObservationPresent(financials.net_profit))) return "empty";
   return financials.data_quality?.status === "partial" ? "partial" : "normal";
 }
 

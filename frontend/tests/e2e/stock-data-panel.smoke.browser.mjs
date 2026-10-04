@@ -779,7 +779,7 @@ function createApiMockController() {
         net_profit_yoy: "10%",
         deduct_net_profit: "190亿",
         deduct_net_profit_yoy: "9%",
-        eps: "1.50",
+        eps: 0, // Synthetic numeric zero must remain a visible fact.
         bvps: "15.0",
         roe: "12%",
         gross_margin: "40%",
@@ -1543,6 +1543,9 @@ async function runSmoke(page, mock, errors) {
     if (!(await health.getByText(text, { exact: true }).first().isVisible().catch(() => false))) {
       errors.push(`${label}: fundamental health text not visible: ${text}`);
     }
+  }
+  if (await health.getByText("基本每股收益", {exact:true}).locator("..").locator("p").nth(1).innerText() !== "0") {
+    errors.push(`${label}: numeric zero EPS was hidden as unknown`);
   }
   const healthText = await health.innerText();
   for (const forbidden of ["归母净利润", "高增长", "高 ROE", "财务评分"]) {
