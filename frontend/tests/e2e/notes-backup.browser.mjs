@@ -444,7 +444,11 @@ try {
     await page.evaluate(provider=>localStorage.setItem("vr-llm",JSON.stringify({provider,model:"synthetic-page-context",baseURL:"https://example.test",apiKey:"synthetic"})),provider);
     for(const width of [1440,390]){
       await page.setViewportSize({width,height:1000});
-      await page.goto(`${frontend}/my-reports`,{waitUntil:"networkidle"});await openExplicitPages();
+      await page.goto(`${frontend}/my-reports`,{waitUntil:"networkidle"});
+      await page.getByText(/发送 AI 问答时，所选上下文会交给你配置的提供方/).waitFor();
+      await openExplicitPages();
+      const clearPreviousFixture=page.getByRole("button",{name:"清空本页对话",exact:true});
+      if(await clearPreviousFixture.count())await clearPreviousFixture.click();
       const question=`${provider}-${width}`;
       await page.getByPlaceholder("询问 Vibe...").fill(question);
       await page.getByRole("button",{name:"发送",exact:true}).click();
@@ -455,6 +459,7 @@ try {
       await coverage.getByText(/当时来源 SHA256/).waitFor();
       await coverage.locator("summary").click();
       await coverage.getByText(/第 3 页：正文不可用/).waitFor();
+      await coverage.scrollIntoViewIfNeeded();
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
       if(provider==="api" && process.env.E2E_PAGE_AI_SCREENSHOT_DIR){
         mkdirSync(process.env.E2E_PAGE_AI_SCREENSHOT_DIR,{recursive:true});

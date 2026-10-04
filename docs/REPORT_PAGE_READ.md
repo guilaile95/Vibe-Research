@@ -79,7 +79,8 @@ truthfulness or attention to every supplied character.
 
 Completed answers persist the server-supplied scope, five-way page partition,
 per-page truncation/counts and historical source SHA with their citations. They do
-not persist raw page text. Conversation identity includes report, SHA and range;
+not persist a separate copy of input page text; a saved model answer may itself
+quote supplied text. Conversation identity includes report, SHA and range;
 changing selection or closing/stopping the stream aborts the previous request.
 A restored answer describes its historical context; a new question always
 revalidates the source. Cancelled/error/partial answers retain existing incomplete
