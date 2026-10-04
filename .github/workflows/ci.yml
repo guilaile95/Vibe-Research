@@ -135,7 +135,16 @@ jobs:
 
       - name: Run stock-data panel smoke E2E
         working-directory: frontend
+        env:
+          E2E_KLINE_RESEARCH_SCREENSHOT_DIR: kline-research-evidence
         run: npm run test:e2e:smoke
+
+      - name: Save synthetic K-line research viewport evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: kline-research-evidence
+          path: frontend/kline-research-evidence/kline-research-synthetic-*.png
+          if-no-files-found: error
 
       - name: Run core navigation smoke E2E
         working-directory: frontend

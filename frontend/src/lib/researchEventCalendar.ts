@@ -118,8 +118,11 @@ export function filterResearchEvents(
   );
 }
 
-export function eventNavigationHref(event: ResearchEventCalendarEvent): string {
-  const campaignId = event.campaign_ids[0];
+export function eventNavigationHref(event: ResearchEventCalendarEvent, selectedCampaignId?: string): string {
+  const ids = [...new Set(event.campaign_ids.filter(Boolean))];
+  const campaignId = selectedCampaignId
+    ? (ids.includes(selectedCampaignId) ? selectedCampaignId : null)
+    : (ids.length === 1 ? ids[0] : null);
   return campaignId
     ? `/decision-inbox#campaign-${encodeURIComponent(campaignId)}`
     : `/stock-data?code=${encodeURIComponent(event.security_code)}`;

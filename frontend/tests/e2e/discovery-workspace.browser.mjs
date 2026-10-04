@@ -434,8 +434,14 @@ try {
 
   // All existing filters operate on the same queue without changing its backend ordering.
   await page.getByLabel("发现行业或主题").selectOption("消费");
+  // Like the priority filter below, sector is URL-backed. Preserve the exact
+  // exclusion assertion, after the selected URL and rendered card have settled.
+  await page.waitForURL((url) => url.searchParams.get("sector") === "消费");
+  await page.getByTestId("discovery-item-SWING-600221").waitFor({ state: "detached" });
   assert.equal(await page.getByTestId("discovery-item-SWING-600221").count(), 0);
   await page.getByLabel("发现行业或主题").selectOption("ALL");
+  await page.waitForURL((url) => url.searchParams.get("sector") === "ALL");
+  await page.getByTestId("discovery-item-SWING-600221").waitFor({ state: "visible" });
   await page.getByLabel("研究优先级", { exact: true }).selectOption("LOW");
   // URL-backed filters commit asynchronously; assert the settled rendered state.
   await page.waitForURL((url) => url.searchParams.get("priority") === "LOW");

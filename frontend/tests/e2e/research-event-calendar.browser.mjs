@@ -250,10 +250,22 @@ async function main() {
         await announcement.getByText("DATE_ONLY", { exact: false }).waitFor();
         await typeFilter.selectOption("ALL");
         await page.locator('[data-testid="research-event-row"][data-event-type="PERIODIC_REPORT"]').first().waitFor();
-        const contextLink = page.getByTestId("research-event-context-link").first();
-        await contextLink.click();
-        await page.waitForURL(/\/decision-inbox#campaign-/);
-        assert.match(page.url(), /#campaign-/);
+        const eventRow = page.getByTestId("research-event-row").first();
+        const eventId = await eventRow.getAttribute("data-event-id");
+        const sourceEvent = data.events.find((event) => event.event_id === eventId);
+        assert.ok(sourceEvent, "navigation must use the actual event identity");
+        const campaignIds = [...new Set(sourceEvent.campaign_ids)];
+        assert.ok(campaignIds.length > 0);
+        const selectedCampaign = campaignIds.at(-1);
+        const expectedHref = `/decision-inbox#campaign-${encodeURIComponent(selectedCampaign)}`;
+        if (campaignIds.length > 1) {
+          assert.equal(await eventRow.getByTestId("research-event-context-link").getAttribute("href"), `/stock-data?code=${sourceEvent.security_code}`);
+          await eventRow.locator(`a[href="${expectedHref}"]`).click();
+        } else {
+          await eventRow.getByTestId("research-event-context-link").click();
+        }
+        await page.waitForURL((url) => url.pathname + url.hash === expectedHref);
+        assert.equal(new URL(page.url()).pathname + new URL(page.url()).hash, expectedHref);
         await page.goBack({ waitUntil: "domcontentloaded" });
         await page.getByTestId("research-event-calendar").waitFor();
       }

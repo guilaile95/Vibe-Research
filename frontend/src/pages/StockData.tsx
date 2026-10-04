@@ -781,6 +781,7 @@ export function StockData() {
               <>
                 {/* 扩展数据（可选依赖）：按需展开，避免每次查询都触发 mootdx/akshare 请求 */}
                 <OptionalDataPanel
+                  securityCode={activeCode}
                   panelStates={panelStates}
                   onToggle={togglePanel}
                   onRetry={retryPanel}

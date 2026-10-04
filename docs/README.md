@@ -30,3 +30,6 @@
 `research/` 下的评估、实验、执行记录按各自日期、基线和数据范围阅读。
 [PROJECT_STATE](PROJECT_STATE.md)、[NEXT_TASK](NEXT_TASK.md) 和 [BK-11 执行记录](research/EXECUTION_STATE.md) 是历史入口，不作为当前任务队列。
 新增结论优先链接原有证据，不复制整套日志；项目代理规则只在根 [AGENTS.md](../AGENTS.md) 维护。
+
+- [K-line research linkage](KLINE_RESEARCH_LINKAGE.md): bounded event/evidence overlay and identity/date limits
+- [Public stack and rollback](research/PUBLIC_STACK_ROLLBACK_20261004.md): dated ancestry and reversible integration gates

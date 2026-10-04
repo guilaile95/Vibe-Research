@@ -149,6 +149,16 @@ function EventRow({ event }: { event: ResearchEventCalendarEvent }) {
         >
           研究上下文 →
         </Link>
+        {[...new Set(event.campaign_ids)].length > 1 && (
+          <span className="flex flex-wrap gap-2" aria-label="选择同股研究 Campaign">
+            {[...new Set(event.campaign_ids)].map((id) => (
+              <Link key={id} to={eventNavigationHref(event, id)} className="break-all text-primary hover:underline">
+                Campaign {id}
+              </Link>
+            ))}
+            <span className="text-muted-foreground">同股关联，不表示事件已绑定正式证据。</span>
+          </span>
+        )}
         {sourceUrl && (
           <a
             href={sourceUrl}
