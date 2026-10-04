@@ -1,3 +1,4 @@
+import { AttributionScopeNote } from "@/components/review/AttributionScopeNote";
 import { useCallback, useEffect, useState } from "react";
 import {
   PieChart,
@@ -107,7 +108,7 @@ export default function PerformanceAttribution() {
       });
       setResult(res.attribution);
       setViewingSnapshotId(null);
-      setNotice(`已冻结快照（as_of ${res.snapshot?.as_of_date ?? "—"}）`);
+      setNotice(`已冻结快照（计算日期 ${res.snapshot?.as_of_date ?? "—"}）`);
       await loadSnapshots();
       setSnapshotsOpen(true);
     } catch (err: any) {
@@ -213,6 +214,8 @@ export default function PerformanceAttribution() {
         </div>
       )}
 
+      {!loading && result && <AttributionScopeNote result={result} historical={viewingSnapshotId !== null} />}
+
       {limitations.length > 0 && (
         <div className="flex gap-2 rounded-md bg-amber-500/10 p-3 text-sm text-amber-600">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -237,7 +240,7 @@ export default function PerformanceAttribution() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <SummaryCard label="已实现盈亏" value={totals?.total_realized_pnl ?? null} colored />
             <SummaryCard label="未实现盈亏" value={totals?.total_unrealized_pnl ?? null} colored />
-            <SummaryCard label="手续费合计" value={totals?.total_fees ?? null} />
+            <SummaryCard label="费用合计（含其他成本）" value={totals?.total_fees ?? null} />
             <SummaryCard label="持仓成本合计" value={totals?.total_cost_basis ?? null} />
           </div>
 
@@ -245,7 +248,7 @@ export default function PerformanceAttribution() {
             <div className="mb-4 flex items-center justify-between">
               <h2 className="font-medium">逐股归因</h2>
               <span className="text-xs text-muted-foreground">
-                as_of {result.as_of_date} · {totals?.position_count ?? positions.length} 只
+                计算日期 {result.as_of_date} · {totals?.position_count ?? positions.length} 只
               </span>
             </div>
             <div className="overflow-auto">
@@ -260,7 +263,7 @@ export default function PerformanceAttribution() {
                       "持仓数量",
                       "均价成本",
                       "持仓成本",
-                      "手续费",
+                      "费用（含其他成本）",
                       "未实现盈亏",
                     ].map((h) => (
                       <th
@@ -329,7 +332,7 @@ export default function PerformanceAttribution() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-left">
-                    {["快照时间", "AS OF", "已实现盈亏", "持仓数"].map((h) => (
+                    {["快照时间", "原计算日期", "已实现盈亏", "持仓数"].map((h) => (
                       <th
                         key={h}
                         className="pb-3 font-mono text-xs uppercase tracking-widest text-muted-foreground"

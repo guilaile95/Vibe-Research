@@ -62,3 +62,14 @@ See [CI run](https://github.com/guilaile95/Vibe-Research/actions/runs/3718094059
 No merge, deployment, desktop write, live provider/model request or financial action
 was performed by this cloud integration. See [page-reading contract](../REPORT_PAGE_READ.md)
 and [financial compatibility evidence](../FINANCIAL_OPERAND_BOUNDARIES.md).
+
+## Bounded explanation follow-up
+
+PA1 now explains existing result scope before totals: result-bound date range and
+selected trade count (unknown for older snapshots), calculation date rather than
+quote date, no opening-position backfill, absent-price/cost limitations, and fees
+including `other_cost`. Currency and quantity denomination are not supplied by
+this API, so labels preserve ledger units rather than inventing universal CNY or
+lot conversion. Account funding count coverage is displayed even when complete,
+with quote-time compatibility explicitly unverified. No calculation, new metric,
+source freshness classification, schema or snapshot-writing behavior changes.

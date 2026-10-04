@@ -377,7 +377,16 @@ jobs:
 
       - name: Run research notes backup E2E
         working-directory: frontend
+        env:
+          E2E_ATTRIBUTION_SCREENSHOT_DIR: attribution-evidence
         run: npm run test:e2e:notes-backup
+
+      - name: Save synthetic attribution viewport evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: attribution-evidence
+          path: frontend/attribution-evidence/attribution-synthetic-*.png
+          if-no-files-found: error
 
   e2e-decision-inbox:
     name: Playwright decision inbox E2E
