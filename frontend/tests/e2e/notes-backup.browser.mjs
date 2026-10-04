@@ -6,7 +6,7 @@
  */
 
 import assert from "node:assert/strict";
-import { createReadStream, existsSync, readFileSync, readdirSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, readdirSync, mkdirSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -405,6 +405,40 @@ try {
   }
   assert.equal(pageReads,2);
   assert.equal(citationCalls,2,"page reads must not invoke AI");
+
+  // Read-only PA1 explanation fixtures: do not freeze or edit a business record.
+  const attribution={as_of_date:"2026-10-01",date_from:"2026-09-01",date_to:null,selected_trade_count:3,
+    positions:[{code:"600001",name:"SYNTHETIC EXAMPLE",closed_quantity:0,realized_pnl:0,remaining_quantity:100,avg_cost:10,cost_basis:1000,total_fees:6,unrealized_pnl:null,data_limitations:["存在无持仓成本基准的卖出记录，该笔实现盈亏未计入"]}],
+    totals:{total_realized_pnl:0,total_unrealized_pnl:null,total_fees:6,total_cost_basis:1000,position_count:1},data_limitations:["未提供现价，未实现盈亏不可用"]};
+  let attributionWrites=0;
+  await page.route("**/api/performance-attribution**",route=>{
+    if(route.request().method()!=="GET")attributionWrites++;
+    const path=new URL(route.request().url()).pathname;
+    const old={...attribution,as_of_date:"2025-12-31"};delete old.selected_trade_count;delete old.date_from;delete old.date_to;
+    const data=path.endsWith("/snapshots/old")?{snapshot:{payload:old},positions:old.positions}
+      :path.endsWith("/snapshots")?{items:[{snapshot_id:"old",created_at:"2026-01-01",as_of_date:"2025-12-31",total_realized_pnl:0,position_count:1}]}
+      :attribution;
+    return route.fulfill({json:{data}});
+  });
+  for(const width of [1440,390]){
+    await page.setViewportSize({width,height:1000});
+    await page.goto(`${frontend}/performance-attribution`,{waitUntil:"networkidle"});
+    const scope=page.getByTestId("attribution-scope");
+    await scope.getByText("3 笔",{exact:true}).waitFor();
+    await scope.getByText(/币种未提供/).waitFor();
+    await page.getByText("费用合计（含其他成本）",{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    if(process.env.E2E_ATTRIBUTION_SCREENSHOT_DIR){
+      mkdirSync(process.env.E2E_ATTRIBUTION_SCREENSHOT_DIR,{recursive:true});
+      await page.screenshot({path:join(process.env.E2E_ATTRIBUTION_SCREENSHOT_DIR,`attribution-synthetic-${width}.png`)});
+    }
+    await page.getByRole("button",{name:/历史快照/}).click();
+    await page.getByRole("row").filter({hasText:"2026-01-01"}).click();
+    await scope.getByText("未记录（旧结果不推算）",{exact:true}).waitFor();
+    await scope.getByText("未记录 至 未记录",{exact:true}).waitFor();
+    await scope.getByText(/历史快照原结果/).waitFor();
+    assert.equal(attributionWrites,0);
+  }
 
   console.log("notes backup browser E2E: PASS");
 } finally {

@@ -2906,6 +2906,8 @@ export interface AttributionTotals {
 }
 
 export interface AttributionResult {
+  // Existing backend provenance field; older saved payloads may omit it.
+  selected_trade_count?: number;
   as_of_date: string;
   date_from: string | null;
   date_to: string | null;

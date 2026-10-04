@@ -1,3 +1,4 @@
+import { AccountCoverageNote } from "@/components/portfolio/AccountCoverageNote";
 import { useState, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { Plus, ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle, Sparkles, RotateCw, Pencil } from "lucide-react";
@@ -267,11 +268,7 @@ function AccountFundingCard({ funding, corrupted }: { funding?: AccountFundingDa
           </p>
         </div>
       </div>
-      {cov && !isComplete && (
-        <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-400">
-          行情覆盖：{cov.valid_holdings} / {cov.total_holdings}（部分持仓行情不可用）
-        </p>
-      )}
+      <AccountCoverageNote coverage={cov} />
     </div>
   );
 }
