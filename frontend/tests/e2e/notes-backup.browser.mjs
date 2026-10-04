@@ -273,6 +273,26 @@ try {
     assert.deepEqual(uploadedNames,["first.txt","second.txt","second.txt"]);
   }
 
+  // A slow initial archive list must not hide a subsequently confirmed upload.
+  let releaseInitialList, initialListStarted;
+  const initialListReady=new Promise(resolve=>{initialListStarted=resolve;});
+  let archiveReads=0;
+  const staleArchiveList=async route=>{
+    if(route.request().method()!=="GET")return route.fallback();
+    if(++archiveReads===1){initialListStarted();await new Promise(resolve=>{releaseInitialList=resolve;});return route.fulfill({json:{data:[]}});}
+    return route.fallback();
+  };
+  await page.route("**/api/myreports",staleArchiveList);
+  await page.goto(`${frontend}/my-reports`,{waitUntil:"domcontentloaded"});await initialListReady;
+  await page.locator('input[type="file"]').setInputFiles({name:"fresh.txt",mimeType:"text/plain",buffer:Buffer.from("synthetic fresh")});
+  await page.locator('[id="report-fresh.txt"]').waitFor();
+  const staleArchiveResponse=page.waitForResponse(r=>new URL(r.url()).pathname==="/api/myreports"&&r.request().method()==="GET");
+  releaseInitialList();await staleArchiveResponse;
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  assert.equal(await page.locator('[id="report-fresh.txt"]').count(),1);
+  assert.equal(await page.getByText(/还没有归档的研报/).count(),0);
+  await page.unroute("**/api/myreports",staleArchiveList);
+
   let releaseOldSignal, signalStarted;
   const oldSignalStarted=new Promise(resolve=>{signalStarted=resolve;});
   await page.route("**/api/signal-ledger?*",async route=>{

@@ -67,6 +67,7 @@ export function MyReports() {
   const [drag, setDrag] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const uploadBusyRef = useRef(false);
+  const listRequestRef = useRef(0);
 
   const [view, setView] = useState<MyReportsBrowseGroup>("industry");
 
@@ -114,22 +115,27 @@ export function MyReports() {
   }, [filterSector, filterInstitution, filterYear, filterMonth]);
 
   const load = async () => {
+    const generation = ++listRequestRef.current;
+    const active = () => generation === listRequestRef.current;
     try {
       const data = await api.myReports();
+      if (!active()) return true; // A newer refresh owns the result.
       setReports(data);
       setLoadFailed(false);
       setErr(null);
       return true;
     } catch (e) {
+      if (!active()) return true;
       setErr(e instanceof ApiError ? e.message : "加载研报列表失败");
       setLoadFailed(true);
       return false;
     } finally {
-      setHasLoaded(true);
+      if (active()) setHasLoaded(true);
     }
   };
   useEffect(() => {
     load();
+    return () => { listRequestRef.current += 1; };
   }, []);
 
   useEffect(() => {
