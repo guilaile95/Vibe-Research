@@ -569,6 +569,31 @@ try {
   assert.equal(await page.getByRole("cell",{name:"2026-10-01",exact:true}).count(),0);
   assert.equal(await page.getByRole("cell",{name:"2026-10-02",exact:true}).count(),1);
   await page.unroute("**/api/daily-review/history?*", historyRace);
+  const snapshotRows=[1,2].map(id=>({id,trade_date:`2026-10-0${id}`,generated_at:"synthetic",created_at:"synthetic",status:"partial",schema_version:"test"}));
+  const detailList=route=>route.fulfill({json:{items:snapshotRows,count:2,limit:20,offset:0}});
+  await page.route("**/api/daily-review/history?*",detailList);
+  await page.getByTitle("刷新历史列表",{exact:true}).click();
+  await page.getByRole("button",{name:"查看",exact:true}).nth(1).waitFor();
+  let releaseOldDetail, detailStarted;
+  const oldDetailStarted=new Promise(resolve=>{detailStarted=resolve;});
+  await page.route("**/api/daily-review/history/1",async route=>{
+    detailStarted();await new Promise(resolve=>{releaseOldDetail=resolve;});
+    await route.fulfill({json:{...snapshotRows[0],review:{warnings:["STALE_SNAPSHOT"]}}});
+  });
+  await page.route("**/api/daily-review/history/2",route=>route.fulfill({json:{...snapshotRows[1],review:{warnings:["CURRENT_SNAPSHOT"]}}}));
+  await page.getByRole("button",{name:"查看",exact:true}).nth(0).click();await oldDetailStarted;
+  await page.getByRole("button",{name:"查看",exact:true}).nth(1).click();
+  await page.getByText("CURRENT_SNAPSHOT",{exact:true}).waitFor();
+  const oldDetailResponse=page.waitForResponse(r=>new URL(r.url()).pathname==="/api/daily-review/history/1");
+  releaseOldDetail();await oldDetailResponse;
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  assert.equal(await page.getByText("STALE_SNAPSHOT",{exact:true}).count(),0);
+  await page.getByText("CURRENT_SNAPSHOT",{exact:true}).waitFor();
+  await page.getByRole("heading",{name:"历史快照详情 #2",exact:true}).waitFor();
+  await page.getByTitle("关闭",{exact:true}).click();
+  assert.equal(await page.getByRole("heading",{name:"历史快照详情 #2",exact:true}).count(),0);
+  await page.unroute("**/api/daily-review/history?*",detailList);
+
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });

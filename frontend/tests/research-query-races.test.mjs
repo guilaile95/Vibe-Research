@@ -5,14 +5,14 @@ import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-function harness(page, start, end) {
+function harness(page, start, end, entry) {
   const source=readFileSync(new URL(`../src/pages/${page}.tsx`,import.meta.url),'utf8');
   const body=source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start)));
   const state={};const calls=[];
   const api=new Proxy({}, {get:()=>params=>new Promise((resolve,reject)=>calls.push({params,resolve,reject}))});
-  const scope={api,HISTORY_LIMIT:20,histOffset:0,histFilterDate:'',historyRequestRef:{current:0},requestRef:{current:0},mountedRef:{current:true},ApiError:Error};
-  for(const key of ['HistLoading','HistErr','HistItems','HistCount','HistOffset','HistDone','Loading','ErrorMsg','RunRecord','SignalEntries','DecisionOutcomes'])scope[`set${key}`]=value=>{state[key]=value;};
-  const code=ts.transpileModule(body+`;globalThis.run=${page==='DailyReview'?'loadHistory':'fetchData'};`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  const scope={api,HISTORY_LIMIT:20,histOffset:0,histFilterDate:'',historyRequestRef:{current:0},requestRef:{current:0},mountedRef:{current:true},detailRequestRef:{current:0},comparisonRequestRef:{current:0},baseSnapshot:{id:1},targetSnapshot:{id:2},comparisonLoading:false,COMPARE_BOARD_LIMIT:10,COMPARE_STOCK_LIMIT:10,ApiError:Error};
+  for(const key of ['HistLoading','HistErr','HistItems','HistCount','HistOffset','HistDone','Loading','ErrorMsg','RunRecord','SignalEntries','DecisionOutcomes','SelectedSnapshotId','SelectedSnapshot','DetailError','DetailLoading','BaseSnapshot','TargetSnapshot','Comparison','ComparisonError','ComparisonLoading'])scope[`set${key}`]=value=>{state[key]=value;};
+  const code=ts.transpileModule(body+`;globalThis.run=${entry || (page==='DailyReview'?'loadHistory':'fetchData')};`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
   vm.runInNewContext(code,scope);
   return {...scope,state,calls};
 }
@@ -53,4 +53,28 @@ for(const kind of ['DailyReview','SignalLedger'])test(`${kind} invalidated unmou
   h.historyRequestRef.current++;h.requestRef.current++;h.mountedRef.current=false;
   h.calls[0].resolve({items:[{id:'LATE'}]});await tick();
   assert.deepEqual(h.state,before);
+});
+
+test('DailyReview newer snapshot selection rejects an older detail result',async()=>{
+  const h=harness('DailyReview','  const openHistoryDetail =','  const onHistDateChange =','openHistoryDetail');
+  h.run(1);h.run(2);
+  h.calls[1].resolve({id:2,trade_date:'2026-10-02'});await tick();
+  h.calls[0].resolve({id:1,trade_date:'2026-10-01'});await tick();
+  assert.equal(h.state.SelectedSnapshotId,2);
+  assert.equal(h.state.SelectedSnapshot.id,2);
+});
+
+for(const action of ['clearCompareSelection','selectBaseSnapshot','selectTargetSnapshot'])test(`DailyReview ${action} invalidates old comparison`,async()=>{
+  const h=harness('DailyReview','  const invalidateComparison =','  /** rank_delta','({runCompare,clearCompareSelection,selectBaseSnapshot,selectTargetSnapshot})');
+  h.run.runCompare();h.run[action]({id:3});
+  h.calls[0].resolve({base_id:1,target_id:2,marker:'OLD'});await tick();
+  assert.equal(h.state.Comparison,null);
+});
+
+test('DailyReview close detail invalidates pending response',async()=>{
+  const h=harness('DailyReview','  const openHistoryDetail =','  const onHistDateChange =','({openHistoryDetail,closeHistoryDetail})');
+  h.run.openHistoryDetail(1);h.run.closeHistoryDetail();
+  h.calls[0].resolve({id:1});await tick();
+  assert.equal(h.state.SelectedSnapshotId,null);assert.equal(h.state.SelectedSnapshot,null);
+  assert.equal(h.state.DetailLoading,false);
 });
