@@ -7,6 +7,7 @@ Read helpers open the index read-only and never create it.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sqlite3
@@ -202,12 +203,31 @@ def extract(path: Path, extension: str) -> tuple[str, list[tuple[int, str]], int
     return STATUS_SEARCHABLE, [(0, body)], None, ""
 
 
+def _source_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def index_report(reports_dir: Path, report: dict[str, Any], source_path: Path) -> dict[str, Any]:
     report_id = str(report.get("id") or "")
     extension = str(report.get("ext") or "").lower()
     if not report_id or not source_path.is_file():
         raise ReportTextIndexError("研报原文件不存在，无法建立正文索引")
-    status, chunks, page_count, error_code = extract(source_path, extension)
+    # Bind extracted text to the actual source, including legacy entries without
+    # a metadata fingerprint. An unsuccessful rebuild must not retain old text.
+    source_sha = ""
+    extraction_error = None
+    try:
+        source_sha = _source_sha256(source_path)
+        status, chunks, page_count, error_code = extract(source_path, extension)
+        if _source_sha256(source_path) != source_sha:
+            status, chunks, page_count, error_code = STATUS_ERROR, [], None, "FILE_CHANGED_DURING_INDEX"
+    except Exception as exc:
+        status, chunks, page_count, error_code = STATUS_ERROR, [], None, "EXTRACTION_FAILED"
+        extraction_error = exc
     indexed_at = datetime.now(timezone.utc).isoformat()
     with _LOCK:
         conn = _connect_write(reports_dir)
@@ -222,7 +242,7 @@ def index_report(reports_dir: Path, report: dict[str, Any], source_path: Path) -
                      file_sha256=excluded.file_sha256, status=excluded.status,
                      indexed_at=excluded.indexed_at, page_count=excluded.page_count,
                      error_code=excluded.error_code""",
-                (report_id, str(report.get("file_sha256") or ""), status, indexed_at, page_count, error_code),
+                (report_id, source_sha, status, indexed_at, page_count, error_code),
             )
             if status == STATUS_SEARCHABLE:
                 conn.executemany(
@@ -238,12 +258,15 @@ def index_report(reports_dir: Path, report: dict[str, Any], source_path: Path) -
             raise
         finally:
             conn.close()
+    if extraction_error is not None:
+        raise ReportTextIndexError("研报正文提取失败，请重新建立索引") from extraction_error
     return {
         "report_id": report_id,
         "status": status,
         "indexed_at": indexed_at,
         "page_count": page_count,
         "error_code": error_code,
+        "file_sha256": source_sha,
     }
 
 
@@ -261,7 +284,9 @@ def remove_report(reports_dir: Path, report_id: str) -> None:
             conn.close()
 
 
-def status_map(reports_dir: Path, reports: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def status_map(
+    reports_dir: Path, reports: list[dict[str, Any]], *, verify_source: bool = False,
+) -> dict[str, dict[str, Any]]:
     result = {}
     for report in reports:
         ext = str(report.get("ext") or "").lower()
@@ -285,10 +310,27 @@ def status_map(reports_dir: Path, reports: list[dict[str, Any]]) -> dict[str, di
         report = by_id.get(row["report_id"])
         if not report:
             continue
-        if row["file_sha256"] and row["file_sha256"] != str(report.get("file_sha256") or ""):
+        error = ""
+        indexed_sha = str(row["file_sha256"] or "")
+        metadata_sha = str(report.get("file_sha256") or "")
+        if row["status"] == STATUS_SEARCHABLE:
+            path = Path(reports_dir) / f"{report['id']}{report.get('ext', '')}"
+            if not indexed_sha:
+                error = "INDEX_FINGERPRINT_MISSING"
+            elif metadata_sha and indexed_sha != metadata_sha:
+                error = "FILE_CHANGED"
+            elif not path.is_file():
+                error = "SOURCE_UNAVAILABLE"
+            elif verify_source:
+                try:
+                    if _source_sha256(path) != indexed_sha:
+                        error = "FILE_CHANGED"
+                except OSError:
+                    error = "SOURCE_UNAVAILABLE"
+        if error:
             result[row["report_id"]] = {
                 "text_index_status": STATUS_NOT_INDEXED,
-                "text_index_error": "FILE_CHANGED",
+                "text_index_error": error,
                 "indexed_at": "",
                 "page_count": None,
             }
@@ -298,6 +340,7 @@ def status_map(reports_dir: Path, reports: list[dict[str, Any]]) -> dict[str, di
             "text_index_error": row["error_code"],
             "indexed_at": row["indexed_at"],
             "page_count": row["page_count"],
+            "text_index_sha256": indexed_sha,
         }
     return result
 
@@ -332,12 +375,12 @@ def _search_terms(value: str, *, selected_reports: bool) -> list[str]:
     return terms
 
 
-def _snippet(text: str, terms: list[str]) -> str:
+def _snippet(text: str, terms: list[str]) -> tuple[str, bool]:
     folded = text.casefold()
     positions = [folded.find(term.casefold()) for term in terms]
     positions = [position for position in positions if position >= 0]
     start = max(0, (min(positions) if positions else 0) - 90)
-    return _SPACE_RE.sub(" ", text[start:start + 320]).strip()
+    return _SPACE_RE.sub(" ", text[start:start + 320]).strip(), start > 0 or start + 320 < len(text)
 
 
 def search(
@@ -368,6 +411,12 @@ def search(
         candidates[report_id] = report
     if not candidates:
         return []
+    # Validate only scoped candidates; never read unrelated source documents.
+    statuses = status_map(reports_dir, list(candidates.values()), verify_source=True)
+    candidates = {rid: report for rid, report in candidates.items()
+                  if statuses[rid]["text_index_status"] == STATUS_SEARCHABLE}
+    if not candidates:
+        return []
     terms = _search_terms(value, selected_reports=bool(requested))
     if not terms:
         raise ValueError("检索条件无效")
@@ -378,7 +427,7 @@ def search(
     text_filters = " AND ".join("instr(lower(c.text), lower(?)) > 0" for _ in terms)
     try:
         rows = conn.execute(
-            f"""SELECT c.report_id, c.page, c.text
+            f"""SELECT c.report_id, c.page, c.text, i.file_sha256
                 FROM report_text_chunks c JOIN report_text_index i USING(report_id)
                 WHERE i.status=? AND c.report_id IN ({placeholders}) AND {text_filters}""",
             [STATUS_SEARCHABLE, *candidates, *terms],
@@ -389,17 +438,22 @@ def search(
         conn.close()
     hits = []
     for row in rows:
+        if row["file_sha256"] != statuses[row["report_id"]]["text_index_sha256"]:
+            continue
         folded = row["text"].casefold()
         if not all(term.casefold() in folded for term in terms):
             continue
         score = float(sum(folded.count(term.casefold()) for term in terms))
         report = candidates[row["report_id"]]
+        snippet, excerpt_truncated = _snippet(row["text"], terms)
         hits.append({
             "report_id": row["report_id"],
             "title": report.get("title") or report.get("name") or row["report_id"],
             "name": report.get("name") or "",
             "page": row["page"] or None,
-            "snippet": _snippet(row["text"], terms),
+            "snippet": snippet,
+            "excerpt_truncated": excerpt_truncated,
+            "file_sha256": row["file_sha256"],
             "score": score,
             "publish_date": report.get("publish_date") or "",
             "institution": report.get("institution") or "",

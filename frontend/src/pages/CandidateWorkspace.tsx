@@ -17,6 +17,7 @@ import {
 } from "@/lib/candidateCampaign";
 import { api, ApiError, type EvidenceRecord, type StockRelativeContext, type StockValuationContext } from "@/lib/api";
 import { candidateEntryContext } from "@/lib/candidateEntryContext";
+import { CandidateEvidenceLoadError, loadCandidateEvidence } from "@/lib/candidateEvidence";
 import { CAMPAIGN_STRATEGY_LABELS } from "@/lib/decisionInbox";
 import { rememberResearchVisit, RESEARCH_SECTIONS as researchSections } from "@/lib/researchResume";
 
@@ -93,12 +94,16 @@ export function CandidateWorkspace() {
       .catch((cause) => {
         if (!cancelled) setPosition({ status: "error", value: null, error: errorMessage(cause, "当前持仓读取失败") });
       });
-    const evidenceRequest = api.evidenceList({ subject_type: "stock", subject_id: code, limit: 200, offset: 0 })
+    const evidenceRequest = loadCandidateEvidence(
+      (params) => api.evidenceList({ subject_type: "stock", subject_id: code, ...params }),
+      () => cancelled,
+    )
       .then((result) => {
-        if (!cancelled) setEvidence({ status: "ready", value: { records: result.items, total: result.total }, error: "" });
+        if (!cancelled && result) setEvidence({ status: "ready", value: result, error: "" });
       })
       .catch((cause) => {
-        if (!cancelled) setEvidence({ status: "error", value: null, error: errorMessage(cause, "证据记录读取失败") });
+        if (!cancelled) setEvidence({ status: "error", value: null, error: cause instanceof CandidateEvidenceLoadError
+          ? cause.message : errorMessage(cause, "证据记录读取失败") });
       });
     const relativeRequest = api.stockRelativeContext(code)
       .then((result) => {
