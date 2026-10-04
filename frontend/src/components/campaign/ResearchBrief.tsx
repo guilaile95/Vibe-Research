@@ -63,7 +63,7 @@ export function ResearchBrief({
   const latestUpdate = model.confirmedUpdates[model.confirmedUpdates.length - 1] ?? null;
   return (
     <section
-      className="min-w-0 break-words rounded-lg border border-border/60 bg-background/35 p-4 space-y-4"
+      className="min-w-0 scroll-mt-16 break-words rounded-lg border border-border/60 bg-background/35 p-4 space-y-4 lg:scroll-mt-0"
       data-testid="research-brief"
       data-decision-context={model.contextState}
       data-context-binding={bindingThesisId}
@@ -97,12 +97,12 @@ export function ResearchBrief({
 
       <section data-testid="research-brief-subject">
         <h3 className="text-xs font-semibold">研究哪个标的、采用什么策略、当前处于什么确认状态？</h3>
-        <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-5">
+        <div className="mt-2 grid grid-cols-2 gap-2 text-xs lg:grid-cols-5">
           <div><p className="text-muted-foreground">证券</p><p className="mt-1 font-medium" data-context-security>{model.securityCode}</p></div>
           <div><p className="text-muted-foreground">策略</p><p className="mt-1 font-medium" data-context-strategy>{model.strategyLabel}{model.strategyCode ? `（${model.strategyCode}）` : ""}</p></div>
           <div><p className="text-muted-foreground">当前投资逻辑</p><p className="mt-1 font-medium" data-context-thesis-status>{model.thesisVersionText}</p></div>
           <div><p className="text-muted-foreground">当前确认状态</p><p className="mt-1 font-medium" data-context-effective-state>{model.effectiveState.label}</p></div>
-          <div><p className="text-muted-foreground">预期周期</p><p className="mt-1 font-medium" data-context-horizon>{model.horizonText}</p></div>
+          <div className="col-span-2 lg:col-span-1"><p className="text-muted-foreground">预期周期</p><p className="mt-1 font-medium" data-context-horizon>{model.horizonText}</p></div>
         </div>
         <p className="mt-2 text-xs leading-5 text-muted-foreground">{model.effectiveState.note}</p>
         {model.horizonSource === "CURRENT_THESIS" && (

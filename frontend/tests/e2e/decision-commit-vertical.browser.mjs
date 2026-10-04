@@ -555,7 +555,11 @@ async function run() {
       assert.ok(invalidation && freshness && frozenHistory);
       assert.ok(invalidation.y < frozenHistory.y && freshness.y < frozenHistory.y, "conditions and data boundaries must precede frozen history");
       if (viewport.width >= 1024) assert.ok(Math.abs(invalidation.y - freshness.y) < 2, "desktop attention blocks should share a row");
-      else assert.ok(freshness.y >= invalidation.y + invalidation.height, "narrow attention blocks should stack");
+      else {
+        assert.ok(freshness.y >= invalidation.y + invalidation.height, "narrow attention blocks should stack");
+        const heading = await brief.getByRole("heading", { name: "研究摘要", exact: true }).boundingBox();
+        assert.ok(heading && heading.y >= 56, "mobile anchor must leave room for the floating navigation button");
+      }
       assert.equal(await brief.evaluate((element) => element.scrollWidth <= element.clientWidth + 1), true, "brief must not overflow horizontally");
       assert.equal(await brief.locator("input, textarea, select").count(), 0, "reflow must remain read-only");
       assert.equal(apiWriteRequests.length, 0, "reflow and keyboard expansion must not write business state");

@@ -24,6 +24,9 @@ test('existing boundaries precede frozen history without duplicating or changing
  for(const stance of ['support','oppose'])assert.match(html,new RegExp(`href="https://example.test/${stance}"`));
  assert.doesNotMatch(html,/<(?:input|textarea|select|button)\b/);
  assert.match(html,/lg:grid-cols-2/);
+ assert.match(html,/grid-cols-2 gap-2 text-xs lg:grid-cols-5/);
+ assert.match(html,/col-span-2 lg:col-span-1/);
+ assert.match(html,/scroll-mt-16/);
 });
 
 test('disproven remains a terminal alert and historical original stays explicitly historical',()=>{
