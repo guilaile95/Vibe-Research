@@ -43,3 +43,26 @@ test("legacy sources remain usable while malformed coverage is rejected at strea
     assert.equal(parseReportChatCoverage(invalid), undefined);
   }
 });
+
+test("source identity, title and real or missing page pass unchanged to UI callbacks", () => {
+  const items = [
+    { report_id: "selected-pdf", title: "Selected PDF", page: 2 },
+    { report_id: "selected-text", title: "Selected text", page: null },
+  ];
+  const state = createNdjsonProtocolState();
+  let received;
+  applyNdjsonLine(state, JSON.stringify({ type: "sources", items }), { onSources: value => { received = value; } });
+  assert.deepEqual(received, items);
+  assert.equal(state.sawError, false);
+});
+
+for (const page of [0, -1, 1.5, "2", undefined]) {
+  test(`invalid source page ${String(page)} is rejected rather than invented`, () => {
+    const state = createNdjsonProtocolState();
+    applyNdjsonLine(state, JSON.stringify({ type: "sources", items: [{ report_id: "selected", title: "Selected", page }] }), {
+      onSources: () => assert.fail("malformed citation must not reach the UI"),
+    });
+    assert.equal(state.sawError, true);
+    assert.match(state.errorMessage!, /研报引用格式错误/);
+  });
+}

@@ -328,6 +328,48 @@ try {
   assert.equal(await page.locator("select").first().inputValue(),"execution");
   await page.getByText(/CURRENT_SIGNAL/).waitFor();
 
+  // Product citation UI is separate from answer prose. These are synthetic
+  // transport fixtures; backend tests separately verify real PDF extraction.
+  archived=[
+    {id:"selected-pdf",name:"selected.pdf",title:"Selected PDF",size:1,ts:1,sector_keys:[]},
+    {id:"selected-text",name:"selected.txt",title:"Selected text",size:1,ts:1,sector_keys:[]},
+    {id:"unselected",name:"unselected.txt",title:"UNSELECTED REPORT",size:1,ts:1,sector_keys:[]},
+  ];
+  let citationCalls=0;
+  const citationErrors=[];
+  page.on("pageerror",error=>citationErrors.push(error.message));
+  await page.route("**/api/chat",route=>{
+    const body=route.request().postDataJSON();
+    assert.deepEqual([...body.report_ids].sort(),["selected-pdf","selected-text"]);
+    citationCalls++;
+    const events=[{type:"sources",items:[{report_id:"selected-pdf",title:"Selected PDF",page:2},{report_id:"selected-text",title:"Selected text",page:null}]},{type:"delta",text:"SYNTHETIC ANSWER; CITATIONS ARE SHOWN SEPARATELY"},{type:"done"}];
+    return route.fulfill({status:200,contentType:"application/x-ndjson",body:events.map(event=>JSON.stringify(event)).join("\n")+"\n"});
+  });
+  for(const provider of ["api","cli-codex"]){
+    await page.evaluate(provider=>localStorage.setItem("vr-llm",JSON.stringify({provider,model:"synthetic-citation",baseURL:"https://example.test",apiKey:"synthetic"})),provider);
+    await page.goto(`${frontend}/my-reports`,{waitUntil:"networkidle"});
+    const openSelectedChat=async()=>{
+      await page.getByRole("checkbox",{name:"选择 Selected PDF",exact:true}).check();
+      await page.getByRole("checkbox",{name:"选择 Selected text",exact:true}).check();
+      await page.getByRole("button",{name:"基于所选资料提问（2）",exact:true}).click();
+    };
+    await openSelectedChat();
+    await page.getByPlaceholder("询问 Vibe...").fill("synthetic citation question");
+    await page.getByRole("button",{name:"发送",exact:true}).click();
+    const pdfCitation="Selected PDF · report_id=selected-pdf · 第 2 页";
+    const textCitation="Selected text · report_id=selected-text · 页码不可用";
+    await page.getByText(pdfCitation,{exact:true}).waitFor();
+    await page.getByText(textCitation,{exact:true}).waitFor();
+    assert.equal(await page.getByRole("dialog",{name:"Vibe AI 对话"}).getByText(/report_id=unselected/).count(),0);
+    const beforeReload=citationCalls;
+    await page.reload({waitUntil:"networkidle"});await openSelectedChat();
+    await page.getByText(pdfCitation,{exact:true}).waitFor();
+    await page.getByText(textCitation,{exact:true}).waitFor();
+    assert.equal(citationCalls,beforeReload,"restoring citations must not repeat model request");
+  }
+  assert.equal(citationCalls,2);
+  assert.deepEqual(citationErrors,[]);
+
   console.log("notes backup browser E2E: PASS");
 } finally {
   if (browser) await browser.close().catch(() => {});

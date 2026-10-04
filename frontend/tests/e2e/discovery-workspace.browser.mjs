@@ -437,6 +437,9 @@ try {
   assert.equal(await page.getByTestId("discovery-item-SWING-600221").count(), 0);
   await page.getByLabel("发现行业或主题").selectOption("ALL");
   await page.getByLabel("研究优先级", { exact: true }).selectOption("LOW");
+  // URL-backed filters commit asynchronously; assert the settled rendered state.
+  await page.waitForURL((url) => url.searchParams.get("priority") === "LOW");
+  await firstCard.waitFor({ state: "detached" });
   assert.equal(await firstCard.count(), 0);
   await page.getByLabel("研究优先级", { exact: true }).selectOption("ALL");
   const discoveryText = await workspace.innerText();

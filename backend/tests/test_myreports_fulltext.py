@@ -442,3 +442,53 @@ def test_chinese_question_expansion_is_bounded_and_requires_selection(tmp_path, 
     for topic in ["率", "毛利率" * 30, " ".join([f"主题{i}" for i in range(9)])]:
         bounded = f"比较这两份报告对{topic}的分歧"
         assert fulltext._search_terms(bounded, selected_reports=True) == bounded.split()
+
+
+@pytest.mark.parametrize("provider", ["api", "cli-codex"])
+@pytest.mark.parametrize("stale_pdf", [False, True])
+def test_source_identity_page_and_selection_survive_product_chat_transport(tmp_path, monkeypatch, provider, stale_pdf):
+    """Real extraction/index/context/router; synthetic providers, no semantic-model claim."""
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "reports")
+    pdf = _upload("Selected PDF.pdf", _pdf("unrelated cover", "catalyst revenue 100 CNY billion FY2025"))
+    text = _upload("Selected text.txt", b"catalyst revenue 80 CNY billion FY2025")
+    private = _upload("Unselected.txt", b"catalyst PRIVATE_UNSELECTED_900")
+    if stale_pdf:
+        (mr.REPORTS_DIR / (pdf["id"] + pdf["ext"])).write_bytes(_pdf("catalyst REPLACED_SOURCE"))
+    contexts = []
+
+    def api_stream(_cfg, _messages, context):
+        contexts.append(context)
+        yield {"type": "delta", "text": "SYNTHETIC TRANSPORT ONLY"}
+        yield {"type": "done"}
+
+    def codex_stream(**kwargs):
+        contexts.append(kwargs["context"])
+        yield {"type": "delta", "text": "SYNTHETIC TRANSPORT ONLY"}
+        yield {"type": "done"}
+
+    monkeypatch.setattr(app_module.chat_layer, "run_chat_stream", api_stream)
+    monkeypatch.setattr(app_module.agent_runtime, "stream_chat", codex_stream)
+    monkeypatch.setattr(app_module.agent_runtime, "status", lambda: {"available": True, "signedIn": True})
+    response = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "catalyst"}],
+        "report_ids": [pdf["id"], text["id"]], "session": "source-identity-fixture",
+        "llm": {"provider": provider, "model": "synthetic", "baseURL": "https://example.test", "apiKey": "synthetic"},
+    })
+    assert response.status_code == 200
+    events = [json.loads(line) for line in response.text.splitlines()]
+    sources = next(event for event in events if event["type"] == "sources")
+    expected = {(text["id"], "Selected text", None)}
+    if not stale_pdf:
+        expected.add((pdf["id"], "Selected PDF", 2))
+    assert {(item["report_id"], item["title"], item["page"]) for item in sources["items"]} == expected
+    assert sources["coverage"]["selected_count"] == 2
+    assert len(contexts) == 1 and "80 CNY billion FY2025" in contexts[0]
+    assert private["id"] not in response.text + contexts[0]
+    assert "PRIVATE_UNSELECTED_900" not in response.text + contexts[0]
+    if stale_pdf:
+        assert "100 CNY billion FY2025" not in contexts[0]
+        assert any(item["report_id"] == pdf["id"] and item["reason"] == "NOT_INDEXED"
+                   for item in sources["coverage"]["uncovered_reports"])
+    else:
+        assert "100 CNY billion FY2025" in contexts[0]
+        assert "page=2" in contexts[0]
