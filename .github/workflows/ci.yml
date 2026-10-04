@@ -383,7 +383,7 @@ jobs:
     name: Playwright decision inbox E2E
     runs-on: ubuntu-latest
     env:
-      E2E_SCREENSHOT_DIR: ${{ runner.temp }}/research-brief-evidence
+      E2E_SCREENSHOT_DIR: research-brief-evidence
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -492,7 +492,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: research-brief-evidence
-          path: ${{ runner.temp }}/research-brief-evidence/research-brief*.png
+          path: frontend/research-brief-evidence/research-brief*.png
           if-no-files-found: error
           retention-days: 7
 
