@@ -193,6 +193,7 @@ export function DailyReview() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [selectedSnapshot, setSelectedSnapshot] = useState<DailyReviewHistorySnapshot | null>(null);
+  const detailRequestRef = useRef(0);
 
   // 快照对比（只读；不替换实时 dr / 不触发 AI / 不自动请求）
   const [baseSnapshot, setBaseSnapshot] = useState<DailyReviewHistoryItem | null>(null);
@@ -200,6 +201,7 @@ export function DailyReview() {
   const [comparison, setComparison] = useState<DailyReviewComparison | null>(null);
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
+  const comparisonRequestRef = useRef(0);
   const [compareBoardTab, setCompareBoardTab] = useState<"industry" | "concept" | "region">("industry");
 
   // 北向资金（独立 endpoint）
@@ -430,6 +432,8 @@ export function DailyReview() {
     return () => {
       mountedRef.current = false;
       historyRequestRef.current += 1;
+      detailRequestRef.current += 1;
+      comparisonRequestRef.current += 1;
       clearPoll();
       bk11AbortRef.current?.abort();
     };
@@ -464,25 +468,30 @@ export function DailyReview() {
   };
 
   const openHistoryDetail = async (id: number) => {
+    const generation = ++detailRequestRef.current;
+    const active = () => mountedRef.current && generation === detailRequestRef.current;
     setSelectedSnapshotId(id);
     setSelectedSnapshot(null);
     setDetailError(null);
     setDetailLoading(true);
     try {
       const snap = await api.getDailyReviewHistorySnapshot(id);
+      if (!active()) return;
       setSelectedSnapshot(snap);
     } catch (e) {
+      if (!active()) return;
       if (e instanceof ApiError && e.status === 404) {
         setDetailError("该历史快照不存在");
       } else {
         setDetailError(e instanceof ApiError ? e.message : "历史详情加载失败");
       }
     } finally {
-      setDetailLoading(false);
+      if (active()) setDetailLoading(false);
     }
   };
 
   const closeHistoryDetail = () => {
+    detailRequestRef.current += 1;
     setSelectedSnapshotId(null);
     setSelectedSnapshot(null);
     setDetailError(null);
@@ -495,27 +504,33 @@ export function DailyReview() {
     loadHistory({ trade_date: value, offset: 0 });
   };
 
+  const invalidateComparison = () => {
+    comparisonRequestRef.current += 1;
+    setComparison(null);
+    setComparisonError(null);
+    setComparisonLoading(false);
+  };
+
   const clearCompareSelection = () => {
     setBaseSnapshot(null);
     setTargetSnapshot(null);
-    setComparison(null);
-    setComparisonError(null);
+    invalidateComparison();
   };
 
-  /** 更换基础/目标时立即清空旧比较结果，避免与当前选择不一致 */
+  /** Changing either side invalidates in-flight results as well as visible ones. */
   const selectBaseSnapshot = (item: DailyReviewHistoryItem) => {
     setBaseSnapshot(item);
-    setComparison(null);
-    setComparisonError(null);
+    invalidateComparison();
   };
   const selectTargetSnapshot = (item: DailyReviewHistoryItem) => {
     setTargetSnapshot(item);
-    setComparison(null);
-    setComparisonError(null);
+    invalidateComparison();
   };
 
   const runCompare = async () => {
     if (!baseSnapshot || !targetSnapshot || comparisonLoading) return;
+    const generation = ++comparisonRequestRef.current;
+    const active = () => mountedRef.current && generation === comparisonRequestRef.current;
     setComparisonLoading(true);
     setComparisonError(null);
     try {
@@ -526,8 +541,9 @@ export function DailyReview() {
         board_limit: COMPARE_BOARD_LIMIT,
         stock_limit: COMPARE_STOCK_LIMIT,
       });
-      setComparison(result);
+      if (active()) setComparison(result);
     } catch (e) {
+      if (!active()) return;
       setComparison(null);
       if (e instanceof ApiError) {
         if (e.status === 404) {
@@ -543,7 +559,7 @@ export function DailyReview() {
         setComparisonError("快照对比失败");
       }
     } finally {
-      setComparisonLoading(false);
+      if (active()) setComparisonLoading(false);
     }
   };
 
