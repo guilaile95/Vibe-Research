@@ -656,3 +656,45 @@ for(const staleError of [false,true])test(`report upload refresh survives obsole
   assert.match(label(h.render()),/FRESH UPLOAD/);
   assert.doesNotMatch(label(h.render()),/STALE LIST ERROR|还没有归档/);
 });
+
+test('active report search refreshes after successful batch indexing',async()=>{
+  let indexed=false, searches=0;
+  const h=reportHarness(async()=>{searches++;return indexed?[{report_id:'indexed',title:'NEWLY INDEXED',snippet:'audit',page:1}]:[];},{
+    previewMyReportTextIndex:async()=>({items:[{eligible:true,report_id:'indexed'}]}),
+    batchIndexMyReportText:async()=>{indexed=true;return{};},
+  });
+  h.render();await tick();query(h,'audit');h.flushTimers();await tick();
+  assert.match(label(h.render()),/没有匹配/);
+  await find(h.render(),'button','索引旧研报').props.onClick();
+  h.render();h.flushTimers();await tick();
+  assert.equal(searches,2);
+  assert.match(label(h.render()),/NEWLY INDEXED/);
+});
+
+test('failed report indexing preserves current search and does not invent a refresh',async()=>{
+  let searches=0;
+  const h=reportHarness(async()=>{searches++;return[{report_id:'existing',title:'EXISTING RESULT',snippet:'audit',page:1}];},{
+    previewMyReportTextIndex:async()=>({items:[{eligible:true,report_id:'existing'}]}),
+    batchIndexMyReportText:async()=>{throw new apiClient.ApiError('INDEX FAILURE',500);},
+  });
+  h.render();await tick();query(h,'audit');h.flushTimers();await tick();
+  await find(h.render(),'button','索引旧研报').props.onClick();h.render();h.flushTimers();await tick();
+  assert.equal(searches,1);assert.match(label(h.render()),/EXISTING RESULT/);assert.match(label(h.render()),/INDEX FAILURE/);
+});
+
+test('index completion refreshes the latest query and discards older query responses',async()=>{
+  const indexed=deferred(), calls=[];
+  const h=reportHarness(q=>{const d=deferred();calls.push({...d,q});return d.promise;},{
+    previewMyReportTextIndex:async()=>({items:[{eligible:true,report_id:'existing'}]}),
+    batchIndexMyReportText:()=>indexed.promise,
+  });
+  h.render();await tick();query(h,'alpha');h.flushTimers();
+  calls[0].resolve([]);await tick();
+  const pending=find(h.render(),'button','索引旧研报').props.onClick();await tick();
+  query(h,'beta');h.flushTimers();
+  indexed.resolve({});await pending;h.render();h.flushTimers();
+  assert.deepEqual(calls.map(c=>c.q),['alpha','beta','beta']);
+  calls[2].resolve([{report_id:'fresh',title:'FRESH BETA',snippet:'beta',page:1}]);await tick();
+  calls[1].resolve([{report_id:'stale',title:'OLD BETA',snippet:'beta',page:1}]);await tick();
+  assert.match(label(h.render()),/FRESH BETA/);assert.doesNotMatch(label(h.render()),/OLD BETA/);
+});

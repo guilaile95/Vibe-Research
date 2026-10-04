@@ -293,6 +293,21 @@ try {
   assert.equal(await page.getByText(/还没有归档的研报/).count(),0);
   await page.unroute("**/api/myreports",staleArchiveList);
 
+  let indexedSearchReady=false, archiveSearches=0;
+  await page.route("**/api/myreports/fulltext-search?*",route=>{
+    archiveSearches++;
+    return route.fulfill({json:{data:indexedSearchReady?[{report_id:"fresh.txt",title:"INDEX_SEARCH_RESULT",snippet:"synthetic indexed text",page:1}]:[]}});
+  });
+  await page.route("**/api/myreports/text-index/preview",route=>route.fulfill({json:{data:{items:[{eligible:true,report_id:"fresh.txt"}]}}}));
+  await page.route("**/api/myreports/text-index/batch",route=>{indexedSearchReady=true;return route.fulfill({json:{data:{}}});});
+  await page.getByPlaceholder("搜索研报正文…").fill("synthetic");
+  await page.getByText("没有匹配的研报。",{exact:true}).waitFor();
+  page.once("dialog",dialog=>dialog.accept());
+  await page.getByRole("button",{name:"索引旧研报",exact:true}).click();
+  await page.getByText("INDEX_SEARCH_RESULT",{exact:true}).waitFor();
+  assert.equal(archiveSearches,2);
+  assert.equal(await page.getByPlaceholder("搜索研报正文…").inputValue(),"synthetic");
+
   let releaseOldSignal, signalStarted;
   const oldSignalStarted=new Promise(resolve=>{signalStarted=resolve;});
   await page.route("**/api/signal-ledger?*",async route=>{
