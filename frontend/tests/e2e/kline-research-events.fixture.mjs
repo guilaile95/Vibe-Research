@@ -21,7 +21,7 @@ export async function runKlineResearchEvents({ page, mock, baseUrl, openTab, exp
         held = new Promise((resolve) => { release = resolve; timer = setTimeout(resolve, 5000); });
         try { await held; } finally { clearTimeout(timer); }
       }
-      return send({ status: calendarUnavailable ? "UNAVAILABLE" : "NORMAL", events: calendarUnavailable ? [] : [calendarEvent(code, `${code}-weekend`, "2026-07-18"), calendarEvent(code, `${code}-unknown`, null), calendarEvent("foreign", "must-not-crosslink", "2026-07-20")], limitations: calendarUnavailable ? ["SYNTHETIC_SOURCE_UNAVAILABLE"] : [] });
+      return send({ schema_version: "research_event_calendar.v0.1", as_of: "2026-07-24", fetched_at: "2026-07-24", window: { date_from: dates[0], date_to: dates.at(-1), semantics: "CALENDAR_DAYS" }, universe: { kind: "SINGLE_SECURITY", status: "NORMAL", campaign_count: 2, unique_security_count: 1, max_unique_securities: 1, securities: [{ security_code: code, security_name: null, campaign_ids: ["campaign_alpha", "campaign_beta"] }] }, sources: [], writes: { campaign: 0, thesis: 0, evidence: 0, decision: 0, trade: 0, account: 0 }, status: calendarUnavailable ? "UNAVAILABLE" : "NORMAL", events: calendarUnavailable ? [] : [calendarEvent(code, `${code}-weekend`, "2026-07-18"), calendarEvent(code, `${code}-unknown`, null), calendarEvent("foreign", "must-not-crosslink", "2026-07-20")], limitations: calendarUnavailable ? ["SYNTHETIC_SOURCE_UNAVAILABLE"] : [] });
     }
     if (url.pathname === "/api/evidence") {
       calls.push({ kind: "evidence", code, limit: url.searchParams.get("limit"), offset: url.searchParams.get("offset") });

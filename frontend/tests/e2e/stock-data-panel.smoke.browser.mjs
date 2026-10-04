@@ -1972,9 +1972,15 @@ async function main() {
     });
 
     await runSmoke(page, mock, errors);
-    await runKlineResearchEvents({ page, mock, baseUrl: `http://127.0.0.1:${frontendPort}`, openTab, expandKline, fillCode, clickQuery, waitForStockHeader });
-    await page.goto(`http://127.0.0.1:${frontendPort}/stock-data?code=000001`, { waitUntil: "domcontentloaded" });
-    await waitForStockHeader(page, "000001", "平安银行");
+    const researchContext = await browser.newContext();
+    try {
+      const researchPage = await researchContext.newPage();
+      const researchMock = createApiMockController();
+      await researchPage.route("**/api/**", (route) => researchMock.handle(route));
+      researchPage.on("pageerror", (error) => errors.push(`research pageerror: ${error.message}`));
+      researchPage.on("console", (message) => { if (message.type() === "error") errors.push(`research console.error: ${message.text()}`); });
+      await runKlineResearchEvents({ page: researchPage, mock: researchMock, baseUrl: `http://127.0.0.1:${frontendPort}`, openTab, expandKline, fillCode, clickQuery, waitForStockHeader });
+    } finally { await researchContext.close(); }
     await page.setViewportSize({ width: 390, height: 844 });
     try {
       // 相对表现 / 当前行业估值在「概览」页签（上一个步骤停在行情与技术）。
