@@ -156,7 +156,13 @@ export function MyReports() {
     };
   }, [q, searchRetry]);
 
-  const refreshAll = async () => load();
+  const refreshAll = async () => {
+    // Successful archive/index mutations also invalidate an unchanged query.
+    // The search effect reads the latest query, even if it changed mid-request.
+    setSearchState((current) => ({ ...current, status: "loading", results: [] }));
+    setSearchRetry((value) => value + 1);
+    return load();
+  };
 
   const upload = async (files: FileList | File[]) => {
     if (uploadBusyRef.current) return;
