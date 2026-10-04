@@ -35,3 +35,5 @@
 - [Public stack and rollback](research/PUBLIC_STACK_ROLLBACK_20261004.md): dated ancestry and reversible integration gates
 
 - [PA1 view ownership](PA1_VIEW_OWNERSHIP.md): asynchronous result identity and confirmed snapshot-write handling
+
+- [Trade-list read ownership](TRADE_LIST_READ_OWNERSHIP.md): applied-filter identity and stale-response protection
