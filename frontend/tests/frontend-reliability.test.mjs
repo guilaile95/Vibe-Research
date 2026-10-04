@@ -637,3 +637,22 @@ test('report upload blocks overlapping batches and reports failed refresh withou
   assert.match(label(h.render()),/列表刷新失败/);
   assert.doesNotMatch(label(h.render()),/还没有归档/);
 });
+
+for(const staleError of [false,true])test(`report upload refresh survives obsolete initial ${staleError?'error':'empty response'}`,async t=>{
+  const previousReader=globalThis.FileReader;
+  globalThis.FileReader=class {readAsDataURL(){this.result='data:text/plain;base64,eA==';this.onload();}};
+  t.after(()=>{globalThis.FileReader=previousReader;});
+  const initial=deferred();let loads=0;
+  const report={id:'fresh-upload',name:'fresh.txt',title:'FRESH UPLOAD',size:1,ts:1};
+  const h=reportHarness(async()=>[],{
+    myReports:()=>++loads===1?initial.promise:Promise.resolve([report]),
+    uploadReport:async()=>report,
+  });
+  h.render();
+  nodes(h.render()).find(node=>node.type==='input'&&node.props.type==='file').props.onChange({target:{files:[{name:'fresh.txt'}],value:''}});
+  await tick();assert.match(label(h.render()),/FRESH UPLOAD/);
+  if(staleError)initial.reject(new apiClient.ApiError('STALE LIST ERROR',500));else initial.resolve([]);
+  await tick();
+  assert.match(label(h.render()),/FRESH UPLOAD/);
+  assert.doesNotMatch(label(h.render()),/STALE LIST ERROR|还没有归档/);
+});
