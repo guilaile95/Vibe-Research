@@ -725,15 +725,26 @@ async function run() {
       return probeWork;
     });
     try {
-      await page.evaluate(() => { void fetch("/__e2e_inbox_readiness_probe"); });
+      await page.evaluate(() => {
+        globalThis.__e2eInboxReadinessProbe = fetch("/__e2e_inbox_readiness_probe").then(response => response.text());
+      });
       await boundedProbeWait(interceptedProbe);
       await actionPanel.getByRole("link", { name: "打开决策复盘 →" }).waitFor({ state: "visible" });
+      // The visible continuity card also owns a batched read. Wait for its
+      // completed UI, not navigation-abort exclusions or global idle.
+      const inboxContinuity = page.locator(`[data-testid="research-continuity"][data-campaign-id="${campaign.campaign_id}"]`);
+      await inboxContinuity.locator('button[aria-label="刷新研究连续性"]:not([disabled])').waitFor({ state: "visible" });
+      assert.equal(await inboxContinuity.getByRole("alert").count(), 0, "Inbox continuity must finish without an error");
       assert.equal(probeReleased, false, "readiness must not depend on unrelated network completion");
       assert.equal(apiWriteRequests.length, writesBeforeInbox, "opening and reading Decision Inbox must not write business state");
     } finally {
       releaseReadinessProbe();
       try {
         await boundedProbeWait(probeWork);
+        // fulfill() alone can precede the browser's body read; finish our own
+        // fetch before leaving the page so no synthetic ERR_ABORTED is hidden.
+        await boundedProbeWait(page.evaluate(() => globalThis.__e2eInboxReadinessProbe));
+        await page.evaluate(() => { delete globalThis.__e2eInboxReadinessProbe; });
       } finally {
         await page.unroute(probeRoute);
       }
