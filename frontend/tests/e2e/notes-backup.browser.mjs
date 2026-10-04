@@ -246,6 +246,53 @@ try {
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes")).length), 3);
   assert.match(await page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes")).find(n=>n.kind==="反思审计").content), /未覆盖全文/);
 
+  // The report archive shares the same research-persistence surface. Use only
+  // intercepted synthetic API responses, never a real upload destination.
+  let archived = [], uploadedNames = [], rejectSecond = true;
+  await page.route("**/api/myreports", async route => {
+    if (route.request().method() === "GET") return route.fulfill({json:{data:archived}});
+    const body = route.request().postDataJSON();
+    uploadedNames.push(body.name);
+    if (rejectSecond && body.name === "second.txt") return route.fulfill({status:400,json:{detail:"SYNTHETIC_UPLOAD_REJECTED"}});
+    const report={id:body.name,name:body.name,title:body.name,size:1,ts:1,sector_keys:[]};
+    archived.push(report);
+    await route.fulfill({json:{data:report}});
+  });
+  for (const width of [1440,390]) {
+    archived=[];uploadedNames=[];rejectSecond=true;
+    await page.setViewportSize({width,height:900});
+    await page.goto(`${frontend}/my-reports`, {waitUntil:"networkidle"});
+    const upload=page.locator('input[type="file"]');
+    await upload.setInputFiles(["first.txt","second.txt","third.txt"].map(name=>({name,mimeType:"text/plain",buffer:Buffer.from("synthetic")})));
+    await page.getByText(/已上传 1 份/).waitFor();
+    await page.locator('[id="report-first.txt"]').waitFor();
+    assert.deepEqual(uploadedNames,["first.txt","second.txt"]);
+    rejectSecond=false;
+    await upload.setInputFiles({name:"second.txt",mimeType:"text/plain",buffer:Buffer.from("synthetic retry")});
+    await page.locator('[id="report-second.txt"]').waitFor();
+    assert.deepEqual(uploadedNames,["first.txt","second.txt","second.txt"]);
+  }
+
+  let releaseOldSignal, signalStarted;
+  const oldSignalStarted=new Promise(resolve=>{signalStarted=resolve;});
+  await page.route("**/api/signal-ledger?*",async route=>{
+    const stage=new URL(route.request().url()).searchParams.get("stage");
+    if(stage==="schema"){signalStarted();await new Promise(resolve=>{releaseOldSignal=resolve;});}
+    await route.fulfill({json:{items:stage?[{entry_id:stage,stage,severity:"info",code:"600519",payload_json:{marker:stage==="schema"?"STALE_SIGNAL":"CURRENT_SIGNAL"}}]:[],total:stage?1:0}});
+  });
+  await page.goto(`${frontend}/signal-ledger`,{waitUntil:"networkidle"});
+  await page.locator("select").first().selectOption("schema");
+  await page.getByRole("button",{name:"查询信号",exact:true}).click();await oldSignalStarted;
+  await page.locator("select").first().selectOption("execution");
+  await page.getByRole("button",{name:"查询信号",exact:true}).click();
+  await page.getByText(/CURRENT_SIGNAL/).waitFor();
+  const oldSignalResponse=page.waitForResponse(r=>r.url().includes("stage=schema"));
+  releaseOldSignal();await oldSignalResponse;
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  assert.equal(await page.getByText(/STALE_SIGNAL/).count(),0);
+  assert.equal(await page.locator("select").first().inputValue(),"execution");
+  await page.getByText(/CURRENT_SIGNAL/).waitFor();
+
   console.log("notes backup browser E2E: PASS");
 } finally {
   if (browser) await browser.close().catch(() => {});

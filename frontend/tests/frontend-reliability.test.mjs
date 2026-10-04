@@ -39,7 +39,7 @@ function harness(path, name, overrides = {}) {
     compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   vm.runInNewContext(js, {
-    exports, require: name => mods[name] ?? generic, AbortController, DOMException, Error, console, URLSearchParams, Map, Set, Date,
+    exports, require: name => mods[name] ?? generic, FileReader: globalThis.FileReader, AbortController, DOMException, Error, console, URLSearchParams, Map, Set, Date,
     window: { setTimeout: fn => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), addEventListener(type, fn) { listeners.set(type, fn); }, removeEventListener(type, fn) { if (listeners.get(type) === fn) listeners.delete(type); } }, confirm: () => true,
   }, { filename: path });
   return {
@@ -216,13 +216,13 @@ test('failed or stopped Debate never advertises complete savable results', async
   assert.match(label(h.render()), /辩论失败/);
 });
 
-function reportHarness(search) {
+function reportHarness(search, api = {}) {
   const params = new URLSearchParams();
   return harness('pages/MyReports.tsx', 'MyReports', {
     'react-router-dom': { useSearchParams: () => [params, () => {}], Link: 'link' },
     '@/data/sectors.json': { default: { sectors: [] } }, '@/lib/utils': { cn: () => '' },
-    '@/lib/myReportsView': { filterReports: rows => rows, groupReportsByIndustry: () => [], groupReportsByInstitution: () => [], groupReportsByYearMonth: () => [] },
-    '@/lib/api': { ...apiClient, api: { myReports: async () => [], searchMyReportText: search } },
+    '@/lib/myReportsView': { filterReports: rows => rows, groupReportsByIndustry: rows => [{ key:"all", label:"All", count:rows.length, reports:rows }], groupReportsByInstitution: () => [], groupReportsByYearMonth: () => [] },
+    '@/lib/api': { ...apiClient, api: { myReports: async () => [], searchMyReportText: search, ...api } },
   });
 }
 function query(h, value) {
@@ -592,4 +592,48 @@ test('failed reflection keeps partial text but cannot reuse previous completion 
   assert.match(label(tree), /反思未完整结束/);
   assert.equal(find(tree, 'button', '把审计结果存为新记录'), undefined);
   assert.equal(notes.loadNotes().length, 2);
+});
+
+test('partial report upload refreshes confirmed successes and identifies the failed file', async t => {
+  const previousReader = globalThis.FileReader;
+  globalThis.FileReader = class { readAsDataURL() { this.result='data:text/plain;base64,eA=='; this.onload(); } };
+  t.after(()=>{globalThis.FileReader=previousReader;});
+  const calls=[]; let loads=0;
+  const success={id:'uploaded',name:'first.txt',title:'Uploaded first',size:1,ts:1};
+  const h=reportHarness(async()=>[], {
+    myReports:async()=>{loads++;return loads>1?[success]:[];},
+    uploadReport:async name=>{calls.push(name);if(name==='second.txt')throw new apiClient.ApiError('synthetic rejection',400);return success;},
+  });
+  h.render(); await tick();
+  nodes(h.render()).find(node=>node.type==='input' && node.props.type==='file').props.onChange({target:{files:[{name:'first.txt'},{name:'second.txt'},{name:'third.txt'}],value:'files'}});
+  await tick();
+  assert.deepEqual(calls,['first.txt','second.txt']);
+  assert.equal(loads,2);
+  const tree=h.render();
+  assert.match(label(tree),/Uploaded first/);
+  assert.match(label(tree),/已上传 1/);
+  assert.match(label(tree),/second.txt/);
+  assert.match(label(tree),/synthetic rejection/);
+  assert.doesNotMatch(label(tree),/还没有归档/);
+});
+
+test('report upload blocks overlapping batches and reports failed refresh without claiming rollback', async t => {
+  const previousReader=globalThis.FileReader;
+  globalThis.FileReader=class {readAsDataURL(){this.result='data:text/plain;base64,eA==';this.onload();}};
+  t.after(()=>{globalThis.FileReader=previousReader;});
+  const first=deferred();const calls=[];let loads=0;
+  const h=reportHarness(async()=>[], {
+    myReports:async()=>{if(++loads>1)throw new apiClient.ApiError('offline',500);return[];},
+    uploadReport:async name=>{calls.push(name);if(name==='first.txt')return first.promise;throw new apiClient.ApiError('rejected',400);},
+  });
+  h.render();await tick();
+  const input=()=>nodes(h.render()).find(node=>node.type==='input'&&node.props.type==='file');
+  input().props.onChange({target:{files:[{name:'first.txt'},{name:'bad.txt'}],value:''}});await tick();
+  input().props.onChange({target:{files:[{name:'duplicate.txt'}],value:''}});await tick();
+  assert.deepEqual(calls,['first.txt']);
+  first.resolve({id:'first'});await tick();
+  assert.deepEqual(calls,['first.txt','bad.txt']);
+  assert.match(label(h.render()),/已上传 1/);
+  assert.match(label(h.render()),/列表刷新失败/);
+  assert.doesNotMatch(label(h.render()),/还没有归档/);
 });
