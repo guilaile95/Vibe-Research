@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import {
   Activity,
@@ -49,7 +49,10 @@ export default function SignalLedger() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [filterError, setFilterError] = useState<string | null>(null);
 
+  const requestRef = useRef(0);
   const fetchData = async (currentFilters: SignalLedgerFilters) => {
+    const generation = ++requestRef.current;
+    const active = () => generation === requestRef.current;
     setLoading(true);
     setErrorMsg(null);
     try {
@@ -57,6 +60,7 @@ export default function SignalLedger() {
       if (targetRunId) {
         // Run detail mode
         const detail = await api.getRunSignalLedger(targetRunId);
+        if (!active()) return;
         setRunRecord(detail.run);
         setSignalEntries(detail.signal_entries);
         setDecisionOutcomes(detail.decision_outcomes);
@@ -70,21 +74,24 @@ export default function SignalLedger() {
           severity: currentFilters.severity || undefined,
           limit: 100,
         });
+        if (!active()) return;
         setSignalEntries(queryRes.items);
       }
     } catch (err) {
+      if (!active()) return;
       if (err instanceof ApiError) {
         setErrorMsg(err.message);
       } else {
         setErrorMsg("加载信号账本失败，请稍后重试");
       }
     } finally {
-      setLoading(false);
+      if (active()) setLoading(false);
     }
   };
 
   useEffect(() => {
     fetchData(filters);
+    return () => { requestRef.current += 1; };
   }, []);
 
   const handleFilterSubmit = (e: React.FormEvent) => {

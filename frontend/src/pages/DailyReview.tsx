@@ -186,6 +186,7 @@ export function DailyReview() {
   const [histFilterDate, setHistFilterDate] = useState("");
   const [histOffset, setHistOffset] = useState(0);
   const [histCount, setHistCount] = useState(0);
+  const historyRequestRef = useRef(0);
 
   // 历史详情（只读，不替换当前实时 dr）
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<number | null>(null);
@@ -366,6 +367,8 @@ export function DailyReview() {
   }, [applyDailyReviewPayload, clearPoll]);
 
   const loadHistory = (opts?: { trade_date?: string; offset?: number }) => {
+    const generation = ++historyRequestRef.current;
+    const active = () => mountedRef.current && generation === historyRequestRef.current;
     const offset = opts?.offset ?? histOffset;
     const tradeDate = opts?.trade_date !== undefined ? opts.trade_date : histFilterDate;
     setHistLoading(true);
@@ -377,16 +380,19 @@ export function DailyReview() {
     if (tradeDate) params.trade_date = tradeDate;
     api.listDailyReviewHistory(params)
       .then((res) => {
+        if (!active()) return;
         setHistItems(res.items || []);
         setHistCount(res.count ?? (res.items?.length ?? 0));
         setHistOffset(res.offset ?? offset);
       })
       .catch((e) => {
+        if (!active()) return;
         setHistItems([]);
         setHistCount(0);
         setHistErr(e instanceof ApiError ? e.message : "历史记录加载失败");
       })
       .finally(() => {
+        if (!active()) return;
         setHistLoading(false);
         setHistDone(true);
       });
@@ -423,6 +429,7 @@ export function DailyReview() {
     // 仅首次挂载：不自动保存、不自动 AI
     return () => {
       mountedRef.current = false;
+      historyRequestRef.current += 1;
       clearPoll();
       bk11AbortRef.current?.abort();
     };

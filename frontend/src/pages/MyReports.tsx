@@ -66,6 +66,7 @@ export function MyReports() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [drag, setDrag] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const uploadBusyRef = useRef(false);
 
   const [view, setView] = useState<MyReportsBrowseGroup>("industry");
 
@@ -118,9 +119,11 @@ export function MyReports() {
       setReports(data);
       setLoadFailed(false);
       setErr(null);
+      return true;
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "加载研报列表失败");
       setLoadFailed(true);
+      return false;
     } finally {
       setHasLoaded(true);
     }
@@ -147,22 +150,30 @@ export function MyReports() {
     };
   }, [q, searchRetry]);
 
-  const refreshAll = async () => {
-    await load();
-  };
+  const refreshAll = async () => load();
 
   const upload = async (files: FileList | File[]) => {
+    if (uploadBusyRef.current) return;
+    uploadBusyRef.current = true;
     setBusy(true);
     setErr(null);
+    let uploaded = 0;
+    let currentName = "";
     try {
       for (const f of Array.from(files)) {
+        currentName = f.name;
         const b64 = await fileToB64(f);
         await api.uploadReport(f.name, b64);
+        uploaded += 1;
       }
       await refreshAll();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : "上传失败");
+      // Earlier files are already persisted: a later failure must not hide them.
+      const refreshed = uploaded === 0 || await refreshAll();
+      const detail = e instanceof ApiError ? e.message : "上传失败";
+      setErr(`已上传 ${uploaded} 份；「${currentName}」上传失败：${detail}。后续文件未上传。${refreshed ? "" : "列表刷新失败，请刷新页面核对已上传文件，勿重复上传。"}`);
     } finally {
+      uploadBusyRef.current = false;
       setBusy(false);
     }
   };

@@ -549,6 +549,27 @@ try {
   await todayCloud.locator("[data-market-cloud-chart]").waitFor({ state: "visible", timeout: 15000 });
   assert.equal(await todaySurface.getByTestId("market-intel-panel").count(), 1, "切回当前市场后市场情报仍在位");
 
+  // Date filters must own their result even if an older request finishes last.
+  let releaseOldHistory, historyStarted;
+  const oldHistoryStarted = new Promise(resolve => { historyStarted = resolve; });
+  const historyRace = async route => {
+    const date = new URL(route.request().url()).searchParams.get("trade_date");
+    if (date === "2026-10-01") { historyStarted(); await new Promise(resolve => { releaseOldHistory = resolve; }); }
+    await route.fulfill({json:{items:[{id:date === "2026-10-01"?1:2,trade_date:date,generated_at:"synthetic",created_at:"synthetic",status:"partial",schema_version:"test"}],count:1,limit:20,offset:0}});
+  };
+  await page.route("**/api/daily-review/history?*", historyRace);
+  await page.getByTestId("today-view-tab-history").click();
+  await page.getByLabel("交易日期",{exact:true}).fill("2026-10-01");
+  await oldHistoryStarted;
+  await page.getByLabel("交易日期",{exact:true}).fill("2026-10-02");
+  await page.getByRole("cell",{name:"2026-10-02",exact:true}).waitFor();
+  const oldHistoryResponse = page.waitForResponse(r=>r.url().includes("trade_date=2026-10-01"));
+  releaseOldHistory();await oldHistoryResponse;
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  assert.equal(await page.getByRole("cell",{name:"2026-10-01",exact:true}).count(),0);
+  assert.equal(await page.getByRole("cell",{name:"2026-10-02",exact:true}).count(),1);
+  await page.unroute("**/api/daily-review/history?*", historyRace);
+
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`http://127.0.0.1:${port}/daily-review`, { waitUntil: "domcontentloaded" });
   await page.getByTestId("today-market-surface").locator("[data-market-cloud-chart]").waitFor({ state: "visible", timeout: 15000 });
