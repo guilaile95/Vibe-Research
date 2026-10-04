@@ -1,5 +1,6 @@
 import { AttributionScopeNote } from "@/components/review/AttributionScopeNote";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import {
   PieChart,
   Loader2,
@@ -61,80 +62,135 @@ export default function PerformanceAttribution() {
   const [freezing, setFreezing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [viewingSnapshotId, setViewingSnapshotId] = useState<string | null>(null);
+  const [snapshotListError, setSnapshotListError] = useState<string | null>(null);
+  const [freezeError, setFreezeError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+  const viewRequestRef = useRef(0);
+  const snapshotListRequestRef = useRef(0);
+  const freezeInFlightRef = useRef(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      viewRequestRef.current += 1;
+      snapshotListRequestRef.current += 1;
+    };
+  }, []);
 
   const loadSnapshots = useCallback(async () => {
+    const requestId = ++snapshotListRequestRef.current;
+    const isCurrent = () => mountedRef.current && requestId === snapshotListRequestRef.current;
+    if (mountedRef.current) setSnapshotListError(null);
     try {
       const res = await api.listAttributionSnapshots({ limit: 20, offset: 0 });
-      setSnapshots(res.items ?? []);
+      if (isCurrent()) setSnapshots(res.items ?? []);
     } catch {
-      /* 快照列表失败不阻塞主视图 */
+      if (isCurrent()) setSnapshotListError("历史快照列表刷新失败；这不表示已确认的冻结操作失败。");
     }
   }, []);
 
   const fetchAttribution = useCallback(async () => {
+    const requestId = ++viewRequestRef.current;
+    const isCurrent = () => mountedRef.current && requestId === viewRequestRef.current;
     setLoading(true);
     setError(null);
+    setResult(null);
     setViewingSnapshotId(null);
     try {
       const res = await api.getPerformanceAttribution({
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
       });
-      setResult(res);
+      if (isCurrent()) setResult(res);
     } catch (err: any) {
-      setError(err?.message || "加载收益归因失败");
-      setResult(null);
+      if (isCurrent()) setError(err?.message || "加载收益归因失败");
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [dateFrom, dateTo]);
 
   useEffect(() => {
-    fetchAttribution();
+    void fetchAttribution();
   }, [fetchAttribution]);
 
   useEffect(() => {
-    loadSnapshots();
+    void loadSnapshots();
   }, [loadSnapshots]);
 
+  const changeDate = (field: "from" | "to", value: string) => {
+    if (value === (field === "from" ? dateFrom : dateTo)) return;
+    // Invalidate in the input event, before the new render/effect starts a read.
+    viewRequestRef.current += 1;
+    setLoading(true);
+    setResult(null);
+    setViewingSnapshotId(null);
+    setError(null);
+    if (field === "from") setDateFrom(value); else setDateTo(value);
+  };
+
   const handleFreeze = async () => {
+    // React's disabled state is not a synchronous duplicate-submit guard.
+    if (freezeInFlightRef.current) return;
+    freezeInFlightRef.current = true;
+    const startedView = viewRequestRef.current;
     setFreezing(true);
     setNotice(null);
-    setError(null);
+    setFreezeError(null);
     try {
+      // This is a write: never abort or automatically retry it on view changes.
       const res = await api.createAttributionSnapshot({
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
       });
-      setResult(res.attribution);
-      setViewingSnapshotId(null);
-      setNotice(`已冻结快照（计算日期 ${res.snapshot?.as_of_date ?? "—"}）`);
-      await loadSnapshots();
-      setSnapshotsOpen(true);
-    } catch (err: any) {
-      setError(err?.message || "冻结快照失败");
+      const message = `已冻结快照 ${res.snapshot.snapshot_id}（计算日期 ${res.snapshot.as_of_date ?? "—"}）`;
+      // Router transitions can change URL before this page's effect cleanup.
+      // The application-level acknowledgement must survive either timing.
+      toast.success(message);
+      if (mountedRef.current) {
+        setNotice(message);
+        if (viewRequestRef.current === startedView) {
+          // Stop a read started before this confirmed write from overwriting it.
+          viewRequestRef.current += 1;
+          setResult(res.attribution);
+          setViewingSnapshotId(null);
+          setError(null);
+          setLoading(false);
+        }
+        setSnapshotsOpen(true);
+        await loadSnapshots();
+      }
+    } catch {
+      const message = "未确认冻结快照结果，请先查看历史快照再决定是否重试；不会自动重新提交。";
+      toast.error(message);
+      if (mountedRef.current) setFreezeError(message);
     } finally {
-      setFreezing(false);
+      freezeInFlightRef.current = false;
+      if (mountedRef.current) setFreezing(false);
     }
   };
 
   const handleOpenSnapshot = async (snapshotId: string) => {
+    const requestId = ++viewRequestRef.current;
+    const isCurrent = () => mountedRef.current && requestId === viewRequestRef.current;
     setLoading(true);
     setError(null);
-    setNotice(null);
+    setResult(null);
+    setViewingSnapshotId(null);
     try {
       const detail = await api.getAttributionSnapshot(snapshotId);
+      if (!isCurrent()) return;
       const payload = detail.snapshot?.payload;
       if (payload) {
         setResult({ ...payload, positions: detail.positions ?? payload.positions ?? [] });
+        setViewingSnapshotId(snapshotId);
       } else {
-        setResult(null);
+        setError("快照没有可读取的归因结果。");
       }
-      setViewingSnapshotId(snapshotId);
     } catch (err: any) {
-      setError(err?.message || "加载快照详情失败");
+      if (isCurrent()) setError(err?.message || "加载快照详情失败");
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
 
@@ -159,14 +215,14 @@ export default function PerformanceAttribution() {
             type="date"
             aria-label="起始日期"
             value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
+            onChange={(e) => changeDate("from", e.target.value)}
             className="rounded-md border border-input bg-background px-3 py-2 text-sm"
           />
           <input
             type="date"
             aria-label="结束日期"
             value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
+            onChange={(e) => changeDate("to", e.target.value)}
             className="rounded-md border border-input bg-background px-3 py-2 text-sm"
           />
           <button
@@ -197,8 +253,10 @@ export default function PerformanceAttribution() {
         </div>
       )}
 
+      {freezeError && <p role="alert" className="rounded-md bg-amber-500/10 p-3 text-sm text-amber-600">{freezeError}</p>}
+
       {notice && (
-        <div className="rounded-md bg-emerald-500/10 p-3 text-sm text-emerald-600">{notice}</div>
+        <div data-testid="attribution-freeze-notice" className="rounded-md bg-emerald-500/10 p-3 text-sm text-emerald-600">{notice}</div>
       )}
 
       {viewingSnapshotId && (
@@ -231,9 +289,13 @@ export default function PerformanceAttribution() {
         <div className="flex h-40 items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
-      ) : !result || positions.length === 0 ? (
+      ) : !result ? (
         <div className={`${CARD} text-center text-muted-foreground`}>
-          暂无交易流水，无法计算归因
+          归因结果暂不可用，请检查读取状态后重试。
+        </div>
+      ) : positions.length === 0 ? (
+        <div className={`${CARD} text-center text-muted-foreground`}>
+          当前结果没有可归因的交易流水。
         </div>
       ) : (
         <>
@@ -324,6 +386,12 @@ export default function PerformanceAttribution() {
           <span className="text-xs text-muted-foreground">{snapshotsOpen ? "收起" : "展开"}</span>
         </button>
 
+        {snapshotListError && (
+          <div role="alert" className="mt-3 text-sm text-amber-600">
+            {snapshotListError}
+            <button type="button" onClick={() => void loadSnapshots()} className="ml-2 underline">刷新历史列表</button>
+          </div>
+        )}
         {snapshotsOpen && (
           <div className="mt-4 overflow-auto">
             {snapshots.length === 0 ? (
