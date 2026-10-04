@@ -4,6 +4,7 @@
 > **候选池维护历史**：由 PR #34 引入；**实时稳定 HEAD**：`git rev-parse origin/feature/research-system-v01`
 > **仅描述仓库内已实现能力边界与外部候选差距；不包含密钥、持仓内容或代理敏感配置**
 > **维度拆分**：实现状态 ≠ 当前执行授权
+> **历史范围**：下文能力、实验与授权状态保留各阶段记录，不是当前任务清单。当前恢复入口为 [CURRENT_STAGE.md](CURRENT_STAGE.md)，实现与授权须核对 live GitHub 及用户最新明确指令。
 
 ---
 
@@ -28,7 +29,7 @@
 | **未授权** | 仅候选规划 | ❌ |
 | **待用户决策** | 本地实验/备份，需用户决定去留 | ❌ 不得当授权任务推进 |
 
-**当前已授权产品开发任务：无。**
+**历史快照中的已授权产品开发任务：无。** 当前授权按 [NEXT_TASK.md](NEXT_TASK.md) 指向的来源核对，本文不授予开发权限。
 
 历史上已上线的功能，不代表当前仍有开发授权。
 
@@ -442,14 +443,15 @@ BK-08 (视觉) ──▶ 全部前端候选
 
 | 文档 | 职责 | 何时更新 |
 |------|------|----------|
-| `docs/PRODUCT_BACKLOG.md` | 本文档 — 候选池边界、授权状态、依赖关系 | 候选授权/完成/新增时 |
-| `docs/NEXT_TASK.md` | 当前已授权任务（无候选） | 授权变更时 |
-| `docs/CHAT_HANDOFF.md` | 交接摘要 + 安全边界 | 架构/边界变更时 |
-| `docs/PROJECT_STATE.md` | 已实现能力清单 | 功能合并至稳定分支时 |
+| `docs/PRODUCT_BACKLOG.md` | 本文档 — 候选池边界、依赖与历史记录，不授予执行权限 | 候选内容变化时 |
+| [`docs/CURRENT_STAGE.md`](CURRENT_STAGE.md) | 恢复坐标，指向 live 工程与授权来源 | 恢复入口变化时 |
+| [`docs/NEXT_TASK.md`](NEXT_TASK.md) | 当前授权来源的指针，不维护第二份任务清单 | 授权入口变化时 |
+| [`docs/CHAT_HANDOFF.md`](CHAT_HANDOFF.md) | 交接恢复入口，规则链接到根 AGENTS.md | 恢复入口变化时 |
+| [`docs/PROJECT_STATE.md`](PROJECT_STATE.md) | 历史快照归档提示，不是当前状态权威 | 归档说明变化时 |
 | `docs/ARCHITECTURE.md` | 调用链 + 数据流 | 架构变更时 |
 | `docs/DECISIONS.md` | 设计决定 | 新设计决定时 |
-| `docs/KNOWN_ISSUES.md` | 已知限制 + 测试例外 | 发现/修复限制时 |
-| `docs/GOVERNANCE.md` | 治理契约（权威链、CI 分级、分支保护、PR 恢复方案） | 治理变更时 |
+| `docs/KNOWN_ISSUES.md` | 长期产品限制；实时缺陷与 CI 以 GitHub 为准 | 长期限制变化时 |
+| `docs/GOVERNANCE.md` | 权威来源导航；工程规则正文在根 AGENTS.md | 来源角色变化时 |
 | `docs/research/EXECUTION_STATE.md` | 最近执行记录（历史），不作为项目状态权威 | 历史执行记录更新时 |
 
 ---

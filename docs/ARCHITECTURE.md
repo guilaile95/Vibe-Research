@@ -63,7 +63,7 @@ generate_daily_review()
   → 否则锁内 _build_daily_review()
        market.get_indices / breadth / emotion / boards / turnover / global …
   → daily_review_errors.sanitize_review_public_fields
-  → 内存 _store_review + 磁盘 persist（规则见 PROJECT_STATE）
+  → 内存 _store_review + 磁盘 persist（按 daily_review_cache 的持久化条件）
 ```
 
 ### 展示 vs 业务

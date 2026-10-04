@@ -1,43 +1,43 @@
 # Current Stage — Recovery Coordinates
 
-Last reviewed: 2026-09-10
+Last reviewed: 2026-10-04
 
 This file is a recovery pointer, not Engineering Truth and not a second task database.
 Always resolve live GitHub state before acting; do not persist an exact stable SHA here.
 
+## Start here
+
+- [Documentation index](README.md): task-oriented navigation.
+- [Getting started](GETTING_STARTED.md): supported environments, startup and health checks.
+- [2026-10-04 public integration and acceptance](research/PUBLIC_INTEGRATION_20261004.md): code/doc dependencies and remaining evidence.
+- [2026-10-02 historical delivery snapshot](research/PROJECT_STATUS_20261002.md): version separation, Draft repairs and bounded validation.
+- [Notion project home](https://app.notion.com/p/3be55152dfe881fd8552e356a79c7cf6) and [detailed assessment](https://app.notion.com/p/3e355152dfe881ee9effcfa720040127): durable context and dated history; workspace access required.
+
 ## Current Product Stage
 
-**Planning Parity continuation; Product Reality remains ready but is not active.**
+**Research workflow implemented; real market reliability, real model quality and sustained product value remain separate acceptance work.**
 
-The durable Product Reality contract remains Issue
-[#162](https://github.com/guilaile95/Vibe-Research/issues/162).
+The durable Product Reality contract is Issue [#162](https://github.com/guilaile95/Vibe-Research/issues/162).
+Its latest observed comment records `ARMED_WAITING_FOR_FIRST_REAL_SESSION` and `FORMAL_OBSERVATION_DAY_1 = NOT_STARTED`.
+Older body text uses `READY_NOT_ACTIVE`; read the latest comments and the Owner's current decision rather than treating an old label as live authority.
 
-Last synchronized state:
-
-```text
-PRODUCT_REALITY_STATE = READY_NOT_ACTIVE
-FORMAL_OBSERVATION_DAY_1 = NOT_STARTED
-OBSERVATION_SAMPLE_INVALIDATED = NO
-CURRENT_SEQUENCE = PLANNING_PARITY_CONTINUES
-```
-
-Owner sequencing decision: Product Reality is not a prerequisite for continuing Planning Parity.
-Engineering may continue through narrowly scoped, explicitly bounded Planning Parity slices while Day 1
-has not started. Once the Owner actually starts the formal Product Reality observation, the observation
-freeze in #162 applies for the duration of that active sprint.
-
-Day 1 still begins only when the Owner uses the accepted stable build for a real A-share decision
-workflow. CI, browser smoke, setup checks, demos, and synthetic data must never be counted as Product
-Reality evidence.
+Day 1 begins only with the Owner's natural A-share workflow on an accepted build. CI, browser checks,
+setup, prototypes and synthetic data cannot activate or backfill it. The observation freeze applies
+when that real observation sprint is active. Clearly bounded Owner-authorized work follows its own scope.
 
 ## Current Engineering Default
 
-Issue [#203](https://github.com/guilaile95/Vibe-Research/issues/203) remains the live engineering authority.
-The default state is **FROZEN between slices**, unless its latest comment records an active Owner/PM
-Planning Parity authorization or another narrow Owner override.
+Issue [#203](https://github.com/guilaile95/Vibe-Research/issues/203) remains the durable authorization pointer;
+the Owner's latest explicit instruction defines any current override. Outside an authorized scope,
+the default is **FROZEN between slices**. A task list or historical Draft does not authorize new work.
 
-A clear next action does not itself authorize unrelated implementation. Historical Draft PRs and old
-agent lane assignments remain archival context and must not be revived automatically.
+The October 2 documentation refresh had a documentation-only Draft boundary. Subsequent
+Owner-authorized cloud repairs and bounded research/UI improvements are recorded in the October 4
+snapshot. Current scope still stops before stable merge, deployment or desktop changes; recover
+the latest explicit instruction rather than extending either historical task automatically.
+
+Resolve the live remote stable HEAD separately from local branch names. Local integrated source,
+remote Draft branches and the currently running services are different evidence surfaces.
 
 ## Stable Product Foundation
 

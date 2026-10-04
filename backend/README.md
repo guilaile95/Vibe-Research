@@ -1,19 +1,16 @@
 # Vibe-Research Backend
 
-市场数据查询、本地研究与决策/账户记录，以及可选 AI 层。包含受控写入与本地持久化，不能作为“全部只读、无状态”服务部署。权限与调用链见 [架构说明](../docs/ARCHITECTURE.md)。
+市场数据查询、本地研究与决策/账户记录，以及可选 AI 层。后端包含受控写入和本地持久化；部署与调用前请了解[架构与数据边界](../docs/ARCHITECTURE.md)。
 
 ## 安装
 
-```bash
-cd backend
-python3.11 -m venv .venv
-.venv/bin/python -m pip install -r requirements-linux-py311.lock.txt
-```
+按[入门运行指南](../docs/GETTING_STARTED.md)选择平台、Python 版本与对应精确锁文件，并启动所需服务。依赖合同见[依赖可复现性](../docs/DEPENDENCY_REPRODUCIBILITY.md)。
 
-> 上述为 Linux CPython 3.11 的锁定环境。Windows 请按 [根目录启动说明](../README.md#运行方式) 使用对应版本及锁文件。公开数据源可能限流、故障或变更，不保证安装后所有来源都可用。
-> 一致预期 / 新闻 / 公告需 `akshare`，K线 / 财务需 `mootdx`；未装时对应端点返回 501 + 安装提示，不影响其余功能。
+公开数据源可能限流、故障或变更；安装成功不代表所有来源均可用。下表中的依赖说明用于理解接口，不替代完整锁定环境。
 
 ## 1. HTTP API（给网页前端 + 系统 AI）
+
+Linux 完成安装后，在 `backend/` 目录启动后端；其他平台命令见入门指南：
 
 ```bash
 .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8900
@@ -37,7 +34,7 @@ python3.11 -m venv .venv
 | `POST /api/chat` | 系统 AI 对话（API 模式可使用受控工具；订阅模式能力不同） | 依所选接入方式 |
 | `POST /api/ai/connection-test` | 手动固定合成请求、无工具、限时检测；不是模型质量评测 | httpx；[边界与费用](../docs/AI_CONNECTION_TEST.md) |
 
-> 上表为主要端点；完整路由清单见 `app.py`。要更全量的 A 股数据（打板 / ETF期权 / 全市场行业排名等），用根目录 [`a-stock-data/`](../a-stock-data/SKILL.md) 工具箱。
+> 上表是部分接口参考，不是完整 API 清单；当前路由、参数和数据来源以 [`app.py`](app.py) 及其注册的 router 模块为准。额外 A 股研究接口见根目录 [`a-stock-data/`](../a-stock-data/SKILL.md) 工具说明。
 
 `/api/chat` 请求体：
 ```json
@@ -47,24 +44,24 @@ python3.11 -m venv .venv
   "llm": {"baseURL": "https://api.deepseek.com", "apiKey": "sk-…", "model": "deepseek-chat"}
 }
 ```
-`llm` 由前端随请求带上；此聊天请求本身不持久化 key。设置页的保存操作另会同步本机后台凭据，以支持已配置的定时功能；模型请求会将认证凭据发送给所选服务端，勿与“本地保存”混淆。
+`llm` 由前端随请求带上；此聊天请求本身不持久化 key。设置页保存操作另会将模型配置与凭据同步到本机后台，供已配置的定时功能使用。模型请求会将认证凭据和所需上下文发送给选定服务端。
 
 ## 2. MCP Server（给 Claude Code / 高手 agent）
 
-协议层不引入额外 MCP 框架，但仍需上面完整的后端 Python 环境。挂进 Claude Code：
+协议层未引入额外 MCP 框架，但仍需完整的后端 Python 环境。在 `backend/` 目录将其挂进已安装的 Claude Code：
 
 ```bash
 claude mcp add vibe-research -- \
   "$(pwd)/.venv/bin/python" "$(pwd)/mcp_server.py"
 ```
 
-工具清单由 `mcp_server.py` 从 `chat.TOOLS`（底层 `ai_tools.TOOLS`）动态生成，不再只有四个工具。通过 MCP 的 `tools/list` 查询当前注册清单。MCP 本身不调用模型；外部 agent 的模型费用及数据源额度由相应服务决定。
+工具清单由 [`mcp_server.py`](mcp_server.py) 从 `chat.TOOLS`（底层 `ai_tools.TOOLS`）动态生成，可通过 MCP 的 `tools/list` 查询。MCP 本身不调用模型；外部 agent 的认证、模型费用和数据源额度由相应服务决定。
 
-### 完整 A 股数据工具箱（随仓库自带）
+### A 股数据工具箱（随仓库自带）
 
-仓库另带 [a-stock-data](../a-stock-data/SKILL.md) 的数据源工具说明；能力、依赖和限制以该目录当前文档为准，不以历史端点数量作保证。
-- 要调哪个接口，直接看 [`a-stock-data/SKILL.md`](../a-stock-data/SKILL.md)——每个端点都有 copy-paste 即用的代码（内嵌全部调用逻辑，零第三方数据封装依赖，东财接口已内置限流防封）。
-- 运行依赖：`pip install mootdx requests pandas stockstats`（自包含，v3.0 起已移除 akshare）。
-- 仓库内置的是固定版本快照，可独立使用，无需额外下载。
-- 分工：MCP 暴露已注册的受控查询工具；数据源目录提供额外研究接口说明。不要把外部 agent 的能力等同于本产品受限的 Codex 页面聊天。
+仓库带有 [`a-stock-data/`](../a-stock-data/SKILL.md) 数据工具与示例快照。能力、依赖和来源限制以该目录当前文档为准，不以历史端点数量保证覆盖或可用性。
+
+- 按具体接口说明准备依赖；请求限流措施不保证第三方来源始终可达。
+- MCP 暴露已注册的受控工具；数据源目录提供额外研究接口说明。
+- 外部 agent 的工具能力与本产品受限的 Codex 页面聊天不同，不能相互推定。
 

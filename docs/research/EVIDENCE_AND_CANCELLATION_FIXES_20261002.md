@@ -29,10 +29,10 @@ The pre-fix exact-PR356 TCP experiment reproduced the opposite behavior: all thr
 
 The committed backend regression tests exercise the real ASGI disconnect channel and real result restore, repeated cancellations, model/before-save/inside-save stages, financial boundaries, K-line contracts and error-envelope integration. The focused suite passed **283 tests in 17 files** (9.46 seconds); independent final review approved the patch without blocking findings. The later explicit debate-section assertion passed alongside the chat/K-line subset (65 tests). These runs use the existing project Python 3.12 environment and no live providers.
 
-From the isolated checkout's `backend` directory:
+After preparing the isolated checkout's Python 3.12 environment, run from its `backend` directory:
 
 ```powershell
-& 'E:\AI Projects\Vibe-Research\backend\.venv\Scripts\python.exe' -B -m pytest tests/test_tencent_kline_contract.py tests/test_ai_tools_bse_kline.py tests/test_astock_financial_health.py tests/test_financials_api.py tests/test_critical_data_financials_adapter.py tests/test_portfolio_advice_cancellation.py tests/test_portfolio_advice_api.py tests/test_portfolio_advice_service.py tests/test_portfolio_advice_error_mapping.py tests/test_portfolio_advice_architecture.py tests/test_ai_result_store.py tests/test_ai_result_service.py tests/test_decision_trace_store.py tests/test_decision_evidence_service.py tests/test_signal_ledger_store.py tests/test_signal_ledger_service.py tests/test_chat_grounding.py -q -p no:cacheprovider
+.\.venv\Scripts\python.exe -B -m pytest tests/test_tencent_kline_contract.py tests/test_ai_tools_bse_kline.py tests/test_astock_financial_health.py tests/test_financials_api.py tests/test_critical_data_financials_adapter.py tests/test_portfolio_advice_cancellation.py tests/test_portfolio_advice_api.py tests/test_portfolio_advice_service.py tests/test_portfolio_advice_error_mapping.py tests/test_portfolio_advice_architecture.py tests/test_ai_result_store.py tests/test_ai_result_service.py tests/test_decision_trace_store.py tests/test_decision_evidence_service.py tests/test_signal_ledger_store.py tests/test_signal_ledger_service.py tests/test_chat_grounding.py -q -p no:cacheprovider
 ```
 
 ## Cancellation guarantee and remaining acceptance
