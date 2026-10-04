@@ -33,3 +33,5 @@
 
 - [K-line research linkage](KLINE_RESEARCH_LINKAGE.md): bounded event/evidence overlay and identity/date limits
 - [Public stack and rollback](research/PUBLIC_STACK_ROLLBACK_20261004.md): dated ancestry and reversible integration gates
+
+- [PA1 view ownership](PA1_VIEW_OWNERSHIP.md): asynchronous result identity and confirmed snapshot-write handling

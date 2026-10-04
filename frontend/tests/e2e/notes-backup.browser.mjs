@@ -12,6 +12,7 @@ import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
+import { runAttributionOwnership } from "./attribution-ownership.fixture.mjs";
 
 const here = join(fileURLToPath(import.meta.url), "..");
 const dist = resolve(here, "../../dist");
@@ -515,6 +516,7 @@ try {
     assert.equal(attributionWrites,0);
   }
 
+  await runAttributionOwnership(browser, frontend);
   console.log("notes backup browser E2E: PASS");
 } finally {
   if (browser) await browser.close().catch(() => {});
