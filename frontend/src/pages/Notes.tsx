@@ -69,6 +69,8 @@ export function Notes() {
   const [reflectErr, setReflectErr] = useState("");
   const [reflecting, setReflecting] = useState(false);
   const [reflectSaved, setReflectSaved] = useState(false);
+  const [reflectComplete, setReflectComplete] = useState(false);
+  const [reflectTruncated, setReflectTruncated] = useState(false);
   const [backupStatus, setBackupStatus] = useState("");
   const [backupError, setBackupError] = useState("");
   const [importing, setImporting] = useState(false);
@@ -97,12 +99,19 @@ export function Notes() {
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    setReflectId(n.id); setReflectText(""); setReflectErr(""); setReflectSaved(false); setReflecting(true);
+    setReflectId(n.id); setReflectText(""); setReflectErr(""); setReflectSaved(false); setReflectComplete(false); setReflectTruncated(false); setReflecting(true);
     try {
       await reflectStream(n.content, n.title, {
         onDelta: (t) => { if (abortRef.current === ctrl && !ctrl.signal.aborted) setReflectText((s) => s + t); },
         onError: (message) => { if (abortRef.current === ctrl && !ctrl.signal.aborted) setReflectErr(message); },
+        onDone: (content, truncated) => {
+          if (abortRef.current === ctrl && !ctrl.signal.aborted) {
+            setReflectText(content);
+            setReflectTruncated(truncated);
+          }
+        },
       }, ctrl.signal);
+      if (abortRef.current === ctrl && !ctrl.signal.aborted) setReflectComplete(true);
     } catch (e) {
       if (abortRef.current === ctrl && !ctrl.signal.aborted && !(e instanceof DOMException && e.name === "AbortError")) {
         setReflectErr(e instanceof ApiError ? e.message : String(e));
@@ -113,9 +122,10 @@ export function Notes() {
   }
 
   function saveReflection(n: Note) {
+    if (!reflectComplete || reflecting || reflectErr || reflectId !== n.id) return;
     setBackupStatus("");
     try {
-      setNotes(addNote("反思审计", `反思 · ${n.title}`, reflectText, n.research ? {
+      setNotes(addNote("反思审计", `反思 · ${n.title}`, reflectTruncated ? `原文较长，本次仅审计截取部分，未覆盖全文。\n\n${reflectText}` : reflectText, n.research ? {
         securityCode: n.research.securityCode,
         question: n.research.question,
         sourceLinks: n.research.sourceLinks,
@@ -344,20 +354,16 @@ export function Notes() {
 
                     {reflectId === n.id && (reflectText || reflectErr) && (
                       <div className="mt-3 rounded-lg border border-violet-500/30 bg-violet-500/[0.05] p-3">
-                        {reflectErr ? (
-                          <p className="text-xs text-destructive">{reflectErr}</p>
-                        ) : (
-                          <>
-                            <div className="prose prose-sm dark:prose-invert max-w-none text-foreground">
-                              <ReactMarkdown remarkPlugins={[remarkGfm]}>{reflectText}</ReactMarkdown>
-                            </div>
-                            {!reflecting && (
-                              <button onClick={() => saveReflection(n)} disabled={reflectSaved}
-                                className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-50">
-                                <Save className="h-3 w-3" /> {reflectSaved ? "已存为新记录" : "把审计结果存为新记录"}
-                              </button>
-                            )}
-                          </>
+                        {reflectErr && <p className="text-xs text-destructive" role="alert">{reflectErr}</p>}
+                        {reflectTruncated && <p className="text-xs text-muted-foreground">原文较长，本次仅审计截取部分，未覆盖全文。</p>}
+                        <div className="prose prose-sm dark:prose-invert max-w-none text-foreground">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{reflectText}</ReactMarkdown>
+                        </div>
+                        {reflectComplete && !reflecting && !reflectErr && (
+                          <button onClick={() => saveReflection(n)} disabled={reflectSaved}
+                            className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-50">
+                            <Save className="h-3 w-3" /> {reflectSaved ? "已存为新记录" : "把审计结果存为新记录"}
+                          </button>
                         )}
                       </div>
                     )}

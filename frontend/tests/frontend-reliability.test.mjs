@@ -571,3 +571,25 @@ test('candidate unsaved guard follows only meaningful text, save success, and ac
   h.unmount();
   assert.equal(h.hasListener('beforeunload'), false);
 });
+
+test('failed reflection keeps partial text but cannot reuse previous completion to save', async () => {
+  notes.addNote('test', 'Synthetic source', 'Source research');
+  let fail = false;
+  const h = harness('pages/Notes.tsx', 'Notes', { '@/lib/agents': { reflectStream:async (_content, _title, handlers) => {
+    handlers.onDelta(fail ? 'INCOMPLETE AUDIT' : 'complete audit');
+    if (fail) throw new apiClient.ApiError('反思未完整结束', 502);
+    handlers.onDone('complete audit', true);
+  } } });
+  find(h.render(), 'button', 'Synthetic source').props.onClick();
+  await find(h.render(), 'button', '反思审计').props.onClick();
+  assert.match(label(h.render()), /未覆盖全文/);
+  find(h.render(), 'button', '把审计结果存为新记录').props.onClick();
+  assert.match(notes.loadNotes().find(n=>n.kind==='反思审计').content, /未覆盖全文/);
+  fail = true;
+  await nodes(h.render()).find(node => node.type === 'button' && label(node) === '反思审计').props.onClick();
+  const tree = h.render();
+  assert.match(label(tree), /INCOMPLETE AUDIT/);
+  assert.match(label(tree), /反思未完整结束/);
+  assert.equal(find(tree, 'button', '把审计结果存为新记录'), undefined);
+  assert.equal(notes.loadNotes().length, 2);
+});
