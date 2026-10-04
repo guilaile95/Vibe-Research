@@ -12,6 +12,7 @@ import {
 export type KlineChartProps = {
   bars: KlineBar[];
   indicators?: TechnicalIndicators | null;
+  researchMarkers?: readonly { date: string; label: string; href: string; title: string }[];
 };
 
 const METRIC_META: Record<
@@ -75,7 +76,7 @@ function candleTitle(c: {
  * 轻量 SVG K 线（蜡烛图）+ 可选价格指标叠加。
  * 无外部图表库依赖；指标失败不影响 K 线展示。
  */
-export function KlineChart({ bars, indicators = null }: KlineChartProps) {
+export function KlineChart({ bars, indicators = null, researchMarkers = [] }: KlineChartProps) {
   const points = useMemo(
     () => normalizeKlineIndicatorOverlay(bars, indicators?.series ?? null, 60),
     [bars, indicators],
@@ -143,13 +144,25 @@ export function KlineChart({ bars, indicators = null }: KlineChartProps) {
       )}
 
       <svg
-        viewBox={`0 0 ${W} ${H}`}
+        viewBox={`0 ${researchMarkers.length ? -28 : 0} ${W} ${H + (researchMarkers.length ? 28 : 0)}`}
         className="w-full"
         preserveAspectRatio="xMidYMid meet"
         role="img"
         aria-label={hasOverlay ? "K 线及技术指标图" : "K 线图"}
         data-testid="kline-chart-svg"
       >
+        {researchMarkers.map((marker) => {
+          const candle = geometry.candles.find((item) => item.date === marker.date);
+          if (!candle) return null;
+          return (
+            <a key={marker.date} href={marker.href} aria-label={marker.title} data-testid="kline-research-marker">
+              <title>{marker.title}</title>
+              <line x1={candle.x} x2={candle.x} y1={-3} y2={H} stroke="hsl(var(--primary) / 0.25)" strokeDasharray="3 3" />
+              <circle cx={candle.x} cy={-14} r={11} fill="hsl(var(--primary))" />
+              <text x={candle.x} y={-10} textAnchor="middle" fontSize={10} fill="hsl(var(--primary-foreground))">{marker.label}</text>
+            </a>
+          );
+        })}
         {/* 网格线 */}
         {[0, 0.25, 0.5, 0.75, 1].map((t) => {
           const y = padY + plotH * t;

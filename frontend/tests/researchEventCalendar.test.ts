@@ -119,3 +119,10 @@ for (const [from, to, invalid] of [
     assert.equal(Boolean(researchEventWindowError(from, to)), invalid);
   });
 }
+
+test("multi-campaign events never silently choose the first campaign", () => {
+  const row = event({ campaign_ids: ["campaign-a", "campaign-b"] });
+  assert.equal(eventNavigationHref(row), "/stock-data?code=600001");
+  assert.equal(eventNavigationHref(row, "campaign-b"), "/decision-inbox#campaign-campaign-b");
+  assert.equal(eventNavigationHref(row, "foreign-campaign"), "/stock-data?code=600001");
+});

@@ -67,3 +67,12 @@ test("research event calendar API appends optional security_code to the query", 
   assert.match(request.url, /\/api\/research-events\?/);
   assert.match(request.url, /security_code=600519/);
 });
+
+test("bounded stock evidence read forwards cancellation with GET and no business body", async () => {
+  requests.length = 0;
+  const controller = new AbortController();
+  await api.evidenceList({ subject_type: "stock", subject_id: "000001", limit: 100, offset: 0, signal: controller.signal });
+  const request = requests.at(-1)!;
+  assert.equal(request.method, "GET"); assert.equal(request.body, undefined); assert.equal(request.signal, controller.signal);
+  assert.match(request.url, /subject_type=stock&subject_id=000001&limit=100&offset=0/);
+});

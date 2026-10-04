@@ -1017,6 +1017,7 @@ export const api = {
     subject_id?: string;
     limit?: number;
     offset?: number;
+    signal?: AbortSignal;
   }) => {
     const q = new URLSearchParams();
     if (params?.subject_type) q.set("subject_type", params.subject_type);
@@ -1024,7 +1025,7 @@ export const api = {
     if (params?.limit != null) q.set("limit", String(params.limit));
     if (params?.offset != null) q.set("offset", String(params.offset));
     const qs = q.toString();
-    return get<EvidenceListResult>(`/evidence${qs ? `?${qs}` : ""}`);
+    return get<EvidenceListResult>(`/evidence${qs ? `?${qs}` : ""}`, params?.signal ? { signal: params.signal } : undefined);
   },
   evidenceCreate: (body: EvidenceCreateInput) =>
     request<EvidenceRecord>("/evidence", "POST", body),
