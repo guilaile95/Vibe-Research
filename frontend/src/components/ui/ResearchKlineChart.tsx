@@ -80,7 +80,7 @@ function ScopedResearchKlineChart({ bars, indicators, code, dates }: {
   const mapped = [...groups.entries()].filter(([date]) => date !== "unmapped");
   const markers = mapped.map(([date, entries], index) => ({ date, label: String(index + 1), href: `#${id}-${date}`, title: `标记 ${index + 1}：${date}，${entries.length} 条研究记录；跳到文字列表` }));
   return (
-    <div className="min-w-0 space-y-3" data-testid="research-kline-chart" data-security-code={code}>
+    <div className="min-w-0 scroll-mt-16 space-y-3 md:scroll-mt-4" data-testid="research-kline-chart" data-security-code={code}>
       <KlineChart bars={bars} indicators={indicators} researchMarkers={enabled ? markers : []} />
       {from && to && /^\d{6}$/.test(code) && (
         <button type="button" className="rounded border border-border px-3 py-2 text-xs hover:bg-muted" aria-expanded={enabled} aria-controls={`${id}-list`} onClick={() => {
@@ -102,7 +102,7 @@ function ScopedResearchKlineChart({ bars, indicators, code, dates }: {
           {evidence.data && evidence.data.total > evidence.data.items.length && <p className="text-xs text-warning">证据共 {evidence.data.total} 条，本次仅取得 {evidence.data.items.length} 条；其余未读取，图上没有不代表账本不存在。</p>}
           {rows.length > DISPLAY_LIMIT && <p className="text-xs text-warning">已取得 {rows.length} 条可用记录，本视图仅展示前 {DISPLAY_LIMIT} 条，其余 {rows.length - DISPLAY_LIMIT} 条未显示。</p>}
           {mapped.map(([date, entries], index) => (
-            <section key={date} id={`${id}-${date}`} tabIndex={-1} className="scroll-mt-4 space-y-2 rounded focus:outline focus:outline-2 focus:outline-primary">
+            <section key={date} id={`${id}-${date}`} tabIndex={-1} className="scroll-mt-16 space-y-2 rounded md:scroll-mt-4 focus:outline focus:outline-2 focus:outline-primary">
               <h4 className="text-xs font-semibold">标记 {index + 1} · {date} · {entries.length} 条</h4>
               <ul className="space-y-2">{entries.map((row) => <EventEntry key={row.event.key} row={row} />)}</ul>
             </section>
