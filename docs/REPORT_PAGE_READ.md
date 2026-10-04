@@ -51,3 +51,42 @@ pages, invalid ranges, missing/corrupt indexes, unpaginated files, source mutati
 and read-only preservation. UI tests cover stale requests, source/version/range
 changes, retries and explicit invocation; browser fixtures check keyboard and
 390/1440px layouts. All fixture data is synthetic.
+
+## Explicit AI opt-in
+
+After reading pages, the separate “用这些指定页问 AI” action opens a scoped chat.
+Opening the reader/chat does not invoke a model. Sending a question uses the
+existing configured API or Codex provider and may consume that provider's quota.
+Ordinary selected-report search chat is unchanged.
+
+`/api/chat` accepts optional `report_page_context` containing only `report_id`,
+`expected_file_sha256`, `page_from`, `page_to`. Exactly that one report must be in
+`report_ids`. Browser page text and extra selection fields are rejected; explicit
+mode ignores browser `context`. Before each provider call the server reads the
+existing index again and validates catalog/index/source SHA, including the
+post-read source check. Stale/error/zero-readable inputs never invoke the provider.
+Reindexing a changed file does not make an old expected SHA valid.
+
+Fixed page-text budgets are 8 pages, 12,000 Unicode code points total and 6,000 per
+page. The assembled explicit prompt (coverage, serialized page text, conversation
+content and the fixed API grounding instruction) is capped at 24,000 code points;
+oversized input fails instead of silently clipping metadata/history. Provider
+protocol envelopes and the Codex runtime's fixed instructions are outside this
+application-content budget. API mode uses the existing no-tools transport; Codex
+retains its existing no-tools runtime boundary. Embedded source instructions are
+untrusted quoted data, not commands. This is a retrieval guard, not proof of model
+truthfulness or attention to every supplied character.
+
+Completed answers persist the server-supplied scope, five-way page partition,
+per-page truncation/counts and historical source SHA with their citations. They do
+not persist a separate copy of input page text; a saved model answer may itself
+quote supplied text. Conversation identity includes report, SHA and range;
+changing selection or closing/stopping the stream aborts the previous request.
+A restored answer describes its historical context; a new question always
+revalidates the source. Cancelled/error/partial answers retain existing incomplete
+turn rules. Page context is not silently added to ordinary searches or other reports.
+
+Offline acceptance stubs both API and Codex, exercises actual PDF late-correction
+retrieval, stale/reindexed sources, strict budgets and no-tools transport, and
+checks persisted UI metadata at 390/1440px. Historical real-model evaluation totals
+remain unchanged; no paid/live model call is part of this implementation test.

@@ -72,7 +72,7 @@ test("callers can scope a conversation below the route level", () => {
   // 个股页不换路由就能换标的：只按 pathname 分 key 会让 A 股票的历史
   // 作为 history 发给正在问 B 股票的模型。
   assert.match(source, /scopeKey\?: string/);
-  assert.match(source, /CHAT_KEY_PREFIX \+ pathname \+ \(scopeKey \? `#\$\{scopeKey\}` : ""\) \+ `@\$\{runtimeKey\}`/);
+  assert.match(source, /CHAT_KEY_PREFIX \+ pathname \+ \(scopeKey \? `#\$\{scopeKey\}` : ""\) \+ pageScope \+ `@\$\{runtimeKey\}`/);
 });
 
 test("the stock page actually passes a per-symbol scope", async () => {
@@ -159,4 +159,10 @@ test("research note metadata is captured per answer instead of read from the cur
   assert.match(source, /metadata=\{m\.noteMetadata\}/);
   assert.match(source, /if \(initialQuestion !== undefined\) setInput\(initialQuestion\); setOpen\(true\)/);
   assert.match(source, /setInput\(""\);\s*setEpoch\(loadEpoch\(chatKey\)\)/);
+});
+
+test("explicit page history identity includes report, version and range", () => {
+  for (const field of ['report_id','expected_file_sha256','page_from','page_to']) assert.ok(source.includes(`reportPageContext.${field}`));
+  assert.match(source, /session, reportIds, reportPageContext/);
+  assert.match(source, /page_context && <ReportPageContextView/);
 });

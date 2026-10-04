@@ -39,7 +39,7 @@ function harness(path, name, overrides = {}) {
     compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   vm.runInNewContext(js, {
-    exports, require: name => mods[name] ?? generic, FileReader: globalThis.FileReader, AbortController, DOMException, Error, console, URLSearchParams, Map, Set, Date,
+    exports, document: { addEventListener() {}, removeEventListener() {} }, require: name => mods[name] ?? generic, FileReader: globalThis.FileReader, AbortController, DOMException, Error, console, URLSearchParams, Map, Set, Date,
     window: { setTimeout: fn => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), addEventListener(type, fn) { listeners.set(type, fn); }, removeEventListener(type, fn) { if (listeners.get(type) === fn) listeners.delete(type); } }, confirm: () => true,
   }, { filename: path });
   return {
@@ -749,5 +749,47 @@ test('page reader validates ranges, missing version, and retry without automatic
   await find(tree, 'button').props.onClick();
   assert.equal(count, 2);
   assert.match(label(h.render(props)), /不自动加入 AI 上下文/);
+  h.unmount();
+});
+
+
+test('explicit page chat aborts old scope and preserves only matching complete history', async () => {
+  const calls = [];
+  const h = harness('components/ui/AskAiButton.tsx', 'AskAiButton', {
+    'react-router-dom': { useLocation: () => ({ pathname: '/my-reports' }), Link: 'link' },
+    '@/lib/storage': { storageGet: key => storage.get(key) ?? null, storageSet: (key, value) => storage.set(key, value), storageRemove: key => storage.delete(key) },
+    '@/lib/llm': { ...llm, loadLlm: () => ({ provider: 'api', model: 'synthetic' }), hasLlm: () => true,
+      llmIdentity: () => 'synthetic', runtimeLabel: () => 'Synthetic', chatStream: (...args) => { const d = deferred(); calls.push({ args, d }); return d.promise; } },
+  });
+  let props = { context: 'ignored browser hints', label: 'Explicit page AI', reportIds: ['report-a'], reportPageContext: { report_id: 'report-a', expected_file_sha256: 'a'.repeat(64), page_from: 2, page_to: 3 } };
+  let tree = h.render(props); find(tree, 'button', 'Explicit page AI').props.onClick(); h.render(props); tree = h.render(props);
+  find(tree, 'textarea').props.onChange({ target: { value: 'old question' } }); tree = h.render(props);
+  nodes(tree).find(n => n.props?.['aria-label'] === '发送').props.onClick(); h.render(props);
+  assert.deepEqual(calls[0].args[6], props.reportPageContext);
+  props = { ...props, reportIds: ['report-b'], reportPageContext: { ...props.reportPageContext, report_id: 'report-b', expected_file_sha256: 'b'.repeat(64) } };
+  h.render(props); tree = h.render(props);
+  assert.equal(calls[0].args[3].aborted, true);
+  calls[0].args[2].onDelta('STALE PAGE ANSWER'); calls[0].d.resolve({}); await tick();
+  assert.doesNotMatch(label(h.render(props)), /STALE PAGE ANSWER/);
+  find(tree, 'textarea').props.onChange({ target: { value: 'new question' } }); tree = h.render(props);
+  nodes(tree).find(n => n.props?.['aria-label'] === '发送').props.onClick(); h.render(props);
+  calls[1].args[2].onDelta('CURRENT PAGE ANSWER'); calls[1].d.resolve({}); await tick(); h.render(props);
+  const stored = [...storage.entries()].filter(([key]) => key.startsWith('vr-askai-chat:'));
+  assert.equal(stored.length, 1);
+  assert.match(stored[0][0], /pages:report-b:b{64}:2-3/);
+  assert.match(stored[0][1], /CURRENT PAGE ANSWER/);
+  assert.doesNotMatch(stored[0][1], /old question|STALE PAGE/);
+  tree = h.render(props);
+  find(tree, 'textarea').props.onChange({ target: { value: 'cancel question' } }); tree = h.render(props);
+  nodes(tree).find(n => n.props?.['aria-label'] === '发送').props.onClick(); tree = h.render(props);
+  nodes(tree).find(n => n.props?.['aria-label'] === '停止生成').props.onClick();
+  assert.equal(calls[2].args[3].aborted, true);
+  calls[2].args[2].onDelta('LATE CANCELLED ANSWER'); calls[2].d.resolve({}); await tick(); tree = h.render(props);
+  assert.doesNotMatch([...storage.values()].join(''), /cancel question|LATE CANCELLED/);
+  find(tree, 'textarea').props.onChange({ target: { value: 'retry question' } }); tree = h.render(props);
+  nodes(tree).find(n => n.props?.['aria-label'] === '发送').props.onClick(); h.render(props);
+  calls[3].args[2].onDelta('RETRY PAGE ANSWER'); calls[3].d.resolve({}); await tick(); h.render(props);
+  assert.match([...storage.values()].join(''), /RETRY PAGE ANSWER/);
+  assert.doesNotMatch([...storage.values()].join(''), /cancel question|LATE CANCELLED/);
   h.unmount();
 });

@@ -400,6 +400,15 @@ export function applyNdjsonLine(
       state.errorMessage = "后端研报覆盖信息格式错误";
       return;
     }
+    if (coverage?.page_context) {
+      const pages = coverage.page_context.coverage.readable;
+      if (items.length !== pages.length || new Set(items.map(item => item.page)).size !== pages.length ||
+        items.some(item => item.report_id !== coverage.page_context!.report_id || item.page === null || !pages.includes(item.page))) {
+        state.sawError = true;
+        state.errorMessage = "指定页引用与覆盖范围不一致";
+        return;
+      }
+    }
     handlers.onSources?.(items, coverage);
   } else if (event.type === "done") {
     if (state.sawDone) {

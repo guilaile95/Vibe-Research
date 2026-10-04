@@ -406,6 +406,81 @@ try {
   assert.equal(pageReads,2);
   assert.equal(citationCalls,2,"page reads must not invoke AI");
 
+  // Explicit page AI uses only server-bound identity/range, and persists coverage.
+  const explicitMeta={report_id:"selected-pdf",expected_file_sha256:"a".repeat(64),page_from:2,page_to:3,
+    requested:[2,3],full_report_read:false,returned_chars:28,
+    coverage:{readable:[2],omitted:[],invalid:[],unreadable:[3],error:[]},
+    items:[{page:2,status:"readable",reason:"CHAR_TRUNCATED",returned_chars:28,indexed_chars:40,truncated:true},
+      {page:3,status:"unreadable",reason:"NO_INDEXED_PAGE_TEXT"}]};
+  const explicitCoverage={selected_count:1,matched_report_count:1,included_report_count:1,retrieved_hit_count:1,included_hit_count:1,
+    hit_limit:8,hit_limit_reached:false,context_truncated:true,excerpt_only:true,uncovered_reports:[],page_context:explicitMeta};
+  let explicitCalls=0;
+  await page.route("**/api/chat",route=>{
+    explicitCalls++;
+    const body=route.request().postDataJSON();
+    assert.deepEqual(body.report_ids,["selected-pdf"]);
+    assert.deepEqual(body.report_page_context,{report_id:"selected-pdf",expected_file_sha256:"a".repeat(64),page_from:2,page_to:3});
+    assert.equal(JSON.stringify(body).includes("SYNTHETIC LATE CORRECTION: 80"),false,"browser page text must not be sent");
+    const question=body.messages.at(-1).content;
+    const events=question==="changed source"?[{type:"error",message:"指定页来源或索引已失效，未调用模型；请重新读取"}]
+      :[{type:"sources",items:[{report_id:"selected-pdf",title:"Selected PDF",page:2}],coverage:explicitCoverage},
+        {type:"delta",text:`EXPLICIT PAGE SYNTHETIC ${question}`},{type:"done"}];
+    return route.fulfill({status:200,contentType:"application/x-ndjson",body:events.map(event=>JSON.stringify(event)).join("\n")+"\n"});
+  });
+  const openExplicitPages=async()=>{
+    await page.getByRole("checkbox",{name:"选择 Selected PDF",exact:true}).check();
+    const viewer=page.getByTestId("report-page-reader");
+    await viewer.locator("summary").click();
+    await viewer.getByLabel("起始页",{exact:true}).fill("2");
+    await viewer.getByLabel("结束页",{exact:true}).fill("3");
+    const before=explicitCalls;
+    await viewer.getByRole("button",{name:"读取指定页",exact:true}).click();
+    await viewer.getByText("SYNTHETIC LATE CORRECTION: 80",{exact:true}).waitFor();
+    assert.equal(explicitCalls,before,"preview must not invoke AI");
+    await viewer.getByRole("button",{name:"用这些指定页问 AI",exact:true}).click();
+    assert.equal(explicitCalls,before,"opening explicit chat must not invoke AI");
+  };
+  for(const provider of ["api","cli-codex"]){
+    await page.evaluate(provider=>localStorage.setItem("vr-llm",JSON.stringify({provider,model:"synthetic-page-context",baseURL:"https://example.test",apiKey:"synthetic"})),provider);
+    for(const width of [1440,390]){
+      await page.setViewportSize({width,height:1000});
+      await page.goto(`${frontend}/my-reports`,{waitUntil:"networkidle"});
+      await page.getByText(/发送 AI 问答时，所选上下文会交给你配置的提供方/).waitFor();
+      await openExplicitPages();
+      const clearPreviousFixture=page.getByRole("button",{name:"清空本页对话",exact:true});
+      if(await clearPreviousFixture.count())await clearPreviousFixture.click();
+      const question=`${provider}-${width}`;
+      await page.getByPlaceholder("询问 Vibe...").fill(question);
+      await page.getByRole("button",{name:"发送",exact:true}).click();
+      await page.getByText(`EXPLICIT PAGE SYNTHETIC ${question}`,{exact:true}).waitFor();
+      const coverage=page.getByTestId("chat-page-coverage").last();
+      await coverage.getByText(/请求 2 页.*纳入 1 页/).waitFor();
+      await coverage.getByText(/页内截断：有/).waitFor();
+      await coverage.getByText(/当时来源 SHA256/).waitFor();
+      await coverage.locator("summary").click();
+      await coverage.getByText(/第 3 页：正文不可用/).waitFor();
+      await coverage.scrollIntoViewIfNeeded();
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+      if(provider==="api" && process.env.E2E_PAGE_AI_SCREENSHOT_DIR){
+        mkdirSync(process.env.E2E_PAGE_AI_SCREENSHOT_DIR,{recursive:true});
+        await page.screenshot({path:join(process.env.E2E_PAGE_AI_SCREENSHOT_DIR,`explicit-page-ai-synthetic-${width}.png`)});
+      }
+      const beforeReload=explicitCalls;
+      await page.reload({waitUntil:"networkidle"});await openExplicitPages();
+      await page.getByText(`EXPLICIT PAGE SYNTHETIC ${question}`,{exact:true}).waitFor();
+      await page.getByTestId("chat-page-coverage").last().getByText(/当时来源 SHA256/).waitFor();
+      assert.equal(explicitCalls,beforeReload,"history restoration must not call AI");
+      await page.getByPlaceholder("询问 Vibe...").fill("changed source");
+      await page.getByRole("button",{name:"发送",exact:true}).click();
+      await page.getByText(/指定页来源或索引已失效，未调用模型/).waitFor();
+      await page.getByText(`EXPLICIT PAGE SYNTHETIC ${question}`,{exact:true}).waitFor();
+      await page.getByPlaceholder("询问 Vibe...").fill(`retry-${question}`);
+      await page.getByRole("button",{name:"发送",exact:true}).click();
+      await page.getByText(`EXPLICIT PAGE SYNTHETIC retry-${question}`,{exact:true}).waitFor();
+      await page.getByRole("button",{name:"关闭",exact:true}).click();
+    }
+  }
+
   // Read-only PA1 explanation fixtures: do not freeze or edit a business record.
   const attribution={as_of_date:"2026-10-01",date_from:"2026-09-01",date_to:null,selected_trade_count:3,
     positions:[{code:"600001",name:"SYNTHETIC EXAMPLE",closed_quantity:0,realized_pnl:0,remaining_quantity:100,avg_cost:10,cost_basis:1000,total_fees:6,unrealized_pnl:null,data_limitations:["存在无持仓成本基准的卖出记录，该笔实现盈亏未计入"]}],

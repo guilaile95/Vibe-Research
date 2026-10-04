@@ -47,7 +47,17 @@ export interface MyReportTextHit {
 
 export type ReportChatSource = Pick<MyReportTextHit, "report_id" | "title" | "page">;
 
+export type ReportPageSelection = Omit<ReportPageReadRequest, "selected_report_ids">;
+export interface ReportPageContextMeta extends ReportPageSelection {
+  full_report_read: false;
+  requested: number[];
+  coverage: Record<ReportPageReadStatus, number[]>;
+  returned_chars: number;
+  items: Omit<ReportPageReadResult["items"][number], "text">[];
+}
+
 export interface ReportChatCoverage {
+  page_context?: ReportPageContextMeta;
   selected_count: number;
   matched_report_count: number;
   included_report_count: number;
