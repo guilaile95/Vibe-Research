@@ -8,14 +8,14 @@ const calendarEvent = (code, id, date) => ({ event_id: id, security_code: code, 
 
 export async function runKlineResearchEvents({ page, mock, baseUrl, openTab, expandKline, fillCode, clickQuery, waitForStockHeader }) {
   const calls = []; const writes = [];
-  let hold = false; let release; let held; let calendarUnavailable = false;
+  let hold = false; let release; let held; let calendarUnavailable = false; let chartPhase = false;
   const routeHandler = async (route) => {
     const request = route.request(); const url = new URL(request.url()); const code = url.searchParams.get("security_code") || url.searchParams.get("subject_id") || url.searchParams.get("code") || "000001";
     if (request.method() !== "GET") writes.push({ path: url.pathname, method: request.method() });
     const send = (data) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data }) });
     if (url.pathname === "/api/kline") return send(dates.map((date, i) => ({ date, open: 10 + i, high: 11 + i, low: 9 + i, close: 10.5 + i, volume: 1000, amount: 10000 })));
     if (url.pathname === "/api/research-events") {
-      calls.push({ kind: "calendar", code, from: url.searchParams.get("date_from"), to: url.searchParams.get("date_to") });
+      calls.push({ kind: "calendar", surface: chartPhase ? "chart" : "overview", code, from: url.searchParams.get("date_from"), to: url.searchParams.get("date_to") });
       if (hold) {
         hold = false; let timer;
         held = new Promise((resolve) => { release = resolve; timer = setTimeout(resolve, 5000); });
@@ -36,9 +36,13 @@ export async function runKlineResearchEvents({ page, mock, baseUrl, openTab, exp
   try {
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+      chartPhase = false;
       await page.goto(`${baseUrl}/stock-data?code=000001`, { waitUntil: "domcontentloaded" });
       await waitForStockHeader(page, "000001", "平安银行");
-      await openTab(page, "market"); await expandKline(page);
+      // Existing overview calendar has its own default-window request. Finish it
+      // before measuring the separate opt-in chart reads.
+      await page.getByTestId("research-event-calendar").getByTestId("research-event-row").first().waitFor();
+      await openTab(page, "market"); chartPhase = true; await expandKline(page);
       await page.getByTestId("kline-candle").first().waitFor();
       const before = calls.length;
       const toggle = page.getByRole("button", { name: "显示研究事件", exact: true });
@@ -77,8 +81,11 @@ export async function runKlineResearchEvents({ page, mock, baseUrl, openTab, exp
       await page.getByText("合成证据 000001-exact", { exact: true }).waitFor();
     }
     // A held old-stock reply must not survive hide/show or a real query switch.
+    chartPhase = false;
     await page.goto(`${baseUrl}/stock-data?code=000001`, { waitUntil: "domcontentloaded" });
-    await waitForStockHeader(page, "000001", "平安银行"); await openTab(page, "market"); await expandKline(page);
+    await waitForStockHeader(page, "000001", "平安银行");
+    await page.getByTestId("research-event-calendar").getByTestId("research-event-row").first().waitFor();
+    await openTab(page, "market"); chartPhase = true; await expandKline(page);
     hold = true;
     await page.getByRole("button", { name: "显示研究事件", exact: true }).click();
     await page.locator('[data-event-id="000001-exact"]').waitFor();
@@ -103,7 +110,9 @@ export async function runKlineResearchEvents({ page, mock, baseUrl, openTab, exp
     calendarUnavailable = false;
     await page.getByRole("button", { name: "显示研究事件", exact: true }).click();
     await page.locator('[data-event-id="000002-weekend"]').waitFor();
-    assert.ok(calls.filter((call) => call.kind === "calendar").every((call) => call.from === dates[0] && call.to === dates.at(-1)));
+    const chartCalls = calls.filter((call) => call.kind === "calendar" && call.surface === "chart");
+    assert.ok(chartCalls.length >= 5, "all explicit chart loads/retries were observed");
+    assert.ok(chartCalls.every((call) => call.from === dates[0] && call.to === dates.at(-1)), JSON.stringify(chartCalls));
     assert.ok(calls.filter((call) => call.kind === "evidence").every((call) => call.limit === "100" && call.offset === "0"));
     assert.deepEqual(writes, [], "all event linkage flows are read-only");
     console.log("PASS synthetic K-line research: 1440/390, keyboard ID navigation, gaps, bounded reads, cancellation and no writes");

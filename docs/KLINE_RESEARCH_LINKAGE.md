@@ -7,7 +7,8 @@ prices load, **显示研究事件** explicitly requests two existing read-only A
   last dates of the same visible (up to 60 valid bars) chart
 - `GET /evidence?subject_type=stock&subject_id=…&limit=100&offset=0`
 
-No request is made merely by viewing prices. Hiding, switching stock or changing
+This overlay adds no request merely by viewing prices. The existing overview
+calendar retains its separate default-window loading behaviour. Hiding, switching stock or changing
 the visible bar-date sequence aborts pending reads and clears the opt-in/results.
 Each source can fail independently without deleting price bars or the other's
 successful records. Retry clears old event results before re-reading. The existing
