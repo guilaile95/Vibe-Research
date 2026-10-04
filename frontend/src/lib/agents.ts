@@ -105,10 +105,25 @@ export async function reflectStream(
   signal?: AbortSignal,
 ): Promise<void> {
   const llm = requireLlm();
+  let terminal: { content: string; truncated: boolean } | undefined;
+  let received = "", invalid = false, failed = false;
   await streamNdjson("/api/reflect", { source, title, llm }, (ev) => {
+    if (terminal) { invalid = true; return; }
     if (ev.type === "status") handlers.onStatus?.(ev.message);
-    else if (ev.type === "delta") handlers.onDelta?.(ev.text);
-    else if (ev.type === "done") handlers.onDone?.(ev.content, !!ev.truncated);
-    else if (ev.type === "error") handlers.onError?.(ev.message);
+    else if (ev.type === "delta") {
+      if (typeof ev.text !== "string") { invalid = true; return; }
+      received += ev.text;
+      handlers.onDelta?.(ev.text);
+    } else if (ev.type === "done") {
+      if (typeof ev.content !== "string" || !ev.content.trim()
+        || (received && ev.content !== received.trim()) || typeof ev.truncated !== "boolean") invalid = true;
+      terminal = { content: ev.content, truncated: ev.truncated };
+    } else if (ev.type === "error") {
+      failed = true;
+      handlers.onError?.(ev.message);
+    } else invalid = true;
   }, signal);
+  signal?.throwIfAborted();
+  if (!terminal || invalid || failed) throw new ApiError("反思未完整结束，请重试；已收到的内容仅供参考", 502);
+  handlers.onDone?.(terminal.content, terminal.truncated);
 }

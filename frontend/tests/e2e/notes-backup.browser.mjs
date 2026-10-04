@@ -227,6 +227,25 @@ try {
   assert.equal(finalStorage.key, "SECRET_ACCESS_KEY");
   assert.equal(finalStorage.chat, "SECRET_CHAT_HISTORY");
 
+  // Synthetic Reflection responses exercise the production client and Notes UI.
+  await page.evaluate(() => localStorage.setItem("vr-llm", JSON.stringify({provider:"cli-codex", model:"synthetic"})));
+  let completeReflection = false;
+  await page.route("**/api/reflect", route => route.fulfill({status:200, contentType:"application/x-ndjson", body:
+    JSON.stringify({type:"delta", text:"SYNTHETIC_AUDIT"}) + "\n" + (completeReflection ? JSON.stringify({type:"done", content:"SYNTHETIC_AUDIT", truncated:true}) + "\n" : "")
+  }));
+  await page.getByText("备份恢复验证", {exact:true}).click();
+  await page.getByRole("button", {name:"反思审计", exact:true}).click();
+  await page.getByRole("alert").filter({hasText:"反思未完整结束"}).waitFor();
+  await page.getByText("SYNTHETIC_AUDIT", {exact:true}).waitFor();
+  assert.equal(await page.getByRole("button", {name:"把审计结果存为新记录", exact:true}).count(), 0);
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes")).length), 2);
+  completeReflection = true;
+  await page.getByRole("button", {name:"反思审计", exact:true}).click();
+  await page.getByRole("button", {name:"把审计结果存为新记录", exact:true}).click();
+  await page.getByRole("button", {name:"已存为新记录", exact:true}).waitFor();
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes")).length), 3);
+  assert.match(await page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes")).find(n=>n.kind==="反思审计").content), /未覆盖全文/);
+
   console.log("notes backup browser E2E: PASS");
 } finally {
   if (browser) await browser.close().catch(() => {});

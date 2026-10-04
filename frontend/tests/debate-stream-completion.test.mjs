@@ -90,3 +90,28 @@ test("Reflection retains its own terminal event contract", async t => {
   await reflectStream("synthetic source", "synthetic title", { onDone: (...args) => { done = args; } });
   assert.deepEqual(done, ["SYNTHETIC_REFLECTION", true]);
 });
+
+for (const [name, fixture] of [
+  ['empty EOF', []],
+  ['partial EOF', [{type:'delta', text:'partial'}]],
+  ['empty completion', [{type:'done', content:'', truncated:false}]],
+  ['mismatched completion', [{type:'delta', text:'partial'}, {type:'done', content:'different', truncated:false}]],
+  ['error then done', [{type:'error', message:'failed'}, {type:'done', content:'partial', truncated:false}]],
+  ['duplicate completion', [{type:'done', content:'partial', truncated:false}, {type:'done', content:'partial', truncated:false}]],
+  ['post-completion delta', [{type:'done', content:'partial', truncated:false}, {type:'delta', text:'late'}]],
+]) {
+  test(`Reflection rejects ${name} without successful callback`, async t => {
+    t.mock.method(globalThis, 'fetch', async () => new Response(encode(fixture)));
+    let done = 0;
+    await assert.rejects(reflectStream('synthetic source', 'title', {onDone:()=>done++}), /反思未完整结束/);
+    assert.equal(done, 0);
+  });
+}
+
+test('Reflection rejects late completion after abort', async t => {
+  const controller = new AbortController();
+  t.mock.method(globalThis, 'fetch', async () => { controller.abort(); return new Response(encode([{type:'done', content:'audit', truncated:false}])); });
+  let done=0;
+  await assert.rejects(reflectStream('source', 'title', {onDone:()=>done++}, controller.signal), {name:'AbortError'});
+  assert.equal(done,0);
+});
