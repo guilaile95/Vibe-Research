@@ -66,3 +66,37 @@ for (const page of [0, -1, 1.5, "2", undefined]) {
     assert.match(state.errorMessage!, /研报引用格式错误/);
   });
 }
+
+const pageMeta = {
+  report_id: "selected", expected_file_sha256: "a".repeat(64), page_from: 2, page_to: 3,
+  full_report_read: false, requested: [2, 3], returned_chars: 28,
+  coverage: { readable: [2], omitted: [], invalid: [], unreadable: [3], error: [] },
+  items: [{ page: 2, status: "readable", reason: "CHAR_TRUNCATED", returned_chars: 28, indexed_chars: 40, truncated: true },
+    { page: 3, status: "unreadable", reason: "NO_INDEXED_PAGE_TEXT" }],
+};
+const pageCoverage = { ...coverage, selected_count: 1, matched_report_count: 1, included_report_count: 1,
+  retrieved_hit_count: 1, included_hit_count: 1, uncovered_reports: [], context_truncated: true, page_context: pageMeta };
+
+test("explicit-page metadata survives stream and history without storing source text", () => {
+  const input = structuredClone(pageCoverage);
+  Object.assign(input.page_context.items[0], { text: "DO NOT PERSIST RAW PAGE" });
+  const parsed = parseReportChatCoverage(input)!;
+  assert.deepEqual(parsed.page_context, pageMeta);
+  assert.equal(JSON.stringify(parsed).includes("DO NOT PERSIST"), false);
+  assert.deepEqual(parseReportChatCoverage(JSON.parse(JSON.stringify(parsed))), parsed);
+  const state = createNdjsonProtocolState();
+  applyNdjsonLine(state, JSON.stringify({ type: "sources", items: [{ report_id: "selected", title: "Title", page: 2 }], coverage: parsed }));
+  assert.equal(state.sawError, false);
+});
+
+test("malformed page coverage, invented full-read and cross-report sources fail closed", () => {
+  for (const patch of [{ full_report_read: true }, { returned_chars: 0 }, { page_to: 1000000000 },
+    { requested: [2] }, { expected_file_sha256: "old" }, { coverage: { ...pageMeta.coverage, readable: [3] } }]) {
+    assert.equal(parseReportChatCoverage({ ...pageCoverage, page_context: { ...pageMeta, ...patch } }), undefined);
+  }
+  for (const source of [{ report_id: "other", title: "Other", page: 2 }, { report_id: "selected", title: "Wrong page", page: 3 }]) {
+    const state = createNdjsonProtocolState();
+    applyNdjsonLine(state, JSON.stringify({ type: "sources", items: [source], coverage: pageCoverage }));
+    assert.equal(state.sawError, true);
+  }
+});

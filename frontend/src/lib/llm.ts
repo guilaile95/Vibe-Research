@@ -1,6 +1,6 @@
 // 用户 LLM 配置（只存本地 localStorage，不上传、不进仓库）+ 系统 AI 对话调用。
 
-import { ApiError, request, streamNdjson, type NdjsonStreamResult, type ReportChatSource, type ReportChatCoverage, type ChatToolResult } from "./api.ts";
+import { ApiError, request, streamNdjson, type NdjsonStreamResult, type ReportChatSource, type ReportChatCoverage, type ReportPageSelection, type ChatToolResult } from "./api.ts";
 import { isCliProvider, type ProviderId } from "./ai-models.ts";
 import { storageSetChecked, storageRemoveChecked } from "./storage.ts";
 
@@ -109,12 +109,13 @@ export async function chatStream(
   signal?: AbortSignal,
   session?: string,
   reportIds: string[] = [],
+  reportPageContext?: ReportPageSelection,
 ): Promise<ChatResult> {
   const llm = loadLlm();
   if (!llm) throw new ApiError("尚未接入 AI，请先在「接入 AI」里配置", 400);
   return streamNdjson(
     "/chat",
-    { messages, context, session: session || "", report_ids: reportIds, llm },
+    { messages, context, session: session || "", report_ids: reportIds, ...(reportPageContext ? { report_page_context: reportPageContext } : {}), llm },
     handlers,
     signal,
   );

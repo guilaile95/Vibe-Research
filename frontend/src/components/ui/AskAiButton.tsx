@@ -1,3 +1,4 @@
+import { ReportPageContextView } from "@/components/reports/ReportPageContextView";
 import { useState, useRef, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Sparkles, X, Settings, Send, Loader2, Wrench, AlertCircle, Trash2, Square } from "lucide-react";
@@ -16,7 +17,7 @@ import {
   type ChatReportCoverage,
   type ChatMsg,
 } from "@/lib/llm";
-import { ApiError } from "@/lib/api";
+import { ApiError, type ReportPageSelection } from "@/lib/api";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { storageGet, storageSet, storageRemove } from "@/lib/storage";
 import { parseReportChatCoverage } from "@/lib/reportChatCoverage";
@@ -139,6 +140,7 @@ interface Props {
   // ⚠️ 不换路由就能换标的的页面（如个股页）必须传入已解析的代码，否则对话会串台。
   scopeKey?: string;
   reportIds?: string[];
+  reportPageContext?: ReportPageSelection;
   initialQuestion?: string;
   noteMetadata?: NoteResearchMetadata;
 }
@@ -156,7 +158,7 @@ const argStr = (a: Record<string, unknown>): string => {
   return "";
 };
 
-export function AskAiButton({ context, suggestions = [], label = "问 AI", scopeKey, reportIds = [], initialQuestion, noteMetadata }: Props) {
+export function AskAiButton({ context, suggestions = [], label = "问 AI", scopeKey, reportIds = [], reportPageContext, initialQuestion, noteMetadata }: Props) {
   const { pathname } = useLocation();
   const selectedLlm = loadLlm();
   const isCodexRuntime = selectedLlm?.provider === "cli-codex";
@@ -164,7 +166,9 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
   const [open, setOpen] = useState(false);
   const [configured, setConfigured] = useState(false);
   const [runtimeKey, setRuntimeKey] = useState(() => llmIdentity());
-  const chatKey = CHAT_KEY_PREFIX + pathname + (scopeKey ? `#${scopeKey}` : "") + `@${runtimeKey}`;
+  const pageScope = reportPageContext
+    ? `#pages:${reportPageContext.report_id}:${reportPageContext.expected_file_sha256}:${reportPageContext.page_from}-${reportPageContext.page_to}` : "";
+  const chatKey = CHAT_KEY_PREFIX + pathname + (scopeKey ? `#${scopeKey}` : "") + pageScope + `@${runtimeKey}`;
   // key 与消息放在**同一个 state 里原子更新**——这是正确性的关键，不是风格问题。
   // 若分成 msgs + 一个记录归属的 ref，key 变化那一帧 ref 已指向新 key 而 msgs 仍是旧的
   // （setState 下一帧才生效），落盘守卫会误放行，把来源页对话写进目标 key、
@@ -321,7 +325,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
         onToolResult: (result) => { if (alive()) patchLast((msg) => ({ ...msg, tools: applyChatToolResult(msg.tools || [], result) })); },
         onSources: (items, coverage) => { if (alive()) patchLast((msg) => ({ ...msg, sources: items, coverage })); },
         onDelta: (t) => { if (alive()) patchLast((msg) => ({ ...msg, content: msg.content + t })); },
-      }, ac.signal, session, reportIds);
+      }, ac.signal, session, reportIds, reportPageContext);
       // 正常收完：摘掉 partial，这条回答才开始落盘、才进下一轮 history。
       if (alive()) setMsgs((current) => boundedCompleteTurns(current.map((msg, index) => {
         if (index !== current.length - 1 || msg.role !== "assistant") return msg;
@@ -438,7 +442,9 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                         </span>
                         <p className="mt-3 font-medium">就当前页面开始提问</p>
                         <p className="mt-1 text-xs text-muted-foreground">
-                          {isCodexRuntime
+                          {reportPageContext
+                            ? "只提供重新校验后的指定页文本，不调用数据工具；未覆盖页与来源版本会随回答保留。"
+                            : isCodexRuntime
                             ? "Codex 只使用当前页面上下文，不会读取本机文件或调用数据工具。"
                             : "AI 会自动带上本页上下文，并按需调用 Vibe 数据工具。"}
                         </p>
@@ -476,8 +482,9 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                                 )}
                                 {(m.coverage || (m.sources && m.sources.length > 0)) && (
                                   <div className="mt-3 break-words rounded-xl border border-border/50 bg-muted/40 p-3 text-xs text-muted-foreground">
-                                    <p className="mb-1 font-medium text-foreground">检索依据</p>
-                                    {m.coverage && (
+                                    <p className="mb-1 font-medium text-foreground">{m.coverage?.page_context ? "指定页依据" : "检索依据"}</p>
+                                    {m.coverage?.page_context && <ReportPageContextView value={m.coverage.page_context} />}
+                                    {m.coverage && !m.coverage.page_context && (
                                       <div data-testid="chat-report-coverage" className="mb-2 space-y-1">
                                         <p>已选 {m.coverage.selected_count} 份 · 检索命中 {m.coverage.matched_report_count} 份 · 送入模型 {m.coverage.included_report_count} 份（{m.coverage.included_hit_count} 个片段）</p>
                                         <p>检索上限 {m.coverage.hit_limit} 个片段：{m.coverage.hit_limit_reached ? "已达到" : "未达到"} · 上下文截断：{m.coverage.context_truncated ? "有" : "无"}</p>

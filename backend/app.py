@@ -673,11 +673,33 @@ def _require_llm_ready(llm: LLMConfig) -> bool:
     return False
 
 
+class ReportPageSelectionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    report_id: str = Field(min_length=1, max_length=128)
+    expected_file_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    page_from: int = Field(strict=True, ge=1, le=1000000)
+    page_to: int = Field(strict=True, ge=1, le=1000000)
+
+    @model_validator(mode="after")
+    def bounded_range(self):
+        if self.page_to < self.page_from or self.page_to - self.page_from >= 200:
+            raise ValueError("页码范围须为连续 1-200 页")
+        return self
+
+
+class ReportPageReadIn(ReportPageSelectionIn):
+    selected_report_ids: list[str] = Field(min_length=1, max_length=100)
+    max_pages: int = Field(default=8, strict=True, ge=1, le=20)
+    max_chars: int = Field(default=12000, strict=True, ge=1, le=20000)
+    max_page_chars: int = Field(default=6000, strict=True, ge=1, le=20000)
+
+
 class ChatReq(BaseModel):
     messages: list[dict]
     context: str = ""
     session: str = ""
     report_ids: list[str] = Field(default_factory=list, max_length=100)
+    report_page_context: ReportPageSelectionIn | None = None
     llm: LLMConfig
 
 
@@ -733,6 +755,8 @@ def chat(req: ChatReq):
 
     def gen():
         try:
+            if disconnect_event.is_set():
+                return
             question = next(
                 (
                     str(message.get("content") or "").strip()
@@ -743,11 +767,25 @@ def chat(req: ChatReq):
             )
             context = req.context
             sources = []
-            if req.report_ids:
+            if req.report_page_context is not None:
+                _agent_runtime_turn(req.messages)  # Same role/history boundary for API and Codex.
+                report_context, sources, coverage = mr.build_chat_page_context(
+                    req.report_page_context.model_dump(), report_ids=req.report_ids,
+                )
+                context = report_context  # Explicit mode never trusts browser-supplied page/context text.
+                # The explicit-page mode bounds all conversation history plus
+                # server-built coverage and Unicode page text, never silently clips.
+                prompt_chars = len(chat_layer.PAGE_CONTEXT_SYSTEM_PROMPT) + len(context) + sum(len(str(message.get("content") or "")) for message in req.messages)
+                if prompt_chars > mr.PAGE_CHAT_PROMPT_MAX_CHARS:
+                    raise mr.ReportError("指定页上下文与对话超过 24000 字符预算，请缩小范围或清空对话后重试")
+                yield json.dumps({"type": "sources", "items": sources, "coverage": coverage}, ensure_ascii=False) + "\n"
+            elif req.report_ids:
                 hits = mr.search_report_text(question, report_ids=req.report_ids, limit=mr.CHAT_REPORT_HIT_LIMIT)
                 report_context, sources, coverage = mr.build_chat_report_context(hits, report_ids=req.report_ids)
                 context = f"{context or '（无页面数据）'}\n\n{report_context}"
                 yield json.dumps({"type": "sources", "items": sources, "coverage": coverage}, ensure_ascii=False) + "\n"
+            if disconnect_event.is_set():
+                return
             if is_codex_runtime:
                 question, history = _agent_runtime_turn(req.messages)
                 events = agent_runtime.stream_chat(
@@ -757,12 +795,22 @@ def chat(req: ChatReq):
                     history=history,
                     cancel_event=disconnect_event,
                 )
+            elif req.report_page_context is not None:
+                events = chat_layer.run_chat_stream(cfg, req.messages, context, use_tools=False)
             else:
                 events = chat_layer.run_chat_stream(cfg, req.messages, context)
             for ev in events:
                 if disconnect_event.is_set():
                     return
                 yield json.dumps(ev, ensure_ascii=False) + "\n"
+        except mr.ReportIndexCorruptedError as e:
+            if not disconnect_event.is_set():
+                message = ("指定页报告目录损坏，未调用模型；请检查本地报告目录或备份" if req.report_page_context is not None
+                           else chat_layer.public_error_message(e))
+                yield json.dumps({"type": "error", "message": message}, ensure_ascii=False) + "\n"
+        except mr.ReportError as e:
+            if not disconnect_event.is_set():
+                yield json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False) + "\n"
         except Exception as e:  # noqa: BLE001 — 运行时错误以流内事件上报，不中断连接
             if not disconnect_event.is_set():
                 yield json.dumps({"type": "error", "message": f"对话失败：{chat_layer.public_error_message(e)}"}, ensure_ascii=False) + "\n"
@@ -1267,24 +1315,6 @@ def myreports_browse(group: str = Query(...), sector_key: str | None = None):
 def myreports_search(q: str = ""):
     """元数据检索：匹配 name / title / institution / sector_keys。"""
     return {"data": mr.search_reports(mr.list_reports(), q)}
-
-
-class ReportPageReadIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    report_id: str = Field(min_length=1, max_length=128)
-    selected_report_ids: list[str] = Field(min_length=1, max_length=100)
-    expected_file_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    page_from: int = Field(strict=True, ge=1, le=1000000)
-    page_to: int = Field(strict=True, ge=1, le=1000000)
-    max_pages: int = Field(default=8, strict=True, ge=1, le=20)
-    max_chars: int = Field(default=12000, strict=True, ge=1, le=20000)
-    max_page_chars: int = Field(default=6000, strict=True, ge=1, le=20000)
-
-    @model_validator(mode="after")
-    def bounded_range(self):
-        if self.page_to < self.page_from or self.page_to - self.page_from >= 200:
-            raise ValueError("页码范围须为连续 1-200 页")
-        return self
 
 
 @app.post("/api/myreports/page-read")

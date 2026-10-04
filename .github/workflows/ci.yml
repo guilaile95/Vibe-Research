@@ -379,6 +379,7 @@ jobs:
         working-directory: frontend
         env:
           E2E_ATTRIBUTION_SCREENSHOT_DIR: attribution-evidence
+          E2E_PAGE_AI_SCREENSHOT_DIR: page-ai-evidence
         run: npm run test:e2e:notes-backup
 
       - name: Save synthetic attribution viewport evidence
@@ -386,6 +387,13 @@ jobs:
         with:
           name: attribution-evidence
           path: frontend/attribution-evidence/attribution-synthetic-*.png
+          if-no-files-found: error
+
+      - name: Save synthetic explicit-page AI viewport evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: page-ai-evidence
+          path: frontend/page-ai-evidence/explicit-page-ai-synthetic-*.png
           if-no-files-found: error
 
   e2e-decision-inbox:
