@@ -71,6 +71,7 @@ test('confirmed freeze after view change keeps latest snapshot while acknowledgi
   const h = harness(); const freeze = h.handleFreeze(); const view = h.handleOpenSnapshot('B');
   h.calls[1].resolve(snapshot('B')); await view; h.calls[0].resolve(frozen()); await tick();
   assert.equal(h.state.Result.marker, 'B'); assert.equal(h.state.ViewingSnapshotId, 'B'); assert.match(h.state.Notice, /已冻结快照 frozen-A/);
+  assert.equal(h.notifications.length, 1); assert.equal(h.notifications[0][0], "success");
   assert.equal(h.calls[2].kind, 'listAttributionSnapshots'); h.calls[2].resolve({ items: [{ snapshot_id: 'frozen-A' }] }); await freeze;
   assert.equal(h.calls.filter((call) => call.kind === 'createAttributionSnapshot').length, 1);
 });

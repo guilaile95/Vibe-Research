@@ -144,6 +144,9 @@ export default function PerformanceAttribution() {
         date_to: dateTo || undefined,
       });
       const message = `已冻结快照 ${res.snapshot.snapshot_id}（计算日期 ${res.snapshot.as_of_date ?? "—"}）`;
+      // Router transitions can change URL before this page's effect cleanup.
+      // The application-level acknowledgement must survive either timing.
+      toast.success(message);
       if (mountedRef.current) {
         setNotice(message);
         if (viewRequestRef.current === startedView) {
@@ -156,13 +159,11 @@ export default function PerformanceAttribution() {
         }
         setSnapshotsOpen(true);
         await loadSnapshots();
-      } else {
-        // The operation still completed even though its originating page closed.
-        toast.success(message);
       }
     } catch {
       const message = "未确认冻结快照结果，请先查看历史快照再决定是否重试；不会自动重新提交。";
-      if (mountedRef.current) setFreezeError(message); else toast.error(message);
+      toast.error(message);
+      if (mountedRef.current) setFreezeError(message);
     } finally {
       freezeInFlightRef.current = false;
       if (mountedRef.current) setFreezing(false);
@@ -255,7 +256,7 @@ export default function PerformanceAttribution() {
       {freezeError && <p role="alert" className="rounded-md bg-amber-500/10 p-3 text-sm text-amber-600">{freezeError}</p>}
 
       {notice && (
-        <div className="rounded-md bg-emerald-500/10 p-3 text-sm text-emerald-600">{notice}</div>
+        <div data-testid="attribution-freeze-notice" className="rounded-md bg-emerald-500/10 p-3 text-sm text-emerald-600">{notice}</div>
       )}
 
       {viewingSnapshotId && (

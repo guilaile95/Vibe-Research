@@ -21,8 +21,9 @@ neither cancelled when the view changes nor automatically retried. Once confirme
 - if the same view is still selected, the confirmed result may replace it and
   invalidates older reads; otherwise the newer selected view is preserved
 - the history list refresh is independent of the acknowledgement
-- after in-app navigation unmounts the page, the existing application toast shows
-  completion; no stale page-state update is attempted
+- the existing application toast always acknowledges completion, so a route
+  transition cannot lose the acknowledgement between URL change and unmount;
+  after unmount no stale page-state update is attempted
 
 If the write response is not confirmed, the UI asks the user to inspect history
 before deciding whether to retry. It does not assert that the server definitely

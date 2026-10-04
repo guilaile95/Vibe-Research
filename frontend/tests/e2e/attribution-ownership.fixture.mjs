@@ -104,7 +104,7 @@ export async function runAttributionOwnership(browser, frontend) {
       await row("B").click(); await scope.getByText("202 笔", { exact: true }).waitFor();
       failNextList = true;
       await releaseAndFinish(freeze, "/api/performance-attribution/snapshot");
-      await page.getByText(/已冻结快照 frozen-1/).waitFor();
+      await page.getByTestId("attribution-freeze-notice").getByText(/已冻结快照 frozen-1/).waitFor();
       await page.getByRole("alert").getByText(/历史快照列表刷新失败/).waitFor();
       assert.match(await scope.innerText(), /202 笔/);
       assert.equal(calls.filter((call) => call.kind === "freeze").length, 1);
@@ -115,7 +115,8 @@ export async function runAttributionOwnership(browser, frontend) {
       const leaveFreeze = holdNext("freeze"); await page.getByRole("button", { name: "冻结快照", exact: true }).click(); await leaveFreeze.entered;
       await page.locator('a[href="/trades"]').last().click(); await page.waitForURL("**/trades");
       await releaseAndFinish(leaveFreeze, "/api/performance-attribution/snapshot");
-      await page.getByText(/已冻结快照 frozen-2/).waitFor();
+      await page.locator("[data-sonner-toast]").getByText(/已冻结快照 frozen-2/).waitFor();
+      await page.getByRole("heading", { name: "交易流水", exact: true }).waitFor();
       assert.equal(await page.getByTestId("attribution-scope").count(), 0);
       assert.equal(calls.filter((call) => call.kind === "freeze").length, 2, "two explicit clicks only; no automatic retry");
       assert.deepEqual(calls.filter((call) => call.method !== "GET").map((call) => new URL(call.url).pathname), ["/api/performance-attribution/snapshot", "/api/performance-attribution/snapshot"]);
