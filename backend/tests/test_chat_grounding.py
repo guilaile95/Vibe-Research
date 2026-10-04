@@ -96,3 +96,22 @@ def test_grounding_contract_limits_inference_without_changing_formal_authority()
     for term in ("已知事实", "可能解释", "待核对问题", "相反证据", "什么新证据", "null/缺失",
                  "不是新的事实来源", "抓取时间", "只有新闻/公告/研报标题", "不能把分歧写成一致结论"):
         assert term in chat.GROUNDING_RULES
+
+
+def test_conflict_acceptance_fixture_is_well_formed_not_a_model_quality_pass():
+    """Validate test data only; no generated answer or semantic model is evaluated."""
+    from pathlib import Path
+    fixture = json.loads((Path(__file__).parent / "fixtures/report_ai_acceptance.json").read_text(encoding="utf-8"))
+    assert fixture["synthetic"] and fixture["model_evaluated"] is False
+    conflict, forecast = fixture["cases"]
+    assert len({source["report_id"] for case in fixture["cases"] for source in case["sources"]}) == 3
+    assert {source["value"] for source in conflict["sources"]} == {80, 100}
+    assert len({(source["metric"], source["period"], source["unit"], source["scope"]) for source in conflict["sources"]}) == 1
+    assert {claim["kind"] for claim in conflict["forbidden_claims"]} >= {"historical_fact_range", "historical_fact_average"}
+    assert forecast["sources"][0]["claim_type"] == "source_forecast_range"
+    assert forecast["sources"][0]["range"] == [80, 100]
+    for case in fixture["cases"]:
+        assert case["reference_answers"]["acceptable"] and case["reference_answers"]["unacceptable"]
+        for source in case["sources"]:
+            assert source["title"] and source["unit"] and source["as_of"]
+            assert source["page"] is None or source["page"] > 0
