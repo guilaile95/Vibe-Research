@@ -495,7 +495,10 @@ async function run() {
       assert.match(changesText, /竞品跟踪简报：立场 反对/);
       assert.match(changesText, /卖方晨会纪要：立场 支持/);
       const conflictDetails = page.getByTestId("research-brief-conflict-records").first();
-      await conflictDetails.locator("summary").click();
+      const conflictSummary = conflictDetails.locator("summary");
+      await conflictSummary.focus();
+      assert.equal(await conflictSummary.evaluate((element) => element === document.activeElement), true);
+      await conflictSummary.press("Enter");
       const conflictText = await conflictDetails.innerText();
       assert.match(conflictText, /\[反对\] ?竞品正在放量/);
       assert.match(conflictText, /\[支持\] ?竞品正在放量/);
@@ -530,7 +533,9 @@ async function run() {
       assert.match(updateText, /确认时间：/);
       assert.match(updateText, /渠道复核/);
       // 展开已确认依据：反对依据带来源，且展开动作不产生任何业务写请求。
-      await updateItems.first().locator("summary").click();
+      const updateSummary = updateItems.first().locator("summary");
+      await updateSummary.focus();
+      await updateSummary.press("Enter");
       await page.getByTestId("research-brief-evidence-oppose").filter({ hasText: "7 月渠道复核显示动销略低于预期" }).first().waitFor();
       assert.equal(apiWriteRequests.length, 0, `opening/expanding the brief must make no business writes, saw ${JSON.stringify(apiWriteRequests)}`);
     }
@@ -541,10 +546,25 @@ async function run() {
       : disprovenScenario
         ? "research-brief-disproven-after.png"
         : "research-brief-after.png";
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      await brief.evaluate((element) => element.scrollIntoView({ block: "start" }));
+      await page.screenshot({ path: join(shotDir, shotName.replace(".png", `-${viewport.width}.png`)) });
+      const bounds = await Promise.all(["invalidation", "freshness", "view"].map((key) => page.getByTestId(`research-brief-${key}`).boundingBox()));
+      const [invalidation, freshness, frozenHistory] = bounds;
+      assert.ok(invalidation && freshness && frozenHistory);
+      assert.ok(invalidation.y < frozenHistory.y && freshness.y < frozenHistory.y, "conditions and data boundaries must precede frozen history");
+      if (viewport.width >= 1024) assert.ok(Math.abs(invalidation.y - freshness.y) < 2, "desktop attention blocks should share a row");
+      else assert.ok(freshness.y >= invalidation.y + invalidation.height, "narrow attention blocks should stack");
+      assert.equal(await brief.evaluate((element) => element.scrollWidth <= element.clientWidth + 1), true, "brief must not overflow horizontally");
+      assert.equal(await brief.locator("input, textarea, select").count(), 0, "reflow must remain read-only");
+      assert.equal(apiWriteRequests.length, 0, "reflow and keyboard expansion must not write business state");
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
     await brief.screenshot({ path: join(shotDir, shotName) });
-    if (disprovenScenario) {
-      // 已证伪案例不进入 Preview / Commit：终态研究不要求成功提交正式决定。
-      console.log("[E2E] research-brief disproven scenario captured");
+    if (disprovenScenario || process.env.BRIEF_LAYOUT_ONLY === "1") {
+      // Layout-only fixtures stop before any formal Preview / Commit action.
+      console.log("[E2E] research-brief read-only layout scenario captured");
       return;
     }
     // P1-DF3：结构化 review boundary——用户显式选择本地时间，页面展示
