@@ -382,6 +382,8 @@ jobs:
   e2e-decision-inbox:
     name: Playwright decision inbox E2E
     runs-on: ubuntu-latest
+    env:
+      E2E_SCREENSHOT_DIR: research-brief-evidence
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -450,6 +452,20 @@ jobs:
           PYTHON: python
           DCR1_READBACK_VARIANT: campaign-mismatch
         run: npm run test:e2e:decision-commit
+      - name: Run Research Brief terminal layout E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+          BRIEF_SCENARIO: disproven
+          BRIEF_LAYOUT_ONLY: "1"
+        run: npm run test:e2e:decision-commit
+      - name: Run Research Brief unavailable layout E2E
+        working-directory: frontend
+        env:
+          PYTHON: python
+          DF2_FORCE_CONTEXT_FALLBACK: "1"
+          BRIEF_LAYOUT_ONLY: "1"
+        run: npm run test:e2e:decision-commit
       - name: Run HR1 production vertical E2E
         working-directory: frontend
         env:
@@ -470,6 +486,15 @@ jobs:
         env:
           PYTHON: python
         run: npm run test:e2e:decision-challenge
+
+      - name: Preserve synthetic Research Brief screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: research-brief-evidence
+          path: frontend/research-brief-evidence/research-brief*.png
+          if-no-files-found: error
+          retention-days: 7
 
   e2e-account-bootstrap:
     name: Playwright account bootstrap E2E
