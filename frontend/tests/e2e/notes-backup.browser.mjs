@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
 import { runAttributionOwnership } from "./attribution-ownership.fixture.mjs";
+import { runTradeListOwnership } from "./trade-list-ownership.fixture.mjs";
 
 const here = join(fileURLToPath(import.meta.url), "..");
 const dist = resolve(here, "../../dist");
@@ -517,6 +518,7 @@ try {
   }
 
   await runAttributionOwnership(browser, frontend);
+  await runTradeListOwnership(browser, frontend);
   console.log("notes backup browser E2E: PASS");
 } finally {
   if (browser) await browser.close().catch(() => {});

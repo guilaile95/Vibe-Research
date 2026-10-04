@@ -75,6 +75,15 @@ export function Trades() {
   });
   const [filterError, setFilterError] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
+  const listMountedRef = useRef(true);
+  const listRequestRef = useRef(0);
+  const listScopeRef = useRef({ filters: appliedFilters, offset });
+  listScopeRef.current = { filters: appliedFilters, offset };
+
+  useEffect(() => {
+    listMountedRef.current = true;
+    return () => { listMountedRef.current = false; listRequestRef.current += 1; };
+  }, []);
 
   // 详情 modal state
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
@@ -114,15 +123,31 @@ export function Trades() {
     setSelectedTradeId(tradeId);
   };
 
-  // 加载数据
-  const loadTrades = useCallback(async () => {
+  // The list owns only reads. Existing transaction handlers call this stable
+  // function after writes, so those refreshes also use the latest applied scope.
+  const selectListScope = (nextFilters: TradeListFilters, nextOffset: number) => {
+    listRequestRef.current += 1;
+    listScopeRef.current = { filters: nextFilters, offset: nextOffset };
     setLoading(true);
     setError(null);
+    setTrades([]);
+  };
+
+  const loadTrades = useCallback(async () => {
+    if (!listMountedRef.current) return;
+    const requestId = ++listRequestRef.current;
+    const scope = listScopeRef.current;
+    const isCurrent = () => listMountedRef.current && requestId === listRequestRef.current
+      && scope.filters === listScopeRef.current.filters && scope.offset === listScopeRef.current.offset;
+    setLoading(true);
+    setError(null);
+    setTrades([]);
     try {
-      const query = buildTradeListQuery(appliedFilters, PAGE_LIMIT, offset);
+      const query = buildTradeListQuery(scope.filters, PAGE_LIMIT, scope.offset);
       const res = await api.listTrades(query);
-      setTrades(res);
+      if (isCurrent()) setTrades(res);
     } catch (e) {
+      if (!isCurrent()) return;
       if (e instanceof ApiError) {
         setError(e.message);
       } else if (e instanceof Error) {
@@ -131,13 +156,13 @@ export function Trades() {
         setError("加载交易流水失败");
       }
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [appliedFilters, offset]);
+  }, []);
 
   useEffect(() => {
-    loadTrades();
-  }, [loadTrades]);
+    void loadTrades();
+  }, [appliedFilters, offset, loadTrades]);
 
   // 加载单条详情
   const loadDetail = useCallback(async (id: string, selection: { tradeId: string }) => {
@@ -311,9 +336,11 @@ export function Trades() {
       setFilterError(err);
       return;
     }
+    const nextFilters = { ...filters };
+    selectListScope(nextFilters, 0);
     setFilterError(null);
     setOffset(0);
-    setAppliedFilters({ ...filters });
+    setAppliedFilters(nextFilters);
   };
 
   const handleFilterReset = () => {
@@ -325,6 +352,7 @@ export function Trades() {
       date_to: "",
       include_voided: false,
     };
+    selectListScope(emptyFilters, 0);
     setFilters(emptyFilters);
     setFilterError(null);
     setOffset(0);
@@ -473,12 +501,14 @@ export function Trades() {
   // 分页
   const handlePrevPage = () => {
     if (offset >= PAGE_LIMIT) {
+      selectListScope(listScopeRef.current.filters, offset - PAGE_LIMIT);
       setOffset(offset - PAGE_LIMIT);
     }
   };
 
   const handleNextPage = () => {
     if (trades.length >= PAGE_LIMIT) {
+      selectListScope(listScopeRef.current.filters, offset + PAGE_LIMIT);
       setOffset(offset + PAGE_LIMIT);
     }
   };
@@ -679,6 +709,9 @@ export function Trades() {
                   return (
                     <tr
                       key={item.trade_id}
+                      data-testid="trade-list-row"
+                      data-trade-id={item.trade_id}
+                      data-security-code={item.code}
                       className={cn(
                         "hover:bg-muted/30 transition-colors",
                         isVoided && "opacity-60 bg-muted/10",
