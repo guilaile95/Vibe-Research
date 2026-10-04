@@ -1,3 +1,4 @@
+import { ReportPageReader } from "@/components/reports/ReportPageReader";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Upload, FileText, Trash2, Download, Loader2, FolderOpen, Search, Pencil, ExternalLink, Save, X } from "lucide-react";
@@ -640,6 +641,8 @@ export function MyReports() {
           />
         </div>
       </div>
+
+      {selectedIds.length > 0 && <ReportPageReader reports={reports.filter(r => selectedIds.includes(r.id))} />}
 
       {/* 搜索结果 */}
       {searching && (

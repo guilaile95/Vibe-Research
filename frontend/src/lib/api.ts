@@ -14,6 +14,8 @@ import type {
   ThesisDeltaCreatePayload,
   ThesisDeltaListResult,
   MyReport,
+  ReportPageReadRequest,
+  ReportPageReadResult,
   MyReportTextHit,
   MyReportTextIndexPreview,
   MyReportTextIndexBatchResult,
@@ -903,6 +905,7 @@ export const api = {
   info: (code: string) => get<Record<string, string | number>>(`/info?code=${code}`),
   /** 巨潮公告全文列表（需 akshare，备用源）；依赖缺失抛 501。 */
   disclosure: (code: string) => get<DisclosureItem[]>(`/disclosure?code=${code}`),
+  readReportPages: (body: ReportPageReadRequest, signal?: AbortSignal) => request<ReportPageReadResult>("/myreports/page-read", "POST", body, { signal }),
   myReports: () => get<MyReport[]>("/myreports"),
   uploadReport: (name: string, contentB64: string, meta?: {
     title?: string; institution?: string; publish_date?: string;

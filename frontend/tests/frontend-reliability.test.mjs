@@ -698,3 +698,56 @@ test('index completion refreshes the latest query and discards older query respo
   calls[1].resolve([{report_id:'stale',title:'OLD BETA',snippet:'beta',page:1}]);await tick();
   assert.match(label(h.render()),/FRESH BETA/);assert.doesNotMatch(label(h.render()),/OLD BETA/);
 });
+
+test('page reader invalidates old results on range, selection and SHA changes', async () => {
+  const pending = [], calls = [];
+  const h = harness('components/reports/ReportPageReader.tsx', 'ReportPageReader', {
+    '@/lib/api': { api: { readReportPages: (body, signal) => { calls.push({ body, signal }); const d = deferred(); pending.push(d); return d.promise; } } },
+  });
+  let props = { reports: [{ id: 'a', name: 'A.pdf', file_sha256: 'a'.repeat(64) }] };
+  let tree = h.render(props);
+  find(tree, 'button', '读取指定页').props.onClick();
+  tree = h.render(props);
+  assert.equal(find(tree, 'button').props.disabled, true);
+  nodes(tree).find(n => n.props?.['aria-label'] === '结束页').props.onChange({ target: { value: '2' } });
+  tree = h.render(props);
+  assert.equal(calls[0].signal.aborted, true);
+  find(tree, 'button').props.onClick();
+  const result = { file_sha256: 'a'.repeat(64), returned_chars: 5,
+    coverage: { readable: [2], omitted: [], invalid: [], unreadable: [], error: [] },
+    items: [{ page: 2, status: 'readable', reason: 'INDEXED_TEXT', text: 'fresh', returned_chars: 5, indexed_chars: 5 }] };
+  pending[1].resolve(result); await tick();
+  assert.match(label(h.render(props)), /fresh/);
+  pending[0].resolve({ ...result, items: [{ ...result.items[0], text: 'stale' }] }); await tick();
+  assert.doesNotMatch(label(h.render(props)), /stale/);
+  props = { reports: [{ ...props.reports[0], file_sha256: 'b'.repeat(64) }] };
+  assert.doesNotMatch(label(h.render(props)), /fresh/);
+  props = { reports: [] };
+  assert.equal(h.render(props), null);
+  h.unmount();
+});
+
+test('page reader validates ranges, missing version, and retry without automatic AI use', async () => {
+  let count = 0;
+  const h = harness('components/reports/ReportPageReader.tsx', 'ReportPageReader', {
+    '@/lib/api': { api: { readReportPages: async () => { count++; throw new Error('offline'); } } },
+  });
+  let props = { reports: [{ id: 'a', name: 'A.pdf' }] };
+  let tree = h.render(props);
+  assert.equal(find(tree, 'button').props.disabled, true);
+  props = { reports: [{ ...props.reports[0], file_sha256: 'a'.repeat(64) }] };
+  tree = h.render(props);
+  assert.equal(count, 0);
+  for (const value of ['-1', '1.5', '1e3', '999999999999999999999999', '201']) {
+    nodes(tree).find(n => n.props?.['aria-label'] === '结束页').props.onChange({ target: { value } });
+    tree = h.render(props);
+    assert.equal(find(tree, 'button').props.disabled, true);
+  }
+  nodes(tree).find(n => n.props?.['aria-label'] === '结束页').props.onChange({ target: { value: '2' } });
+  tree = h.render(props); await find(tree, 'button').props.onClick();
+  tree = h.render(props); assert.match(label(tree), /读取失败/);
+  await find(tree, 'button').props.onClick();
+  assert.equal(count, 2);
+  assert.match(label(h.render(props)), /不自动加入 AI 上下文/);
+  h.unmount();
+});
