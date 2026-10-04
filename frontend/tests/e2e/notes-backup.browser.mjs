@@ -370,6 +370,42 @@ try {
   assert.equal(citationCalls,2);
   assert.deepEqual(citationErrors,[]);
 
+  // Explicit indexed-page viewer: synthetic transport only, no automatic AI call.
+  archived[0].file_sha256="a".repeat(64);
+  let pageReads=0;
+  await page.route("**/api/myreports/page-read",route=>{
+    pageReads++;
+    const body=route.request().postDataJSON();
+    assert.deepEqual(body.selected_report_ids,["selected-pdf"]);
+    assert.equal(body.expected_file_sha256,"a".repeat(64));
+    assert.equal(body.page_from,2);
+    return route.fulfill({json:{data:{report_id:"selected-pdf",file_sha256:"a".repeat(64),scope:"INDEXED_PAGE_TEXT_ONLY",full_report_read:false,
+      requested:[2,3],returned_chars:28,complete_requested_text:false,
+      coverage:{readable:[2],omitted:[],invalid:[],unreadable:[3],error:[]},
+      items:[{page:2,status:"readable",reason:"CHAR_TRUNCATED",text:"SYNTHETIC LATE CORRECTION: 80",returned_chars:28,indexed_chars:40,truncated:true},
+        {page:3,status:"unreadable",reason:"NO_INDEXED_PAGE_TEXT"}]}}});
+  });
+  for(const width of [1440,390]){
+    await page.setViewportSize({width,height:900});
+    await page.goto(`${frontend}/my-reports`,{waitUntil:"networkidle"});
+    await page.getByRole("checkbox",{name:"选择 Selected PDF",exact:true}).check();
+    const viewer=page.getByTestId("report-page-reader");
+    await viewer.locator("summary").focus();await page.keyboard.press("Enter");
+    await viewer.getByLabel("起始页",{exact:true}).fill("2");
+    await viewer.getByLabel("结束页",{exact:true}).fill("3");
+    await viewer.getByRole("button",{name:"读取指定页",exact:true}).click();
+    await viewer.getByText("SYNTHETIC LATE CORRECTION: 80",{exact:true}).waitFor();
+    await viewer.getByText(/第 2 页.*部分正文/).waitFor();
+    await viewer.getByText(/第 3 页.*正文不可用/).waitFor();
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    await viewer.getByLabel("结束页",{exact:true}).fill("4");
+    assert.equal(await viewer.getByRole("region",{name:"指定页读取结果"}).count(),0);
+    await page.getByRole("checkbox",{name:"选择 Selected PDF",exact:true}).uncheck();
+    assert.equal(await page.getByTestId("report-page-reader").count(),0);
+  }
+  assert.equal(pageReads,2);
+  assert.equal(citationCalls,2,"page reads must not invoke AI");
+
   console.log("notes backup browser E2E: PASS");
 } finally {
   if (browser) await browser.close().catch(() => {});

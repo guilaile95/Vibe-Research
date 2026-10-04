@@ -95,6 +95,7 @@ def _connect_readonly(reports_dir: Path) -> sqlite3.Connection | None:
         return None
     if not index.is_file():
         raise ReportTextIndexCorruptedError()
+    conn = None
     try:
         conn = sqlite3.connect(f"{index.resolve().as_uri()}?mode=ro", uri=True, timeout=5)
         conn.row_factory = sqlite3.Row
@@ -102,8 +103,12 @@ def _connect_readonly(reports_dir: Path) -> sqlite3.Connection | None:
         _assert_schema(conn)
         return conn
     except ReportTextIndexCorruptedError:
+        if conn is not None:
+            conn.close()
         raise
     except sqlite3.Error as exc:
+        if conn is not None:
+            conn.close()
         raise ReportTextIndexCorruptedError() from exc
 
 
@@ -461,3 +466,112 @@ def search(
         })
     hits.sort(key=lambda hit: (-hit["score"], hit["report_id"], hit["page"] or 0))
     return hits[:limit]
+
+
+def read_pages(reports_dir: Path, report: dict | None, *, report_id: str,
+               selected_report_ids: list[str], expected_file_sha256: str,
+               page_from: int, page_to: int, max_pages: int = 8,
+               max_chars: int = 12000, max_page_chars: int = 6000) -> dict:
+    """Read bounded indexed PDF page text, never a claim of reading the source PDF.
+
+    Caller validates shape/range before expansion. Selection is a workflow scope,
+    not authorization; this uses the same local report catalog as other readers.
+    """
+    limits = ((page_from, 1, 1000000), (page_to, 1, 1000000),
+              (max_pages, 1, 20), (max_chars, 1, 20000), (max_page_chars, 1, 20000))
+    if any(type(v) is not int or not low <= v <= high for v, low, high in limits):
+        raise ValueError("invalid page-read limits")
+    if page_to < page_from or page_to - page_from >= 200:
+        raise ValueError("requested range must contain 1-200 pages")
+    requested = list(range(page_from, page_to + 1))
+    result = {"report_id": report_id, "file_sha256": expected_file_sha256,
+              "scope": "INDEXED_PAGE_TEXT_ONLY", "full_report_read": False,
+              "requested": requested, "items": [], "returned_chars": 0,
+              "complete_requested_text": False,
+              "limits": {"max_pages": max_pages, "max_chars": max_chars,
+                         "max_page_chars": max_page_chars}}
+
+    def finish(items):
+        result["items"] = items
+        result["coverage"] = {status: [item["page"] for item in items if item["status"] == status]
+                              for status in ("readable", "omitted", "invalid", "unreadable", "error")}
+        result["returned_chars"] = sum(item.get("returned_chars", 0) for item in items)
+        result["complete_requested_text"] = all(
+            item["status"] == "readable" and not item["truncated"] for item in items)
+        return result
+
+    def fail(status, reason):
+        return finish([{"page": page, "status": status, "reason": reason} for page in requested])
+
+    if report_id not in selected_report_ids:
+        return fail("invalid", "REPORT_NOT_SELECTED")
+    if report is None:
+        return fail("invalid", "REPORT_NOT_FOUND")
+    # Do not accept client-supplied paths or use catalog corruption to escape root.
+    ext = str(report.get("ext") or "").lower()
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", report_id) or not re.fullmatch(r"\.[a-z0-9]+", ext):
+        return fail("error", "INVALID_SOURCE_METADATA")
+    source = Path(reports_dir) / f"{report_id}{ext}"
+    if source.resolve().parent != Path(reports_dir).resolve():
+        return fail("error", "INVALID_SOURCE_METADATA")
+    if report.get("file_sha256") != expected_file_sha256:
+        return fail("error", "FILE_CHANGED")
+    conn = None
+    try:
+        if _source_sha256(source) != expected_file_sha256:
+            return fail("error", "FILE_CHANGED")
+        conn = _connect_readonly(reports_dir)
+        if conn is None:
+            return fail("unreadable", "NOT_INDEXED")
+        conn.execute("BEGIN")
+        meta = conn.execute("SELECT * FROM report_text_index WHERE report_id=?", (report_id,)).fetchone()
+        if meta is None:
+            return fail("unreadable", "NOT_INDEXED")
+        if meta["file_sha256"] != expected_file_sha256:
+            return fail("error", "INDEX_SOURCE_MISMATCH")
+        if meta["status"] == STATUS_ERROR:
+            return fail("error", "INDEX_EXTRACTION_FAILED")
+        if ext != ".pdf" or meta["page_count"] is None:
+            return fail("unreadable", "PAGE_NUMBERS_UNAVAILABLE")
+        page_count = meta["page_count"]
+        if type(page_count) is not int or page_count < 0:
+            return fail("error", "INDEX_METADATA_INVALID")
+        result["page_count"] = page_count
+        items = []
+        used_chars = used_pages = 0
+        placeholders = {"n/a", "[no text]", "[image]", "ocr_required", "pdf_no_extractable_text", "暂无正文"}
+        for page in requested:
+            item = {"page": page}
+            if page > page_count:
+                item.update(status="invalid", reason="PAGE_OUT_OF_RANGE")
+            elif meta["status"] != STATUS_SEARCHABLE:
+                item.update(status="unreadable", reason="NO_EXTRACTABLE_TEXT")
+            else:
+                # SQL substring bounds memory as well as response size, including page 1.
+                capacity = min(max_page_chars, max_chars - used_chars)
+                row = conn.execute("SELECT length(text), substr(text,1,?), substr(text,1,256) FROM report_text_chunks WHERE report_id=? AND page=?",
+                                   (max(1, capacity), report_id, page)).fetchone()
+                if row is None or not row[0]:
+                    item.update(status="unreadable", reason="NO_INDEXED_PAGE_TEXT")
+                elif used_pages >= max_pages or capacity <= 0:
+                    item.update(status="omitted", reason="PAGE_BUDGET" if used_pages >= max_pages else "CHAR_BUDGET")
+                elif not any(char.isalnum() for char in row[1]) or (row[0] <= 256 and row[2].strip().lower() in placeholders):
+                    item.update(status="unreadable", reason="EMPTY_OR_PLACEHOLDER_TEXT")
+                else:
+                    text = row[1]
+                    item.update(status="readable", text=text, returned_chars=len(text),
+                                indexed_chars=row[0], truncated=len(text) < row[0],
+                                reason="CHAR_TRUNCATED" if len(text) < row[0] else "INDEXED_TEXT")
+                    used_chars += len(text)
+                    used_pages += 1
+            items.append(item)
+        if _source_sha256(source) != expected_file_sha256:
+            return fail("error", "FILE_CHANGED_DURING_READ")
+        return finish(items)
+    except (ReportTextIndexError, sqlite3.Error):
+        return fail("error", "INDEX_READ_FAILED")
+    except OSError:
+        return fail("error", "SOURCE_UNAVAILABLE")
+    finally:
+        if conn is not None:
+            conn.close()

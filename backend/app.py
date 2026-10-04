@@ -1269,6 +1269,29 @@ def myreports_search(q: str = ""):
     return {"data": mr.search_reports(mr.list_reports(), q)}
 
 
+class ReportPageReadIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    report_id: str = Field(min_length=1, max_length=128)
+    selected_report_ids: list[str] = Field(min_length=1, max_length=100)
+    expected_file_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    page_from: int = Field(strict=True, ge=1, le=1000000)
+    page_to: int = Field(strict=True, ge=1, le=1000000)
+    max_pages: int = Field(default=8, strict=True, ge=1, le=20)
+    max_chars: int = Field(default=12000, strict=True, ge=1, le=20000)
+    max_page_chars: int = Field(default=6000, strict=True, ge=1, le=20000)
+
+    @model_validator(mode="after")
+    def bounded_range(self):
+        if self.page_to < self.page_from or self.page_to - self.page_from >= 200:
+            raise ValueError("页码范围须为连续 1-200 页")
+        return self
+
+
+@app.post("/api/myreports/page-read")
+def myreports_page_read(body: ReportPageReadIn):
+    return {"data": mr.read_report_pages(**body.model_dump())}
+
+
 @app.get("/api/myreports/fulltext-search")
 def myreports_fulltext_search(
     q: str,

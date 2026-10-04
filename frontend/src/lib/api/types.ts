@@ -4047,3 +4047,16 @@ export interface NativeIntelAiSentimentResponse {
   status: string;
   cached?: boolean;
 }
+
+export interface ReportPageReadRequest {
+  report_id: string; selected_report_ids: string[]; expected_file_sha256: string;
+  page_from: number; page_to: number;
+}
+export type ReportPageReadStatus = "readable" | "omitted" | "invalid" | "unreadable" | "error";
+export interface ReportPageReadResult {
+  report_id: string; file_sha256: string; scope: "INDEXED_PAGE_TEXT_ONLY"; full_report_read: false;
+  requested: number[]; returned_chars: number; complete_requested_text: boolean;
+  coverage: Record<ReportPageReadStatus, number[]>;
+  items: { page: number; status: ReportPageReadStatus; reason: string; text?: string;
+    returned_chars?: number; indexed_chars?: number; truncated?: boolean }[];
+}

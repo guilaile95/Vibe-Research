@@ -1155,6 +1155,13 @@ def search_report_text(
     )
 
 
+def read_report_pages(**request) -> dict:
+    report_id = request["report_id"]
+    # The existing local API trust boundary applies; selection is not an ACL.
+    report = next((entry for entry in _load_index_raw() if entry.get("id") == report_id), None)
+    return fulltext.read_pages(REPORTS_DIR, report, **request)
+
+
 CHAT_REPORT_HIT_LIMIT = 8
 CHAT_REPORT_EXCERPT_MAX_CHARS = 6000
 
