@@ -14,6 +14,7 @@ import * as navigation from '../src/lib/navigation.ts';
 import * as sectorResearch from '../src/data/sectorResearch/index.ts';
 import * as signalLedgerView from '../src/lib/signalLedgerView.ts';
 import * as hotlistView from '../src/lib/hotlistView.ts';
+import * as dataHealthView from '../src/lib/dataHealthView.ts';
 
 // Component behavior in a deterministic hook runner: real TSX handlers/effects and
 // storage modules, mocked network/UI dependencies. No browser or real credentials.
@@ -81,6 +82,53 @@ const find = (tree, type, text) => nodes(tree).find(node => node.type === type &
 const testId = (tree, id) => nodes(tree).find(node => node.props?.['data-testid'] === id);
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+const healthRecord = (source_id, marker = 'OLD') => ({ source_id, display_name: source_id, module: 'synthetic', status: 'partial', is_stale: false, observed_at: '2026-10-05T00:00:00Z', last_error_code: marker, last_error_summary: '', blocks_advice: false });
+const healthOverview = marker => ({ items: ['quotes', 'financials'].map(id => healthRecord(id, marker)), overall_status: 'partial', summary: { normal: 0, partial: 2, unavailable: 0, stale: 0, not_initialized: 0 }, block_reasons: [] });
+const healthDetail = (id, marker) => ({ record: healthRecord(id, marker), calculation: {}, related_pages: [] });
+function healthHarness() {
+  const overviewCalls = [], detailCalls = [];
+  const h = harness('pages/DataHealth.tsx', 'DataHealth', {
+    '@/lib/api': { ApiError: Error, api: {
+      getDataHealth: () => { const call = deferred(); overviewCalls.push(call); return call.promise; },
+      getDataHealthSource: id => { const call = { id, ...deferred() }; detailCalls.push(call); return call.promise; },
+    } }, '@/lib/dataHealthView': dataHealthView,
+    '@/components/ui/GlassCard': { GlassCard: 'glass-card' }, '@/components/ui/PageHeader': { PageHeader: 'page-header' },
+  });
+  const choose = id => { nodes(h.render()).find(n => n.type === 'glass-card' && n.props.onClick && label(n).includes(id)).props.onClick(); h.render(); };
+  const reread = () => { find(h.render(), 'button', '重新读取').props.onClick(); h.render(); };
+  const detailText = () => label(nodes(h.render()).find(n => n.type === 'glass-card' && label(n).includes('单来源详情')));
+  return { ...h, overviewCalls, detailCalls, choose, reread, detailText };
+}
+async function readyHealth() { const h = healthHarness(); h.render(); h.overviewCalls[0].resolve(healthOverview('OLD')); await tick(); h.render(); return h; }
+
+test('health reread refreshes the selected detail together with the overview', async () => {
+  const h = await readyHealth(); h.choose('quotes'); h.detailCalls[0].resolve(healthDetail('quotes', 'OLD')); await tick(); assert.match(h.detailText(), /错误码：OLD/);
+  h.reread(); assert.equal(h.overviewCalls.length, 2); assert.equal(h.detailCalls.length, 2); assert.match(h.detailText(), /加载详情/); assert.doesNotMatch(h.detailText(), /错误码：OLD/);
+  h.overviewCalls[1].resolve(healthOverview('NEW')); h.detailCalls[1].resolve(healthDetail('quotes', 'NEW')); await tick(); assert.match(h.detailText(), /错误码：NEW/); h.unmount();
+});
+
+test('health detail failure has explicit retry and same-source selection can recover', async () => {
+  const h = await readyHealth(); h.choose('quotes'); h.detailCalls[0].reject(new Error('DETAIL_FAILED')); await tick(); assert.match(h.detailText(), /DETAIL_FAILED/);
+  find(h.render(), 'button', '重试详情').props.onClick(); h.render(); assert.equal(h.detailCalls.length, 2); assert.doesNotMatch(h.detailText(), /DETAIL_FAILED/);
+  h.detailCalls[1].reject(new Error('FAILED_AGAIN')); await tick(); h.choose('quotes'); assert.equal(h.detailCalls.length, 3);
+  h.detailCalls[2].resolve(healthDetail('quotes', 'RECOVERED')); await tick(); assert.match(h.detailText(), /RECOVERED/); h.unmount();
+});
+
+for (const staleError of [false, true]) test(`health switch and same-source reload ignore old ${staleError ? 'error' : 'success'} and finalizer`, async () => {
+  const h = await readyHealth(); h.choose('quotes'); h.choose('financials');
+  if (staleError) h.detailCalls[0].reject(new Error('OBSOLETE')); else h.detailCalls[0].resolve(healthDetail('quotes', 'OBSOLETE'));
+  await tick(); assert.match(h.detailText(), /加载详情/); assert.doesNotMatch(h.detailText(), /OBSOLETE/);
+  h.detailCalls[1].resolve(healthDetail('financials', 'CURRENT')); await tick(); assert.match(h.detailText(), /CURRENT/);
+  h.choose('financials'); h.choose('financials'); assert.equal(h.detailCalls.length, 4);
+  h.detailCalls[3].resolve(healthDetail('financials', 'LATEST')); await tick(); h.detailCalls[2].reject(new Error('OBSOLETE')); await tick(); assert.match(h.detailText(), /LATEST/); assert.doesNotMatch(h.detailText(), /OBSOLETE/); h.unmount();
+});
+
+test('health overview late responses and unmounted details cannot mutate current state', async () => {
+  const h = await readyHealth(); h.reread(); h.reread(); h.overviewCalls[2].resolve(healthOverview('LATEST_OVERVIEW')); await tick(); h.overviewCalls[1].resolve({ ...healthOverview('OLD_OVERVIEW'), items: [] }); await tick();
+  assert.match(label(h.render()), /全部数据源（2）/); h.choose('quotes'); h.detailCalls[0].resolve(healthDetail('financials', 'WRONG_OWNER')); await tick(); assert.doesNotMatch(h.detailText(), /WRONG_OWNER/); assert.match(h.detailText(), /详情.*失败/);
+  h.choose('quotes'); const before = label(h.render()); h.unmount(); h.detailCalls[1].resolve(healthDetail('quotes', 'AFTER_UNMOUNT')); await tick(); assert.equal(label(h.render()), before);
+});
 
 function deepReadHarness() {
   const calls = [];
