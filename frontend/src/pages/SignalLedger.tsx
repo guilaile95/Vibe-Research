@@ -207,6 +207,8 @@ export default function SignalLedger() {
               onClick={() => {
                 const cleared: SignalLedgerFilters = { decision_run_id: "", stage: "", code: "", severity: "" };
                 setFilters(cleared);
+                setFilterError(null);
+                setSignalEntries([]);
                 setSearchParams(new URLSearchParams());
                 fetchData(cleared);
               }}
@@ -331,7 +333,7 @@ export default function SignalLedger() {
             <RefreshCw className="w-8 h-8 text-indigo-500 animate-spin mx-auto mb-3" />
             <p className="text-sm text-gray-500">正在加载信号流水...</p>
           </div>
-        ) : signalEntries.length === 0 ? (
+        ) : errorMsg ? null : signalEntries.length === 0 ? (
           <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-12 text-center">
             <FileCode className="w-10 h-10 text-gray-400 mx-auto mb-3" />
             <p className="text-sm text-gray-500 font-medium">暂无信号记录</p>
