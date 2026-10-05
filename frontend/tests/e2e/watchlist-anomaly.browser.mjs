@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createReadStream, existsSync, readdirSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,7 +71,27 @@ try {
   browser = await launchBrowser();
   const page = await browser.newPage();
   const pageErrors = [];
+  const externalRequests = [];
+  const saveRequests = [];
+  let watchCodes = ["600519", "000001", "837023"];
+  let watchEtag = "e2e";
+  let failSave = false;
+  let anomalyMode = "normal";
+  let releaseAnomalies;
+  const screenshots = process.env.WATCHLIST_SCREENSHOT_DIR;
+  if (screenshots) mkdirSync(screenshots, { recursive: true });
   page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error" && !/Failed to load resource.*(?:409|503)/.test(message.text())) pageErrors.push(message.text());
+  });
+  await page.route("**/*", (route) => {
+    const url = new URL(route.request().url());
+    if (url.origin === `http://127.0.0.1:${port}`) return route.continue();
+    externalRequests.push(url.origin);
+    // Keep the fixture offline without a font stylesheet abort polluting console health.
+    if (url.origin === "https://fonts.googleapis.com") return route.fulfill({ status: 200, contentType: "text/css", body: "" });
+    return route.abort();
+  });
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/native-intel/watchlist-context") {
@@ -99,6 +119,8 @@ try {
       } } });
     }
     if (path === "/api/watchlist/anomalies") {
+      if (anomalyMode === "loading") await new Promise((resolve) => { releaseAnomalies = resolve; });
+      if (anomalyMode === "error") return route.fulfill({ status: 503, json: { detail: "synthetic anomaly unavailable" } });
       return route.fulfill({ json: { data: {
         provider_id: "hithink_financial_api",
         provider_contract: "hithink-watchlist-anomalies-v0.1",
@@ -109,13 +131,22 @@ try {
           type: "大幅上涨", reason: "成交活跃且价格快速上行", keywords: ["白酒"],
         }, {
           code: "600519", provider_symbol: "600519.SH", name: "贵州茅台",
-          type: "快速反弹", reason: "盘中价格快速回升", keywords: [],
+          type: "快速反弹", reason: anomalyMode === "missing-reason" ? "" : "盘中价格快速回升", keywords: [],
         }],
       } } });
     }
     if (path === "/api/watchlist") {
+      if (route.request().method() === "PUT") {
+        const body = route.request().postDataJSON();
+        saveRequests.push(body);
+        assert.equal(body.expected_etag, watchEtag, "save must use the authoritative ETag");
+        if (failSave) return route.fulfill({ status: 409, json: { detail: "synthetic version conflict" } });
+        watchCodes = body.codes;
+        watchEtag = "e2e-saved";
+        return route.fulfill({ json: { data: { codes: watchCodes, etag: watchEtag } } });
+      }
       return route.fulfill({ json: { data: {
-        status: "valid", data: { codes: ["600519", "000001", "837023"], updated_at: "2026-08-24 09:30:00" }, etag: "e2e",
+        status: "valid", data: { codes: watchCodes, updated_at: "2026-08-24 09:30:00" }, etag: watchEtag,
       } } });
     }
     if (path === "/api/quote") {
@@ -137,11 +168,98 @@ try {
   await page.getByText("盘中价格快速回升", { exact: true }).waitFor();
   assert.equal(await page.getByText("当前数据源未返回异动记录", { exact: true }).count(), 1);
   assert.equal(await page.getByText("当前数据源未覆盖该标的异动查询", { exact: true }).count(), 1);
+  const table = page.getByTestId("watchlist-anomaly-table");
+  const layoutEvidence = [];
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 320, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    assert.equal(await table.count(), 1, "one shared table for every viewport");
+    assert.equal(await table.getByRole("columnheader").count(), 6);
+    assert.equal(await table.locator("tbody tr").count(), 3);
+    for (const code of watchCodes) {
+      const row = table.locator(`[data-watchlist-code="${code}"]`);
+      assert.equal(await row.getByRole("cell").count(), 6);
+      for (const [index, field] of ["stock", "price", "change", "amount", "anomaly", "action"].entries()) {
+        assert.equal(await row.getByRole("cell").nth(index).getAttribute("headers"), `watchlist-${field}`);
+      }
+      for (const control of [row.getByRole("link", { name: code, exact: true }), row.getByTestId(`watchlist-candidate-${code}`), row.getByRole("button", { name: new RegExp(`移除 .*${code}`) })]) {
+        const bounds = await control.boundingBox();
+        assert.ok(bounds && bounds.height >= 44, `44px row touch target ${code} at ${viewport.width}px`);
+        if (viewport.width < 768) assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= viewport.width, "row actions stay inside viewport");
+      }
+      if (viewport.width < 768) {
+        for (const label of ["最新价", "涨跌幅", "成交额", "当日异动事实"]) assert.equal(await row.getByText(label, { exact: true }).isVisible(), true);
+      }
+    }
+    const values = await table.locator('[data-watchlist-code="600519"] td').allTextContents();
+    assert.match(values[1], /1300/);
+    assert.match(values[2], /\+2.5%/);
+    assert.match(values[3], /2.00 亿/);
+    assert.match((await table.locator('[data-watchlist-code="000001"] td').allTextContents())[2], /-1%/);
+    assert.equal(await table.locator('[data-watchlist-code="837023"] td').nth(1).innerText(), viewport.width < 768 ? "最新价\n—" : "—");
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no page horizontal overflow");
+    assert.ok(await page.getByRole("main").evaluate((element) => element.scrollWidth <= element.clientWidth), "no main horizontal overflow");
+    const geometry = await table.evaluate((element) => ({ tableWidth: element.getBoundingClientRect().width, containerWidth: element.parentElement.clientWidth, containerScrollWidth: element.parentElement.scrollWidth }));
+    assert.ok(geometry.containerScrollWidth <= geometry.containerWidth, "no table horizontal scrolling");
+    layoutEvidence.push({ viewport, ...geometry, values });
+    if (screenshots) {
+      await page.getByRole("main").evaluate((element) => element.scrollTo(0, 0));
+      await page.screenshot({ path: join(screenshots, `watchlist-after-${viewport.width}.png`), fullPage: true });
+      await table.screenshot({ path: join(screenshots, `watchlist-records-after-${viewport.width}.png`) });
+      if (viewport.width < 768) {
+        // main owns scrolling: capture each complete record rather than a clipped whole table.
+        for (const code of ["600519", "837023"]) {
+          const row = table.locator(`[data-watchlist-code="${code}"]`);
+          await row.evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await row.screenshot({ path: join(screenshots, `watchlist-row-${code}-after-${viewport.width}.png`) });
+          await page.screenshot({ path: join(screenshots, `watchlist-row-${code}-viewport-after-${viewport.width}.png`) });
+        }
+      }
+    }
+  }
   await page.getByLabel("仅看有异动").check();
   assert.equal(await page.locator("tbody tr").count(), 1);
   await page.getByRole("link", { name: "600519", exact: true }).click();
   await page.waitForURL("**/stock-data?code=600519");
   await page.locator('[data-active-code="600519"]').waitFor();
+  // Missing reasons, initial loading and unavailable data retain their distinct meanings.
+  anomalyMode = "missing-reason";
+  await page.goto(`http://127.0.0.1:${port}/watchlist`, { waitUntil: "networkidle" });
+  await page.getByText("当前数据源未提供原因", { exact: true }).waitFor();
+  anomalyMode = "loading";
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await table.getByText("读取中…", { exact: true }).first().waitFor();
+  assert.equal(await page.getByLabel("仅看有异动").isDisabled(), true);
+  anomalyMode = "normal";
+  releaseAnomalies();
+  await table.getByText("盘中价格快速回升", { exact: true }).waitFor();
+  anomalyMode = "error";
+  await page.getByLabel("刷新行情与异动", { exact: true }).click();
+  await table.getByText("异动数据暂不可用", { exact: true }).first().waitFor();
+  assert.equal(await table.locator("tbody tr").count(), 3);
+  assert.equal(await page.getByLabel("仅看有异动").isDisabled(), true);
+  if (screenshots) await table.screenshot({ path: join(screenshots, "watchlist-unavailable-after-320.png") });
+
+  // Successful and conflicting saves both return keyboard focus to the stable heading.
+  anomalyMode = "normal";
+  await page.getByLabel("刷新行情与异动", { exact: true }).click();
+  await table.getByText("盘中价格快速回升", { exact: true }).waitFor();
+  await table.getByRole("button", { name: "移除 平安银行（000001）", exact: true }).click();
+  await table.locator('[data-watchlist-code="000001"]').waitFor({ state: "detached" });
+  await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "watchlist-list-heading");
+  await page.getByRole("status").getByText("已移除 000001（后端权威）", { exact: true }).waitFor();
+  failSave = true;
+  await table.getByRole("button", { name: "移除 股票（837023）", exact: true }).click();
+  await page.getByRole("status").getByText(/synthetic version conflict/).waitFor();
+  await table.locator('[data-watchlist-code="837023"]').waitFor();
+  await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "watchlist-list-heading");
+  assert.deepEqual(watchCodes, ["600519", "837023"], "failed save reloads the authoritative list");
+  assert.equal(saveRequests.length, 2);
+  assert.equal(await page.evaluate(() => localStorage.getItem("vr-watchlist")), null);
+  assert.ok(externalRequests.every((origin) => origin === "https://fonts.googleapis.com"), "only known font stylesheet requests may be fulfilled locally; all external requests are intercepted");
+  if (screenshots) {
+    await page.screenshot({ path: join(screenshots, "watchlist-remove-conflict-after-320.png"), fullPage: true });
+    writeFileSync(join(screenshots, "watchlist-after-layout.json"), JSON.stringify({ layoutEvidence, saveRequests, focus: await page.getByTestId("watchlist-list-heading").evaluate((element) => document.activeElement === element), pageErrors, externalRequests }, null, 2));
+  }
   assert.deepEqual(pageErrors, []);
   console.log("watchlist anomaly browser vertical: PASS");
 } finally {
