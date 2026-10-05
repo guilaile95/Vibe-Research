@@ -1,5 +1,9 @@
 import type { SectorIndustryContextData, SectorIndustryContextItem } from "./api";
 
+export const SECTOR_INDUSTRY_MATRIX_INDUSTRY_HEADER = "东财行业";
+export const SECTOR_INDUSTRY_MATRIX_ABOVE_MA20_HEADER = "站上 MA20";
+export const SECTOR_INDUSTRY_MATRIX_PARTICIPATION_HEADER = "参与度";
+
 export type SectorIndustrySortKey =
   | "member_aggregate_return_5d_pct"
   | "member_aggregate_return_20d_pct"

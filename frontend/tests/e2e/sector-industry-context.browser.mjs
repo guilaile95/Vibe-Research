@@ -103,10 +103,10 @@ async function assertMatrix(page, label, errors) {
   if (!url.endsWith("/sectors")) errors.push(`${label}: wrong URL ${url}`);
   if (!title) errors.push(`${label}: missing page title`);
   const body = await page.locator("body").innerText();
-  for (const expected of ["行业环境 / 横向比较", "分类：Eastmoney 当前行业", "成员口径：当前快照成员", "历史成员有效性：未证明", "当前 Eastmoney 行业成员的 PE/PB 分布", "不是行业指数估值，也不是历史估值分位", "PE+ 中位数", "PB+ 中位数", "0值", "电子", "医药", "UNKNOWN"]) {
+  for (const expected of ["行业环境 / 横向比较", "东财行业", "站上 MA20", "参与度", "分类：Eastmoney 当前行业", "成员口径：当前快照成员", "历史成员有效性：未证明", "当前 Eastmoney 行业成员的 PE/PB 分布", "不是行业指数估值，也不是历史估值分位", "PE+ 中位数", "PB+ 中位数", "0值", "电子", "医药", "UNKNOWN"]) {
     if (!body.includes(expected)) errors.push(`${label}: missing visible text ${expected}`);
   }
-  for (const forbidden of ["便宜", "昂贵", "买入", "卖出", "推荐"]) {
+  for (const forbidden of ["便宜", "昂贵", "买入", "卖出", "推荐", "Above MA20", "Participation"]) {
     if (body.includes(forbidden)) errors.push(`${label}: forbidden valuation/recommendation text ${forbidden}`);
   }
   if (body.includes("Vite Error") || body.includes("Unhandled Runtime Error")) errors.push(`${label}: framework error overlay visible`);
