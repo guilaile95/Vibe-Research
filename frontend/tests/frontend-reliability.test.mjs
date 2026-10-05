@@ -16,9 +16,12 @@ import * as navigation from '../src/lib/navigation.ts';
 // storage modules, mocked network/UI dependencies. No browser or real credentials.
 function harness(path, name, overrides = {}, globals = {}) {
   const states = [], effects = [], refs = [], timers = new Map(), listeners = new Map();
-  let cursor = 0, pending = [], timerId = 0;
+  let cursor = 0, pending = [], timerId = 0, scheduled = true, lastTree, lastProps = {};
   const React = {
-    useState(init) { const i = cursor++; if (!(i in states)) states[i] = typeof init === 'function' ? init() : init; return [states[i], value => { states[i] = typeof value === 'function' ? value(states[i]) : value; }]; },
+    useState(init) { const i = cursor++; if (!(i in states)) states[i] = typeof init === 'function' ? init() : init; return [states[i], value => {
+      const next = typeof value === 'function' ? value(states[i]) : value;
+      if (!Object.is(states[i], next)) { states[i] = next; scheduled = true; }
+    }]; },
     useRef(init) { const i = cursor++; return refs[i] ??= { current: init }; },
     useMemo: fn => fn(), useCallback: fn => fn,
     useEffect(fn, deps) {
@@ -44,8 +47,11 @@ function harness(path, name, overrides = {}, globals = {}) {
     exports, document: { addEventListener() {}, removeEventListener() {} }, require: name => mods[name] ?? generic, FileReader: globalThis.FileReader, AbortController, DOMException, Error, console, URLSearchParams, Map, Set, Date,
     window: { setTimeout: fn => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), addEventListener(type, fn) { listeners.set(type, fn); }, removeEventListener(type, fn) { if (listeners.get(type) === fn) listeners.delete(type); } }, confirm: () => true, ...globals,
   }, { filename: path });
+  const render = (props = {}) => { scheduled = false; lastProps = props; cursor = 0; lastTree = exports[name](props); const current = pending; pending = []; current.forEach(fn => fn()); return lastTree; };
   return {
-    render(props = {}) { cursor = 0; const tree = exports[name](props); const current = pending; pending = []; current.forEach(fn => fn()); return tree; },
+    render,
+    // Respect React's same-state bailout when testing external storage changes.
+    flushScheduled() { let remaining = 30; while (scheduled && remaining-- > 0) render(lastProps); assert.equal(scheduled, false, 'render did not settle'); return lastTree; },
     emit(type, event) { listeners.get(type)?.(event); },
     hasListener(type) { return listeners.has(type); },
     flushTimers() { const current = [...timers.values()]; timers.clear(); current.forEach(fn => fn()); },
@@ -546,6 +552,57 @@ test('Settings cancellation is visible, and changing backend access key disables
   tree=h.render(); nodes(tree).find(n=>n.type==='input' && n.props.placeholder?.includes('VR_API_KEY')).props.onChange({target:{value:'UNSAVED-BACKEND-KEY'}});
   assert.equal(testId(h.render(),'model-connection-test-start').props.disabled,true);
   assert.equal(calls,1); h.unmount();
+});
+
+const accessInput = tree => nodes(tree).find(n => n.type === 'input' && n.props.placeholder?.includes('VR_API_KEY'));
+const saveAccessButton = tree => nodes(tree).find(n => n.type === 'button' && label(n) === '保存');
+
+test('Settings saved access key schedules a render even when the draft is already trimmed', async () => {
+  llm.saveLlm(dummyConfig);
+  const { h } = settingsHarness(); h.render(); await tick();
+  let tree = h.flushScheduled();
+  for (const value of ['SYNTHETIC_FIRST', 'SYNTHETIC_SECOND', '']) {
+    accessInput(tree).props.onChange({ target: { value } }); tree = h.flushScheduled();
+    assert.equal(testId(tree, 'model-connection-test-start').props.disabled, true);
+    saveAccessButton(tree).props.onClick(); tree = h.flushScheduled();
+    assert.equal(apiClient.loadAccessKey(), value);
+    assert.equal(testId(tree, 'model-connection-test-start').props.disabled, false);
+    assert.doesNotMatch(label(tree), /后端访问密钥修改后需先保存/);
+  }
+  h.unmount();
+});
+
+test('Settings failed access save retains the old confirmed value and stays blocked until retry', async () => {
+  llm.saveLlm(dummyConfig); apiClient.saveAccessKey('SYNTHETIC_OLD');
+  const { h, messages } = settingsHarness(); h.render(); await tick();
+  let tree = h.flushScheduled();
+  accessInput(tree).props.onChange({ target: { value: 'SYNTHETIC_NEW' } }); tree = h.flushScheduled();
+  globalThis.localStorage = { ...workingStorage, setItem() { throw Error('denied'); } };
+  saveAccessButton(tree).props.onClick(); tree = h.flushScheduled();
+  assert.equal(apiClient.loadAccessKey(), 'SYNTHETIC_OLD');
+  assert.equal(testId(tree, 'model-connection-test-start').props.disabled, true);
+  assert.equal(messages.at(-1)[0], 'error');
+  assert.equal(messages.some(([kind]) => kind === 'success'), false);
+  globalThis.localStorage = workingStorage; saveAccessButton(tree).props.onClick(); tree = h.flushScheduled();
+  assert.equal(testId(tree, 'model-connection-test-start').props.disabled, false); h.unmount();
+});
+
+test('Settings checks live access storage before probing and refreshes cross-tab readiness without replacing the draft', async () => {
+  llm.saveLlm(dummyConfig); apiClient.saveAccessKey('SYNTHETIC_OLD'); let calls = 0;
+  const { h } = settingsHarness({}, { testModelConnection: async () => { calls++; } });
+  h.render(); await tick(); let tree = h.flushScheduled();
+  // Stabilize shared idle state before changing storage without an event.
+  testId(tree, 'wave5-model-input').props.onChange({ target: { value: 'synthetic-new-model' } }); tree = h.flushScheduled();
+  apiClient.saveAccessKey('SYNTHETIC_PEER');
+  testId(tree, 'model-connection-test-start').props.onClick(); await tick();
+  assert.equal(calls, 0);
+  h.emit('storage', { key: 'vr-access-key' }); tree = h.flushScheduled();
+  assert.equal(accessInput(tree).props.value, 'SYNTHETIC_OLD');
+  assert.equal(testId(tree, 'model-connection-test-start').props.disabled, true);
+  apiClient.saveAccessKey('SYNTHETIC_OLD'); h.emit('storage', { key: 'vr-access-key' }); tree = h.flushScheduled();
+  assert.equal(testId(tree, 'model-connection-test-start').props.disabled, false);
+  apiClient.saveAccessKey(''); h.emit('storage', { key: null }); tree = h.flushScheduled();
+  assert.equal(testId(tree, 'model-connection-test-start').props.disabled, true); h.unmount();
 });
 
 

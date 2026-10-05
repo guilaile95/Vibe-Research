@@ -34,6 +34,7 @@ export function Settings() {
   const [apiKey, setApiKey] = useState(existing && !existingIsCli ? existing.apiKey : "");
   // 后端访问密钥（对应部署时的 VR_API_KEY）；本机自用不设鉴权时留空
   const [accessKey, setAccessKey] = useState(loadAccessKey());
+  const [savedAccessKey, setSavedAccessKey] = useState(accessKey);
   const [runtimeStatus, setRuntimeStatus] = useState<AgentRuntimeStatus | null>(null);
   const [runtimeBusy, setRuntimeBusy] = useState(false);
 
@@ -42,10 +43,13 @@ export function Settings() {
   const [probe] = useState(() => createModelConnectionProbe(testModelConnection, setProbeState));
   const probeBaseURL = canonicalModelProbeURL(baseURL);
   const probeDestination = modelProbeDestination(baseURL);
-  const probeAccessReady = accessKey.trim() === loadAccessKey();
+  const probeAccessReady = accessKey.trim() === savedAccessKey;
   const changeMode = (next: "api" | "subscription") => { probe.invalidate(); setMode(next); };
   useEffect(() => {
-    const invalidate = () => probe.invalidate();
+    const invalidate = () => {
+      probe.invalidate();
+      setSavedAccessKey(loadAccessKey());
+    };
     window.addEventListener(LLM_CHANGED_EVENT, invalidate);
     window.addEventListener("storage", invalidate);
     return () => {
@@ -55,7 +59,7 @@ export function Settings() {
     };
   }, [probe]);
   const runProbe = () => {
-    if (mode !== "api" || !probeBaseURL || !probeAccessReady || !apiKey.trim() || !modelName.trim()) return;
+    if (mode !== "api" || !probeBaseURL || !probeAccessReady || accessKey.trim() !== loadAccessKey() || !apiKey.trim() || !modelName.trim()) return;
     void probe.start({ provider: providerOf(apiId), baseURL: probeBaseURL, apiKey: apiKey.trim(), model: modelName.trim() });
   };
 
@@ -210,6 +214,7 @@ export function Settings() {
       return;
     }
     setAccessKey(k);
+    setSavedAccessKey(k);
     toast.success(k ? "已保存后端访问密钥（存本地）" : "已清除后端访问密钥");
   };
 
