@@ -5,8 +5,14 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { buildTradeListQuery, validateTradeListFilters } from '../src/lib/tradeLedgerView.ts';
 
-const source = readFileSync(new URL('../src/pages/Trades.tsx', import.meta.url), 'utf8');
-const part = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
+const source = readFileSync(new URL('../src/pages/Trades.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const part = (start, end) => {
+  const startIndex = source.indexOf(start);
+  assert.notEqual(startIndex, -1, `Missing trade-list source start: ${start}`);
+  const endIndex = source.indexOf(end, startIndex + start.length);
+  assert.notEqual(endIndex, -1, `Missing trade-list source end: ${end}`);
+  return source.slice(startIndex, endIndex);
+};
 const body = part('  const selectListScope =', '  // 加载单条详情')
   + part('  const handleFilterSubmit =', '  // 打开与关闭新建')
   + part('  // 分页', '  const executionTimePreview =');
