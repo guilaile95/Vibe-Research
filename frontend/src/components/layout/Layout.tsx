@@ -21,6 +21,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { storageGet, storageSet } from "@/lib/storage";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { NAV_GROUPS, entriesInGroup, matchRoute, navEntry, pageManagesSectionNav } from "@/lib/navigation";
 import { DailyReviewAiTaskIndicator } from "./DailyReviewAiTaskIndicator";
@@ -70,7 +71,7 @@ function focusableIn(container: HTMLElement | null) {
 export function Layout() {
   const { pathname } = useLocation();
   const { dark, toggle } = useDarkMode();
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem("vr-sidebar") === "collapsed");
+  const [collapsed, setCollapsed] = useState(() => storageGet("vr-sidebar") === "collapsed");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(readDesktop);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -78,7 +79,7 @@ export function Layout() {
   const mainRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    localStorage.setItem("vr-sidebar", collapsed ? "collapsed" : "expanded");
+    storageSet("vr-sidebar", collapsed ? "collapsed" : "expanded");
   }, [collapsed]);
 
   useEffect(() => {

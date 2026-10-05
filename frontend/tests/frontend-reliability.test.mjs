@@ -9,14 +9,19 @@ import * as apiClient from '../src/lib/api.ts';
 import * as models from '../src/lib/ai-models.ts';
 import * as researchNote from '../src/lib/researchNote.ts';
 import * as modelProbe from '../src/lib/modelConnectionProbe.ts';
+import * as preferenceStorage from '../src/lib/storage.ts';
+import * as navigation from '../src/lib/navigation.ts';
 
 // Component behavior in a deterministic hook runner: real TSX handlers/effects and
 // storage modules, mocked network/UI dependencies. No browser or real credentials.
-function harness(path, name, overrides = {}) {
+function harness(path, name, overrides = {}, globals = {}) {
   const states = [], effects = [], refs = [], timers = new Map(), listeners = new Map();
-  let cursor = 0, pending = [], timerId = 0;
+  let cursor = 0, pending = [], timerId = 0, scheduled = true, lastTree, lastProps = {};
   const React = {
-    useState(init) { const i = cursor++; if (!(i in states)) states[i] = typeof init === 'function' ? init() : init; return [states[i], value => { states[i] = typeof value === 'function' ? value(states[i]) : value; }]; },
+    useState(init) { const i = cursor++; if (!(i in states)) states[i] = typeof init === 'function' ? init() : init; return [states[i], value => {
+      const next = typeof value === 'function' ? value(states[i]) : value;
+      if (!Object.is(states[i], next)) { states[i] = next; scheduled = true; }
+    }]; },
     useRef(init) { const i = cursor++; return refs[i] ??= { current: init }; },
     useMemo: fn => fn(), useCallback: fn => fn,
     useEffect(fn, deps) {
@@ -40,10 +45,13 @@ function harness(path, name, overrides = {}) {
   }).outputText;
   vm.runInNewContext(js, {
     exports, document: { addEventListener() {}, removeEventListener() {} }, require: name => mods[name] ?? generic, FileReader: globalThis.FileReader, AbortController, DOMException, Error, console, URLSearchParams, Map, Set, Date,
-    window: { setTimeout: fn => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), addEventListener(type, fn) { listeners.set(type, fn); }, removeEventListener(type, fn) { if (listeners.get(type) === fn) listeners.delete(type); } }, confirm: () => true,
+    window: { setTimeout: fn => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), addEventListener(type, fn) { listeners.set(type, fn); }, removeEventListener(type, fn) { if (listeners.get(type) === fn) listeners.delete(type); } }, confirm: () => true, ...globals,
   }, { filename: path });
+  const render = (props = {}) => { scheduled = false; lastProps = props; cursor = 0; lastTree = exports[name](props); const current = pending; pending = []; current.forEach(fn => fn()); return lastTree; };
   return {
-    render(props = {}) { cursor = 0; const tree = exports[name](props); const current = pending; pending = []; current.forEach(fn => fn()); return tree; },
+    render,
+    // Respect React's same-state bailout when testing external storage changes.
+    flushScheduled() { let remaining = 30; while (scheduled && remaining-- > 0) render(lastProps); assert.equal(scheduled, false, 'render did not settle'); return lastTree; },
     emit(type, event) { listeners.get(type)?.(event); },
     hasListener(type) { return listeners.has(type); },
     flushTimers() { const current = [...timers.values()]; timers.clear(); current.forEach(fn => fn()); },
@@ -69,6 +77,56 @@ const storage = new Map();
 const workingStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
 test.beforeEach(() => { storage.clear(); globalThis.localStorage = workingStorage; });
 test.afterEach(() => { globalThis.localStorage = workingStorage; storage.clear(); });
+
+const layoutHarness = () => harness('components/layout/Layout.tsx', 'Layout', {
+  'react-router-dom': { useLocation: () => ({ pathname: '/notes' }), Link: 'link', Outlet: 'outlet' },
+  '@/hooks/useDarkMode': { useDarkMode: () => ({ dark: false, toggle() {} }) },
+  '@/lib/storage': preferenceStorage, '@/lib/navigation': navigation,
+}, { localStorage: globalThis.localStorage });
+const sidebarControl = (tree, name) => nodes(tree).find(node => node.type === 'button' && node.props['aria-label'] === name);
+
+test('sidebar valid preferences persist and missing or corrupt values default to expanded', () => {
+  for (const value of [null, 'expanded', 'collapsed', '', 'true', '{broken']) {
+    storage.clear();
+    if (value !== null) storage.set('vr-sidebar', value);
+    const h = layoutHarness();
+    const tree = h.render();
+    assert.ok(sidebarControl(tree, value === 'collapsed' ? '展开侧栏' : '收起侧栏'));
+    sidebarControl(tree, value === 'collapsed' ? '展开侧栏' : '收起侧栏').props.onClick();
+    h.render();
+    assert.equal(storage.get('vr-sidebar'), value === 'collapsed' ? 'expanded' : 'collapsed');
+    h.unmount();
+    assert.ok(sidebarControl(layoutHarness().render(), value === 'collapsed' ? '收起侧栏' : '展开侧栏'));
+  }
+});
+
+test('sidebar storage read denial falls back without preventing in-memory navigation state', () => {
+  globalThis.localStorage = { ...workingStorage, getItem(key) { if (key === 'vr-sidebar') throw new DOMException('denied', 'SecurityError'); return workingStorage.getItem(key); } };
+  const h = layoutHarness();
+  sidebarControl(h.render(), '收起侧栏').props.onClick();
+  assert.ok(sidebarControl(h.render(), '展开侧栏'));
+  h.unmount();
+});
+
+test('sidebar denied writes keep session toggles usable and retain the last saved preference', () => {
+  for (const name of ['SecurityError', 'QuotaExceededError']) {
+    storage.set('vr-sidebar', 'collapsed');
+    let denied = true;
+    globalThis.localStorage = { ...workingStorage, setItem(key, value) { if (key === 'vr-sidebar' && denied) throw new DOMException('denied', name); workingStorage.setItem(key, value); } };
+    const h = layoutHarness();
+    sidebarControl(h.render(), '展开侧栏').props.onClick();
+    assert.ok(sidebarControl(h.render(), '收起侧栏'));
+    assert.equal(storage.get('vr-sidebar'), 'collapsed');
+    h.unmount();
+    const reloaded = layoutHarness();
+    assert.ok(sidebarControl(reloaded.render(), '展开侧栏'));
+    denied = false;
+    sidebarControl(reloaded.render(), '展开侧栏').props.onClick();
+    reloaded.render();
+    assert.equal(storage.get('vr-sidebar'), 'expanded');
+    reloaded.unmount();
+  }
+});
 
 const noteProps = { kind: 'test', title: 'Synthetic research', content: 'Synthetic content' };
 test('failed note save keeps the button retryable and shows an error', () => {
@@ -496,6 +554,57 @@ test('Settings cancellation is visible, and changing backend access key disables
   assert.equal(calls,1); h.unmount();
 });
 
+const accessInput = tree => nodes(tree).find(n => n.type === 'input' && n.props.placeholder?.includes('VR_API_KEY'));
+const saveAccessButton = tree => nodes(tree).find(n => n.type === 'button' && label(n) === '保存');
+
+test('Settings saved access key schedules a render even when the draft is already trimmed', async () => {
+  llm.saveLlm(dummyConfig);
+  const { h } = settingsHarness(); h.render(); await tick();
+  let tree = h.flushScheduled();
+  for (const value of ['SYNTHETIC_FIRST', 'SYNTHETIC_SECOND', '']) {
+    accessInput(tree).props.onChange({ target: { value } }); tree = h.flushScheduled();
+    assert.equal(testId(tree, 'model-connection-test-start').props.disabled, true);
+    saveAccessButton(tree).props.onClick(); tree = h.flushScheduled();
+    assert.equal(apiClient.loadAccessKey(), value);
+    assert.equal(testId(tree, 'model-connection-test-start').props.disabled, false);
+    assert.doesNotMatch(label(tree), /后端访问密钥修改后需先保存/);
+  }
+  h.unmount();
+});
+
+test('Settings failed access save retains the old confirmed value and stays blocked until retry', async () => {
+  llm.saveLlm(dummyConfig); apiClient.saveAccessKey('SYNTHETIC_OLD');
+  const { h, messages } = settingsHarness(); h.render(); await tick();
+  let tree = h.flushScheduled();
+  accessInput(tree).props.onChange({ target: { value: 'SYNTHETIC_NEW' } }); tree = h.flushScheduled();
+  globalThis.localStorage = { ...workingStorage, setItem() { throw Error('denied'); } };
+  saveAccessButton(tree).props.onClick(); tree = h.flushScheduled();
+  assert.equal(apiClient.loadAccessKey(), 'SYNTHETIC_OLD');
+  assert.equal(testId(tree, 'model-connection-test-start').props.disabled, true);
+  assert.equal(messages.at(-1)[0], 'error');
+  assert.equal(messages.some(([kind]) => kind === 'success'), false);
+  globalThis.localStorage = workingStorage; saveAccessButton(tree).props.onClick(); tree = h.flushScheduled();
+  assert.equal(testId(tree, 'model-connection-test-start').props.disabled, false); h.unmount();
+});
+
+test('Settings checks live access storage before probing and refreshes cross-tab readiness without replacing the draft', async () => {
+  llm.saveLlm(dummyConfig); apiClient.saveAccessKey('SYNTHETIC_OLD'); let calls = 0;
+  const { h } = settingsHarness({}, { testModelConnection: async () => { calls++; } });
+  h.render(); await tick(); let tree = h.flushScheduled();
+  // Stabilize shared idle state before changing storage without an event.
+  testId(tree, 'wave5-model-input').props.onChange({ target: { value: 'synthetic-new-model' } }); tree = h.flushScheduled();
+  apiClient.saveAccessKey('SYNTHETIC_PEER');
+  testId(tree, 'model-connection-test-start').props.onClick(); await tick();
+  assert.equal(calls, 0);
+  h.emit('storage', { key: 'vr-access-key' }); tree = h.flushScheduled();
+  assert.equal(accessInput(tree).props.value, 'SYNTHETIC_OLD');
+  assert.equal(testId(tree, 'model-connection-test-start').props.disabled, true);
+  apiClient.saveAccessKey('SYNTHETIC_OLD'); h.emit('storage', { key: 'vr-access-key' }); tree = h.flushScheduled();
+  assert.equal(testId(tree, 'model-connection-test-start').props.disabled, false);
+  apiClient.saveAccessKey(''); h.emit('storage', { key: null }); tree = h.flushScheduled();
+  assert.equal(testId(tree, 'model-connection-test-start').props.disabled, true); h.unmount();
+});
+
 
 test('candidate unsaved guard follows only meaningful text, save success, and actual route changes', () => {
   let shouldBlock;
@@ -792,4 +901,76 @@ test('explicit page chat aborts old scope and preserves only matching complete h
   assert.match([...storage.values()].join(''), /RETRY PAGE ANSWER/);
   assert.doesNotMatch([...storage.values()].join(''), /cancel question|LATE CANCELLED/);
   h.unmount();
+});
+
+function storageChatHarness() {
+  const calls = [];
+  const h = harness('components/ui/AskAiButton.tsx', 'AskAiButton', {
+    'react-router-dom': { useLocation: () => ({ pathname: '/synthetic-chat' }), Link: 'link' },
+    '@/lib/storage': preferenceStorage,
+    '@/lib/llm': { ...llm, loadLlm: () => ({ provider: 'api', model: 'synthetic' }), hasLlm: () => true,
+      llmIdentity: () => 'synthetic', runtimeLabel: () => 'Synthetic', chatStream: (...args) => {
+        const d = deferred(); calls.push({ args, d }); return d.promise;
+      } },
+  });
+  let props = { context: 'synthetic context', scopeKey: 'first' };
+  const render = () => h.render(props);
+  find(render(), 'button', '问 AI').props.onClick(); render(); render();
+  return { ...h, calls, render,
+    scope(value) { props = { ...props, scopeKey: value }; render(); render(); },
+    send(question = 'synthetic question') {
+      find(render(), 'textarea').props.onChange({ target: { value: question } });
+      nodes(render()).find(n => n.props?.['aria-label'] === '发送').props.onClick(); render();
+      return calls.at(-1);
+    },
+  };
+}
+
+test('unrelated storage changes preserve the active chat through completion and persistence', async () => {
+  const h = storageChatHarness(), call = h.send();
+  call.args[2].onDelta('SYNTHETIC ANSWER'); h.render();
+  for (let round = 0; round < 3; round++) {
+    for (const key of ['vr-sidebar', 'vr-notes', 'unrelated', 'vr-askai-chat:other', 'vr-askai-epoch:other']) {
+      h.emit('storage', { key, storageArea: null }); h.render();
+      assert.equal(call.args[3].aborted, false);
+      assert.ok(nodes(h.render()).find(n => n.props?.['aria-label'] === '停止生成'));
+    }
+  }
+  call.d.resolve({}); await tick(); h.render();
+  assert.match(storage.get('vr-askai-chat:/synthetic-chat#first@synthetic'), /SYNTHETIC ANSWER/);
+  const next = h.send('followup'); assert.equal(next.args[0].length, 3);
+  h.unmount(); assert.equal(next.args[3].aborted, true);
+  assert.equal(h.hasListener('storage'), false); assert.equal(h.hasListener(llm.LLM_CHANGED_EVENT), false);
+});
+
+test('relevant storage and runtime events still cancel and exclude late results from persistence', async () => {
+  const chatKey = 'vr-askai-chat:/synthetic-chat#first@synthetic';
+  for (const key of ['vr-llm', 'vr-access-key', null, chatKey, 'vr-askai-epoch:' + chatKey, 'runtime-event']) {
+    storage.clear(); const h = storageChatHarness(), call = h.send();
+    if (key === 'runtime-event') h.emit(llm.LLM_CHANGED_EVENT);
+    else h.emit('storage', { key, storageArea: null });
+    assert.equal(call.args[3].aborted, true);
+    call.args[2].onDelta('LATE CANCELLED'); call.d.resolve({}); await tick(); h.render();
+    assert.doesNotMatch([...storage.values()].join(''), /LATE CANCELLED|synthetic question/);
+    const retry = h.send('retry'); retry.args[2].onDelta('RETRY COMPLETE'); retry.d.resolve({}); await tick(); h.render();
+    assert.match(storage.get(chatKey), /RETRY COMPLETE/); h.unmount();
+  }
+});
+
+test('storage cancellation follows the current scope instead of the initial chat key', () => {
+  const h = storageChatHarness(), first = h.send(); h.scope('second');
+  assert.equal(first.args[3].aborted, true);
+  const second = h.send('new scope');
+  for (const key of ['vr-askai-chat:/synthetic-chat#first@synthetic', 'vr-askai-epoch:vr-askai-chat:/synthetic-chat#first@synthetic']) {
+    h.emit('storage', { key, storageArea: null }); assert.equal(second.args[3].aborted, false);
+  }
+  h.emit('storage', { key: 'vr-askai-epoch:vr-askai-chat:/synthetic-chat#second@synthetic', storageArea: null });
+  assert.equal(second.args[3].aborted, true); h.unmount();
+});
+
+test('non-local storage areas cannot invalidate chat runtime', () => {
+  const h = storageChatHarness(), call = h.send();
+  h.emit('storage', { key: 'vr-llm', storageArea: {} });
+  h.emit('storage', { key: null, storageArea: {} });
+  assert.equal(call.args[3].aborted, false); h.unmount();
 });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createReadStream, existsSync, mkdirSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -304,6 +304,7 @@ let server;
 let browser;
 const apiRequests = [];
 const browserErrors = [];
+const externalRequests = [];
 let discoveryRefreshes = 0;
 try {
   assert.ok(existsSync(path.join(dist, "index.html")), "frontend/dist missing; run npm run build first");
@@ -314,6 +315,14 @@ try {
   await page.addInitScript(() => localStorage.setItem("vr-theme", "dark"));
   page.on("console", (message) => { if (message.type() === "error") browserErrors.push(message.text()); });
   page.on("pageerror", (error) => browserErrors.push(`pageerror: ${error.message}`));
+  await page.route("**/*", (route) => {
+    const url = new URL(route.request().url());
+    if (url.origin === `http://127.0.0.1:${port}`) return route.continue();
+    externalRequests.push(url.origin);
+    // Keep the fixture offline without a font stylesheet abort polluting console health.
+    if (url.origin === "https://fonts.googleapis.com") return route.fulfill({ status: 200, contentType: "text/css", body: "" });
+    return route.abort();
+  });
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -419,7 +428,8 @@ try {
   // Results precede diagnostics on desktop and narrow screens; collapsed details do not hide the research entry.
   const screenshots = process.env.DISCOVERY_SCREENSHOT_DIR;
   if (screenshots) mkdirSync(screenshots, { recursive: true });
-  for (const viewport of [{ width: 1440, height: 900 }, { width: 568, height: 698 }, { width: 390, height: 844 }]) {
+  const layoutEvidence = [];
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 568, height: 698 }, { width: 390, height: 844 }, { width: 320, height: 844 }]) {
     await page.setViewportSize(viewport);
     await page.getByRole("main").evaluate((element) => element.scrollTo(0, 0));
     const firstBounds = await firstCard.boundingBox();
@@ -428,7 +438,32 @@ try {
     assert.ok(firstBounds.y >= 0 && firstBounds.y < viewport.height, `first candidate must enter the initial viewport at ${viewport.width}px`);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `no page horizontal overflow at ${viewport.width}px`);
     assert.ok(await page.getByRole("main").evaluate((element) => element.scrollWidth <= element.clientWidth), `no content horizontal overflow at ${viewport.width}px`);
-    if (screenshots) await page.screenshot({ path: path.join(screenshots, `discovery-${viewport.width}.png`), fullPage: true });
+    const filters = page.getByTestId("discovery-filters");
+    assert.equal(await filters.locator("label").count(), 4);
+    for (const label of ["行业 / 主题", "研究优先级", "研究资格", "数据状态"]) assert.equal(await filters.locator("label > span").getByText(label, { exact: true }).isVisible(), true);
+    const controls = [page.getByTestId("refresh-discovery"), ...await filters.locator("select, button").all(), page.getByTestId("discovery-candidate-600519"), firstCard.locator("summary")];
+    const controlBounds = [];
+    for (const control of controls) {
+      const bounds = await control.boundingBox();
+      assert.ok(bounds && bounds.height >= 44, `44px Discovery touch target at ${viewport.width}px`);
+      assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= viewport.width, "control stays inside viewport");
+      controlBounds.push(bounds);
+    }
+    assert.equal(await page.getByTestId("discovery-results-status").getAttribute("role"), "status");
+    layoutEvidence.push({ viewport, firstBounds, controlBounds });
+    if (screenshots) await page.screenshot({ path: path.join(screenshots, `discovery-after-${viewport.width}.png`), fullPage: true });
+    if (viewport.width <= 390) {
+      await page.getByLabel("研究优先级", { exact: true }).selectOption("LOW");
+      await page.waitForURL((url) => url.searchParams.get("priority") === "LOW");
+      await firstCard.waitFor({ state: "detached" });
+      await page.getByTestId("discovery-results-status").getByText(/当前显示 1 个/).waitFor();
+      await page.getByLabel("研究优先级", { exact: true }).selectOption("ALL");
+      await page.waitForURL((url) => url.searchParams.get("priority") === "ALL");
+      await firstCard.waitFor();
+      await firstCard.locator("summary").click();
+      await firstCard.getByText("CATALYST_DISCLOSED", { exact: true }).waitFor();
+      await firstCard.locator("summary").click();
+    }
   }
   await page.setViewportSize({ width: 1440, height: 900 });
 
@@ -571,6 +606,7 @@ try {
   }
 
   // E: explicit handoff preserves identity and loads P1 Candidate without creating formal state.
+  await page.setViewportSize({ width: 320, height: 844 });
   await page.getByLabel("发现行业或主题").selectOption("消费");
   await page.getByLabel("研究优先级", { exact: true }).selectOption("HIGH");
   await page.getByLabel("研究资格", { exact: true }).selectOption("CLEAR");
@@ -593,6 +629,7 @@ try {
   await page.goBack();
   await firstCard.waitFor();
   assert.equal(await firstCard.getAttribute("data-return-selected"), "true");
+  assert.ok(await page.getByRole("main").evaluate((element) => element.scrollWidth <= element.clientWidth), "returned mobile card has no horizontal overflow");
   await page.goForward();
   await candidate.waitFor();
   await page.getByTestId("candidate-stock-data-entry").click();
@@ -613,6 +650,11 @@ try {
     "Discovery handoff must not auto-create Campaign, Evidence, or Thesis state",
   );
   assert.deepEqual(browserErrors, []);
+  assert.ok(externalRequests.every((origin) => origin === "https://fonts.googleapis.com"), "only known font stylesheet requests may be fulfilled locally; all external requests are intercepted");
+  if (screenshots) {
+    await firstCard.screenshot({ path: path.join(screenshots, "discovery-return-after-320.png") });
+    writeFileSync(path.join(screenshots, "discovery-after-layout.json"), JSON.stringify({ layoutEvidence, returnFocus: await firstCard.evaluate((element) => document.activeElement === element), browserErrors, externalRequests }, null, 2));
+  }
   console.log("NORTH-STAR-P2 Discovery browser A-E vertical: PASS");
 } finally {
   if (browser) await browser.close().catch(() => {});

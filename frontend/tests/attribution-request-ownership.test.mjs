@@ -4,8 +4,12 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 
-const source = readFileSync(new URL('../src/pages/PerformanceAttribution.tsx', import.meta.url), 'utf8');
-const body = source.slice(source.indexOf('  useEffect(() => {\n    mountedRef.current = true;'), source.indexOf('  const positions:'));
+const source = readFileSync(new URL('../src/pages/PerformanceAttribution.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const startIndex = source.indexOf('  useEffect(() => {\n    mountedRef.current = true;');
+assert.notEqual(startIndex, -1, 'Missing attribution ownership effect');
+const endIndex = source.indexOf('  const positions:', startIndex);
+assert.notEqual(endIndex, -1, 'Missing attribution render boundary');
+const body = source.slice(startIndex, endIndex);
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 function harness() {
   const state = {}, calls = [], notifications = [], effects = [];

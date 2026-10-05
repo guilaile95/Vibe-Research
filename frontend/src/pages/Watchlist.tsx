@@ -61,6 +61,7 @@ export function Watchlist() {
   const [onlyAnomalies, setOnlyAnomalies] = useState(false);
   const [sort, setSort] = useState<WatchlistSort>("anomaly");
   const anomalyRunRef = useRef(0);
+  const listHeadingRef = useRef<HTMLHeadingElement>(null);
   // 实时行情默认**关闭**——开着会持续请求，让用户自己决定要不要开。
   const [live, setLive] = useState(loadLive);
 
@@ -152,7 +153,9 @@ export function Watchlist() {
 
   const remove = (c: string) => {
     const next = codes.filter((x) => x !== c);
-    void persist(next);
+    void persist(next, `已移除 ${c}（后端权威）`).finally(() => {
+      listHeadingRef.current?.focus();
+    });
   };
 
   const anomalyByCode = useMemo(() => {
@@ -200,7 +203,18 @@ export function Watchlist() {
   );
 
   return (
-    <div>
+    <div className="watchlist-page">
+      <style>{`
+        @media (max-width: 767px) {
+          .watchlist-records, .watchlist-records tbody { display: block; min-width: 0; }
+          .watchlist-records thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+          .watchlist-records tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 12px 0; }
+          .watchlist-records td { min-width: 0; padding: 8px 4px; overflow-wrap: anywhere; }
+          .watchlist-records td:nth-child(1), .watchlist-records td:nth-child(4), .watchlist-records td:nth-child(5), .watchlist-records td:nth-child(6) { grid-column: 1 / -1; max-width: none; }
+          .watchlist-records td:nth-child(2), .watchlist-records td:nth-child(3), .watchlist-records td:nth-child(4) { text-align: left; }
+          .watchlist-records .watchlist-field-label { display: block; margin-bottom: 4px; font-family: inherit; font-size: 11px; color: hsl(var(--muted-foreground)); }
+        }
+      `}</style>
       <PageHeader
         title="自选股"
         subtitle="批量添加、一屏总览你关注的标的。数据存后端权威自选（迁移后清除本地草稿）。"
@@ -210,7 +224,7 @@ export function Watchlist() {
               onClick={toggleLive}
               title={live ? "关闭实时行情" : "开启实时行情（交易时段每 3 秒自动刷新）"}
               className={cn(
-                "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs transition-colors",
+                "inline-flex min-h-11 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
                 live
                   ? "border-primary/50 bg-primary/10 text-primary"
                   : "border-border/60 text-muted-foreground hover:text-foreground",
@@ -253,22 +267,22 @@ export function Watchlist() {
             }}
             rows={2}
             placeholder={"如：600519 000858, 002463\n300750 688017"}
-            className="flex-1 resize-y rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
+            className="min-w-0 flex-1 resize-y rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
           />
           <button
             onClick={add}
             disabled={saving}
-            className="inline-flex h-9 shrink-0 items-center gap-1.5 self-start rounded-lg bg-primary/15 px-4 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
+            className="inline-flex min-h-11 shrink-0 items-center gap-1.5 self-start rounded-lg bg-primary/15 px-4 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
           >
             <Plus className="h-4 w-4" /> 添加
           </button>
         </div>
-        {hint && <p className="mt-2 text-xs text-muted-foreground/70">{hint}</p>}
+        <p role="status" aria-live="polite" className="mt-2 text-xs text-muted-foreground/70">{hint}</p>
       </GlassCard>
 
       <GlassCard glow>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h3 className="flex items-center gap-1.5 font-semibold">
+          <h3 ref={listHeadingRef} tabIndex={-1} data-testid="watchlist-list-heading" className="flex items-center gap-1.5 rounded font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
             <Star className="h-4 w-4 text-primary" /> 自选总览
             <span className="text-xs font-normal text-muted-foreground">{watchlistLoading || watchlistError ? "（未确认）" : `（${codes.length}）`}</span>
           </h3>
@@ -293,7 +307,8 @@ export function Watchlist() {
                 void loadAnomalies();
               }}
               disabled={loading || anomalyLoading}
-              className="text-muted-foreground hover:text-primary"
+              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded text-muted-foreground hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+              aria-label="刷新行情与异动"
               title="刷新行情与异动"
             >
               <RefreshCw className={cn("h-3.5 w-3.5", (loading || anomalyLoading) && "animate-spin")} />
@@ -305,7 +320,7 @@ export function Watchlist() {
             ) : watchlistError ? (
               <div className="py-8 text-center text-sm text-warning" role="alert">
                 <p>自选股读取失败：{watchlistError}</p>
-                <button type="button" onClick={() => void load()} className="mt-2 text-primary hover:underline">重试读取自选</button>
+                <button type="button" onClick={() => void load()} className="mt-2 min-h-11 px-3 text-primary hover:underline">重试读取自选</button>
               </div>
             ) : codes.length === 0 ? (
               <p className="py-8 text-center text-sm text-muted-foreground/60">
@@ -325,8 +340,8 @@ export function Watchlist() {
                 )}
                 {anomalyError && <span className="ml-2 text-warning">异动数据暂不可用：{anomalyError}</span>}
               </div>
-              <div className="flex items-center gap-3">
-                <label className="flex items-center gap-1.5 text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex min-h-11 cursor-pointer items-center gap-1.5 text-muted-foreground">
                   <input
                     type="checkbox"
                     checked={onlyAnomalies}
@@ -338,7 +353,7 @@ export function Watchlist() {
                 <select
                   value={sort}
                   onChange={(e) => setSort(e.target.value as WatchlistSort)}
-                  className="rounded border border-border bg-background px-2 py-1"
+                  className="min-h-11 rounded border border-border bg-background px-2 py-1"
                   aria-label="自选排序"
                 >
                   <option value="anomaly">异动优先</option>
@@ -354,31 +369,31 @@ export function Watchlist() {
               </p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[760px] text-sm" data-testid="watchlist-anomaly-table">
-                  <thead>
-                    <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
-                      <th className="px-2 py-2 font-normal">股票</th>
-                      <th className="px-2 py-2 text-right font-normal">最新价</th>
-                      <th className="px-2 py-2 text-right font-normal">涨跌幅</th>
-                      <th className="px-2 py-2 text-right font-normal">成交额</th>
-                      <th className="px-2 py-2 font-normal">当日异动事实</th>
-                      <th className="w-8 px-2 py-2" />
+                <table role="table" aria-label="自选总览" className="watchlist-records w-full min-w-[760px] text-sm" data-testid="watchlist-anomaly-table">
+                  <thead role="rowgroup">
+                    <tr role="row" className="border-b border-border/50 text-left text-xs text-muted-foreground">
+                      <th role="columnheader" scope="col" id="watchlist-stock" className="px-2 py-2 font-normal">股票</th>
+                      <th role="columnheader" scope="col" id="watchlist-price" className="px-2 py-2 text-right font-normal">最新价</th>
+                      <th role="columnheader" scope="col" id="watchlist-change" className="px-2 py-2 text-right font-normal">涨跌幅</th>
+                      <th role="columnheader" scope="col" id="watchlist-amount" className="px-2 py-2 text-right font-normal">成交额</th>
+                      <th role="columnheader" scope="col" id="watchlist-anomaly" className="px-2 py-2 font-normal">当日异动事实</th>
+                      <th role="columnheader" scope="col" id="watchlist-action" className="w-8 px-2 py-2"><span className="sr-only">操作</span></th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-border/40">
+                  <tbody role="rowgroup" className="divide-y divide-border/40">
                     {visibleCodes.map((c) => {
                       const q = quotes[c];
                       const events = anomalyByCode[c] ?? [];
                       return (
-                        <tr key={c} data-watchlist-code={c}>
-                  <td className="px-2 py-3">
+                        <tr role="row" key={c} data-watchlist-code={c}>
+                  <td role="cell" headers="watchlist-stock" className="px-2 py-3">
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                      <Link to={`/stock-data?code=${c}`} className="font-mono hover:text-primary hover:underline">
+                      <Link to={`/stock-data?code=${c}`} className="inline-flex min-h-11 items-center rounded font-mono hover:text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
                         {c}
                       </Link>
                       <Link
                         to={candidateWorkspaceHref(c)}
-                        className="text-[11px] text-primary hover:underline"
+                        className="inline-flex min-h-11 items-center rounded px-2 text-[11px] text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                         data-testid={`watchlist-candidate-${c}`}
                       >
                         候选研究
@@ -388,12 +403,14 @@ export function Watchlist() {
                       <span className="ml-2 text-muted-foreground">{q?.name || events[0]?.name}</span>
                     )}
                   </td>
-                  <td className="px-2 py-3 text-right font-mono">{q?.price ?? "—"}</td>
-                  <td className={cn("px-2 py-3 text-right font-mono", color(q?.change_pct))}>
+                  <td role="cell" headers="watchlist-price" className="px-2 py-3 text-right font-mono"><span aria-hidden="true" className="watchlist-field-label hidden">最新价</span>{q?.price ?? "—"}</td>
+                  <td role="cell" headers="watchlist-change" className={cn("px-2 py-3 text-right font-mono", color(q?.change_pct))}>
+                      <span aria-hidden="true" className="watchlist-field-label hidden">涨跌幅</span>
                       {pct(q?.change_pct)}
                   </td>
-                  <td className="px-2 py-3 text-right font-mono">{money(q?.amount_wan)}</td>
-                  <td className="max-w-[420px] px-2 py-3">
+                  <td role="cell" headers="watchlist-amount" className="px-2 py-3 text-right font-mono"><span aria-hidden="true" className="watchlist-field-label hidden">成交额</span>{money(q?.amount_wan)}</td>
+                  <td role="cell" headers="watchlist-anomaly" className="max-w-[420px] px-2 py-3">
+                    <span aria-hidden="true" className="watchlist-field-label hidden">当日异动事实</span>
                     {events.length > 0 ? (
                       <div className="space-y-1">
                         {events.map((item, index) => (
@@ -413,11 +430,12 @@ export function Watchlist() {
                       <span className="text-warning">异动数据暂不可用</span>
                     )}
                   </td>
-                  <td className="px-2 py-3 text-right">
+                  <td role="cell" headers="watchlist-action" className="px-2 py-3 text-right">
                     <button
                       onClick={() => remove(c)}
                       disabled={saving}
-                      className="text-muted-foreground hover:text-danger disabled:opacity-50"
+                      className="inline-flex min-h-11 min-w-11 items-center justify-center rounded text-muted-foreground hover:text-danger disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                      aria-label={`移除 ${q?.name || events[0]?.name || "股票"}（${c}）`}
                       title="移除"
                     >
                       <X className="h-3.5 w-3.5" />

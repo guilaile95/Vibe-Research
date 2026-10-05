@@ -129,7 +129,7 @@ function OpportunityCard({ item }: { item: DiscoveryOpportunityItem }) {
               navigate({ pathname: location.pathname, search: location.search, hash: `#${anchor}` }, { replace: true });
             }
           }}
-          className="inline-flex shrink-0 items-center gap-1 py-1 text-sm font-medium text-primary hover:underline"
+          className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded px-1 py-1 text-sm font-medium text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
           data-testid={`discovery-candidate-${item.security_code}`}
         >
           进入候选研究 <ChevronRight className="h-3.5 w-3.5" />
@@ -170,7 +170,7 @@ function OpportunityCard({ item }: { item: DiscoveryOpportunityItem }) {
         <span>行情归属 {item.as_of ?? "未知"}</span>
       </div>
       <details className="border-t border-border/50 pt-3 text-xs text-muted-foreground" data-testid={`discovery-evidence-${item.security_code}`}>
-        <summary className="cursor-pointer hover:text-foreground">完整依据与来源</summary>
+        <summary className="min-h-11 cursor-pointer content-center rounded hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">完整依据与来源</summary>
         <div className="mt-3 space-y-2 break-words">
           <div className="flex flex-wrap gap-1.5">
             {item.reason_codes.map((reason) => <span key={reason} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">{reason}</span>)}
@@ -258,7 +258,7 @@ export function DiscoveryWorkspace() {
     return (
       <GlassCard className="space-y-3 p-5" data-testid="discovery-unavailable">
         <div className="flex items-center gap-2 text-destructive"><AlertCircle className="h-4 w-4" />{error || "市场发现不可用"}</div>
-        <button type="button" onClick={() => void load(true)} className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted">重试</button>
+        <button type="button" onClick={() => void load(true)} className="min-h-11 rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted">重试</button>
       </GlassCard>
     );
   }
@@ -274,13 +274,13 @@ export function DiscoveryWorkspace() {
             </div>
             <p className="mt-1 text-xs text-muted-foreground">{discoveryTimeSummary(snapshot)}</p>
           </div>
-          <button type="button" onClick={() => void load(true)} disabled={refreshing} className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50" data-testid="refresh-discovery">
+          <button type="button" onClick={() => void load(true)} disabled={refreshing} className="ml-auto inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" data-testid="refresh-discovery">
             {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
             {refreshing ? "刷新中…" : "刷新"}
           </button>
         </div>
 
-        {error ? <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"><AlertCircle className="h-3.5 w-3.5" />刷新失败，继续显示当前结果：{error}</div> : null}
+        {error ? <div role="alert" className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"><AlertCircle className="h-3.5 w-3.5" />刷新失败，继续显示当前结果：{error}</div> : null}
 
         {snapshot.datasets.some((dataset) => dataset.status !== "normal") ? (
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-amber-700 dark:text-amber-300" data-testid="discovery-source-warning">
@@ -294,36 +294,44 @@ export function DiscoveryWorkspace() {
       <div className="space-y-3 border-y border-border/50 py-3" data-testid="discovery-filters">
         <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="发现策略">
           {STRATEGIES.map((strategy) => (
-            <button key={strategy} type="button" role="tab" aria-selected={filters.strategy === strategy} onClick={() => setFilters({ strategy })} className={`rounded-md px-3 py-1.5 text-sm ${filters.strategy === strategy ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`} data-testid={`strategy-${strategy}`}>
+            <button key={strategy} type="button" role="tab" aria-selected={filters.strategy === strategy} onClick={() => setFilters({ strategy })} className={`min-h-11 rounded-md px-3 py-1.5 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${filters.strategy === strategy ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`} data-testid={`strategy-${strategy}`}>
               {STRATEGY_LABELS[strategy]} <span className="ml-1 text-[10px] text-muted-foreground">{snapshot.queues[strategy].length}</span>
             </button>
           ))}
         </div>
-        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4 [&>select]:min-w-0">
-          <select aria-label="发现行业或主题" value={filters.sector} onChange={(event) => setFilters({ sector: event.target.value })} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4 [&>label]:min-w-0 [&_select]:min-h-11 [&_select]:w-full [&_select]:min-w-0">
+          <label className="space-y-1 text-xs text-muted-foreground"><span className="block">行业 / 主题</span>
+          <select aria-label="发现行业或主题" value={filters.sector} onChange={(event) => setFilters({ sector: event.target.value })} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground">
             <option value="ALL">全部行业 / 主题</option>
             {filters.sector !== "ALL" && !sectors.includes(filters.sector) ? <option value={filters.sector}>{filters.sector}（本次队列暂无）</option> : null}
             {sectors.map((sector) => <option key={sector} value={sector}>{sector}</option>)}
           </select>
-          <select aria-label="研究优先级" value={filters.priority} onChange={(event) => setFilters({ priority: event.target.value as DiscoveryFilters["priority"] })} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
+          </label>
+          <label className="space-y-1 text-xs text-muted-foreground"><span className="block">研究优先级</span>
+          <select aria-label="研究优先级" value={filters.priority} onChange={(event) => setFilters({ priority: event.target.value as DiscoveryFilters["priority"] })} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground">
             {PRIORITIES.map((priority) => <option key={priority} value={priority}>{priority === "ALL" ? PRIORITY_LABELS[priority] : `${PRIORITY_LABELS[priority]}优先级`}</option>)}
           </select>
-          <select aria-label="研究资格" value={filters.restricted} onChange={(event) => setFilters({ restricted: event.target.value as DiscoveryFilters["restricted"] })} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
+          </label>
+          <label className="space-y-1 text-xs text-muted-foreground"><span className="block">研究资格</span>
+          <select aria-label="研究资格" value={filters.restricted} onChange={(event) => setFilters({ restricted: event.target.value as DiscoveryFilters["restricted"] })} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground">
             <option value="ALL">全部资格</option><option value="CLEAR">普通</option><option value="RESTRICTED">受限研究</option><option value="UNKNOWN">资格未知</option>
           </select>
-          <select aria-label="发现数据状态" value={filters.health} onChange={(event) => setFilters({ health: event.target.value as DiscoveryFilters["health"] })} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
+          </label>
+          <label className="space-y-1 text-xs text-muted-foreground"><span className="block">数据状态</span>
+          <select aria-label="发现数据状态" value={filters.health} onChange={(event) => setFilters({ health: event.target.value as DiscoveryFilters["health"] })} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground">
             <option value="ALL">全部数据状态</option><option value="normal">可用</option><option value="partial">部分可用</option><option value="unknown">未知</option><option value="error">错误</option>
           </select>
+          </label>
         </div>
       </div>
 
-      <p className="text-sm text-muted-foreground">当前显示 <span className="font-medium text-foreground">{items.length}</span> 个{STRATEGY_LABELS[filters.strategy]}研究候选</p>
+      <p role="status" aria-live="polite" aria-atomic="true" data-testid="discovery-results-status" className="text-sm text-muted-foreground">{refreshing ? "刷新中，" : ""}当前显示 <span className="font-medium text-foreground">{items.length}</span> 个{STRATEGY_LABELS[filters.strategy]}研究候选 · {statusLabel(snapshot.status)}</p>
       <p className="text-xs text-muted-foreground" data-testid="discovery-queue-boundary">仅筛选本次候选队列，每策略最多12条，同优先级顺序非价值排名。</p>
       <div className="space-y-3" data-testid={`discovery-queue-${filters.strategy}`}>
         {items.length ? items.map((item) => <OpportunityCard key={`${item.strategy}-${item.security_code}`} item={item} />) : (
           <GlassCard className="space-y-3 p-8 text-center text-sm text-muted-foreground">
             <p>{["unavailable", "error"].includes(snapshot.status) ? "当前发现数据不可用，暂时无法提供研究候选。" : "当前筛选下没有研究候选；信息缺失的对象不会被补成机会。"}</p>
-            <Link to={{ pathname: location.pathname, search: `?${fullMarketSearch}` }} className="inline-block text-primary hover:underline" data-testid="discovery-open-full-market">进入全市场筛选</Link>
+            <Link to={{ pathname: location.pathname, search: `?${fullMarketSearch}` }} className="inline-flex min-h-11 items-center rounded px-2 text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" data-testid="discovery-open-full-market">进入全市场筛选</Link>
           </GlassCard>
         )}
       </div>
@@ -336,7 +344,7 @@ export function DiscoveryWorkspace() {
       ) : null}
 
       <details className="rounded-xl border border-border/60 bg-card/50 p-4" data-testid="discovery-diagnostics">
-        <summary className="cursor-pointer text-sm font-medium"><Database className="mr-2 inline h-4 w-4" />扫描范围与数据来源</summary>
+        <summary className="min-h-11 cursor-pointer content-center rounded text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"><Database className="mr-2 inline h-4 w-4" />扫描范围与数据来源</summary>
         <div className="mt-4 space-y-4">
           <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
             {[
@@ -362,7 +370,7 @@ export function DiscoveryWorkspace() {
       </details>
 
       <details className="rounded-xl border border-border/60 bg-card/50 p-4" data-testid="discovery-excluded">
-        <summary className="cursor-pointer text-sm font-medium">为什么被挡在队列外（{snapshot.excluded.length}）</summary>
+        <summary className="min-h-11 cursor-pointer content-center rounded text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">为什么被挡在队列外（{snapshot.excluded.length}）</summary>
         <div className="mt-3 max-h-80 divide-y divide-border/40 overflow-y-auto">
           {snapshot.excluded.map((item, index) => (
             <div key={`${item.security_code}-${item.strategy || "all"}-${index}`} className="flex flex-wrap items-center gap-2 py-2 text-xs">
