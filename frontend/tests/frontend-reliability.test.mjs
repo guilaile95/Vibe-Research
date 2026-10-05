@@ -9,10 +9,12 @@ import * as apiClient from '../src/lib/api.ts';
 import * as models from '../src/lib/ai-models.ts';
 import * as researchNote from '../src/lib/researchNote.ts';
 import * as modelProbe from '../src/lib/modelConnectionProbe.ts';
+import * as preferenceStorage from '../src/lib/storage.ts';
+import * as navigation from '../src/lib/navigation.ts';
 
 // Component behavior in a deterministic hook runner: real TSX handlers/effects and
 // storage modules, mocked network/UI dependencies. No browser or real credentials.
-function harness(path, name, overrides = {}) {
+function harness(path, name, overrides = {}, globals = {}) {
   const states = [], effects = [], refs = [], timers = new Map(), listeners = new Map();
   let cursor = 0, pending = [], timerId = 0;
   const React = {
@@ -40,7 +42,7 @@ function harness(path, name, overrides = {}) {
   }).outputText;
   vm.runInNewContext(js, {
     exports, document: { addEventListener() {}, removeEventListener() {} }, require: name => mods[name] ?? generic, FileReader: globalThis.FileReader, AbortController, DOMException, Error, console, URLSearchParams, Map, Set, Date,
-    window: { setTimeout: fn => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), addEventListener(type, fn) { listeners.set(type, fn); }, removeEventListener(type, fn) { if (listeners.get(type) === fn) listeners.delete(type); } }, confirm: () => true,
+    window: { setTimeout: fn => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), addEventListener(type, fn) { listeners.set(type, fn); }, removeEventListener(type, fn) { if (listeners.get(type) === fn) listeners.delete(type); } }, confirm: () => true, ...globals,
   }, { filename: path });
   return {
     render(props = {}) { cursor = 0; const tree = exports[name](props); const current = pending; pending = []; current.forEach(fn => fn()); return tree; },
@@ -69,6 +71,56 @@ const storage = new Map();
 const workingStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
 test.beforeEach(() => { storage.clear(); globalThis.localStorage = workingStorage; });
 test.afterEach(() => { globalThis.localStorage = workingStorage; storage.clear(); });
+
+const layoutHarness = () => harness('components/layout/Layout.tsx', 'Layout', {
+  'react-router-dom': { useLocation: () => ({ pathname: '/notes' }), Link: 'link', Outlet: 'outlet' },
+  '@/hooks/useDarkMode': { useDarkMode: () => ({ dark: false, toggle() {} }) },
+  '@/lib/storage': preferenceStorage, '@/lib/navigation': navigation,
+}, { localStorage: globalThis.localStorage });
+const sidebarControl = (tree, name) => nodes(tree).find(node => node.type === 'button' && node.props['aria-label'] === name);
+
+test('sidebar valid preferences persist and missing or corrupt values default to expanded', () => {
+  for (const value of [null, 'expanded', 'collapsed', '', 'true', '{broken']) {
+    storage.clear();
+    if (value !== null) storage.set('vr-sidebar', value);
+    const h = layoutHarness();
+    const tree = h.render();
+    assert.ok(sidebarControl(tree, value === 'collapsed' ? '展开侧栏' : '收起侧栏'));
+    sidebarControl(tree, value === 'collapsed' ? '展开侧栏' : '收起侧栏').props.onClick();
+    h.render();
+    assert.equal(storage.get('vr-sidebar'), value === 'collapsed' ? 'expanded' : 'collapsed');
+    h.unmount();
+    assert.ok(sidebarControl(layoutHarness().render(), value === 'collapsed' ? '收起侧栏' : '展开侧栏'));
+  }
+});
+
+test('sidebar storage read denial falls back without preventing in-memory navigation state', () => {
+  globalThis.localStorage = { ...workingStorage, getItem(key) { if (key === 'vr-sidebar') throw new DOMException('denied', 'SecurityError'); return workingStorage.getItem(key); } };
+  const h = layoutHarness();
+  sidebarControl(h.render(), '收起侧栏').props.onClick();
+  assert.ok(sidebarControl(h.render(), '展开侧栏'));
+  h.unmount();
+});
+
+test('sidebar denied writes keep session toggles usable and retain the last saved preference', () => {
+  for (const name of ['SecurityError', 'QuotaExceededError']) {
+    storage.set('vr-sidebar', 'collapsed');
+    let denied = true;
+    globalThis.localStorage = { ...workingStorage, setItem(key, value) { if (key === 'vr-sidebar' && denied) throw new DOMException('denied', name); workingStorage.setItem(key, value); } };
+    const h = layoutHarness();
+    sidebarControl(h.render(), '展开侧栏').props.onClick();
+    assert.ok(sidebarControl(h.render(), '收起侧栏'));
+    assert.equal(storage.get('vr-sidebar'), 'collapsed');
+    h.unmount();
+    const reloaded = layoutHarness();
+    assert.ok(sidebarControl(reloaded.render(), '展开侧栏'));
+    denied = false;
+    sidebarControl(reloaded.render(), '展开侧栏').props.onClick();
+    reloaded.render();
+    assert.equal(storage.get('vr-sidebar'), 'expanded');
+    reloaded.unmount();
+  }
+});
 
 const noteProps = { kind: 'test', title: 'Synthetic research', content: 'Synthetic content' };
 test('failed note save keeps the button retryable and shows an error', () => {
