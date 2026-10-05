@@ -12,6 +12,7 @@ import * as modelProbe from '../src/lib/modelConnectionProbe.ts';
 import * as preferenceStorage from '../src/lib/storage.ts';
 import * as navigation from '../src/lib/navigation.ts';
 import * as sectorResearch from '../src/data/sectorResearch/index.ts';
+import * as signalLedgerView from '../src/lib/signalLedgerView.ts';
 
 // Component behavior in a deterministic hook runner: real TSX handlers/effects and
 // storage modules, mocked network/UI dependencies. No browser or real credentials.
@@ -74,6 +75,48 @@ const find = (tree, type, text) => nodes(tree).find(node => node.type === type &
 const testId = (tree, id) => nodes(tree).find(node => node.props?.['data-testid'] === id);
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+function ledgerHarness() {
+  const calls = [], urls = [];
+  const api = Object.fromEntries(['listSignalEntries', 'getRunSignalLedger'].map(method => [method, params => {
+    const response = deferred(); calls.push({ method, params, ...response }); return response.promise;
+  }]));
+  const h = harness('pages/SignalLedger.tsx', 'default', {
+    '../lib/api': { api, ApiError: Error }, '../lib/signalLedgerView': signalLedgerView,
+    'react-router-dom': { useSearchParams: () => [new URLSearchParams(), params => urls.push(params.toString())], Link: 'link' },
+  });
+  const change = (placeholder, value) => nodes(h.render()).find(n => n.type === 'input' && n.props.placeholder === placeholder).props.onChange({ target: { value } });
+  const submit = () => find(h.render(), 'form').props.onSubmit({ preventDefault() {} });
+  const reset = () => find(h.render(), 'button', '重置').props.onClick();
+  return { ...h, calls, urls, change, submit, reset };
+}
+const ledgerRows = id => ({ items: id ? [{ entry_id: id, signal_type: id, stage: 'schema', severity: 'info', payload_json: {}, created_at: '' }] : [] });
+
+test('signal ledger actual reset clears invalid input and validation before the new response', async () => {
+  const h = ledgerHarness(); h.render(); h.calls[0].resolve(ledgerRows('INITIAL')); await tick();
+  h.change('6位代码', 'bad'); h.submit(); assert.match(label(h.render()), /股票代码必须是 6 位数字/); assert.equal(h.calls.length, 1);
+  h.reset(); const pending = h.render();
+  assert.equal(nodes(pending).find(n => n.props?.placeholder === '6位代码').props.value, '');
+  assert.doesNotMatch(label(pending), /股票代码必须是 6 位数字|INITIAL/); assert.match(label(pending), /正在加载信号流水/);
+  assert.equal(h.urls.at(-1), ''); assert.equal(h.calls[1].params.code, undefined);
+  h.calls[1].resolve(ledgerRows('RESET_RESULT')); await tick(); assert.match(label(h.render()), /RESET_RESULT/); h.unmount();
+});
+
+test('signal ledger failed reset cannot revive old rows or claim an empty result; retry can return empty', async () => {
+  const h = ledgerHarness(); h.render(); h.calls[0].resolve(ledgerRows('OLD_FILTERED')); await tick(); assert.match(label(h.render()), /OLD_FILTERED/);
+  h.reset(); h.calls[1].reject(new Error('RESET_FAILURE')); await tick();
+  assert.match(label(h.render()), /RESET_FAILURE/); assert.doesNotMatch(label(h.render()), /OLD_FILTERED|暂无信号记录|正在加载信号流水/);
+  find(h.render(), 'button', '重试').props.onClick(); assert.equal(h.calls[2].params.code, undefined); assert.doesNotMatch(label(h.render()), /RESET_FAILURE/);
+  h.calls[2].resolve(ledgerRows()); await tick(); assert.match(label(h.render()), /暂无信号记录/); h.unmount();
+});
+
+for (const staleError of [false, true]) test(`signal ledger reset keeps current loading when older request ${staleError ? 'fails' : 'succeeds'}`, async () => {
+  const h = ledgerHarness(); h.render(); h.change('6位代码', 'bad'); h.submit(); h.reset();
+  if (staleError) h.calls[0].reject(new Error('OBSOLETE_FAILURE')); else h.calls[0].resolve(ledgerRows('OBSOLETE_RESULT'));
+  await tick(); assert.match(label(h.render()), /正在加载信号流水/); assert.doesNotMatch(label(h.render()), /OBSOLETE_|股票代码必须是/);
+  h.calls[1].resolve(ledgerRows('LATEST_RESULT')); await tick(); assert.match(label(h.render()), /LATEST_RESULT/); h.unmount();
+});
+
 const storage = new Map();
 const workingStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
 test.beforeEach(() => { storage.clear(); globalThis.localStorage = workingStorage; });
