@@ -11,6 +11,7 @@ import * as researchNote from '../src/lib/researchNote.ts';
 import * as modelProbe from '../src/lib/modelConnectionProbe.ts';
 import * as preferenceStorage from '../src/lib/storage.ts';
 import * as navigation from '../src/lib/navigation.ts';
+import * as sectorResearch from '../src/data/sectorResearch/index.ts';
 
 // Component behavior in a deterministic hook runner: real TSX handlers/effects and
 // storage modules, mocked network/UI dependencies. No browser or real credentials.
@@ -973,4 +974,67 @@ test('non-local storage areas cannot invalidate chat runtime', () => {
   h.emit('storage', { key: 'vr-llm', storageArea: {} });
   h.emit('storage', { key: null, storageArea: {} });
   assert.equal(call.args[3].aborted, false); h.unmount();
+});
+
+function sectorLayoutHarness(loader) {
+  let params = { key: 'ai-computing', tag: 'industry' };
+  const h = harness('components/sectors/SectorResearchLayout.tsx', 'SectorResearchLayout', {
+    'react-router-dom': { useParams: () => params, Link: 'link', Navigate: 'navigate' },
+    '@/data/sectorResearch': { ...sectorResearch, loadSectorResearchWorkspace: loader },
+    '@/components/ui/PageHeader': { PageHeader: 'page-header' },
+    '@/components/ui/AskAiButton': { AskAiButton: 'ask-ai' },
+    './SectorResearchContent': { SectorResearchContent: 'sector-content' },
+  });
+  return { ...h, route(key, tag = 'industry') { params = { key, tag }; return h.render(); } };
+}
+
+test('sector layout renders navigation and AI context from the same content as all 120 columns', async () => {
+  let count = 0;
+  for (const key of sectorResearch.listSectorResearchKeys()) {
+    const workspace = await sectorResearch.loadSectorResearchWorkspace(key);
+    const h = sectorLayoutHarness(async () => workspace);
+    h.route(key, workspace.defaultTag); await tick();
+    for (const tag of workspace.tags) {
+      const tree = h.route(key, tag.slug);
+      assert.equal(find(tree, 'page-header').props.title, workspace.fullName);
+      assert.equal(nodes(tree).find(n => n.type === 'link' && n.props['aria-current'] === 'page').props.children, tag.label);
+      assert.equal(find(tree, 'sector-content').props.tag, tag);
+      assert.equal(find(tree, 'sector-content').props.sources, workspace.sources);
+      const context = find(tree, 'ask-ai').props.context;
+      assert.ok(context.includes('当前栏目：' + tag.label));
+      assert.ok(context.includes('内容状态：' + (tag.status === 'placeholder' ? '框架占位，尚无正式研究正文' : tag.status)));
+      count++;
+    }
+    h.unmount();
+  }
+  assert.equal(count, 120);
+});
+
+test('sector layout rejects previous content before effects and ignores late success or failure after rapid switches', async () => {
+  const calls = [], h = sectorLayoutHarness(key => { const d = deferred(); calls.push({ key, ...d }); return d.promise; });
+  let tree = h.render(); assert.equal(find(tree, 'ask-ai'), undefined);
+  calls[0].resolve(await sectorResearch.loadSectorResearchWorkspace('ai-computing')); await tick();
+  assert.ok(find(h.render(), 'ask-ai').props.context.includes('芯片、服务器、网络、散热产业格局'));
+  // h.route returns the render before its new effect runs.
+  tree = h.route('hbm'); assert.equal(find(tree, 'sector-content'), undefined); assert.equal(find(tree, 'ask-ai'), undefined);
+  tree = h.route('ai-computing'); assert.equal(find(tree, 'sector-content'), undefined);
+  calls[1].resolve(await sectorResearch.loadSectorResearchWorkspace('hbm')); await tick();
+  assert.equal(find(h.render(), 'sector-content'), undefined);
+  calls[2].resolve(await sectorResearch.loadSectorResearchWorkspace('ai-computing')); await tick();
+  tree = h.render(); assert.ok(find(tree, 'ask-ai').props.context.includes('芯片、服务器、网络、散热产业格局'));
+  h.route('hbm'); h.route('ai-computing');
+  calls[3].reject(Error('obsolete chunk failure')); await tick();
+  assert.doesNotMatch(label(h.render()), /加载失败/);
+  calls[4].resolve(await sectorResearch.loadSectorResearchWorkspace('ai-computing')); await tick();
+  assert.ok(find(h.render(), 'sector-content')); h.unmount();
+});
+
+test('sector missing, failed or wrong-owner content ends loading without exposing a misleading AI context', async () => {
+  const other = await sectorResearch.loadSectorResearchWorkspace('hbm');
+  for (const outcome of [undefined, other, new Error('synthetic load failure')]) {
+    const h = sectorLayoutHarness(async () => { if (outcome instanceof Error) throw outcome; return outcome; });
+    h.render(); await tick(); const tree = h.render();
+    assert.match(label(tree), /研究内容加载失败/); assert.doesNotMatch(label(tree), /加载研究内容/);
+    assert.equal(find(tree, 'ask-ai'), undefined); assert.equal(find(tree, 'sector-content'), undefined); h.unmount();
+  }
 });
