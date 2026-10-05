@@ -13,11 +13,12 @@ import * as preferenceStorage from '../src/lib/storage.ts';
 import * as navigation from '../src/lib/navigation.ts';
 import * as sectorResearch from '../src/data/sectorResearch/index.ts';
 import * as signalLedgerView from '../src/lib/signalLedgerView.ts';
+import * as hotlistView from '../src/lib/hotlistView.ts';
 
 // Component behavior in a deterministic hook runner: real TSX handlers/effects and
 // storage modules, mocked network/UI dependencies. No browser or real credentials.
 function harness(path, name, overrides = {}, globals = {}) {
-  const states = [], effects = [], refs = [], timers = new Map(), listeners = new Map();
+  const states = [], effects = [], refs = [], memos = [], timers = new Map(), listeners = new Map();
   let cursor = 0, pending = [], timerId = 0, scheduled = true, lastTree, lastProps = {};
   const React = {
     useState(init) { const i = cursor++; if (!(i in states)) states[i] = typeof init === 'function' ? init() : init; return [states[i], value => {
@@ -25,7 +26,12 @@ function harness(path, name, overrides = {}, globals = {}) {
       if (!Object.is(states[i], next)) { states[i] = next; scheduled = true; }
     }]; },
     useRef(init) { const i = cursor++; return refs[i] ??= { current: init }; },
-    useMemo: fn => fn(), useCallback: fn => fn,
+    useMemo(fn, deps) {
+      const i = cursor++;
+      if (!memos[i] || !deps || deps.some((value, j) => value !== memos[i].deps?.[j])) memos[i] = { deps, value: fn() };
+      return memos[i].value;
+    },
+    useCallback(fn, deps) { return React.useMemo(() => fn, deps); },
     useEffect(fn, deps) {
       const i = cursor++;
       if (!effects[i] || !deps || deps.some((value, j) => value !== effects[i].deps?.[j])) {
@@ -75,6 +81,52 @@ const find = (tree, type, text) => nodes(tree).find(node => node.type === type &
 const testId = (tree, id) => nodes(tree).find(node => node.props?.['data-testid'] === id);
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+function deepReadHarness() {
+  const calls = [];
+  const items = [1, 3].map(item_id => ({ item_id, title: `SOURCE_${item_id}`, url: `https://synthetic.invalid/${item_id}`, source_id: 'fixture', hint: 'tech', current_state: 'ON_LIST', rank: item_id }));
+  const h = harness('components/native-intel/HotlistPanel.tsx', 'HotlistPanel', {
+    '@/lib/api': { ApiError: Error, api: {
+      nativeIntelConfig: async () => ({ region_order: ['hotlist'], regions_enabled: { hotlist: true, rss: false, standalone: false } }),
+      nativeIntelStandalone: async () => ({ items: [] }), nativeIntelHotlist: async () => ({ items, sources: [] }), nativeIntelFilteredItems: async () => ({ items: [] }),
+      // Deliberately settle even after abort to verify ownership, not just transport cancellation.
+      nativeIntelDeepRead: (itemId, payload, signal) => { const response = deferred(); calls.push({ itemId, signal, ...response }); return response.promise; },
+    } },
+    '@/lib/hotlistView': hotlistView, '@/lib/llm': { loadLlm: () => null }, '@/lib/intelDigestView': { formatShanghaiTime: value => value },
+  });
+  const open = id => testId(h.render(), `native-intel-deep-read-${id}`).props.onClick();
+  const close = () => nodes(h.render()).find(n => n.props?.['aria-label'] === '关闭来源深读').props.onClick();
+  return { ...h, calls, open, close };
+}
+const deepData = (item_id, marker) => ({ item_id, status: 'success', title: marker, content_level: 'ARTICLE_BODY', original_url: `https://synthetic.invalid/${item_id}`, content: marker + '_BODY', analysis: marker + '_ANALYSIS' });
+async function readyDeepHarness() { const h = deepReadHarness(); h.render(); await tick(); h.flushScheduled(); return h; }
+function assertDeep(h, marker) {
+  const tree = h.render(); assert.equal(label(testId(tree, 'native-intel-deep-read-content')), marker + '_BODY');
+  assert.equal(label(testId(tree, 'native-intel-deep-read-analysis')), marker + '_ANALYSIS');
+  assert.doesNotMatch(label(testId(tree, 'native-intel-deep-read-modal')), /正在读取来源|OBSOLETE_ERROR/);
+}
+
+for (const staleError of [false, true]) test(`deep read ignores closed request ${staleError ? 'failure' : 'success'} while a new source is loading`, async () => {
+  const h = await readyDeepHarness(); h.open(1); h.close(); h.open(3);
+  if (staleError) h.calls[0].reject(new Error('OBSOLETE_ERROR')); else h.calls[0].resolve(deepData(1, 'OLD_A'));
+  await tick(); assert.match(label(testId(h.render(), 'native-intel-deep-read-modal')), /正在读取来源/);
+  assert.equal(testId(h.render(), 'native-intel-deep-read-content'), undefined); assert.doesNotMatch(label(h.render()), /OBSOLETE_ERROR/);
+  assert.equal(h.calls[0].signal.aborted, true); h.calls[1].resolve(deepData(3, 'NEW_B')); await tick(); assertDeep(h, 'NEW_B'); h.unmount();
+});
+
+test('deep read same-item reopen rejects older completion and current errors can recover', async () => {
+  const h = await readyDeepHarness(); h.open(1); h.close(); h.open(1); h.calls[1].resolve(deepData(1, 'NEW_A')); await tick();
+  h.calls[0].resolve(deepData(1, 'OLD_A')); await tick(); assertDeep(h, 'NEW_A');
+  h.close(); h.open(3); h.calls[2].reject(new Error('CURRENT_ERROR')); await tick(); assert.match(label(h.render()), /CURRENT_ERROR/); assert.doesNotMatch(label(h.render()), /正在读取来源/);
+  h.close(); h.open(3); assert.doesNotMatch(label(h.render()), /CURRENT_ERROR/); h.calls[3].resolve(deepData(3, 'RECOVERED')); await tick(); assertDeep(h, 'RECOVERED'); h.unmount();
+});
+
+test('deep read close and actual effect cleanup cancel pending requests without late state changes', async () => {
+  const h = await readyDeepHarness(); h.open(1); h.close(); assert.equal(h.calls[0].signal.aborted, true);
+  h.calls[0].resolve(deepData(1, 'CLOSED')); await tick(); assert.equal(testId(h.render(), 'native-intel-deep-read-modal'), undefined);
+  h.open(3); const before = label(h.render()); h.unmount(); assert.equal(h.calls[1].signal.aborted, true);
+  h.calls[1].reject(new Error('UNMOUNTED_ERROR')); await tick(); assert.equal(label(h.render()), before);
+});
 
 function ledgerHarness() {
   const calls = [], urls = [];
