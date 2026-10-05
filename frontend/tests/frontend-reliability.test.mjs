@@ -845,3 +845,75 @@ test('explicit page chat aborts old scope and preserves only matching complete h
   assert.doesNotMatch([...storage.values()].join(''), /cancel question|LATE CANCELLED/);
   h.unmount();
 });
+
+function storageChatHarness() {
+  const calls = [];
+  const h = harness('components/ui/AskAiButton.tsx', 'AskAiButton', {
+    'react-router-dom': { useLocation: () => ({ pathname: '/synthetic-chat' }), Link: 'link' },
+    '@/lib/storage': preferenceStorage,
+    '@/lib/llm': { ...llm, loadLlm: () => ({ provider: 'api', model: 'synthetic' }), hasLlm: () => true,
+      llmIdentity: () => 'synthetic', runtimeLabel: () => 'Synthetic', chatStream: (...args) => {
+        const d = deferred(); calls.push({ args, d }); return d.promise;
+      } },
+  });
+  let props = { context: 'synthetic context', scopeKey: 'first' };
+  const render = () => h.render(props);
+  find(render(), 'button', '问 AI').props.onClick(); render(); render();
+  return { ...h, calls, render,
+    scope(value) { props = { ...props, scopeKey: value }; render(); render(); },
+    send(question = 'synthetic question') {
+      find(render(), 'textarea').props.onChange({ target: { value: question } });
+      nodes(render()).find(n => n.props?.['aria-label'] === '发送').props.onClick(); render();
+      return calls.at(-1);
+    },
+  };
+}
+
+test('unrelated storage changes preserve the active chat through completion and persistence', async () => {
+  const h = storageChatHarness(), call = h.send();
+  call.args[2].onDelta('SYNTHETIC ANSWER'); h.render();
+  for (let round = 0; round < 3; round++) {
+    for (const key of ['vr-sidebar', 'vr-notes', 'unrelated', 'vr-askai-chat:other', 'vr-askai-epoch:other']) {
+      h.emit('storage', { key, storageArea: null }); h.render();
+      assert.equal(call.args[3].aborted, false);
+      assert.ok(nodes(h.render()).find(n => n.props?.['aria-label'] === '停止生成'));
+    }
+  }
+  call.d.resolve({}); await tick(); h.render();
+  assert.match(storage.get('vr-askai-chat:/synthetic-chat#first@synthetic'), /SYNTHETIC ANSWER/);
+  const next = h.send('followup'); assert.equal(next.args[0].length, 3);
+  h.unmount(); assert.equal(next.args[3].aborted, true);
+  assert.equal(h.hasListener('storage'), false); assert.equal(h.hasListener(llm.LLM_CHANGED_EVENT), false);
+});
+
+test('relevant storage and runtime events still cancel and exclude late results from persistence', async () => {
+  const chatKey = 'vr-askai-chat:/synthetic-chat#first@synthetic';
+  for (const key of ['vr-llm', 'vr-access-key', null, chatKey, 'vr-askai-epoch:' + chatKey, 'runtime-event']) {
+    storage.clear(); const h = storageChatHarness(), call = h.send();
+    if (key === 'runtime-event') h.emit(llm.LLM_CHANGED_EVENT);
+    else h.emit('storage', { key, storageArea: null });
+    assert.equal(call.args[3].aborted, true);
+    call.args[2].onDelta('LATE CANCELLED'); call.d.resolve({}); await tick(); h.render();
+    assert.doesNotMatch([...storage.values()].join(''), /LATE CANCELLED|synthetic question/);
+    const retry = h.send('retry'); retry.args[2].onDelta('RETRY COMPLETE'); retry.d.resolve({}); await tick(); h.render();
+    assert.match(storage.get(chatKey), /RETRY COMPLETE/); h.unmount();
+  }
+});
+
+test('storage cancellation follows the current scope instead of the initial chat key', () => {
+  const h = storageChatHarness(), first = h.send(); h.scope('second');
+  assert.equal(first.args[3].aborted, true);
+  const second = h.send('new scope');
+  for (const key of ['vr-askai-chat:/synthetic-chat#first@synthetic', 'vr-askai-epoch:vr-askai-chat:/synthetic-chat#first@synthetic']) {
+    h.emit('storage', { key, storageArea: null }); assert.equal(second.args[3].aborted, false);
+  }
+  h.emit('storage', { key: 'vr-askai-epoch:vr-askai-chat:/synthetic-chat#second@synthetic', storageArea: null });
+  assert.equal(second.args[3].aborted, true); h.unmount();
+});
+
+test('non-local storage areas cannot invalidate chat runtime', () => {
+  const h = storageChatHarness(), call = h.send();
+  h.emit('storage', { key: 'vr-llm', storageArea: {} });
+  h.emit('storage', { key: null, storageArea: {} });
+  assert.equal(call.args[3].aborted, false); h.unmount();
+});

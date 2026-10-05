@@ -210,11 +210,23 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
       setConfigured(hasLlm());
       setRuntimeKey(llmIdentity());
     };
+    const onStorage = (event: StorageEvent) => {
+      const currentKey = chatKeyRef.current;
+      if (event.key !== null && event.key !== "vr-llm" && event.key !== "vr-access-key" &&
+        event.key !== currentKey && event.key !== CHAT_EPOCH_PREFIX + currentKey) return;
+      // Only local storage owns runtime/chat state; session storage events from
+      // embedded pages must not cancel a response. Storage access can be denied.
+      if (event.storageArea !== null) {
+        try { if (event.storageArea !== window.localStorage) return; }
+        catch { return; }
+      }
+      refreshRuntime();
+    };
     window.addEventListener(LLM_CHANGED_EVENT, refreshRuntime);
-    window.addEventListener("storage", refreshRuntime);
+    window.addEventListener("storage", onStorage);
     return () => {
       window.removeEventListener(LLM_CHANGED_EVENT, refreshRuntime);
-      window.removeEventListener("storage", refreshRuntime);
+      window.removeEventListener("storage", onStorage);
     };
   }, []);
 
