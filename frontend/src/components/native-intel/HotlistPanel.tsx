@@ -67,6 +67,13 @@ export function HotlistPanel() {
   const [deepReadData, setDeepReadData] = useState<NativeIntelDeepReadResponse | null>(null);
   const [deepReadLoading, setDeepReadLoading] = useState(false);
   const [deepReadError, setDeepReadError] = useState("");
+  const deepReadRequestRef = useRef<AbortController | null>(null);
+  const cancelDeepRead = useCallback(() => {
+    const request = deepReadRequestRef.current;
+    deepReadRequestRef.current = null;
+    request?.abort();
+  }, []);
+  useEffect(() => cancelDeepRead, [cancelDeepRead]);
 
   const handleItemTranslate = async (itemId: number, text: string) => {
     try {
@@ -111,17 +118,21 @@ export function HotlistPanel() {
   };
 
   const handleDeepRead = async (itemId: number) => {
+    cancelDeepRead();
+    const request = new AbortController();
+    deepReadRequestRef.current = request;
+    const active = () => deepReadRequestRef.current === request && !request.signal.aborted;
     setDeepReadItemId(itemId);
     setDeepReadData(null);
     setDeepReadError("");
     setDeepReadLoading(true);
     try {
-      const res = await api.nativeIntelDeepRead(itemId, { llm: loadLlm() });
-      setDeepReadData(res);
+      const res = await api.nativeIntelDeepRead(itemId, { llm: loadLlm() }, request.signal);
+      if (active()) setDeepReadData(res);
     } catch (err) {
-      setDeepReadError(err instanceof ApiError ? err.message : "来源深读失败");
+      if (active()) setDeepReadError(err instanceof ApiError ? err.message : "来源深读失败");
     } finally {
-      setDeepReadLoading(false);
+      if (active()) setDeepReadLoading(false);
     }
   };
   const [rssFilterMeta, setRssFilterMeta] = useState<FilterMeta | null>(null);
@@ -1123,9 +1134,11 @@ export function HotlistPanel() {
                 type="button"
                 aria-label="关闭来源深读"
                 onClick={() => {
+                  cancelDeepRead();
                   setDeepReadItemId(null);
                   setDeepReadData(null);
                   setDeepReadError("");
+                  setDeepReadLoading(false);
                 }}
                 className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
               >

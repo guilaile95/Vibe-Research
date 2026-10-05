@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Activity, AlertTriangle, CheckCircle2, CircleDashed, HelpCircle, Loader2, RefreshCw, XCircle } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -89,47 +89,59 @@ export function DataHealth() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DataHealthDetailResult | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const overviewRequestRef = useRef(0);
+  const detailRequestRef = useRef(0);
 
   const load = useCallback(async () => {
+    const request = ++overviewRequestRef.current;
+    const active = () => request === overviewRequestRef.current;
     setLoading(true);
     setErr(null);
     try {
       const data = await api.getDataHealth();
-      setOverview(data);
+      if (active()) setOverview(data);
     } catch (e) {
+      if (!active()) return;
       const msg = e instanceof ApiError ? e.message : "数据健康服务暂不可用";
       setErr(msg || "数据健康服务暂不可用");
       // 保留旧 overview
     } finally {
-      setLoading(false);
+      if (active()) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void load();
+    return () => {
+      overviewRequestRef.current += 1;
+      detailRequestRef.current += 1;
+    };
   }, [load]);
 
-  useEffect(() => {
-    if (!selectedId) {
-      setDetail(null);
-      return;
-    }
-    let cancelled = false;
+  const loadDetail = useCallback(async (sourceId: string) => {
+    const request = ++detailRequestRef.current;
+    const active = () => request === detailRequestRef.current;
+    setSelectedId(sourceId);
+    setDetail(null);
+    setDetailError(null);
     setDetailLoading(true);
-    api.getDataHealthSource(selectedId)
-      .then((d) => {
-        if (!cancelled) setDetail(d);
-      })
-      .catch(() => {
-        if (!cancelled) setDetail(null);
-      })
-      .finally(() => {
-        if (!cancelled) setDetailLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedId]);
+    try {
+      const data = await api.getDataHealthSource(sourceId);
+      if (!active()) return;
+      if (data?.record?.source_id !== sourceId) throw new Error("数据源详情加载失败，请重试");
+      setDetail(data);
+    } catch (e) {
+      if (active()) setDetailError(e instanceof ApiError && e.message ? e.message : "数据源详情加载失败，请重试");
+    } finally {
+      if (active()) setDetailLoading(false);
+    }
+  }, []);
+
+  const reread = () => {
+    void load();
+    if (selectedId) void loadDetail(selectedId);
+  };
 
   const items = overview?.items ?? [];
   const viewItems = useMemo(
@@ -164,7 +176,7 @@ export function DataHealth() {
         actions={
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={reread}
             className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
           >
             <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
@@ -250,7 +262,7 @@ export function DataHealth() {
                     <button
                       type="button"
                       className="text-primary underline-offset-2 hover:underline"
-                      onClick={() => setSelectedId(p.source_id)}
+                      onClick={() => void loadDetail(p.source_id)}
                     >
                       {p.display_name}
                     </button>
@@ -311,7 +323,7 @@ export function DataHealth() {
                   "cursor-pointer p-3 transition hover:border-primary/40",
                   selectedId === it.source_id && "border-primary/50",
                 )}
-                onClick={() => setSelectedId(it.source_id)}
+                onClick={() => void loadDetail(it.source_id)}
               >
                 <div className="mb-1 flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium">{it.display_name}</span>
@@ -343,7 +355,7 @@ export function DataHealth() {
                   className="mt-2 text-[11px] text-primary hover:underline"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSelectedId(it.source_id);
+                    void loadDetail(it.source_id);
                   }}
                 >
                   查看详情
@@ -375,7 +387,15 @@ export function DataHealth() {
                 <Loader2 className="h-3 w-3 animate-spin" /> 加载详情…
               </p>
             )}
-            {detail && !detailLoading && (
+            {detailError && !detailLoading && (
+              <div role="alert" className="space-y-2 text-xs text-rose-300">
+                <p>{detailError}</p>
+                <button type="button" onClick={() => selectedId && void loadDetail(selectedId)} className="text-primary hover:underline">
+                  重试详情
+                </button>
+              </div>
+            )}
+            {detail && detail.record.source_id === selectedId && !detailLoading && (
               <div className="space-y-2 text-xs">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium">{detail.record.display_name}</span>
