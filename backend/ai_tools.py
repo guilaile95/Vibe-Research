@@ -46,6 +46,28 @@ def _pick(rows: list[dict], keys: tuple[str, ...] | None, limit: int) -> list[di
     return [{k: r.get(k) for k in keys} for r in head if isinstance(r, dict)]
 
 
+def _disclose_projection(items: list[dict], coverage: dict, *, partial: bool, note: str):
+    """Keep the public array contract; annotate a real row, never invent a row."""
+    if not items:
+        return []
+    return [{**items[0], "status": "partial" if partial else "success",
+             "adapter_coverage": {"scope": "adapter_input_before_context_compaction", **coverage},
+             "note": note}, *items[1:]]
+
+
+def _metadata_rows(rows, keys: tuple[str, ...], limit: int):
+    rows = rows or []
+    selected = _pick(rows, None, limit)
+    items = _pick(rows, keys, limit)
+    omitted_fields = sum(len(set(row) - set(keys)) for row in selected)
+    omitted_rows = len(rows) - len(items)
+    return _disclose_projection(items, {
+        "input_rows": len(rows), "output_rows": len(items), "omitted_rows": omitted_rows,
+        "omitted_fields_in_selected_rows": omitted_fields,
+    }, partial=bool(omitted_rows or omitted_fields),
+        note="仅为标题等元数据，不是全文；计数只覆盖本次数据源返回，不证明历史完整。其他字段或记录可能未送入，不能据此断言不存在。")
+
+
 TOOLS: list[dict] = [
     # —— 行情与估值 ——
     _t("query_quote", "查 A 股实时行情：现价/涨跌/PE/PB/市值/换手/涨跌停。可批量。",
@@ -85,7 +107,7 @@ TOOLS: list[dict] = [
     # —— 事件与风险 ——
     _t("query_announcements", "查个股近期公告（标题/日期/类型）。查风险与重大事项先用这个。", _CODE, ["code"]),
     _t("query_lockup", "查个股限售解禁：历史解禁记录 + 未来 90 天待解禁事件（日期/类型/股数/占比）。", _CODE, ["code"]),
-    _t("query_investor_qa", "查个股投资者互动易问答摘录，返回 items 和 adapter_coverage；最多12条、问题200字、回复400字，partial表示有遗漏，不能当成完整回复。", _CODE, ["code"]),
+    _t("query_investor_qa", "查个股投资者互动易问答摘录列表，首条附 adapter_coverage；最多12条、问题200字、回复400字，partial表示有遗漏，不能当成完整回复。", _CODE, ["code"]),
 
     # —— 行业与板块 ——
     _t("query_concepts", "查个股所属板块与概念归属，以及当下被市场归到哪些热门概念在炒。", _CODE, ["code"]),
@@ -331,23 +353,18 @@ def _investor_qa(args: dict):
         out.append({
             "ask_time": r.get("ask_time"),
             "question": q[:200],
-            "answer": a[:400] if a else None,
+            "answer": a[:400] if a else "（未回复）",
             "question_truncated": len(q) > 200,
             "answer_truncated": len(a) > 400,
         })
     omitted_rows = len(rows) - len(out)
     partial = bool(omitted_rows or question_chars_omitted or answer_chars_omitted)
-    return {
-        "status": "partial" if partial else ("success" if out else "empty"),
-        "adapter_coverage": {
-            "scope": "adapter_input_before_context_compaction",
-            "input_rows": len(rows), "output_rows": len(out), "omitted_rows": omitted_rows,
-            "question_chars_omitted_in_selected_rows": question_chars_omitted,
-            "answer_chars_omitted_in_selected_rows": answer_chars_omitted,
-        },
-        "note": "仅为问答摘录；计数只覆盖本次数据源返回，不证明历史完整。截断可能遗漏限定条件，不得当成完整回复；空回复为未知。",
-        "items": out,
-    }
+    return _disclose_projection(out, {
+        "input_rows": len(rows), "output_rows": len(out), "omitted_rows": omitted_rows,
+        "question_chars_omitted_in_selected_rows": question_chars_omitted,
+        "answer_chars_omitted_in_selected_rows": answer_chars_omitted,
+    }, partial=partial,
+        note="仅为问答摘录；计数只覆盖本次数据源返回，不证明历史完整。截断可能遗漏限定条件，不得当成完整回复；空回复为未知。")
 
 
 def _market(args: dict):
@@ -465,9 +482,9 @@ _HANDLERS = {
     "query_kline": _kline,
     "query_financials": lambda a: astock.financials(str(a["code"])),
     "query_company_info": _company_info,
-    "query_reports": lambda a: _pick(astock.eastmoney_reports(str(a["code"]), max_pages=1),
+    "query_reports": lambda a: _metadata_rows(astock.eastmoney_reports(str(a["code"]), max_pages=1),
                                      ("title", "publishDate", "orgSName", "emRatingName"), 15),
-    "query_news": lambda a: _pick(astock.stock_news(str(a["code"]), limit=15),
+    "query_news": lambda a: _metadata_rows(astock.stock_news(str(a["code"]), limit=15),
                                   ("新闻标题", "发布时间", "文章来源"), 15),
     "query_fund_flow": _fund_flow,
     "query_margin": lambda a: _pick(astock.margin_trading(str(a["code"])),
@@ -481,7 +498,7 @@ _HANDLERS = {
     "query_investor_qa": _investor_qa,
     "query_concepts": _concepts,
     "query_industry_comparison": lambda a: astock.industry_comparison(top_n=max(5, min(int(a.get("top_n") or 20), 50))),
-    "query_industry_reports": lambda a: _pick(
+    "query_industry_reports": lambda a: _metadata_rows(
         astock.eastmoney_industry_reports(keywords=a.get("keywords"), days=int(a.get("days") or 90), max_pages=1),
         ("title", "publishDate", "orgSName", "industryName"), 20),
     "query_market": _market,

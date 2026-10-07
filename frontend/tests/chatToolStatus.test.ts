@@ -52,3 +52,14 @@ test("tool result parser rejects malformed or late outcomes and ignores mismatch
   const tools: ChatToolUse[] = [{ name: "query_quote", callId: "different", arg: "", status: "pending", truncated: false }];
   assert.deepEqual(applyChatToolResult(tools, { ...valid, status: "success" }), tools);
 });
+
+test("adapter-only omission is limited even when context was not truncated", () => {
+  const state = createNdjsonProtocolState();
+  let tools: ChatToolUse[] = [{ name: "query_investor_qa", arg: "", callId: "coverage", status: "pending", truncated: false }];
+  applyNdjsonLine(state, JSON.stringify({ type: "tool_result", tool: "query_investor_qa", call_id: "coverage", status: "partial", truncated: false }), {
+    onToolResult: result => { tools = applyChatToolResult(tools, result); },
+  });
+  assert.equal(state.sawError, false);
+  assert.equal(chatToolStatusLabel(tools[0], false), "返回受限");
+  assert.equal(chatToolStatusLabel(parseStoredChatTools(JSON.parse(JSON.stringify(tools)))[0], false), "返回受限");
+});

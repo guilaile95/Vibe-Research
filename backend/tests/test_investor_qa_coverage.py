@@ -22,8 +22,8 @@ def test_short_payload_discloses_lost_qualification(monkeypatch):
     serialized, status, truncated = chat._serialize_tool_result(payload)
     assert status == 'partial'
     assert not truncated  # Context fits; loss already happened in the adapter.
-    assert payload['adapter_coverage']['answer_chars_omitted_in_selected_rows'] == 4
-    assert payload['items'][0]['answer_truncated'] is True
+    assert payload[0]['adapter_coverage']['answer_chars_omitted_in_selected_rows'] == 4
+    assert payload[0]['answer_truncated'] is True
     assert '仅为假设' not in serialized
     assert json.loads(serialized)['limitations']
 
@@ -31,37 +31,37 @@ def test_short_payload_discloses_lost_qualification(monkeypatch):
 @pytest.mark.parametrize('qsize,asize,partial', [(199, 399, False), (200, 400, False), (201, 401, True)])
 def test_exact_unicode_boundaries(monkeypatch, qsize, asize, partial):
     payload = result(monkeypatch, [{'question': '问' * qsize, 'answer': '答' * asize}])
-    row = payload['items'][0]
+    row = payload[0]
     assert len(row['question']) == min(qsize, 200)
     assert len(row['answer']) == min(asize, 400)
     assert row['question_truncated'] == row['answer_truncated'] == partial
-    assert payload['status'] == ('partial' if partial else 'success')
-    assert chat._serialize_tool_result(payload)[1:] == (payload['status'], False)
+    assert payload[0]['status'] == ('partial' if partial else 'success')
+    assert chat._serialize_tool_result(payload)[1:] == (payload[0]['status'], False)
 
 
 def test_row_limit_counts_only_returned_source_window(monkeypatch):
     payload = result(monkeypatch, [{'question': f'Q{i}', 'answer': 'A'} for i in range(30)])
-    assert payload['adapter_coverage'] == {
+    assert payload[0]['adapter_coverage'] == {
         'scope': 'adapter_input_before_context_compaction',
         'input_rows': 30, 'output_rows': 12, 'omitted_rows': 18,
         'question_chars_omitted_in_selected_rows': 0,
         'answer_chars_omitted_in_selected_rows': 0,
     }
-    assert len(payload['items']) == 12
+    assert len(payload) == 12
     assert chat._serialize_tool_result(payload)[1:] == ('partial', False)
 
 
 @pytest.mark.parametrize('rows', [[], None])
 def test_coverage_cannot_turn_empty_input_into_evidence(monkeypatch, rows):
     payload = result(monkeypatch, rows)
-    assert payload['items'] == []
+    assert payload == []
     assert chat._serialize_tool_result(payload)[1:] == ('empty', False)
 
 
-def test_missing_answer_remains_unknown(monkeypatch):
+def test_missing_answer_keeps_legacy_placeholder(monkeypatch):
     payload = result(monkeypatch, [{'question': '有提问', 'answer': None}])
-    assert payload['items'][0]['answer'] is None
-    assert not payload['items'][0]['answer_truncated']
+    assert payload[0]['answer'] == '（未回复）'
+    assert not payload[0]['answer_truncated']
 
 
 def test_context_compaction_is_separate_from_adapter_counts(monkeypatch):
@@ -70,9 +70,9 @@ def test_context_compaction_is_separate_from_adapter_counts(monkeypatch):
     envelope = json.loads(serialized)
     assert status == 'partial' and truncated
     assert len(serialized) <= chat._TOOL_RESULT_CAP
-    assert envelope['data']['adapter_coverage'] == payload['adapter_coverage']
-    assert len(envelope['data']['items']) < payload['adapter_coverage']['output_rows']
-    assert envelope['data']['adapter_coverage']['answer_chars_omitted_in_selected_rows'] == 1200
+    assert envelope['data'][0]['adapter_coverage'] == payload[0]['adapter_coverage']
+    assert len(envelope['data']) < payload[0]['adapter_coverage']['output_rows']
+    assert envelope['data'][0]['adapter_coverage']['answer_chars_omitted_in_selected_rows'] == 1200
     assert any('遗漏' in note for note in envelope['limitations'])
 
 
@@ -86,8 +86,8 @@ def test_mcp_returns_same_adapter_disclosure(monkeypatch):
     assert json.loads(replies[0]['content'][0]['text']) == payload
 
 
-def test_missing_text_is_not_evidence(monkeypatch):
-    payload = result(monkeypatch, [{'question': None, 'answer': None}])
+def test_coverage_metadata_is_not_evidence(monkeypatch):
+    payload = ai_tools._disclose_projection([{}], {'input_rows': 1, 'output_rows': 1}, partial=False, note='fixture')
     assert chat._serialize_tool_result(payload)[1:] == ('empty', False)
 
 
@@ -108,4 +108,19 @@ def test_chat_stream_propagates_adapter_partial_status(monkeypatch):
     tool_message = next(message for message in sent[1] if message['role'] == 'tool')
     envelope = json.loads(tool_message['content'])
     assert envelope['status'] == 'partial'
-    assert envelope['data']['items'][0]['answer_truncated'] is True
+    assert envelope['data'][0]['answer_truncated'] is True
+
+
+def test_legacy_array_readers_and_http_keep_original_fields(monkeypatch):
+    import app
+    rows = [{'ask_time': 'fixture-time', 'question': '问' * 201, 'answer': '答' * 401,
+             'company': 'fixture company', 'answerer': 'fixture author'},
+            {'ask_time': None, 'question': None, 'answer': None}]
+    payload = result(monkeypatch, rows)
+    assert isinstance(payload, list) and len(payload) == len(rows)
+    legacy = [{key: row[key] for key in ('ask_time', 'question', 'answer')} for row in payload]
+    assert legacy == [{'ask_time': 'fixture-time', 'question': '问' * 200, 'answer': '答' * 400},
+                      {'ask_time': None, 'question': '', 'answer': '（未回复）'}]
+    assert 'adapter_coverage' in payload[0] and 'adapter_coverage' not in payload[1]
+    monkeypatch.setattr(app, '_cached', lambda namespace, code, ttl, load: load())
+    assert app.investor_qa(code='000001') == {'data': rows}
