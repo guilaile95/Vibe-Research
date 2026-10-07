@@ -186,3 +186,43 @@ No browser, live provider/model, full backend suite, frontend build/test, indepe
 CodeRabbit review, publication, remote CI, merge or deployment was performed for
 this slice. The previous slice's counts above remain historical, not added to this
 run's totals.
+
+## Investor Q&A deployment-timezone correction (2026-10-06)
+
+On provenance baseline `737e9cd`, the actual investor-Q&A reader converted provider
+`pubDate` using the server's local timezone. For synthetic epoch `1791217800000`,
+three isolated subprocess environments produced these reader/HTTP/AI values:
+
+| Process timezone | Baseline output | Corrected output |
+| --- | --- | --- |
+| UTC | 2026-10-05 16:30 | 2026-10-06 00:30 |
+| Asia/Shanghai | 2026-10-06 00:30 | 2026-10-06 00:30 |
+| UTC−5 (`Etc/GMT+5`) | 2026-10-05 11:30 | 2026-10-06 00:30 |
+
+The repository's existing adapter already specifies millisecond conversion. The
+installed AKShare adapter and its [upstream implementation](https://raw.githubusercontent.com/akfamily/akshare/main/akshare/stock_feature/stock_irm_cninfo.py)
+(read 2026-10-06, `pubDate` mapping and lines 114–118) explicitly convert the same
+endpoint's field from Unix milliseconds/UTC to Asia/Shanghai. This is corroborating
+adapter-source evidence, not a live provider probe or a published CNINFO API SLA.
+
+The fix adds an explicit UTC+8 timezone to the existing conversion, matching the
+modern Beijing-time convention already used in this repository. The platform
+started in 2010, after Shanghai's historical DST period; this is not a generic
+historical-timezone converter. It retains the minute-resolution string format,
+unknown empty strings, row fields/order and two existing requests per reader call.
+The HTTP 15-minute cache contract is unchanged. No machine/global timezone was
+modified; subprocess `TZ` only controlled each disposable test process.
+
+Seventeen new tests cover UTC/Shanghai/negative-offset processes, cross-date
+rollover, integer/float millisecond values, minute formatting, unknown values,
+existing malformed provider behavior (HTTP 502 / AI error), and unchanged valid
+reader strings. Provider-side timestamp strings were already unsupported and
+remain unsupported; no permissive date parser was added. The three process-TZ
+cases are explicitly POSIX-only; numeric conversion checks run cross-platform.
+
+Final focused backend run: 281 passed, 1 skipped (the pre-existing superseded
+native-intel test); syntax and whitespace checks passed. Baseline reproduction
+was 2 failures / 1 pass. No browser, provider/model request, install, proxy change,
+independent review, full suite, frontend check, publication, CI or deployment ran.
+The separate MCP proxy dependency failure recorded above remains unresolved and
+was not retried in this slice.

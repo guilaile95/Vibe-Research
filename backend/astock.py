@@ -1860,7 +1860,10 @@ def hot_concepts(code: str, *, strict: bool = False) -> list[dict]:
 
 
 def investor_qa(code: str, page_size: int = 30) -> list[dict]:
-    """互动易问答（巨潮）：投资者提问 + 公司回复（answer=None 表示未回复）。"""
+    """互动易问答（巨潮）；ask_time 为北京时间分钟字符串，空值表示未知。
+
+    pubDate 为 Unix 毫秒，不能用服务器本地时区解释；answer=None 表示未回复。
+    """
     import requests
 
     try:
@@ -1883,7 +1886,8 @@ def investor_qa(code: str, page_size: int = 30) -> list[dict]:
             "company": it.get("companyShortName"),
             "question": it.get("mainContent"), "answer": it.get("attachedContent"),
             "answerer": it.get("attachedAuthor"),
-            "ask_time": datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M") if ts else "",
+            "ask_time": datetime.fromtimestamp(ts / 1000, tz=timezone(timedelta(hours=8))).strftime(
+                "%Y-%m-%d %H:%M") if ts else "",
         })
     return out
 
