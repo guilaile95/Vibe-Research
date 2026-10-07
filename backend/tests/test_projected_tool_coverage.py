@@ -20,11 +20,11 @@ def news_window(rows):
 
 CASES = [
     ('query_reports', 'eastmoney_reports', ('title', 'publishDate', 'orgSName', 'emRatingName'),
-     15, {'code': '000001'}, {'max_pages': 1}, 'infoCode'),
+     15, {'code': '000001'}, {'max_pages': 1}, 'abstract'),
     ('query_news', 'stock_news', ('新闻标题', '发布时间', '文章来源'),
      15, {'code': '000001'}, {'limit': 15, 'with_coverage': True}, '新闻内容'),
     ('query_industry_reports', 'eastmoney_industry_reports', ('title', 'publishDate', 'orgSName', 'industryName'),
-     20, {'keywords': ['fixture'], 'days': 7}, {'keywords': ['fixture'], 'days': 7, 'max_pages': 1}, 'infoCode'),
+     20, {'keywords': ['fixture'], 'days': 7}, {'keywords': ['fixture'], 'days': 7, 'max_pages': 1}, 'abstract'),
 ]
 
 

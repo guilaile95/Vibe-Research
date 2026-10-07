@@ -27,7 +27,8 @@ Three additional below-budget fixtures reproduce the same missing disclosure:
   title/date/organization/industry remain
 
 All three baseline regression cases fail with `success, truncated=false` instead
-of `partial, truncated=false`. The fix does not forward discarded content.
+of `partial, truncated=false`. The initial disclosure fix did not forward discarded content. The later provenance
+slice below preserves selected source references while continuing to omit full text.
 
 ## Final compatibility-preserving contract
 
@@ -134,3 +135,54 @@ is not a readback mechanism, and a post-adapter cache cannot restore discarded t
 Announcements and other list caps, GPU summaries, and other source-reader truncation
 remain separate candidates requiring concrete reproduction before further changes.
 Expansion stops after this source-layer slice.
+
+
+## Source-provenance preservation slice (2026-10-06)
+
+Baseline `afe0a47` reproduced four independent model-facing failures through actual
+`chat.run_chat` tool execution with offline provider/LLM fixtures: news lost
+`新闻链接`, both report tools lost `infoCode`, and announcements lost `notice_at`
+and `url`. All four new assertions failed with missing keys before implementation.
+News/report dates and publisher names already survived below the context budget;
+no replacement dates or publishers are synthesized.
+
+The adapters now forward those existing string references when present. News and
+announcement links must be absolute HTTP(S) URLs with a host, without credentials,
+backslashes, whitespace/control characters or malformed port/host syntax. Invalid
+references are omitted and counted by existing adapter coverage. A permitted URL
+is still unverified source data; it is not proof that its destination was opened,
+that its claims are true, or that a future fetch would be authorized/safe. No URL
+is fetched here and no report PDF URL is constructed from its ID.
+
+Announcements retain their original title/date/type and array/order/15-row contract,
+adding original source time/link and the same first-real-row coverage/note contract.
+The actual source-reader fixture includes two same-day notices at 09:30 and 16:30:
+model delivery now distinguishes those source timestamps instead of only their
+identical display dates. Timestamps are preserved verbatim, with no timezone,
+precision or historical-availability claim added by this change.
+
+Chat/Debate context compaction prioritizes these reference fields plus existing
+news/report dates and publishers. Citation strings remain exact or become null
+when too long for that compaction tier; they never become fabricated ellipsis
+links or shortened report IDs. The envelope still discloses context truncation.
+Full news/report/announcement text is not recovered. Retaining a reference does not
+create a readback tool, add requests, or establish historical completeness.
+
+Validation against the final source: 264 focused backend checks passed, 1 skipped
+(including 49 new provenance cases); syntax and whitespace checks passed. The
+focused set covers actual Chat model-message delivery, MCP dispatch, Debate,
+source-reader/HTTP compatibility, unsafe/missing metadata, source immutability,
+row caps, empty arrays and compaction. Previous projection tests now use a synthetic
+`abstract` field for still-omitted report content rather than expecting `infoCode`
+to disappear.
+
+An earlier broader invocation reported 258 passed, 1 skipped, 1 failed:
+`test_native_intel_mcp_client.py::test_real_mcp_client_e2e` could not initialize its
+HTTP client because `socksio` is absent for the environment's configured SOCKS
+proxy. The proxy/dependencies were not altered and that check was not retried.
+One newly authored HTTP test initially used an unsupported `limit` argument;
+corrected to the existing route signature and passed in the final focused run.
+No browser, live provider/model, full backend suite, frontend build/test, independent
+CodeRabbit review, publication, remote CI, merge or deployment was performed for
+this slice. The previous slice's counts above remain historical, not added to this
+run's totals.
