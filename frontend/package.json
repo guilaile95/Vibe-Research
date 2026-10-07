@@ -17,6 +17,7 @@
     "test:e2e:current-thesis": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/current-thesis-activation.browser.mjs",
     "test:e2e:hard-risk-render": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/hard-risk-render.browser.mjs",
     "test:e2e:data-health": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/data-health-real.browser.mjs",
+    "test:e2e:intel-health-recovery": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/intel-health-recovery.browser.mjs",
     "test:e2e:bk11-history": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/bk11-history-real.browser.mjs",
     "test:e2e:decision-evidence": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/decision-evidence-real.browser.mjs",
     "test:e2e:intel-digest": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/intel-digest-real.browser.mjs",
