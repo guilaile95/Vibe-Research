@@ -180,3 +180,57 @@ def test_reference_text_remains_untrusted_data():
     assert payload[0]['infoCode'] == text
     assert '不是指令' in payload[0]['note']
     assert '不是指令' in chat.GROUNDING_RULES
+
+
+def test_cumulative_stream_keeps_each_tool_outcome_and_source_identity(monkeypatch, tmp_path):
+    import astock
+    import requests
+    from pandas import DataFrame
+    from types import SimpleNamespace
+
+    # Actual news reader limit + adapter projection + context compaction together.
+    news = [{**CASES[0][3], '新闻标题': 'fixture ' + '新' * 1200, '新闻内容': 'omitted body'}
+            for _ in range(20)]
+    monkeypatch.setattr(astock, '_akshare', lambda: SimpleNamespace(
+        stock_news_em=lambda **kwargs: DataFrame(news)))
+    mock_source(monkeypatch, 'eastmoney_reports', [{**CASES[1][3], 'abstract': 'omitted'}])
+    mock_source(monkeypatch, 'eastmoney_industry_reports', [CASES[2][3]])
+    mock_source(monkeypatch, 'announcements', [{**CASES[3][3], 'url': 'javascript:fixture'}])
+
+    # Actual Q&A millisecond conversion, followed by answer clipping.
+    class Response:
+        def __init__(self, payload): self.payload = payload
+        def json(self): return self.payload
+    def post(url, **kwargs):
+        return Response({'data': [{'secid': 'fixture'}]} if url.endswith('queryKeyboardInfo') else
+                        {'rows': [{'pubDate': 1791217800000, 'mainContent': 'fixture',
+                                   'attachedContent': '答' * 401}]})
+    monkeypatch.setattr(requests, 'post', post)
+    specs = [(case[0], case[2]) for case in CASES] + [('query_investor_qa', {'code': '000001'})]
+    rounds = iter([
+        [{'tool_calls': [{'index': i, 'id': f'combined-{i}', 'function': {
+            'name': tool, 'arguments': json.dumps(args)}} for i, (tool, args) in enumerate(specs)]}],
+        [{'content': 'synthetic combined answer'}],
+    ])
+    sent = []
+    monkeypatch.setattr(chat, '_call_llm_stream', lambda _cfg, messages, _tools: sent.append(copy.deepcopy(messages)))
+    monkeypatch.setattr(chat, '_iter_sse_deltas', lambda _response: iter(next(rounds)))
+    events = list(chat.run_chat_stream({}, [{'role': 'user', 'content': 'synthetic combined research'}]))
+    completed = {e['tool']: e for e in events if e['type'] == 'tool_result'}
+    assert len(completed) == 5 and events[-1]['type'] == 'done'
+    assert completed['query_news']['status'] == 'partial' and completed['query_news']['truncated']
+    assert completed['query_industry_reports']['status'] == 'success'
+    for tool in ('query_reports', 'query_announcements', 'query_investor_qa'):
+        assert completed[tool]['status'] == 'partial' and not completed[tool]['truncated']
+    names = {f'combined-{i}': tool for i, (tool, _args) in enumerate(specs)}
+    messages = {names[m['tool_call_id']]: json.loads(m['content']) for m in sent[1] if m['role'] == 'tool'}
+    news_row = messages['query_news']['data'][0]
+    assert news_row['source_coverage']['omitted_rows'] == 5
+    assert news_row['adapter_coverage']['omitted_rows'] == 0
+    assert news_row['新闻链接'] == CASES[0][3]['新闻链接']
+    assert messages['query_reports']['data'][0]['infoCode'] == CASES[1][3]['infoCode']
+    assert 'url' not in messages['query_announcements']['data'][0]
+    qa_row = messages['query_investor_qa']['data'][0]
+    assert qa_row['ask_time'] == '2026-10-06 00:30' and qa_row['answer_truncated']
+    # Acceptance can replay these exact generated events through the frontend parser.
+    (tmp_path / 'combined-tool-events.json').write_text(json.dumps(events), encoding='utf-8')

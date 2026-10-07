@@ -226,3 +226,59 @@ was 2 failures / 1 pass. No browser, provider/model request, install, proxy chan
 independent review, full suite, frontend check, publication, CI or deployment ran.
 The separate MCP proxy dependency failure recorded above remains unresolved and
 was not retried in this slice.
+
+## Reply-time investigation and cumulative acceptance (2026-10-06)
+
+The reply-time investigation stopped at a semantic evidence boundary. The primary
+AKShare source linked above maps `attachedPubDate` from the **same list endpoint**
+to an ignored field. Its separate question-detail endpoint maps `replyDate` to
+answer time. This does not establish that `attachedPubDate` means the same thing,
+its timestamp unit, or first public availability. No recorded provider payload in
+this checkout established the missing mapping; no live provider request was made.
+
+An offline execution changed only synthetic `attachedPubDate` across same-time,
+next-day, null and malformed values. All four produced identical actual reader,
+HTTP and AI outputs, with `ask_time = 2026-10-06 00:30`; unanswered rows remained
+unanswered. This proves raw-field loss, not the lost field's real semantics or
+that a model actually inferred historical availability. No `answer_time` field,
+question-time fallback or stronger historical-availability assertion was added.
+Reply time remains unknown until authoritative semantics can be established.
+
+The cumulative acceptance run covers the complete local change stack from
+`f4922dd` through the timestamp fix, with one new composition regression. It runs
+five tools in one actual streaming Chat round: news source-window and adapter
+omissions plus context compaction, stock-report IDs, industry-report success,
+rejected announcement links, and actual Q&A epoch conversion plus answer clipping.
+Twelve generated events were replayed through the real frontend NDJSON parser,
+status-label mapping and JSON storage/hydration. All five tool identities/outcomes
+stayed separate, including partial-without-context-truncation and success.
+
+Final unique suite totals (not sums of earlier runs):
+
+- Backend selected aggregate: **688 passed, 1 skipped**, 26 files. Selection is
+  every `backend/tests` file with a top-level import of `chat`, `ai_tools` or
+  `debate`, plus `test_critical_data_disclosures_adapter.py`,
+  `test_mcp_stdio_encoding.py`, `test_native_intel_agent_tools.py` and
+  `test_report_page_chat.py`, deduplicated; run with `-m "not live"` and isolated
+  synthetic data/report/review paths. The skip is the existing superseded
+  native-intel test, not a newly suppressed failure.
+- Frontend full unit suite: **978 passed**, zero failed/skipped.
+- Frontend `npm run build`: TypeScript and Vite passed. Vite's >500 kB chunk warning
+  remains a warning; no bundling/refactor work was introduced.
+- Generated backend-event → frontend-parser/storage replay: **5 tools / 12 events
+  passed**, reported separately from both suite totals.
+- Python syntax and Git whitespace checks passed.
+
+The frontend reused installed dependencies with an identical package-lock hash;
+no package installation or lock change occurred. The newly authored composition
+fixture initially looked for a tool-message `name`; corrected to the actual
+`tool_call_id` association before the successful final aggregate. No production
+composition defect was found. This acceptance adds tests/documentation only.
+
+The known MCP HTTP-client integration failure due to missing `socksio` under the
+configured proxy remains **failed/environment-blocked**, outside this selected
+aggregate, and was not retried or worked around. Full backend collection, browser
+acceptance, live provider/model quality, Windows execution, independent CodeRabbit
+review, remote CI, publication, merge and deployment remain unrun for this stack.
+The next step is review/authorized delivery of this bounded stack, not more
+speculative field-by-field expansion.
