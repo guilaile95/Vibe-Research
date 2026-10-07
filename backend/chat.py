@@ -129,7 +129,7 @@ _TOOL_METADATA_KEYS = {
     "status", "source", "trade_date", "data_time", "fetched_at", "is_stale",
     "stale", "unavailable", "note", "unit", "code", "symbol", "date", "period_end",
     "observed_at", "generated_at", "updated", "warnings", "error", "err", "errors", "fetch_error",
-    "adjustment", "latest_bar_date", "fallback",
+    "adjustment", "latest_bar_date", "fallback", "adapter_coverage",
 }
 _TOOL_EMPTY_METADATA = tools.PAYLOAD_META_KEYS | _TOOL_METADATA_KEYS
 

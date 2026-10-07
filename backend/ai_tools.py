@@ -85,7 +85,7 @@ TOOLS: list[dict] = [
     # —— 事件与风险 ——
     _t("query_announcements", "查个股近期公告（标题/日期/类型）。查风险与重大事项先用这个。", _CODE, ["code"]),
     _t("query_lockup", "查个股限售解禁：历史解禁记录 + 未来 90 天待解禁事件（日期/类型/股数/占比）。", _CODE, ["code"]),
-    _t("query_investor_qa", "查个股投资者互动易问答（公司对投资者提问的官方回复，常含经营细节）。", _CODE, ["code"]),
+    _t("query_investor_qa", "查个股投资者互动易问答摘录，返回 items 和 adapter_coverage；最多12条、问题200字、回复400字，partial表示有遗漏，不能当成完整回复。", _CODE, ["code"]),
 
     # —— 行业与板块 ——
     _t("query_concepts", "查个股所属板块与概念归属，以及当下被市场归到哪些热门概念在炒。", _CODE, ["code"]),
@@ -128,7 +128,8 @@ TOOL_NAMES = [t["function"]["name"] for t in TOOLS]
 
 # Shared structural-empty detection. Debate retains its historical summary-count
 # semantics; chat explicitly treats real zero/false observations as data.
-PAYLOAD_META_KEYS = frozenset({"period", "unit", "note", "code", "generated_at", "tracks", "total_cached"})
+PAYLOAD_META_KEYS = frozenset({"period", "unit", "note", "code", "generated_at", "tracks", "total_cached",
+                              "adapter_coverage", "question_truncated", "answer_truncated"})
 
 
 def payload_empty(value, *, metadata_keys=PAYLOAD_META_KEYS, zero_is_empty=True) -> bool:
@@ -319,17 +320,34 @@ def _company_info(args: dict):
 
 
 def _investor_qa(args: dict):
-    """互动易：公司回复常有整段公文，截断后再喂，否则十几条就能吃掉整个上下文。"""
-    rows = astock.investor_qa(str(args["code"]))
+    """Disclose adapter clipping before chat applies its separate context budget."""
+    rows = astock.investor_qa(str(args["code"])) or []
     out = []
+    question_chars_omitted = answer_chars_omitted = 0
     for r in _pick(rows, None, 12):
         q, a = (r.get("question") or ""), (r.get("answer") or "")
+        question_chars_omitted += max(0, len(q) - 200)
+        answer_chars_omitted += max(0, len(a) - 400)
         out.append({
             "ask_time": r.get("ask_time"),
             "question": q[:200],
-            "answer": a[:400] if a else "（未回复）",
+            "answer": a[:400] if a else None,
+            "question_truncated": len(q) > 200,
+            "answer_truncated": len(a) > 400,
         })
-    return out
+    omitted_rows = len(rows) - len(out)
+    partial = bool(omitted_rows or question_chars_omitted or answer_chars_omitted)
+    return {
+        "status": "partial" if partial else ("success" if out else "empty"),
+        "adapter_coverage": {
+            "scope": "adapter_input_before_context_compaction",
+            "input_rows": len(rows), "output_rows": len(out), "omitted_rows": omitted_rows,
+            "question_chars_omitted_in_selected_rows": question_chars_omitted,
+            "answer_chars_omitted_in_selected_rows": answer_chars_omitted,
+        },
+        "note": "仅为问答摘录；计数只覆盖本次数据源返回，不证明历史完整。截断可能遗漏限定条件，不得当成完整回复；空回复为未知。",
+        "items": out,
+    }
 
 
 def _market(args: dict):
