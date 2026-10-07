@@ -91,7 +91,7 @@ TOOLS: list[dict] = [
        _CODE, ["code"]),
     _t("query_company_info", "查公司基本概况：所属行业、总股本/流通股、上市日期等。", _CODE, ["code"]),
     _t("query_reports", "查个股近期研报列表（标题/机构/评级/日期）。", _CODE, ["code"]),
-    _t("query_news", "查个股近期新闻（标题/时间/来源）。", _CODE, ["code"]),
+    _t("query_news", "查个股近期新闻标题/时间/来源，最多15条；首条附本次来源窗口与裁剪覆盖，不代表历史总数或已读全文。", _CODE, ["code"]),
 
     # —— 资金面与筹码 ——
     _t("query_fund_flow",
@@ -151,7 +151,7 @@ TOOL_NAMES = [t["function"]["name"] for t in TOOLS]
 # Shared structural-empty detection. Debate retains its historical summary-count
 # semantics; chat explicitly treats real zero/false observations as data.
 PAYLOAD_META_KEYS = frozenset({"period", "unit", "note", "code", "generated_at", "tracks", "total_cached",
-                              "adapter_coverage", "question_truncated", "answer_truncated"})
+                              "adapter_coverage", "source_coverage", "question_truncated", "answer_truncated"})
 
 
 def payload_empty(value, *, metadata_keys=PAYLOAD_META_KEYS, zero_is_empty=True) -> bool:
@@ -341,6 +341,17 @@ def _company_info(args: dict):
     }
 
 
+def _news(args: dict):
+    window = astock.stock_news(str(args["code"]), limit=15, with_coverage=True)
+    items = _metadata_rows(window["rows"], ("新闻标题", "发布时间", "文章来源"), 15)
+    if items:
+        coverage = window["source_coverage"]
+        items[0]["source_coverage"] = coverage
+        if coverage["omitted_rows"]:
+            items[0]["status"] = "partial"
+    return items
+
+
 def _investor_qa(args: dict):
     """Disclose adapter clipping before chat applies its separate context budget."""
     rows = astock.investor_qa(str(args["code"])) or []
@@ -484,8 +495,7 @@ _HANDLERS = {
     "query_company_info": _company_info,
     "query_reports": lambda a: _metadata_rows(astock.eastmoney_reports(str(a["code"]), max_pages=1),
                                      ("title", "publishDate", "orgSName", "emRatingName"), 15),
-    "query_news": lambda a: _metadata_rows(astock.stock_news(str(a["code"]), limit=15),
-                                  ("新闻标题", "发布时间", "文章来源"), 15),
+    "query_news": _news,
     "query_fund_flow": _fund_flow,
     "query_margin": lambda a: _pick(astock.margin_trading(str(a["code"])),
                                     ("date", "rzye", "rzmre", "rzche", "rqye", "rzrqye"), 15),

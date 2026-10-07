@@ -220,12 +220,25 @@ def profit_forecast(code: str) -> list[dict]:
     return df.to_dict("records") if df is not None and not df.empty else []
 
 
-def stock_news(code: str, limit: int = 20, *, strict: bool = False) -> list[dict]:
-    """个股新闻（东财）；strict 区分合法空结果与缺失/畸形源响应。"""
+def stock_news(code: str, limit: int = 20, *, strict: bool = False,
+               with_coverage: bool = False) -> list[dict] | dict:
+    """News rows; opt-in coverage counts this provider response, not all history."""
+    def finish(rows, provider_rows):
+        if not with_coverage:
+            return rows
+        return {"rows": rows, "source_coverage": {
+            "scope": "provider_response_before_requested_limit",
+            "provider_response_rows": provider_rows, "returned_rows": len(rows),
+            "omitted_rows": provider_rows - len(rows) if provider_rows is not None else None,
+            "requested_limit": limit, "total_history_rows": None,
+        }}
+
     ak = _akshare()
     df = ak.stock_news_em(symbol=code)
     if not strict:
-        return df.head(limit).to_dict("records") if df is not None and not df.empty else []
+        if df is None:
+            return finish([], None)
+        return finish(df.head(limit).to_dict("records") if not df.empty else [], len(df.index))
 
     # akshare already depends on pandas; keep the import lazy for other providers.
     from pandas import DataFrame
@@ -246,7 +259,7 @@ def stock_news(code: str, limit: int = 20, *, strict: bool = False) -> list[dict
         for row in rows
     ):
         raise ValueError("news provider response contains malformed rows")
-    return rows
+    return finish(rows, len(df))
 
 
 def individual_info(code: str) -> dict:

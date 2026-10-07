@@ -78,14 +78,47 @@ external MCP consumers cannot be enumerated, and their compatibility is not prov
 - Legacy Q&A field readers are exercised by projecting the original three keys;
   array length/order, text caps and placeholder values match the baseline contract
 
-Report readers still request at most one page. News still requests 15 rows and
-its source reader already caps the raw frame before the tool adapter; this fix
-cannot measure rows lost at that earlier boundary. Source window size does not
+Report readers still request at most one page. Source window size does not
 establish complete historical coverage. No extra source/model call is added.
+
+## News source-reader slice
+
+A separate execution against `656d892` reproduced the earlier news-reader gap:
+20 synthetic provider-frame rows became 15 reader rows before adapter projection.
+The adapter correctly reported input_rows=15 and omitted_rows=0, but its successful
+status did not disclose the five rows omitted by the requested reader limit.
+The new source-only regression fails on that baseline (`success != partial`).
+
+`astock.stock_news` adds an opt-in `with_coverage=True` result containing rows and
+source coverage. The AI news adapter opts in and attaches `source_coverage` to its
+first real row, separately from `adapter_coverage`:
+
+- scope: `provider_response_before_requested_limit`
+- provider_response_rows: number of rows in the actual frame returned by the provider
+- returned_rows and omitted_rows: the local requested-limit selection
+- requested_limit: still 15 for this tool
+- total_history_rows: always null because this response does not establish that total
+
+The 20-row fixture reports 20 observed / 15 returned / 5 omitted at the source stage,
+then 15 observed / 15 returned / 0 omitted at the adapter stage. This does not mean
+20 news items exist in all history, nor that omitted items have any particular meaning.
+If the provider returns only 15 or fewer rows, no extra omission is inferred. A missing
+provider response keeps unknown counts as null rather than claiming zero total history.
+No extra page fetch, model round, storage, source selection or readback is introduced.
+
+Default and strict reader calls still return their existing lists. HTTP `/api/news`
+still returns `{data: rows}` with its requested limit, validation and error semantics.
+The provider frame is not mutated. The route/reader had no news cache to migrate;
+no cache or cache-key contract is changed. Shared serialization treats source coverage
+as metadata and retains observed omission counts under normal Chat/Debate compaction.
+
+Fourteen source-window regressions cover empty/below/exact/over-limit frames, opt-in
+and legacy strict/non-strict results, missing response vs empty frame, unchanged HTTP
+reads after AI reads, one source request per invocation and context compaction.
 
 ## Validation and limits (2026-10-06)
 
-323 focused backend tests and 4 frontend status tests pass. These include 30
+373 focused backend tests and 4 frontend status tests pass. These include 44
 backend coverage/compatibility cases. Tests cover exact
 Unicode limits, metadata-only emptiness, field/row omission counts, preservation
 of source inputs, two-stage compaction, unchanged source-call bounds, MCP, sync and
@@ -98,5 +131,6 @@ suite, frontend build, remote CI, merge or deployment was performed for this cha
 
 This work discloses omissions rather than recovering them. Repeating the same tool
 is not a readback mechanism, and a post-adapter cache cannot restore discarded text.
-Announcements and other list caps, GPU summaries, and source-reader truncation remain
-separate candidates requiring concrete reproduction before further changes.
+Announcements and other list caps, GPU summaries, and other source-reader truncation
+remain separate candidates requiring concrete reproduction before further changes.
+Expansion stops after this source-layer slice.

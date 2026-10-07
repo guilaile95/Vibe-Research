@@ -10,11 +10,19 @@ import debate
 import mcp_server
 
 
+def news_window(rows):
+    return {'rows': rows, 'source_coverage': {
+        'scope': 'provider_response_before_requested_limit',
+        'provider_response_rows': len(rows), 'returned_rows': len(rows),
+        'omitted_rows': 0, 'requested_limit': 15, 'total_history_rows': None,
+    }}
+
+
 CASES = [
     ('query_reports', 'eastmoney_reports', ('title', 'publishDate', 'orgSName', 'emRatingName'),
      15, {'code': '000001'}, {'max_pages': 1}, 'infoCode'),
     ('query_news', 'stock_news', ('新闻标题', '发布时间', '文章来源'),
-     15, {'code': '000001'}, {'limit': 15}, '新闻内容'),
+     15, {'code': '000001'}, {'limit': 15, 'with_coverage': True}, '新闻内容'),
     ('query_industry_reports', 'eastmoney_industry_reports', ('title', 'publishDate', 'orgSName', 'industryName'),
      20, {'keywords': ['fixture'], 'days': 7}, {'keywords': ['fixture'], 'days': 7, 'max_pages': 1}, 'infoCode'),
 ]
@@ -28,7 +36,7 @@ def source(request, monkeypatch):
 
     def read(*actual_args, **actual_kwargs):
         calls.append((actual_args, actual_kwargs))
-        return rows
+        return news_window(rows) if actual_kwargs.get('with_coverage') else rows
 
     monkeypatch.setattr(ai_tools.astock, provider, read)
     return tool, keys, limit, args, kwargs, rows, calls
@@ -112,7 +120,7 @@ def test_nonstream_chat_consumes_real_projection_without_extra_tool_calls(source
 def test_http_news_does_not_inherit_tool_projection(monkeypatch):
     import app
     rows = [{'新闻标题': 'fixture title', '新闻内容': 'fixture body', '新闻链接': 'https://example.test/story'}]
-    monkeypatch.setattr(ai_tools.astock, 'stock_news', lambda *args, **kwargs: rows)
+    monkeypatch.setattr(ai_tools.astock, 'stock_news', lambda *args, **kwargs: news_window(rows) if kwargs.get('with_coverage') else rows)
     ai_tools.exec_tool('query_news', {'code': '000001'})
     assert app.news(code='000001', limit=15) == {'data': rows}
     assert 'adapter_coverage' not in rows[0]
