@@ -125,12 +125,14 @@ _TOOL_RESULT_CAP = 6000  # 单次工具结果注入上限（控 token）
 
 _TOOL_ERROR = "工具未返回可用结果，请重试或核对数据源"
 _TOOL_TRUNCATION = "结果超过上下文上限，仅展示部分返回；不得将遗漏内容视为不存在。"
+# Citation strings must stay exact or become unknown, never shortened identifiers.
+_TOOL_REFERENCE_KEYS = {"url", "新闻链接", "infoCode", "notice_at", "publishDate", "发布时间", "文章来源", "orgSName"}
 _TOOL_METADATA_KEYS = {
     "status", "source", "trade_date", "data_time", "fetched_at", "is_stale",
     "stale", "unavailable", "note", "unit", "code", "symbol", "date", "period_end",
     "observed_at", "generated_at", "updated", "warnings", "error", "err", "errors", "fetch_error",
-    "adjustment", "latest_bar_date", "fallback",
-}
+    "adjustment", "latest_bar_date", "fallback", "adapter_coverage", "source_coverage",
+} | _TOOL_REFERENCE_KEYS
 _TOOL_EMPTY_METADATA = tools.PAYLOAD_META_KEYS | _TOOL_METADATA_KEYS
 
 
@@ -166,7 +168,9 @@ def _compact_tool_data(value, item_limit, text_limit):
     if isinstance(value, dict):
         keys = [key for key in value if key in _TOOL_METADATA_KEYS]
         keys += [key for key in value if key not in _TOOL_METADATA_KEYS][:item_limit]
-        return {key: _compact_tool_data(value[key], item_limit, text_limit) for key in keys}
+        return {key: (None if len(value[key]) > text_limit else value[key])
+                if key in _TOOL_REFERENCE_KEYS and isinstance(value[key], str)
+                else _compact_tool_data(value[key], item_limit, text_limit) for key in keys}
     if isinstance(value, list):
         return [_compact_tool_data(item, item_limit, text_limit) for item in value[:item_limit]]
     if isinstance(value, str) and len(value) > text_limit:
