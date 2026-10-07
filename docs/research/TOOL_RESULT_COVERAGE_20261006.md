@@ -1,5 +1,83 @@
 # Bounded tool-projection coverage disclosure
 
+## 中文交付摘要（2026-10-06，未发布的本地候选）
+
+本次仅完成本地修复与验收，**没有发布、合并、部署或切换正在运行的服务**。
+源码与测试验收坐标为 `57e20c21c12417979d455f98c459364fc4adea00`；后续本报告的文档提交不改变该实现。
+README 与 AGENTS 没有把本次候选写成已发布，因此保留原文。
+
+### 实际变化
+
+- 原先问答长回复、研报字段或新闻记录被裁剪后仍可能显示完整返回；现在分别披露来源窗口、适配裁剪和上下文截断，前端显示“返回受限”。
+- 原先新闻链接、研报编号及公告原始时间在送给 AI 前丢失；现在保留已返回的原始值。危险链接被省略，过长引用不会变成伪造的省略号链接。
+- 原先同一问答毫秒时间戳会随服务器时区变成不同日期；现在统一输出北京时间，仍保留原有分钟格式。
+- 列表形状、条数上限、HTTP 返回合同和请求次数保持不变；没有补抓全文。问答回复时间的来源语义尚不明确，继续记为未知，不用提问时间代替。
+
+### 验收与剩余事项
+
+- 最终去重后端组合：**724 通过、1 项既有跳过，27 个测试文件**；包括真实内存 HTTP 路由的失败/空结果区分、缓存与健康记录。
+- 完整前端单测：**978 通过，0 失败/跳过**；TypeScript 与 Vite 构建通过，保留既有大体积 chunk 警告。
+- 实际生成的 5 工具、12 个流事件通过前端解析、标签与存储回读；此项单独说明，不加入上述两个套件计数。
+- 语法与空白检查通过。较早章节的 373、264、281、688 等阶段计数均为历史，不叠加为总成绩。
+- 已知失败：MCP HTTP 集成因现有代理所需 `socksio` 缺失而受阻，未安装依赖、改代理或绕路重试；该失败不算进通过数。
+- 未完成：独立 CodeRabbit 审查、全后端/Windows/浏览器验收、真实来源/模型质量、远端 CI 和发布。审查与发布仍待授权。
+
+安全可补的 HTTP 验收缺口已用现有离线用例关闭；没有发现需要继续修改产品的组合缺陷。
+下一步为独立审查及获准后的交付，不继续推测性扩展字段。
+
+### 复现命令与回退坐标
+
+在仓库根目录、已安装锁文件所需依赖的环境运行。`PYTHON` 指向现有后端解释器；下列命令不安装依赖，不启动浏览器，不调用真实来源或模型。测试自身隔离临时数据目录。
+
+```bash
+PYTHON="${PYTHON:-backend/.venv/bin/python}"
+FILES=$( {
+  rg -l '^(import (chat|ai_tools|debate)|from (chat|ai_tools|debate) import)' backend/tests
+  printf '%s\n' backend/tests/test_critical_data_disclosures_adapter.py \
+    backend/tests/test_mcp_stdio_encoding.py backend/tests/test_native_intel_agent_tools.py \
+    backend/tests/test_report_page_chat.py backend/tests/test_public_feed_errors.py
+} | sort -u )
+ACCEPTANCE_TMP=$(mktemp -d)
+PYTHONPATH=backend "$PYTHON" -m pytest -q -rs -m 'not live' \
+  --basetemp="$ACCEPTANCE_TMP/pytest" $FILES
+npm --prefix frontend run build
+npm --prefix frontend test
+"$PYTHON" -m py_compile backend/astock.py backend/ai_tools.py backend/chat.py \
+  backend/tests/test_tool_source_provenance.py backend/tests/test_investor_qa_timezone.py
+git diff --check
+```
+
+混合工具组合用例会在上述临时目录写出不含真实数据的 `combined-tool-events.json`。接续复验其前端解析及存储回读：
+
+```bash
+EVENTS=$(find "$ACCEPTANCE_TMP/pytest" -name combined-tool-events.json -print -quit)
+node --experimental-strip-types --input-type=module - "$EVENTS" <<'JS'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { applyNdjsonLine, createNdjsonProtocolState } from './frontend/src/lib/api.ts';
+import { applyChatToolResult, parseStoredChatTools } from './frontend/src/lib/chatToolStatus.ts';
+const events = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+const state = createNdjsonProtocolState();
+let tools = [];
+for (const event of events) applyNdjsonLine(state, JSON.stringify(event), {
+  onTool: (name, args, callId) => tools.push({name, arg: '', callId, status: 'pending', truncated: false}),
+  onToolResult: result => { tools = applyChatToolResult(tools, result); },
+});
+assert.equal(state.sawError, false);
+assert.equal(events.length, 12);
+assert.deepEqual(tools.map(t => [t.name, t.status, t.truncated]), [
+  ['query_news', 'partial', true], ['query_reports', 'partial', false],
+  ['query_industry_reports', 'success', false], ['query_announcements', 'partial', false],
+  ['query_investor_qa', 'partial', false],
+]);
+assert.deepEqual(parseStoredChatTools(JSON.parse(JSON.stringify(tools))), tools);
+console.log('5 tools / 12 generated events: PASS');
+JS
+```
+
+本次修复栈之前的对照/回退基线为 `f4922ddadae8c4c297821e757f85a8bb80c3f0a2`，tree 为 `4c8cb09ab015073e9ac1f68e40d17209d3211b9b`。
+需要回退时先保留工作区与后续改动，审核该基线到候选的差异并使用普通反向提交；本轮没有执行回退、重写历史或删除分支。
+
 ## Verified gaps
 
 On baseline `f4922dd`, source readers feed adapters in `backend/ai_tools.py`,
@@ -255,11 +333,11 @@ stayed separate, including partial-without-context-truncation and success.
 
 Final unique suite totals (not sums of earlier runs):
 
-- Backend selected aggregate: **688 passed, 1 skipped**, 26 files. Selection is
+- Backend selected aggregate: **724 passed, 1 skipped**, 27 files. Selection is
   every `backend/tests` file with a top-level import of `chat`, `ai_tools` or
   `debate`, plus `test_critical_data_disclosures_adapter.py`,
   `test_mcp_stdio_encoding.py`, `test_native_intel_agent_tools.py` and
-  `test_report_page_chat.py`, deduplicated; run with `-m "not live"` and isolated
+  `test_report_page_chat.py` and `test_public_feed_errors.py`, deduplicated; run with `-m "not live"` and isolated
   synthetic data/report/review paths. The skip is the existing superseded
   native-intel test, not a newly suppressed failure.
 - Frontend full unit suite: **978 passed**, zero failed/skipped.
