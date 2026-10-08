@@ -52,6 +52,15 @@ def audit(event, args):
     elif event in ("socket.connect", "socket.sendto", "socket.sendmsg", "subprocess.Popen", "os.system"):
         reject(event)
 
+# Windows implements event-loop wakeup with a loopback socketpair. Acquire the
+# verification-only loop before installing the guard and before importing any
+# product code; TestClient reuses it, while all later connects remain forbidden.
+# The Linux browser/uvicorn path never takes this initialization branch.
+verification_loop = None
+if __name__ == "__main__" and sys.platform == "win32":
+    import asyncio
+    verification_loop = asyncio.SelectorEventLoop()
+
 sys.addaudithook(audit)
 socket.create_connection = lambda *a, **k: reject("socket.create_connection")
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "backend"))
@@ -98,7 +107,7 @@ if __name__ == "__main__":
     assert sys.argv[1:] == ["--verify-fixture"]
     import base64
     from fastapi.testclient import TestClient
-    with TestClient(app, base_url="http://127.0.0.1") as client:
+    with TestClient(app, base_url="http://127.0.0.1", backend_options={"loop_factory": lambda: verification_loop} if verification_loop is not None else {}) as client:
         first = client.post("/api/myreports", json={"name": "synthetic-first.txt", "content_b64": base64.b64encode(b"SYNTHETIC_FIRST_BYTES").decode()})
         assert first.status_code == 200, first.text
         rejected = client.post("/api/myreports", json={"name": "synthetic-rejected.html", "content_b64": base64.b64encode(b"SYNTHETIC_REJECTED_BYTES").decode()})
@@ -110,6 +119,8 @@ if __name__ == "__main__":
         assert calendar.status_code == 200 and calendar.json()["data"]["universe"]["status"] == "EMPTY", calendar.text
         assert client.get("/api/research-events?date_from=2000-01-01&date_to=2000-01-02").status_code == 422
         assert not violations, violations
+    if verification_loop is not None:
+        assert verification_loop.is_closed(), "TestClient must close its preinitialized loop"
     # Explicit guard probes run only in this verification subprocess, never the
     # browser harness. Preserve their count rather than silently clearing it.
     for action in (lambda: socket.create_connection(("example.invalid", 80)), lambda: open(ROOT.parent / "forbidden-probe", "w"), lambda: socket.getaddrinfo("example.invalid", 80)):
