@@ -20,7 +20,9 @@ export function ancillaryReply(method, path, search = "") {
     "/api/campaigns": { data: [] },
   };
   if (!search && Object.hasOwn(common, path)) return common[path];
-  if (path === "/api/market/bk11-history" && search === "?days=5") return { status: "empty", latest: null, items: [], limitations: [] };
+  if (path === "/api/market/bk11-history" && search === "?days=5") return { schema_version: "bk11_history.v0.1", status: "empty", window: { requested: 5, snapshot_count: 0 }, trade_date: null, data_time: null, snapshots: [], latest: null, delta: null, summary: null, digest: null, reason_codes: [], warnings: [], limitations: [] };
+  if (path === "/api/market/cloud" && search === "?scope=all&period=today") return { data: { status: "unavailable", data: null, warnings: [], is_stale: false } };
+  if (path === "/api/ai-results/daily_review_ai" && search === "?trade_date=2026-10-08") return { data: null };
   if (path === "/api/native-intel/items" && search === "?limit=40&order_by=last_seen") return { status: "normal", items: [] };
   if (path === "/api/native-intel/trending" && search === "?window_hours=24&top_n=20") return { status: "normal", entities: [] };
   return null;

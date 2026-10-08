@@ -27,7 +27,18 @@ test("ancillary startup reads are inert typed fixtures with no poll/quote/campai
   for (const path of ["/api/daily-review", "/api/market/northbound", "/api/watchlist", "/api/native-intel/status", "/api/radar", "/api/decision-inbox", "/api/campaigns"]) {
     assert.ok(ancillaryReply("GET", path)); assert.equal(ancillaryReply("POST", path), null); assert.equal(ancillaryReply("GET", path, "?refresh=true"), null);
   }
-  for (const [path, search] of [["/api/market/bk11-history", "?days=5"], ["/api/native-intel/items", "?limit=40&order_by=last_seen"], ["/api/native-intel/trending", "?window_hours=24&top_n=20"]]) assert.ok(ancillaryReply("GET", path, search));
+  for (const [path, search] of [["/api/market/cloud", "?scope=all&period=today"], ["/api/ai-results/daily_review_ai", "?trade_date=2026-10-08"], ["/api/market/bk11-history", "?days=5"], ["/api/native-intel/items", "?limit=40&order_by=last_seen"], ["/api/native-intel/trending", "?window_hours=24&top_n=20"]]) {
+    assert.ok(ancillaryReply("GET", path, search));
+    assert.equal(ancillaryReply("POST", path, search), null);
+    assert.equal(ancillaryReply("GET", path), null);
+    assert.equal(ancillaryReply("GET", path, search + "&refresh=true"), null);
+  }
+  const bk = ancillaryReply("GET", "/api/market/bk11-history", "?days=5");
+  assert.deepEqual(bk.window, { requested: 5, snapshot_count: 0 });
+  for (const key of ["snapshots", "reason_codes", "warnings", "limitations"]) assert.deepEqual(bk[key], []);
+  const cloud = ancillaryReply("GET", "/api/market/cloud", "?scope=all&period=today").data;
+  assert.equal(cloud.status, "unavailable"); assert.equal(cloud.data, null); assert.deepEqual(cloud.warnings, []);
+  assert.equal(ancillaryReply("GET", "/api/ai-results/daily_review_ai", "?trade_date=2026-10-08").data, null);
   assert.equal(ancillaryReply("GET", "/api/unknown"), null);
 });
 test("history observation preserves native signals and records actual JSON parsing", async () => {
