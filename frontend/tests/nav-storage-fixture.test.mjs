@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import vm from "node:vm";
-import { injectStorageFailure, nativeStorageProbe, scenarios } from "./e2e/nav-storage.browser.mjs";
+import { injectStorageFailure, nativeStorageProbe, scenarios, navigationReply } from "./e2e/nav-storage.browser.mjs";
 
 function fixture(scenario) {
   const values = new Map([["vr-sidebar", "collapsed"]]);
@@ -39,4 +39,18 @@ test("native policy mode does not inject denial; browser must independently prov
   }
   assert.equal(scenarios.length, 8);
   assert.equal(new Set(scenarios).size, 8);
+});
+
+test("navigation fixture whitelists only two reads and never requests automatic refresh", () => {
+  assert.deepEqual(navigationReply("GET", "/api/thesis"), { items: [], total: 0 });
+  const discovery = navigationReply("GET", "/api/screener/discovery", "?refresh=false");
+  assert.equal(navigationReply("GET", "/api/screener/discovery", "?refresh=true"), null);
+  assert.equal(navigationReply("GET", "/api/screener/discovery"), null);
+  assert.equal(discovery.cache.hit, false);
+  assert.equal(discovery.status, "unavailable");
+  assert.deepEqual(discovery.queues, { SHORT: [], SWING: [], MEDIUM: [] });
+  for (const path of ["/api/thesis", "/api/screener/discovery", "/api/valuation"]) {
+    assert.equal(navigationReply("POST", path), null);
+  }
+  assert.equal(navigationReply("GET", "/api/valuation"), null);
 });

@@ -17,6 +17,23 @@ export function injectStorageFailure(scenario) {
   if (scenario === "injected-read") Storage.prototype.getItem = () => fail("SecurityError");
   if (scenario.startsWith("injected-write")) Storage.prototype.setItem = () => fail(scenario.endsWith("quota") ? "QuotaExceededError" : "SecurityError");
 }
+export function navigationReply(method, path, search = "") {
+  if (method === "GET" && path === "/api/thesis") return { items: [], total: 0 };
+  if (method === "GET" && path === "/api/screener/discovery" && search === "?refresh=false") return {
+    schema_version: "full-market-discovery.v0.1", status: "unavailable",
+    as_of: null, fetched_at: "2026-10-08T00:00:00Z", last_successful_at: null,
+    refresh_attempted_at: null, market_context: { status: "unavailable",
+      core_universe_count: 0, outside_core_count: 0, sector_count: 0,
+      market_average_change_pct: null, amount_median: null,
+      turnover_active_threshold: null, source_ref: "synthetic:unavailable" },
+    funnel: { core_universe: 0, cheap_scan_passed: 0, qualification_candidates: 0,
+      queue_items: { SHORT: 0, SWING: 0, MEDIUM: 0 }, excluded: 0 },
+    datasets: [], queues: { SHORT: [], SWING: [], MEDIUM: [] }, excluded: [],
+    limitations: ["Synthetic navigation fixture; no market data"],
+    cache: { hit: false, age_seconds: 0, refresh_failed: false },
+  };
+  return null;
+}
 export function nativeStorageProbe() {
   try { localStorage.getItem("vr-sidebar"); return "available"; }
   catch (error) { return error.name; }
@@ -71,9 +88,8 @@ async function runScenario(browser, baseURL, width, scenario, evidenceDir) {
     if (url.origin !== baseURL) { external.push(url.origin); return route.abort(); }
     if (url.pathname.startsWith("/api/")) {
       requests.push(`${request.method()} ${url.pathname}`);
-      if (request.method() === "GET" && url.pathname === "/api/thesis") {
-        return route.fulfill({ json: { items: [], total: 0 } });
-      }
+      const reply = navigationReply(request.method(), url.pathname, url.search);
+      if (reply) return route.fulfill({ json: reply });
       unexpected.push(`${request.method()} ${url.pathname}`);
       return route.fulfill({ status: 503, json: { detail: "UNEXPECTED_SYNTHETIC_REQUEST" } });
     }
@@ -105,6 +121,7 @@ async function runScenario(browser, baseURL, width, scenario, evidenceDir) {
       await page.waitForFunction(() => document.querySelector('[data-testid="app-sidebar"]').dataset.mobileOpen === "false");
       assert.equal(await page.locator("main").getAttribute("inert"), null);
     }
+    if (primary === "/screener") await page.getByTestId("discovery-results-status").waitFor();
     if (primary === "/thesis") await page.getByText("还没有投资逻辑", { exact: false }).waitFor();
     await page.getByTestId("section-nav").locator(`a[href="${path}"]`).click();
     await page.waitForURL(`**${path}`);
@@ -160,8 +177,8 @@ async function runScenario(browser, baseURL, width, scenario, evidenceDir) {
     await page.reload();
     await page.getByRole("heading", { name: "研究记录", exact: true }).waitFor();
     await desktopState(readDenied ? false : writeDenied ? true : !initialCollapsed);
-    assert.deepEqual(unexpected, [], "only the synthetic thesis-list read is allowed");
-    assert.deepEqual(requests, ["GET /api/thesis"], "one sidebar library navigation read; no stock/provider request");
+    assert.deepEqual(unexpected, [], "only the two synthetic navigation reads are allowed");
+    assert.deepEqual(requests, ["GET /api/screener/discovery", "GET /api/thesis"], "exactly two synthetic navigation reads; no stock/provider request");
     assert.deepEqual(external, [], "no external network or WebSocket attempts");
     assert.deepEqual(errors, [], "no uncaught page or console errors");
     return { scenario, width, status: "PASS", nativeProbe, observedProbe, requests,
@@ -180,7 +197,7 @@ async function main() {
   const git = arg => execFileSync("git", ["rev-parse", arg], { cwd: frontend, encoding: "utf8" }).trim();
   const result = { checkoutHead: git("HEAD"), checkoutTree: git("HEAD^{tree}"),
     frontendSourceTree: git("HEAD:frontend/src"), pullRequestHead: process.env.NAV_PR_HEAD || null,
-    boundary: "Native temporary-profile cookie policy separately probed; injected exceptions labelled; production UI, only synthetic thesis-list read, no backend/model/market requests; mobile drawer and desktop persistence controls", results: [] };
+    boundary: "Native temporary-profile cookie policy separately probed; injected exceptions labelled; production UI, two synthetic navigation reads, no backend/model/live-market requests; mobile drawer and desktop persistence controls", results: [] };
   let browser, server;
   try {
     assert.ok(existsSync(join(dist, "index.html")), "Run npm run build first");
