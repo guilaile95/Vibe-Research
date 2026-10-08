@@ -55,7 +55,9 @@ async function runScenario(browser, baseURL, width, scenario, evidenceDir) {
     writeFileSync(join(profile, "Default", "Preferences"), JSON.stringify({
       profile: { default_content_setting_values: { cookies: 2 } },
     }));
-    context = await chromium.launchPersistentContext(profile, { ...launchOptions(), baseURL,
+    // Profile content settings require full Chromium, not the default headless shell.
+    // https://playwright.dev/docs/browsers#chromium-new-headless-mode
+    context = await chromium.launchPersistentContext(profile, { ...launchOptions(), channel: "chromium", baseURL,
       viewport: { width, height: 960 }, serviceWorkers: "block" });
   } else context = await browser.newContext({ baseURL, viewport: { width, height: 960 }, serviceWorkers: "block" });
   page = await context.newPage();
@@ -187,10 +189,16 @@ async function main() {
     server = await staticServer();
     const baseURL = `http://127.0.0.1:${server.address().port}`;
     for (const width of [1440, 390]) for (const scenario of scenarios) {
-      result.results.push(await runScenario(browser, baseURL, width, scenario, evidenceDir));
-      console.log(`[NAV] ${scenario} ${width}px PASS`);
+      try {
+        result.results.push(await runScenario(browser, baseURL, width, scenario, evidenceDir));
+        console.log(`[NAV] ${scenario} ${width}px PASS`);
+      } catch (error) {
+        result.results.push({ scenario, width, status: "FAIL", error: error.message });
+        console.error(`[NAV] ${scenario} ${width}px FAIL: ${error.message}`);
+      }
     }
     assert.equal(result.results.length, 16);
+    assert.equal(result.results.filter(row => row.status !== "PASS").length, 0, "every storage scenario must pass");
     console.log("[NAV] 16/16 PASS");
   } catch (error) { result.error = error.message; throw error; }
   finally {
