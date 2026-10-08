@@ -355,6 +355,24 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Run final original-family acceptance E2E
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          PYTHON: python
+          FINAL_FAMILIES_EVIDENCE_DIR: ${{ runner.temp }}/final-families-evidence
+          FINAL_FAMILIES_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: npm run test:e2e:final-families
+
+      - name: Preserve final original-family evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: final-families-evidence
+          path: ${{ runner.temp }}/final-families-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
   e2e-intel-digest-smoke:
     name: Playwright Intel digest E2E
     runs-on: ubuntu-latest
