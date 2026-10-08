@@ -338,6 +338,23 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Run bounded market and ledger recovery E2E
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          MARKET_LEDGER_EVIDENCE_DIR: ${{ runner.temp }}/market-ledger-evidence
+          MARKET_LEDGER_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: npm run test:e2e:market-ledger
+
+      - name: Preserve market and ledger recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: market-ledger-evidence
+          path: ${{ runner.temp }}/market-ledger-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
   e2e-intel-digest-smoke:
     name: Playwright Intel digest E2E
     runs-on: ubuntu-latest

@@ -58,7 +58,8 @@
     "test:e2e:discovery": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/discovery-workspace.browser.mjs",
     "test:e2e:ai-draft-206": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/ai-draft-206.browser.mjs",
     "test:e2e:nav-storage": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/nav-storage.browser.mjs",
-    "test:e2e:ai-settings-storage": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/ai-settings-storage.browser.mjs"
+    "test:e2e:ai-settings-storage": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/ai-settings-storage.browser.mjs",
+    "test:e2e:market-ledger": "node --import ./tests/e2e/runtime-env.mjs --experimental-strip-types tests/e2e/market-ledger.browser.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.0",
