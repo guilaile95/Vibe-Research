@@ -10,7 +10,9 @@ import sys
 import json
 import socket
 from pathlib import Path
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 ROOT = Path(os.environ["VR_FINAL_FIXTURE_ROOT"]).resolve()
 assert ROOT.is_dir()
@@ -36,12 +38,27 @@ def inside(path) -> bool:
     except (TypeError, ValueError):
         return False
 
+def sqlite_inside(path) -> bool:
+    # SQLite file: URIs name the decoded file, not a literal relative "file:"
+    # directory. Permit only production's read-only URI form; other URI modes
+    # or remote authorities fail closed before SQLite opens anything.
+    raw = os.fsdecode(path)
+    if any(ord(char) < 32 or ord(char) == 127 for char in raw):
+        return False
+    if raw.startswith("file:"):
+        uri = urlsplit(raw)
+        if uri.netloc or uri.query != "mode=ro" or uri.fragment:
+            return False
+        decoded = Path(url2pathname(uri.path))
+        return decoded.is_absolute() and inside(decoded)
+    return inside(path)
+
 def audit(event, args):
     if event == "open":
         path, mode, flags = args
         writing = (isinstance(mode, str) and any(c in mode for c in "wax+")) or (isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))
         if writing and not inside(path): reject("write_outside_fixture")
-    elif event == "sqlite3.connect" and not inside(args[0]):
+    elif event == "sqlite3.connect" and not sqlite_inside(args[0]):
         reject("sqlite_outside_fixture")
     elif event in ("os.remove", "os.rmdir", "os.mkdir") and not inside(args[0]):
         reject("filesystem_outside_fixture")
@@ -121,11 +138,19 @@ if __name__ == "__main__":
         assert not violations, violations
     if verification_loop is not None:
         assert verification_loop.is_closed(), "TestClient must close its preinitialized loop"
+    import sqlite3
+    # Exercise URI normalization on every OS, independently of upload indexing.
+    with closing(sqlite3.connect(f"{review_path.resolve().as_uri()}?mode=ro", uri=True)) as conn:
+        assert conn.execute("SELECT 1").fetchone() == (1,)
+    assert sqlite_inside(review_path.resolve().as_uri() + "?mode=ro")
+    for uri in ("file://example.invalid/fixture.db?mode=ro", "file:relative.db?mode=ro", review_path.resolve().as_uri() + "?mode=rw", review_path.resolve().as_uri() + "?mode=ro&vfs=custom", *(review_path.resolve().as_uri().replace("review.db", "re" + control + "view.db") + "?mode=ro" for control in ("\t", "\n", "\r", "\x00", "\x7f"))):
+        assert not sqlite_inside(uri), uri
+    assert not violations, violations
     # Explicit guard probes run only in this verification subprocess, never the
     # browser harness. Preserve their count rather than silently clearing it.
-    for action in (lambda: socket.create_connection(("example.invalid", 80)), lambda: open(ROOT.parent / "forbidden-probe", "w"), lambda: socket.getaddrinfo("example.invalid", 80)):
+    for action in (lambda: socket.create_connection(("example.invalid", 80)), lambda: open(ROOT.parent / "forbidden-probe", "w"), lambda: socket.getaddrinfo("example.invalid", 80), lambda: sqlite3.connect(f"{(ROOT.parent / 'forbidden-probe.db').as_uri()}?mode=ro", uri=True)):
         try: action()
         except RuntimeError: pass
         else: raise AssertionError("guard probe did not fail closed")
-    assert violations == ["socket.create_connection", "write_outside_fixture", "external_dns"], violations
+    assert violations == ["socket.create_connection", "write_outside_fixture", "external_dns", "sqlite_outside_fixture"], violations
     print(json.dumps({"result": "PASS", "actual_routes": ["upload", "history", "calendar"], "expected_guard_probes": violations}))
