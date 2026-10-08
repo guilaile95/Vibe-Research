@@ -432,22 +432,30 @@ def test_analyze_does_not_auto_save(monkeypatch):
     monkeypatch.setattr(review_history, "save_current_daily_review", save)
     monkeypatch.setattr(
         chat_layer,
-        "prepare_daily_review_messages",
-        MagicMock(return_value=[
+        "prepare_daily_review_analysis",
+        MagicMock(return_value={"review": {"status": "normal", "trade_date": "2026-07-21"}, "messages": [
             {"role": "system", "content": "s"},
             {"role": "user", "content": "u"},
-        ]),
+        ]}),
     )
 
     def _stream(*_a, **_k):
+        yield {"type": "delta", "text": "Synthetic review analysis"}
         yield {"type": "done", "trace": [], "rounds": 1}
 
+    ai_save = MagicMock(return_value={
+        "result_type": "daily_review_ai", "trade_date": "2026-07-21",
+        "schema_version": "daily_review_ai.v1", "generated_at": "2026-07-21 16:00:00",
+    })
+    monkeypatch.setattr(app_module.ai_result_service, "save_daily_review_ai", ai_save)
     monkeypatch.setattr(chat_layer, "stream_messages", _stream)
     r = client.post(
         "/api/daily-review/analyze",
         json={"llm": _LLM},
     )
     assert r.status_code == 200
+    assert [json.loads(line)["type"] for line in r.text.splitlines()] == ["delta", "done"]
+    ai_save.assert_called_once()
     save.assert_not_called()
 
 

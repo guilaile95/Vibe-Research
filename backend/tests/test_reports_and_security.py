@@ -84,10 +84,26 @@ def test_ssrf_public_mode_blocks_internal(monkeypatch):
 
 # ---- 成本负数 / 日期 ----
 
-def test_negative_cost_accepted():
+def test_negative_cost_accepted(tmp_path, monkeypatch):
+    # Exercise the real write/readback without touching a user's portfolio or
+    # fetching live quotes as a side effect of get_portfolio().
+    monkeypatch.setattr(app_module.pf, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(app_module.pf, "PF_FILE", str(tmp_path / "portfolio.json"))
+    quote_calls = []
+    def synthetic_quotes(codes):
+        quote_calls.append(codes)
+        return {"600519": {"name": "SYNTHETIC", "price": 10}}
+    monkeypatch.setattr(app_module.pf.astock, "tencent_quote", synthetic_quotes)
     r = client.post("/api/portfolio/holding", json={"code": "600519", "shares": 100, "cost": -5.5})
     assert r.status_code == 200
-    client.request("DELETE", "/api/portfolio/holding", params={"code": "600519"})  # 清理
+    holding = r.json()["data"]["holdings"][0]
+    assert holding["code"] == "600519"
+    assert holding["shares"] == 100
+    assert holding["cost"] == -5.5
+    assert quote_calls == [["600519"]]
+    deleted = client.request("DELETE", "/api/portfolio/holding", params={"code": "600519"})
+    assert deleted.status_code == 200
+    assert deleted.json()["data"]["holdings"] == []
 
 
 def test_zero_shares_rejected():
