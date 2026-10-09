@@ -1,0 +1,34 @@
+{
+  "current_generation_b_close": 14.0,
+  "fixture": "SYNTHETIC_OFFLINE_ONLY",
+  "generation_a_close": 12.0,
+  "generation_b_snapshot_id": "8fa2880bd39d63d9512ff9eb39968bdd4c9f4eede47d10ffb4aa912fc6bbbfd5",
+  "limitations": [
+    "Replay identifies the imported dataset, not what was publicly known on as_of.",
+    "No market provider, model, profitability, UI, or natural workflow is evaluated.",
+    "Snapshot IDs depend on exact Parquet bytes and manifest metadata; regenerate this demo under the installed dependency version.",
+    "Temporary fixture files are removed on exit; retain real snapshot archives and artifacts for real replay."
+  ],
+  "replayed_generation_a_close": 12.0,
+  "replayed_receipt_matches": true,
+  "saved_replay_receipt": {
+    "artifact_sha256": "edaa1f30d8b84c88c845c112982ae1a4b60963227cf6807389d60d9174d336f7",
+    "digest_scope": "normalized_bounded_response_content",
+    "engine_contract": "rdp-replay.v1",
+    "historical_public_availability": "NOT_PROVEN",
+    "parameters": {
+      "as_of": "2026-08-21",
+      "filters": [],
+      "latest": false,
+      "limit": 200,
+      "offset": 0,
+      "sort_by": "code",
+      "sort_order": "asc"
+    },
+    "query": "query_full_market",
+    "result_sha256": "8faea11e137ec9b627b80760938d777c59459e9cf570b948ef48a191c99bc21c",
+    "schema_version": "rdp-replay-receipt.v1",
+    "snapshot_id": "94f2274fc05b30e0c7ac6c93e20bbea342b4d16ed0dffa0ef72815a5e88a4355"
+  },
+  "status": "PASS"
+}

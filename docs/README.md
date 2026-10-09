@@ -42,3 +42,5 @@
 - [PA1 view ownership](PA1_VIEW_OWNERSHIP.md): asynchronous result identity and confirmed snapshot-write handling
 
 - [Trade-list read ownership](TRADE_LIST_READ_OWNERSHIP.md): applied-filter identity and stale-response protection
+
+- [RDP snapshot replay](research/RDP_SNAPSHOT_REPLAY_20261009.md): reopen an imported research generation, retain receipts, and run the offline two-generation example

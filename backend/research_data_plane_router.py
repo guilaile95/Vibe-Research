@@ -17,9 +17,11 @@ def daily_bars(
     date_to: str | None = Query(None),
     limit: int = Query(200, ge=1, le=rdp._MAX_LIMIT),
     offset: int = Query(0, ge=0),
+    snapshot_id: str | None = Query(None),
 ):
     try:
         return rdp.query_daily_bars(
+            snapshot_id=snapshot_id,
             code=code,
             date_from=date_from,
             date_to=date_to,
@@ -43,10 +45,12 @@ def full_market(
     sort_order: Literal["asc", "desc"] = Query("asc"),
     limit: int = Query(200, ge=1, le=rdp._MAX_LIMIT),
     offset: int = Query(0, ge=0),
+    snapshot_id: str | None = Query(None),
 ):
     """Bounded set-based full-market cross-section over the local RDP artifact."""
     try:
         return rdp.query_full_market(
+            snapshot_id=snapshot_id,
             as_of=as_of,
             latest=latest,
             filter_metric=filter_metric,
@@ -75,10 +79,12 @@ def patterns(
     event_type: str | None = Query(None),
     limit: int = Query(100, ge=1, le=rdp._PATTERN_MAX_LIMIT),
     offset: int = Query(0, ge=0),
+    snapshot_id: str | None = Query(None),
 ):
     """Set-based, read-only scan over the five existing technical events."""
     try:
         return rdp.query_patterns(
+            snapshot_id=snapshot_id,
             as_of=as_of,
             latest=latest,
             event_type=event_type,
@@ -97,9 +103,9 @@ def patterns(
 
 
 @router.get("/manifest")
-def manifest():
+def manifest(snapshot_id: str | None = Query(None)):
     try:
-        return rdp.read_manifest()
+        return rdp.read_manifest(snapshot_id=snapshot_id)
     except rdp.ResearchDataPlaneUnavailableError as exc:
         return rdp.build_unavailable_envelope(str(exc))
     except rdp.ResearchDataPlaneValidationError as exc:
