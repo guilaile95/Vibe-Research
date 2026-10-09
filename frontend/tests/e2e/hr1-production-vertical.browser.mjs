@@ -1,6 +1,8 @@
 /**
  * P0-HR1 REAL production vertical E2E：
- * real FastAPI（production ports，无 fake evaluator）+ isolated real backend DB
+ * real FastAPI（production authority ports，无 fake evaluator）+ isolated real backend DB
+ * Public-provider boundaries are synthetic/unavailable, with a fail-closed network audit.
+ * This is offline authority integration coverage, not live-provider quality evidence.
  * + built frontend + Chromium。
  *
  * 证明（工作单 §10-14）：
@@ -167,6 +169,7 @@ async function runE2E() {
       VR_ALLOW_ORIGINS: `http://127.0.0.1:${frontendPort}`,
       VR_DATA_DIR: tempDataDir,
       VR_REPORTS_DIR: tempDataDir,
+      VR_FACT_LAKE_ROOT: path.join(tempDataDir, "absent-fact-lake"),
       VIBE_RESEARCH_TRADE_LEDGER_DB: path.join(tempDataDir, "trade_ledger.sqlite3"),
       VIBE_RESEARCH_REVIEW_DB: path.join(tempDataDir, "review_history.db"),
       VIBE_RESEARCH_EVIDENCE_THESIS_DB: path.join(tempDataDir, "evidence_thesis.db"),
@@ -177,7 +180,7 @@ async function runE2E() {
 
     backendProc = spawn(
       py.cmd,
-      [...py.extraArgs, "app:app", "--host", "127.0.0.1", "--port", String(backendPort)],
+      [...py.extraArgs, "hr1_offline_harness_app:app", "--app-dir", __dirname, "--host", "127.0.0.1", "--port", String(backendPort)],
       { cwd: backendDir, env, stdio: ["ignore", "pipe", "pipe"] },
     );
     backendProc.stdout.on("data", (chunk) => process.stdout.write(`[backend] ${chunk}`));
@@ -432,7 +435,11 @@ async function runE2E() {
     assert.deepEqual(unexpectedConsoleErrors, [],
       `console errors: ${unexpectedConsoleErrors.join("\n")}`);
 
-    console.log("[HR1 real vertical E2E] passed.");
+    const networkAudit = await getJson(backendUrl, "/api/hr1-fixture-network-audit");
+    assert.equal(networkAudit.mode, "SYNTHETIC_PUBLIC_PROVIDERS");
+    assert.deepEqual(networkAudit.attempts, [], "HR1 must not attempt outbound network");
+
+    console.log("[HR1 real vertical E2E] passed (synthetic public providers; zero outbound attempts).");
   } finally {
     if (browser) await browser.close();
     if (backendProc) backendProc.kill();

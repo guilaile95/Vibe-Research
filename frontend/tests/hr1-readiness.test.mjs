@@ -87,3 +87,11 @@ test("failed proxy reads and bounded unsettled work cannot pass final no-write g
   await assert.rejects(pending.settle(async () => {}, 10), /reads did not settle: GET \/never-ready/);
   complete(); await backend;
 });
+
+test("HR1 uses isolated provider harness and audits outbound attempts", () => {
+  const source = readFileSync(new URL("./e2e/hr1-production-vertical.browser.mjs", import.meta.url), "utf8");
+  assert.match(source, /hr1_offline_harness_app:app/);
+  assert.match(source, /assert\.deepEqual\(networkAudit.attempts, \[\]/);
+  const harness = readFileSync(new URL("./e2e/hr1_offline_harness_app.py", import.meta.url), "utf8");
+  assert.doesNotMatch(harness, /assemble_current_decision_inbox\s*=|hard_risk_evaluator\s*=/);
+});
