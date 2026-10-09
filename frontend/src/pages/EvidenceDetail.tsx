@@ -128,6 +128,13 @@ export function EvidenceDetail() {
 
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<Partial<EvidenceRecord>>({});
+  // This token belongs to the edit session, never to a later comparison fetch.
+  const [editToken, setEditToken] = useState<string | null>(null);
+  const [conflict, setConflict] = useState(false);
+  const [latest, setLatest] = useState<EvidenceRecord | null>(null);
+  const [latestLoading, setLatestLoading] = useState(false);
+  const [latestErr, setLatestErr] = useState<string | null>(null);
+  const [latestMissing, setLatestMissing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [editErr, setEditErr] = useState<string | null>(null);
   const [temporal, setTemporal] = useState<EvidenceTemporalAuthority | null>(null);
@@ -173,7 +180,8 @@ export function EvidenceDetail() {
   }, [id]);
 
   const submitTemporalIntake = async () => {
-    if (!id) return;
+    if (!id || record?.deleted || conflict || temporalBusy) return;
+    const rid = runIdRef.current;
     setTemporalBusy(true);
     setTemporalErr(null);
     try {
@@ -187,24 +195,75 @@ export function EvidenceDetail() {
         ingested_at: toCanonicalUtc(temporalForm.ingested_at),
       };
       const result = await api.evidenceTemporalIntake(id, body);
+      if (rid !== runIdRef.current) return;
       setTemporal(result);
       setTemporalForm({
         source_identity: "", source_published_at: "", event_identity: "", event_occurred_at: "",
         observed_at: "", created_at: "", ingested_at: "",
       });
     } catch (e) {
-      setTemporalErr(e instanceof ApiError ? e.message : "保存时间元数据失败");
+      if (rid === runIdRef.current) setTemporalErr(e instanceof ApiError ? e.message : "保存时间元数据失败");
     } finally {
-      setTemporalBusy(false);
+      if (rid === runIdRef.current) setTemporalBusy(false);
     }
   };
 
   useEffect(() => {
+    // Route changes start a new record/session; late responses cannot mutate it.
+    setRecord(null);
+    setForm({});
+    setEditing(false);
+    setEditToken(null);
+    setConflict(false);
+    setLatest(null);
+    setLatestErr(null);
+    setLatestLoading(false);
+    setLatestMissing(false);
+    setBusy(false);
+    setEditErr(null);
+    setTemporal(null);
+    setTemporalErr(null);
+    setTemporalBusy(false);
+    setTemporalForm({ source_identity: "", source_published_at: "", event_identity: "", event_occurred_at: "", observed_at: "", created_at: "", ingested_at: "" });
     void load();
+    return () => { ++runIdRef.current; };
   }, [load]);
 
+  const fetchLatest = async () => {
+    if (!id) return;
+    const rid = runIdRef.current;
+    setLatestLoading(true);
+    setLatestErr(null);
+    setLatest(null);
+    try {
+      const value = await api.evidenceGet(id);
+      if (rid !== runIdRef.current) return;
+      setLatest(value);
+      setLatestMissing(Boolean(value.deleted));
+    } catch (e) {
+      if (rid !== runIdRef.current) return;
+      setLatestMissing(e instanceof ApiError && e.status === 404);
+      setLatestErr(e instanceof ApiError ? e.message : "读取最新版本失败，请重试；草稿仍已保留");
+    } finally {
+      if (rid === runIdRef.current) setLatestLoading(false);
+    }
+  };
+
+  const discardAndReload = () => {
+    if (!latest || latestLoading) return;
+    if (!confirm(editing ? "放弃全部未保存的草稿并加载最新版本？此操作不会合并或保存草稿。" : "加载最新版本？请重新核对内容后再编辑或删除。")) return;
+    setRecord(latest);
+    setForm({});
+    setEditToken(null);
+    setEditing(false);
+    setConflict(false);
+    setEditErr(null);
+    setLatest(null);
+  };
+
   const startEdit = () => {
-    if (!record) return;
+    if (!record || record.deleted || conflict || busy) return;
+    setEditToken(record.edit_token);
     setForm({
       subject_type: record.subject_type,
       subject_id: record.subject_id,
@@ -225,14 +284,16 @@ export function EvidenceDetail() {
     setForm((p) => ({ ...p, [k]: v }));
 
   const save = async () => {
-    if (!id || !record) return;
+    if (!id || !record || !editToken || busy || conflict || record.deleted) return;
     if (!form.claim?.trim()) { setEditErr("请填写证据论断"); return; }
     if (!form.source_title?.trim()) { setEditErr("请填写来源标题"); return; }
 
+    const rid = runIdRef.current;
     setBusy(true);
     setEditErr(null);
     try {
       const body: import("@/lib/api").EvidenceUpdateInput = {
+        expected_edit_token: editToken,
         evidence_type: form.evidence_type!,
         claim: form.claim.trim(),
         source_title: form.source_title.trim(),
@@ -243,26 +304,43 @@ export function EvidenceDetail() {
         confidence: form.confidence!,
       };
       const r = await api.evidenceUpdate(id, body);
+      if (rid !== runIdRef.current) return;
       setRecord(r);
       setEditing(false);
     } catch (e) {
-      setEditErr(e instanceof ApiError ? e.message : "保存失败");
+      if (rid !== runIdRef.current) return;
+      if (e instanceof ApiError && (e.status === 409 || e.status === 404)) {
+        setConflict(true);
+        setEditErr("证据已被其他操作修改或删除。你的全部草稿已保留，尚未覆盖服务器内容。");
+        await fetchLatest();
+      } else {
+        setEditErr(e instanceof ApiError ? e.message : "保存失败");
+      }
     } finally {
-      setBusy(false);
+      if (rid === runIdRef.current) setBusy(false);
     }
   };
 
   const remove = async () => {
-    if (!id || !record) return;
+    if (!id || !record || busy || conflict || record.deleted) return;
     if (!confirm(`删除证据「${record.claim.slice(0, 40)}${record.claim.length > 40 ? "…" : ""}」？\n\n证据将从当前列表移除，但历史版本中的证据快照仍会保留。`)) return;
+    const rid = runIdRef.current;
     setBusy(true);
     setEditErr(null);
     try {
-      await api.evidenceDelete(id);
+      await api.evidenceDelete(id, record.edit_token);
+      if (rid !== runIdRef.current) return;
       nav(returnTo || "/evidence");
     } catch (e) {
-      setEditErr(e instanceof ApiError ? e.message : "删除失败");
-      setBusy(false);
+      if (rid !== runIdRef.current) return;
+      if (e instanceof ApiError && (e.status === 409 || e.status === 404)) {
+        setConflict(true);
+        setEditErr("证据已变更，未执行删除。请先核对最新版本。");
+        await fetchLatest();
+      } else {
+        setEditErr(e instanceof ApiError ? e.message : "删除失败");
+      }
+      if (rid === runIdRef.current) setBusy(false);
     }
   };
 
@@ -308,13 +386,14 @@ export function EvidenceDetail() {
             <div className="flex items-center gap-2">
               <button
                 onClick={startEdit}
+                disabled={busy || conflict || Boolean(record.deleted)}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-border/50 px-3 py-1.5 text-sm text-muted-foreground hover:border-primary/40 hover:text-primary"
               >
                 <Pencil className="h-4 w-4" /> 编辑
               </button>
               <button
                 onClick={remove}
-                disabled={busy}
+                disabled={busy || conflict || Boolean(record.deleted)}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/30 px-3 py-1.5 text-sm text-muted-foreground hover:border-destructive hover:text-destructive disabled:opacity-50"
               >
                 <Trash2 className="h-4 w-4" /> 删除
@@ -328,6 +407,36 @@ export function EvidenceDetail() {
         <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
           {err}
         </div>
+      )}
+
+      {conflict && (
+        <section data-testid="evidence-edit-conflict" className="mb-4 rounded-lg border border-warning/50 p-4" role="alert">
+          <h2 className="font-medium">版本冲突：请核对后再操作</h2>
+          <p className="mt-1 text-sm">不会自动重试、合并或替换草稿。请先复制需要保留的内容，再明确放弃草稿并加载最新版本。</p>
+          {latestLoading && <p>正在读取最新版本…</p>}
+          {latestErr && <p data-testid="evidence-latest-error">{latestErr}</p>}
+          {latestMissing && <p data-testid="evidence-latest-deleted">最新证据已删除或不存在，不能继续保存或删除。当前草稿仍保留供复制。</p>}
+          {latest && (
+            <div data-testid="evidence-conflict-comparison" className="mt-3 space-y-2">
+              {([
+                ["evidence_type", "证据类型"], ["claim", "证据论断"], ["source_title", "来源标题"],
+                ["source_url", "来源 URL"], ["source_date", "来源日期"], ["accessed_at", "查阅时间"],
+                ["classification", "分类"], ["confidence", "置信度"],
+              ] as const).map(([key, label]) => (
+                <div key={key} data-testid={`evidence-compare-${key}`} className="grid gap-1 border-b border-border/30 pb-2 sm:grid-cols-2">
+                  <p className="whitespace-pre-wrap break-all text-sm">{label} · {editing ? "你的草稿" : "当前显示"}：{String((editing ? form[key] : record[key]) ?? "—")}</p>
+                  <p className="whitespace-pre-wrap break-all text-sm">最新版本：{String(latest[key] ?? "—")}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="mt-3 flex gap-3">
+            <button data-testid="evidence-refresh-latest" onClick={() => void fetchLatest()} disabled={latestLoading || busy}>重新读取最新版本</button>
+            <button data-testid="evidence-discard-reload" onClick={discardAndReload} disabled={!latest || latestLoading || busy}>
+              {editing ? "放弃草稿并加载最新版本" : "加载最新版本"}
+            </button>
+          </div>
+        </section>
       )}
 
       <GlassCard>
@@ -409,16 +518,16 @@ export function EvidenceDetail() {
                 </div>
               )}
               <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label className={labelCls}>Source identity<input value={temporalForm.source_identity} onChange={(e) => setTemporalForm((p) => ({ ...p, source_identity: e.target.value }))} className={inputCls} placeholder="asserted source identity" /></label>
-                <label className={labelCls}>Source published at<input type="text" value={temporalForm.source_published_at} onChange={(e) => setTemporalForm((p) => ({ ...p, source_published_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
-                <label className={labelCls}>Event identity<input value={temporalForm.event_identity} onChange={(e) => setTemporalForm((p) => ({ ...p, event_identity: e.target.value }))} className={inputCls} placeholder="asserted event identity" /></label>
-                <label className={labelCls}>Event occurred at<input type="text" value={temporalForm.event_occurred_at} onChange={(e) => setTemporalForm((p) => ({ ...p, event_occurred_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
-                <label className={labelCls}>Observed at<input type="text" value={temporalForm.observed_at} onChange={(e) => setTemporalForm((p) => ({ ...p, observed_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
-                <label className={labelCls}>Created at<input type="text" value={temporalForm.created_at} onChange={(e) => setTemporalForm((p) => ({ ...p, created_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
-                <label className={labelCls}>Ingested at<input type="text" value={temporalForm.ingested_at} onChange={(e) => setTemporalForm((p) => ({ ...p, ingested_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
+                <div className={labelCls}><label htmlFor="evidence-detail-temporalForm-source-identity">Source identity</label><input id="evidence-detail-temporalForm-source-identity" value={temporalForm.source_identity} onChange={(e) => setTemporalForm((p) => ({ ...p, source_identity: e.target.value }))} className={inputCls} placeholder="asserted source identity" /></div>
+                <div className={labelCls}><label htmlFor="evidence-detail-temporalForm-source-published-at">Source published at</label><input id="evidence-detail-temporalForm-source-published-at" type="text" value={temporalForm.source_published_at} onChange={(e) => setTemporalForm((p) => ({ ...p, source_published_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></div>
+                <div className={labelCls}><label htmlFor="evidence-detail-temporalForm-event-identity">Event identity</label><input id="evidence-detail-temporalForm-event-identity" value={temporalForm.event_identity} onChange={(e) => setTemporalForm((p) => ({ ...p, event_identity: e.target.value }))} className={inputCls} placeholder="asserted event identity" /></div>
+                <div className={labelCls}><label htmlFor="evidence-detail-temporalForm-event-occurred-at">Event occurred at</label><input id="evidence-detail-temporalForm-event-occurred-at" type="text" value={temporalForm.event_occurred_at} onChange={(e) => setTemporalForm((p) => ({ ...p, event_occurred_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></div>
+                <div className={labelCls}><label htmlFor="evidence-detail-temporalForm-observed-at">Observed at</label><input id="evidence-detail-temporalForm-observed-at" type="text" value={temporalForm.observed_at} onChange={(e) => setTemporalForm((p) => ({ ...p, observed_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></div>
+                <div className={labelCls}><label htmlFor="evidence-detail-temporalForm-created-at">Created at</label><input id="evidence-detail-temporalForm-created-at" type="text" value={temporalForm.created_at} onChange={(e) => setTemporalForm((p) => ({ ...p, created_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></div>
+                <div className={labelCls}><label htmlFor="evidence-detail-temporalForm-ingested-at">Ingested at</label><input id="evidence-detail-temporalForm-ingested-at" type="text" value={temporalForm.ingested_at} onChange={(e) => setTemporalForm((p) => ({ ...p, ingested_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></div>
               </div>
               <p className="mt-3 text-[11px] text-muted-foreground/70">仅接受明确带 Z 的 canonical UTC 文本。提交的 metadata 不会自行成为 source authority。</p>
-              <button onClick={() => void submitTemporalIntake()} disabled={temporalBusy} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-xs text-primary hover:bg-primary/25 disabled:opacity-50">
+              <button onClick={() => void submitTemporalIntake()} disabled={temporalBusy || conflict || Boolean(record.deleted)} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-xs text-primary hover:bg-primary/25 disabled:opacity-50">
                 {temporalBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} 保存 ASSERTED / OBSERVED METADATA
               </button>
             </div>
@@ -430,10 +539,11 @@ export function EvidenceDetail() {
           </div>
         ) : (
           <div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <label className={labelCls}>
-                主体类型 <span className="text-xs text-muted-foreground/70">(只读)</span>
+            <fieldset disabled={busy} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className={labelCls}>
+                <label htmlFor="evidence-detail-form-subject-type">主体类型 <span className="text-xs text-muted-foreground/70">(只读)</span></label>
                 <select
+                  id="evidence-detail-form-subject-type"
                   value={form.subject_type ?? "stock"}
                   disabled
                   className={`${inputCls} opacity-60 cursor-not-allowed`}
@@ -442,18 +552,20 @@ export function EvidenceDetail() {
                     <option key={t.value} value={t.value}>{t.label}</option>
                   ))}
                 </select>
-              </label>
-              <label className={labelCls}>
-                主体代码/标识 <span className="text-xs text-muted-foreground/70">(只读)</span>
+              </div>
+              <div className={labelCls}>
+                <label htmlFor="evidence-detail-form-subject-id">主体代码/标识 <span className="text-xs text-muted-foreground/70">(只读)</span></label>
                 <input
+                  id="evidence-detail-form-subject-id"
                   value={form.subject_id ?? ""}
                   disabled
                   className={`${inputCls} opacity-60 cursor-not-allowed`}
                 />
-              </label>
-              <label className={labelCls}>
-                证据类型
+              </div>
+              <div className={labelCls}>
+                <label htmlFor="evidence-detail-form-evidence-type">证据类型</label>
                 <select
+                  id="evidence-detail-form-evidence-type"
                   value={form.evidence_type ?? "news"}
                   onChange={(e) => set("evidence_type", e.target.value as EvidenceRecord["evidence_type"])}
                   className={inputCls}
@@ -462,10 +574,11 @@ export function EvidenceDetail() {
                     <option key={t.value} value={t.value}>{t.label}</option>
                   ))}
                 </select>
-              </label>
-              <label className={labelCls}>
-                分类
+              </div>
+              <div className={labelCls}>
+                <label htmlFor="evidence-detail-form-classification">分类</label>
                 <select
+                  id="evidence-detail-form-classification"
                   value={form.classification ?? "fact"}
                   onChange={(e) => set("classification", e.target.value as EvidenceRecord["classification"])}
                   className={inputCls}
@@ -474,10 +587,11 @@ export function EvidenceDetail() {
                     <option key={t.value} value={t.value}>{t.label}</option>
                   ))}
                 </select>
-              </label>
-              <label className={labelCls}>
-                置信度
+              </div>
+              <div className={labelCls}>
+                <label htmlFor="evidence-detail-form-confidence">置信度</label>
                 <select
+                  id="evidence-detail-form-confidence"
                   value={form.confidence ?? "medium"}
                   onChange={(e) => set("confidence", e.target.value as EvidenceRecord["confidence"])}
                   className={inputCls}
@@ -486,52 +600,57 @@ export function EvidenceDetail() {
                     <option key={t.value} value={t.value}>{t.label}</option>
                   ))}
                 </select>
-              </label>
-              <label className={`${labelCls} sm:col-span-2`}>
-                证据论断
+              </div>
+              <div className={`${labelCls} sm:col-span-2`}>
+                <label htmlFor="evidence-detail-form-claim">证据论断</label>
                 <textarea
+                  id="evidence-detail-form-claim"
                   value={form.claim ?? ""}
                   onChange={(e) => set("claim", e.target.value)}
                   rows={4}
                   className={`${inputCls} resize-y`}
                 />
-              </label>
-              <label className={`${labelCls} sm:col-span-2`}>
-                来源标题
+              </div>
+              <div className={`${labelCls} sm:col-span-2`}>
+                <label htmlFor="evidence-detail-form-source-title">来源标题</label>
                 <input
+                  id="evidence-detail-form-source-title"
                   value={form.source_title ?? ""}
                   onChange={(e) => set("source_title", e.target.value)}
                   className={inputCls}
                 />
-              </label>
-              <label className={labelCls}>
-                来源 URL
+              </div>
+              <div className={labelCls}>
+                <label htmlFor="evidence-detail-form-source-url">来源 URL</label>
                 <input
+                  id="evidence-detail-form-source-url"
                   value={form.source_url ?? ""}
                   onChange={(e) => set("source_url", e.target.value)}
                   placeholder="https://..."
                   className={inputCls}
                 />
-              </label>
-              <label className={labelCls}>
-                来源日期
+              </div>
+              <div className={labelCls}>
+                <label htmlFor="evidence-detail-form-source-date">来源日期</label>
                 <input
+                  id="evidence-detail-form-source-date"
                   type="date"
                   value={(form.source_date as string) ?? ""}
                   onChange={(e) => set("source_date", e.target.value as any)}
                   className={inputCls}
                 />
-              </label>
-              <label className={labelCls}>
-                查阅时间
+              </div>
+              <div className={labelCls}>
+                <label htmlFor="evidence-detail-form-accessed-at">查阅时间</label>
                 <input
+                  id="evidence-detail-form-accessed-at"
                   type="datetime-local"
                   value={(form.accessed_at as string) ?? ""}
                   onChange={(e) => set("accessed_at", e.target.value as any)}
                   className={inputCls}
                 />
-              </label>
-            </div>
+              </div>
+            </fieldset>
 
             {editErr && (
               <p className="mt-3 text-sm text-destructive">{editErr}</p>
@@ -540,7 +659,7 @@ export function EvidenceDetail() {
             <div className="mt-4 flex items-center gap-2">
               <button
                 onClick={save}
-                disabled={busy}
+                disabled={busy || conflict || Boolean(record.deleted)}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
               >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
@@ -548,7 +667,7 @@ export function EvidenceDetail() {
               </button>
               <button
                 onClick={() => { setEditing(false); setEditErr(null); }}
-                disabled={busy}
+                disabled={busy || conflict || Boolean(record.deleted)}
                 className="inline-flex items-center gap-1 rounded-lg border border-border/50 px-3 py-1.5 text-sm text-muted-foreground hover:border-primary/40 disabled:opacity-50"
               >
                 <X className="h-4 w-4" /> 取消

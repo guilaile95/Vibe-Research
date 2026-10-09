@@ -780,6 +780,7 @@ async function run() {
     // Another editor changes this evidence after the user reviewed its previous version.
     const evidenceBefore = await jsonRequest(backend, `/api/evidence/${newOptionValue}`);
     const updatedEvidence = Object.fromEntries(["evidence_type", "claim", "source_title", "source_url", "source_date", "accessed_at", "classification", "confidence"].map((key) => [key, evidenceBefore[key]]));
+    updatedEvidence.expected_edit_token = evidenceBefore.edit_token;
     updatedEvidence.source_title = "渠道复核周记 v2";
     await jsonRequest(backend, `/api/evidence/${newOptionValue}`, "PUT", updatedEvidence);
     const rejected = page.waitForResponse((response) => response.url().endsWith(`/thesis/${thesisId}/deltas`) && response.request().method() === "POST" && response.status() === 409);

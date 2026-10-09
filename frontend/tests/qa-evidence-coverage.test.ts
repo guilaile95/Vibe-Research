@@ -9,7 +9,7 @@ const records = (count: number): EvidenceRecord[] => Array.from({ length: count 
   claim: `synthetic claim ${index}`, source_title: "synthetic", source_url: null,
   source_date: "2026-01-01", accessed_at: "2026-01-01T00:00:00Z", classification: "unknown",
   confidence: "low", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
-  deleted: 0, deleted_at: null,
+  deleted: 0, edit_token: "evidence-edit.v1:" + "a".repeat(64), deleted_at: null,
 }));
 
 function reader(items: EvidenceRecord[]) {

@@ -493,8 +493,13 @@ def test_confirmed_evidence_mutation_vs_freeze(db, _round_index):
     confirmed_claims = [link["claim"] for link in confirmed["evidence_links"]]
     assert confirmed_claims == ["ORIGINAL"]
 
+    # Capture the editor's displayed baseline before either writer starts.
+    # Reading inside the lambda adds a third (read-vs-write) race and does not
+    # model the optimistic-concurrency contract exercised by this two-writer test.
+    expected_edit_token = svc.get_evidence(db, evidence_id)["edit_token"]
     results, errors = _race(
         lambda: svc.update_evidence(db, evidence_id, {
+            "expected_edit_token": expected_edit_token,
             "evidence_type": "news", "claim": "MUTATED", "source_title": "source",
             "source_url": None, "source_date": None,
             "accessed_at": "2026-01-03T00:00:00+00:00",

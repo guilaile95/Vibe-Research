@@ -127,13 +127,13 @@ class TestEvidenceHappyPath:
 
     def test_update_evidence(self, client):
         ev = _create_evidence(client)
-        r = client.put(f"/api/evidence/{ev['id']}", json=_evidence_update_payload(claim="updated"))
+        r = client.put(f"/api/evidence/{ev['id']}", json=_evidence_update_payload(claim="updated", expected_edit_token=ev["edit_token"]))
         assert r.status_code == 200
         assert r.json()["data"]["claim"] == "updated"
 
     def test_delete_evidence_with_confirm(self, client):
         ev = _create_evidence(client)
-        r = client.delete(f"/api/evidence/{ev['id']}?confirm=true")
+        r = client.delete(f"/api/evidence/{ev['id']}?confirm=true&expected_edit_token={ev['edit_token']}")
         assert r.status_code == 200
         # 软删除：仍可通过 GET 获取（含 deleted=1）
         r2 = client.get(f"/api/evidence/{ev['id']}")
@@ -647,7 +647,7 @@ class TestConfirm:
 
     def test_delete_evidence_confirm_true(self, client):
         ev = _create_evidence(client)
-        r = client.delete(f"/api/evidence/{ev['id']}?confirm=true")
+        r = client.delete(f"/api/evidence/{ev['id']}?confirm=true&expected_edit_token={ev['edit_token']}")
         assert r.status_code == 200
 
     def test_delete_thesis_confirm_false(self, client):
@@ -752,7 +752,7 @@ class TestEvidenceCascadeApi:
         })  # rev=2
 
         # 编辑证据 → 联动 revision
-        r = client.put(f"/api/evidence/{ev['id']}", json=_evidence_update_payload(claim="updated"))
+        r = client.put(f"/api/evidence/{ev['id']}", json=_evidence_update_payload(claim="updated", expected_edit_token=ev["edit_token"]))
         assert r.status_code == 200
 
         # thesis revision 应为 3
@@ -768,7 +768,7 @@ class TestEvidenceCascadeApi:
             "expected_revision": 1, "change_summary": "l",
         })  # rev=2
 
-        client.delete(f"/api/evidence/{ev['id']}?confirm=true")
+        client.delete(f"/api/evidence/{ev['id']}?confirm=true&expected_edit_token={ev['edit_token']}")
 
         r = client.get(f"/api/thesis/{tid}")
         assert r.json()["data"]["thesis"]["current_revision"] == 3
@@ -822,3 +822,35 @@ class TestDiffApi:
         thesis = _create_thesis(client)
         r = client.get(f"/api/thesis/{thesis['thesis']['id']}/diff?from=1&to=99")
         assert r.status_code == 404
+
+
+class TestEvidenceEditPreconditions:
+    def test_two_editors_update_and_delete_conflicts(self, client, isolated_db):
+        ev = _create_evidence(client)
+        payload = _evidence_update_payload(claim="Editor A", expected_edit_token=ev["edit_token"])
+        first = client.put(f"/api/evidence/{ev['id']}", json=payload)
+        assert first.status_code == 200
+        current = first.json()["data"]
+        before = svc.get_evidence(isolated_db, ev["id"])
+        stale = client.put(f"/api/evidence/{ev['id']}", json={**payload, "claim": "Editor B"})
+        assert stale.status_code == 409
+        assert "最新内容" in stale.json()["detail"]
+        deleted = client.delete(f"/api/evidence/{ev['id']}", params={"confirm": "true", "expected_edit_token": ev["edit_token"]})
+        assert deleted.status_code == 409
+        assert svc.get_evidence(isolated_db, ev["id"]) == before
+        deleted = client.delete(f"/api/evidence/{ev['id']}", params={"confirm": "true", "expected_edit_token": current["edit_token"]})
+        assert deleted.status_code == 200
+        assert deleted.json()["data"]["edit_token"] != current["edit_token"]
+        assert client.put(f"/api/evidence/{ev['id']}", json=payload).status_code == 404
+
+    @pytest.mark.parametrize("token", [None, "", True, 5, "bad", "evidence-edit.v1:" + "0" * 64 + "\n"])
+    def test_missing_and_malformed_tokens_rejected(self, client, token):
+        ev = _create_evidence(client)
+        body = _evidence_update_payload()
+        params = {"confirm": "true"}
+        if token is not None:
+            body["expected_edit_token"] = token
+            params["expected_edit_token"] = token
+        assert client.put(f"/api/evidence/{ev['id']}", json=body).status_code == 422
+        assert client.delete(f"/api/evidence/{ev['id']}", params=params).status_code == 422
+        assert client.get(f"/api/evidence/{ev['id']}").json()["data"] == ev

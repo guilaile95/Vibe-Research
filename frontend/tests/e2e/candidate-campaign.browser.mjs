@@ -237,6 +237,7 @@ const nativeIntelContext = {
 };
 
 const evidenceRecords = [{
+  edit_token: "evidence-edit.v1:" + "a".repeat(64),
   id: "evidence_financial",
   subject_type: "stock",
   subject_id: "600519",
@@ -817,6 +818,8 @@ try {
         await route.fulfill(unavailable());
         return;
       }
+      assert.equal(url.searchParams.get("confirm"), "true");
+      assert.equal(url.searchParams.get("expected_edit_token"), rec.edit_token);
       rec.deleted = 1;
       rec.deleted_at = "2026-08-30T00:00:00Z";
       await route.fulfill(ok(rec));
@@ -1333,6 +1336,7 @@ try {
   await page.waitForURL(/\/candidates\/600519$/);
 
   evidenceRecords.push({
+    edit_token: "evidence-edit.v1:" + "a".repeat(64),
     id: "evidence_native_intel",
     subject_type: "stock",
     subject_id: "600519",

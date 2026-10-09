@@ -122,7 +122,8 @@ async function runScenario(browser, baseURL, width, scenario, evidenceDir) {
       assert.equal(await page.locator("main").getAttribute("inert"), null);
     }
     if (primary === "/screener") await page.getByTestId("discovery-results-status").waitFor();
-    if (primary === "/thesis") await page.getByText("还没有投资逻辑", { exact: false }).waitFor();
+    if (primary === "/thesis") await page.locator('section[aria-labelledby="thesis-list-heading"][aria-busy="false"]')
+      .getByRole("heading", { name: "尚无投资逻辑条目", exact: true }).waitFor();
     await page.getByTestId("section-nav").locator(`a[href="${path}"]`).click();
     await page.waitForURL(`**${path}`);
   };

@@ -8,6 +8,7 @@ portfolio_advice_policy、daily_review、chat 等现有模块。
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import sqlite3
@@ -737,8 +738,24 @@ def readonly_health_snapshot(db_path: str | Path) -> Iterator[sqlite3.Connection
 # 行转换
 # ---------------------------------------------------------------------------
 
+# Explicit persisted fields only: presentation metadata must not change edit tokens.
+_EVIDENCE_EDIT_FIELDS = (
+    "id", "subject_type", "subject_id", "evidence_type", "claim", "source_title",
+    "source_url", "source_date", "accessed_at", "classification", "confidence",
+    "created_at", "updated_at", "deleted", "deleted_at",
+)
+
+
+def evidence_edit_token(row) -> str:
+    """Content precondition, not a monotonic revision or authorization credential."""
+    content = {key: row[key] for key in _EVIDENCE_EDIT_FIELDS}
+    encoded = json.dumps(content, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return "evidence-edit.v1:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 def _evidence_row_to_dict(row: sqlite3.Row) -> dict:
     return {
+        "edit_token": evidence_edit_token(row),
         "id": row["id"],
         "subject_type": row["subject_type"],
         "subject_id": row["subject_id"],

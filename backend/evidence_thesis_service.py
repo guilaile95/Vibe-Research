@@ -36,6 +36,13 @@ class EvidenceNotFoundError(LookupError):
     pass
 
 
+class EvidenceEditConflictError(RuntimeError):
+    """The caller's displayed Evidence is no longer the current stored content."""
+
+    def __init__(self):
+        super().__init__("证据已在其他页面更新，请查看最新内容后重新编辑")
+
+
 class ThesisNotFoundError(LookupError):
     pass
 
@@ -128,6 +135,12 @@ def _validate_expected_revision(value: object) -> int:
         or value <= 0
     ):
         raise ValidationError("expected_revision 必须是正整数")
+    return value
+
+
+def _validate_expected_edit_token(value: object) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"evidence-edit\.v1:[0-9a-f]{64}", value) is None:
+        raise ValidationError("expected_edit_token 缺失或格式错误，请升级客户端并重新读取证据")
     return value
 
 
@@ -399,13 +412,14 @@ def create_evidence(db_path, data: dict) -> dict:
 
     def _do(conn):
         store._insert_evidence(conn, record)
-        return record
+        return store._evidence_row_to_dict(store._get_evidence_row(conn, evidence_id))
 
     return store.write_transaction(db_path, _do)
 
 
 def update_evidence(db_path, evidence_id: str, data: dict) -> dict:
     """更新证据记录，联动更新所有非归档关联 thesis 的 revision。"""
+    expected_token = _validate_expected_edit_token(data.get("expected_edit_token"))
     if data.get("evidence_type") not in _VALID_EVIDENCE_TYPES:
         raise ValidationError(f"evidence_type 必须是 {sorted(_VALID_EVIDENCE_TYPES)} 之一")
     if not isinstance(data.get("claim"), str) or not data["claim"].strip():
@@ -443,6 +457,10 @@ def update_evidence(db_path, evidence_id: str, data: dict) -> dict:
         if int(existing["deleted"]) == 1:
             raise EvidenceNotFoundError(f"证据 {evidence_id} 已删除")
 
+        # This comparison and every dependent write share BEGIN IMMEDIATE.
+        if store.evidence_edit_token(existing) != expected_token:
+            raise EvidenceEditConflictError()
+
         store._update_evidence(conn, evidence_id, update_data)
 
         # 联动更新所有非归档关联 thesis
@@ -461,8 +479,9 @@ def update_evidence(db_path, evidence_id: str, data: dict) -> dict:
     return store.write_transaction(db_path, _do)
 
 
-def soft_delete_evidence(db_path, evidence_id: str) -> dict:
+def soft_delete_evidence(db_path, evidence_id: str, expected_edit_token: str | None = None) -> dict:
     """软删除证据，联动更新所有非归档关联 thesis 的 revision。"""
+    expected_token = _validate_expected_edit_token(expected_edit_token)
     now = _utc_now_iso()
 
     def _do(conn):
@@ -471,6 +490,9 @@ def soft_delete_evidence(db_path, evidence_id: str) -> dict:
             raise EvidenceNotFoundError(f"证据 {evidence_id} 不存在")
         if int(existing["deleted"]) == 1:
             raise EvidenceNotFoundError(f"证据 {evidence_id} 已删除")
+
+        if store.evidence_edit_token(existing) != expected_token:
+            raise EvidenceEditConflictError()
 
         store._soft_delete_evidence(conn, evidence_id, now)
 

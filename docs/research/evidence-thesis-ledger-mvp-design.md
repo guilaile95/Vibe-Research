@@ -1,5 +1,7 @@
 # 投资逻辑与证据账本 — MVP 技术设计（草案 v3）
 
+> Current Evidence edit/delete preconditions: [2026-10-09 contract and client migration](EVIDENCE_EDIT_CONFLICT_20261009.md). The original design below predates this protection.
+
 > 状态：**设计草案 v3，非最终定案**。所有字段、表结构和 API 路由均为候选提案，需通过审查后方可进入实现阶段。
 > （2026-08-07 更新：Evidence Thesis 已实现并上线，本文件保留为历史设计稿）
 >

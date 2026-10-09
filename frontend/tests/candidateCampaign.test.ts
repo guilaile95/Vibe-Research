@@ -107,7 +107,7 @@ test("Evidence gap is an inventory projection and keeps uncovered categories vis
     created_at: "2026-08-01T00:00:00Z",
     updated_at: "2026-08-01T00:00:00Z",
     deleted: 0,
-    deleted_at: null,
+    edit_token: "evidence-edit.v1:" + "a".repeat(64), deleted_at: null,
   });
   const records = [record("financial_filing"), record("news")];
   assert.deepEqual(summarizeCandidateEvidence(records).map(({ key, count, gap }) => ({ key, count, gap })), [
@@ -358,7 +358,7 @@ test("findEvidenceBySourceUrl is a frontend ledger lookup and ignores deleted or
       created_at: "2026-08-27T10:00:00Z",
       updated_at: "2026-08-27T10:00:00Z",
       deleted: 0,
-      deleted_at: null,
+      edit_token: "evidence-edit.v1:" + "a".repeat(64), deleted_at: null,
     },
     {
       id: "evidence_deleted",
@@ -375,7 +375,7 @@ test("findEvidenceBySourceUrl is a frontend ledger lookup and ignores deleted or
       created_at: "2026-08-01T00:00:00Z",
       updated_at: "2026-08-01T00:00:00Z",
       deleted: 1,
-      deleted_at: "2026-08-02T00:00:00Z",
+      edit_token: "evidence-edit.v1:" + "a".repeat(64), deleted_at: "2026-08-02T00:00:00Z",
     },
   ];
   assert.equal(findEvidenceBySourceUrl(records, "https://example.com/native-intel-maotai")?.id, "evidence_keep");

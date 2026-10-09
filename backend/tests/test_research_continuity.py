@@ -239,6 +239,7 @@ def test_persisted_chain_proves_supported_changes_from_real_authorities(tmp_path
         _decision_payload(campaign, thesis_id, frozen["frozen_revision"], original["id"]),
     )
     evidence_thesis_service.update_evidence(evidence_db, original["id"], {
+        "expected_edit_token": original["edit_token"],
         "evidence_type": "news", "claim": "利润增长", "source_title": "来源 B",
         "source_url": "https://b.test", "source_date": "2026-08-02",
         "accessed_at": "2026-08-02T01:00:00Z", "classification": "fact",

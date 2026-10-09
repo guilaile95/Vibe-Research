@@ -3,7 +3,7 @@ import test from "node:test";
 import { klineResearchEvents, positionResearchEvents, researchDate } from "../src/lib/klineResearchEvents.ts";
 import type { EvidenceRecord, ResearchEventCalendarEvent } from "../src/lib/api/types.ts";
 const event = (overrides = {}): ResearchEventCalendarEvent => ({ event_id: "event-a", security_code: "000001", security_name: null, campaign_ids: ["campaign-a", "campaign-b"], event_type: "ANNOUNCEMENT", event_date: "2026-07-18", date_semantics: "DATE_ONLY", state: "OBSERVED", title: "Synthetic weekend event", details: {}, source: "fixture", source_record_identity: "record-a", fetched_at: "2026-07-20", limitations: [], ...overrides });
-const evidence = (overrides = {}): EvidenceRecord => ({ id: "evidence-a", subject_type: "stock", subject_id: "000001", evidence_type: "report", claim: "synthetic", source_title: "Synthetic evidence", source_url: null, source_date: "2026-07-20", accessed_at: "2026-07-22", classification: "fact", confidence: "high", created_at: "2026-07-22", updated_at: "2026-07-22", deleted: 0, deleted_at: null, ...overrides });
+const evidence = (overrides = {}): EvidenceRecord => ({ id: "evidence-a", subject_type: "stock", subject_id: "000001", evidence_type: "report", claim: "synthetic", source_title: "Synthetic evidence", source_url: null, source_date: "2026-07-20", accessed_at: "2026-07-22", classification: "fact", confidence: "high", created_at: "2026-07-22", updated_at: "2026-07-22", deleted: 0, edit_token: "evidence-edit.v1:" + "a".repeat(64), deleted_at: null, ...overrides });
 
 test("dates are strict calendar dates: leap dates valid; rolled/unknown/timestamps never mapped to today", () => {
   assert.equal(researchDate("2024-02-29"), "2024-02-29");

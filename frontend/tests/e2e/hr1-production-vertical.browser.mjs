@@ -1,6 +1,8 @@
 /**
  * P0-HR1 REAL production vertical E2E：
- * real FastAPI（production ports，无 fake evaluator）+ isolated real backend DB
+ * real FastAPI（production authority ports，无 fake evaluator）+ isolated real backend DB
+ * Public-provider boundaries are synthetic/unavailable, with a fail-closed network audit.
+ * This is offline authority integration coverage, not live-provider quality evidence.
  * + built frontend + Chromium。
  *
  * 证明（工作单 §10-14）：
@@ -24,6 +26,7 @@ import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { seedActiveCampaign } from "./campaign-active-fixture.mjs";
+import { waitForHr1Inbox, createHr1BackendDrain } from "./hr1-readiness.fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
@@ -166,6 +169,7 @@ async function runE2E() {
       VR_ALLOW_ORIGINS: `http://127.0.0.1:${frontendPort}`,
       VR_DATA_DIR: tempDataDir,
       VR_REPORTS_DIR: tempDataDir,
+      VR_FACT_LAKE_ROOT: path.join(tempDataDir, "absent-fact-lake"),
       VIBE_RESEARCH_TRADE_LEDGER_DB: path.join(tempDataDir, "trade_ledger.sqlite3"),
       VIBE_RESEARCH_REVIEW_DB: path.join(tempDataDir, "review_history.db"),
       VIBE_RESEARCH_EVIDENCE_THESIS_DB: path.join(tempDataDir, "evidence_thesis.db"),
@@ -176,7 +180,7 @@ async function runE2E() {
 
     backendProc = spawn(
       py.cmd,
-      [...py.extraArgs, "app:app", "--host", "127.0.0.1", "--port", String(backendPort)],
+      [...py.extraArgs, "hr1_offline_harness_app:app", "--app-dir", __dirname, "--host", "127.0.0.1", "--port", String(backendPort)],
       { cwd: backendDir, env, stdio: ["ignore", "pipe", "pipe"] },
     );
     backendProc.stdout.on("data", (chunk) => process.stdout.write(`[backend] ${chunk}`));
@@ -305,6 +309,8 @@ async function runE2E() {
     browser = await chromium.launch({ executablePath: findChromium(), headless: true });
     const page = await browser.newPage();
     const consoleErrors = [];
+    const runtimeErrors = [];
+    page.on("pageerror", error => runtimeErrors.push(error.message));
     const mutationRequests = [];
     page.on("console", (message) => {
       if (message.type() === "error") consoleErrors.push(message.text());
@@ -317,13 +323,29 @@ async function runE2E() {
     });
 
     // 真实 backend 代理：browser 的所有 /api 请求转发到 FastAPI（production ports）。
-    const proxyToBackend = (route) => {
-      const url = new URL(route.request().url());
-      return route.continue({ url: `${backendUrl}${url.pathname}${url.search}` });
+    const backendDrain = createHr1BackendDrain();
+    const proxyToBackend = async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      try {
+        await backendDrain.track(`${request.method()} ${url.pathname}`, async () => {
+          // Still real FastAPI, no fabricated payload. route.fetch lets us await
+          // backend completion even if React cancels the browser-side calendar.
+          const response = await route.fetch({ url: `${backendUrl}${url.pathname}${url.search}`, timeout: 90000 });
+          if (request.failure()) return;
+          try { await route.fulfill({ response }); }
+          catch (error) { if (!request.failure()) throw error; }
+        });
+      } catch {
+        // The drain retains the failure and rejects; this only ends transport.
+        await route.abort().catch(() => {});
+      }
     };
+    const settleBackendReads = () => backendDrain.settle(() => page.evaluate(() =>
+      new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
     await page.route("**/api/**", proxyToBackend);
 
-    await page.goto(`http://127.0.0.1:${frontendPort}/decision-inbox`, { waitUntil: "networkidle" });
+    await waitForHr1Inbox(page, () => page.goto(`http://127.0.0.1:${frontendPort}/decision-inbox`, { waitUntil: "domcontentloaded" }), [itemA, itemB]);
 
     // IA-CONVERGENCE-V1：列表-详情布局下，先选中对象，其详情（含 HardRiskPanel）才挂载。
     // 不知道对象在哪个分组时逐个切换页签并轮询实际条件，不使用固定 sleep。
@@ -379,14 +401,22 @@ async function runE2E() {
     assert.equal(panelBText.includes(`current_thesis:${campaignA.campaign_id}:`), false,
       "panel B 不得出现 Campaign A 的 provenance");
 
+    // Complete every backend read already issued, including independent calendar
+    // and next-action reads, before reload can cancel browser-side transports.
+    await settleBackendReads();
+
     // refresh 后仍来自 backend authority（重新选中后面板状态不变）
-    await page.reload({ waitUntil: "networkidle" });
+    await waitForHr1Inbox(page, () => page.reload({ waitUntil: "domcontentloaded" }), [itemA, itemB]);
     await selectInboxCampaign(campaignA.campaign_id);
     assert.equal(
       await page.locator(`[data-hard-risk-campaign="${campaignA.campaign_id}"]`)
         .getAttribute("data-hard-risk-state"),
       "CONFIRMED",
     );
+
+    // Final no-write/error assertions cover settled real backend work, not just
+    // the visible HardRiskPanel. A dependent request restarts the bounded drain.
+    await settleBackendReads();
 
     // browser 读操作零 mutation（trade / campaign / thesis / decision）
     assert.deepEqual(mutationRequests, [], `browser 不得发起写请求: ${mutationRequests.join("; ")}`);
@@ -396,6 +426,8 @@ async function runE2E() {
     assert.equal(baselineAfterBrowser, baselineBeforeRead,
       "browser load + refresh 不得产生任何 DB 写入");
 
+    assert.deepEqual(runtimeErrors, [], `runtime errors: ${runtimeErrors.join("; ")}`);
+
     // 页面无意外 console error（next-actions 404 属预期，过滤）
     const unexpectedConsoleErrors = consoleErrors.filter(
       (message) => !message.includes("404"),
@@ -403,7 +435,11 @@ async function runE2E() {
     assert.deepEqual(unexpectedConsoleErrors, [],
       `console errors: ${unexpectedConsoleErrors.join("\n")}`);
 
-    console.log("[HR1 real vertical E2E] passed.");
+    const networkAudit = await getJson(backendUrl, "/api/hr1-fixture-network-audit");
+    assert.equal(networkAudit.mode, "SYNTHETIC_PUBLIC_PROVIDERS");
+    assert.deepEqual(networkAudit.attempts, [], "HR1 must not attempt outbound network");
+
+    console.log("[HR1 real vertical E2E] passed (synthetic public providers; zero outbound attempts).");
   } finally {
     if (browser) await browser.close();
     if (backendProc) backendProc.kill();
