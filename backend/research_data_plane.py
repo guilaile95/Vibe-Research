@@ -251,11 +251,16 @@ def _write_parquet(
             )
         finally:
             connection.close()
+        # Windows _commit (os.fsync) requires a writable descriptor. Reopen only
+        # our newly written temporary file, without truncating its Parquet bytes.
+        with temp_path.open("r+b") as stream:
+            os.fsync(stream.fileno())
         digest = hashlib.sha256(temp_path.read_bytes()).hexdigest()
         target = _artifact_path(root, digest)
         created = not target.exists()
         if created:
             os.replace(temp_path, target)
+            _sync_directory(artifact_dir)
         else:
             temp_path.unlink()
     except Exception:
@@ -274,7 +279,7 @@ def import_csv(
     rows = _read_csv(source)
     root_path = resolve_root(root)
     root_path.mkdir(parents=True, exist_ok=True)
-    artifact, digest, artifact_created = _write_parquet(root_path, rows)
+    artifact, digest, _ = _write_parquet(root_path, rows)
     dates = [row[1] for row in rows]
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -293,19 +298,121 @@ def import_csv(
         "imported_at": imported_at or _utc_now(),
         "update_semantics": "immutable_artifact_per_import",
     }
+    # Validate before publishing either metadata reference. Never remove an artifact
+    # on rollback: another immutable snapshot/import may already reference it.
+    _validate_manifest(root_path, manifest)
+    if _manifest_path(root_path).is_file():
+        read_manifest(root_path)  # archive a validated legacy current generation first
+    snapshot_id = _archive_manifest(root_path, manifest)
     manifest_path = _manifest_path(root_path)
     fd, temp_name = tempfile.mkstemp(prefix="manifest-", suffix=".json", dir=root_path)
-    os.close(fd)
     temp_manifest = Path(temp_name)
     try:
-        temp_manifest.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(_canonical_bytes(manifest))
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(temp_manifest, manifest_path)
-    except Exception:
+        _sync_directory(root_path)
+    finally:
         temp_manifest.unlink(missing_ok=True)
-        if artifact_created:
-            artifact.unlink(missing_ok=True)
-        raise
-    return manifest
+    return {**manifest, "snapshot_id": snapshot_id}
+
+
+def _sync_directory(path: Path) -> None:
+    # POSIX directory durability; Windows has atomic rename/link but no portable
+    # directory fsync. No cross-filesystem or hardware-failure guarantee is made.
+    if os.name == "posix":
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def _canonical_bytes(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False, allow_nan=False).encode("utf-8")
+
+
+def _snapshot_path(root: Path, snapshot_id: str) -> Path:
+    if not isinstance(snapshot_id, str) or not re.fullmatch(r"[0-9a-f]{64}", snapshot_id):
+        raise ResearchDataPlaneQueryValidationError("snapshot_id must be a lowercase SHA-256 digest")
+    return root / "snapshots" / f"{snapshot_id}.json"
+
+
+def _archive_manifest(root: Path, manifest: dict[str, Any]) -> str:
+    """Publish complete canonical JSON without ever overwriting an existing ID.
+
+    Call only after metadata/artifact validation. A crash before current-pointer
+    publication may leave an unused but valid snapshot, never a torn current file.
+    """
+    content = _canonical_bytes(manifest)
+    snapshot_id = hashlib.sha256(content).hexdigest()
+    path = _snapshot_path(root, snapshot_id)
+    try:
+        if path.is_file():
+            if _canonical_bytes(json.loads(path.read_text(encoding="utf-8"))) != content:
+                raise ResearchDataPlaneValidationError("research snapshot hash mismatch")
+            return snapshot_id
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _sync_directory(root)
+        fd, temp_name = tempfile.mkstemp(prefix="snapshot-", suffix=".tmp", dir=path.parent)
+    except (UnicodeError, ValueError) as exc:
+        raise ResearchDataPlaneValidationError("research snapshot manifest is invalid") from exc
+    except OSError as exc:
+        raise ResearchDataPlaneUnavailableError("research snapshot archive is unavailable") from exc
+    temporary = Path(temp_name)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, path)  # atomic create-if-absent, never replace metadata
+            _sync_directory(path.parent)
+        except FileExistsError:
+            if _canonical_bytes(json.loads(path.read_text(encoding="utf-8"))) != content:
+                raise ResearchDataPlaneValidationError("research snapshot hash mismatch")
+    except (UnicodeError, ValueError) as exc:
+        raise ResearchDataPlaneValidationError("research snapshot manifest is invalid") from exc
+    except OSError as exc:
+        raise ResearchDataPlaneUnavailableError("research snapshot archive is unavailable") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
+    return snapshot_id
+
+
+REPLAY_ENGINE_CONTRACT = "rdp-replay.v1"
+
+
+def _with_replay_receipt(result: dict[str, Any], manifest: dict[str, Any],
+                         query: str, parameters: dict[str, Any], *,
+                         digest_content: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Digest this bounded page, not a claim of historical public availability."""
+    content = {key: value for key, value in (digest_content if digest_content is not None else result).items()
+               if key not in {"fetched_at", "generated_at", "requested_as_of"}}
+    try:
+        result_digest = hashlib.sha256(_canonical_bytes(content)).hexdigest()
+    except (TypeError, ValueError) as exc:
+        raise ResearchDataPlaneValidationError("research result is not valid replay content") from exc
+    return {
+        **result,
+        "snapshot_id": manifest["snapshot_id"],
+        "next_page": ({"offset": result["next_offset"], "snapshot_id": manifest["snapshot_id"]}
+                      if result.get("next_offset") is not None else None),
+        "replay_receipt": {
+            "schema_version": "rdp-replay-receipt.v1",
+            "engine_contract": REPLAY_ENGINE_CONTRACT,
+            "snapshot_id": manifest["snapshot_id"],
+            "artifact_sha256": manifest["artifact_sha256"],
+            "query": query,
+            "parameters": parameters,
+            "result_sha256": result_digest,
+            "digest_scope": "normalized_bounded_response_content",
+            "historical_public_availability": "NOT_PROVEN",
+        },
+    }
 
 
 def _manifest_date(value: Any, field: str) -> str:
@@ -347,17 +454,35 @@ def _read_artifact_bytes(artifact: Path) -> bytes:
         raise ResearchDataPlaneUnavailableError("research dataset artifact is unreadable") from exc
 
 
-def read_manifest(root: str | Path | None = None) -> dict[str, Any]:
+def read_manifest(root: str | Path | None = None, *, snapshot_id: str | None = None) -> dict[str, Any]:
     root_path = resolve_root(root)
-    path = _manifest_path(root_path)
+    path = _snapshot_path(root_path, snapshot_id) if snapshot_id is not None else _manifest_path(root_path)
     try:
         if not path.is_file():
-            raise ResearchDataPlaneUnavailableError("research bulk dataset is not configured")
+            raise ResearchDataPlaneUnavailableError(
+                "research snapshot is unavailable" if snapshot_id is not None
+                else "research bulk dataset is not configured"
+            )
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except ResearchDataPlaneUnavailableError:
         raise
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ResearchDataPlaneUnavailableError("research dataset manifest is unreadable") from exc
+    try:
+        digest = hashlib.sha256(_canonical_bytes(manifest)).hexdigest()
+    except (TypeError, ValueError) as exc:
+        raise ResearchDataPlaneValidationError("research snapshot manifest is invalid") from exc
+    if snapshot_id is not None and digest != snapshot_id:
+        raise ResearchDataPlaneValidationError("research snapshot hash mismatch")
+    _validate_manifest(root_path, manifest)
+    # Legacy current metadata is archived only after full validation. Older orphan
+    # artifacts are never assigned invented import metadata or snapshot identities.
+    if snapshot_id is None:
+        _archive_manifest(root_path, manifest)
+    return {**manifest, "snapshot_id": digest}
+
+
+def _validate_manifest(root_path: Path, manifest: dict[str, Any]) -> None:
     if not isinstance(manifest, dict) or manifest.get("schema_version") != SCHEMA_VERSION:
         raise ResearchDataPlaneValidationError("research dataset manifest schema is invalid")
     required = {
@@ -444,7 +569,6 @@ def read_manifest(root: str | Path | None = None) -> dict[str, Any]:
         raise ResearchDataPlaneValidationError(
             "research dataset manifest metadata does not match artifact"
         )
-    return manifest
 
 
 def _validate_query(code: str | None, date_from: str | None, date_to: str | None, limit: int, offset: int) -> None:
@@ -471,6 +595,7 @@ def _validate_query(code: str | None, date_from: str | None, date_to: str | None
 def query_daily_bars(
     *,
     root: str | Path | None = None,
+    snapshot_id: str | None = None,
     code: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
@@ -478,9 +603,13 @@ def query_daily_bars(
     offset: int = 0,
 ) -> dict[str, Any]:
     _validate_query(code, date_from, date_to, limit, offset)
-    manifest = read_manifest(root)
+    manifest = read_manifest(root, snapshot_id=snapshot_id)
     root_path = resolve_root(root)
     artifact = _artifact_path(root_path, str(manifest["artifact_sha256"]))
+    replay_parameters = {
+        "code": code, "date_from": date_from, "date_to": date_to,
+        "limit": limit, "offset": offset,
+    }
     predicates: list[str] = []
     params: list[Any] = [str(artifact)]
     if code is not None:
@@ -520,7 +649,7 @@ def query_daily_bars(
         }
         for row in result
     ]
-    return {
+    return _with_replay_receipt({
         "schema_version": SCHEMA_VERSION,
         "dataset_id": manifest["dataset_id"],
         "provider_id": manifest.get("provider_id", PROVIDER_ID),
@@ -544,7 +673,7 @@ def query_daily_bars(
         "returned_rows": len(rows),
         "next_offset": offset + len(rows) if len(rows) == limit else None,
         "limitations": ["Research Runtime 数据不是 Canonical Fact Authority。"],
-    }
+    }, manifest, "query_daily_bars", replay_parameters)
 
 
 def _validate_full_market_query(
@@ -700,6 +829,7 @@ def build_full_market_unavailable_envelope(
 def query_full_market(
     *,
     root: str | Path | None = None,
+    snapshot_id: str | None = None,
     as_of: str | None = None,
     latest: bool = True,
     filter_metric: str | None = None,
@@ -735,9 +865,15 @@ def query_full_market(
         limit=limit,
         offset=offset,
     )
-    manifest = read_manifest(root)
+    manifest = read_manifest(root, snapshot_id=snapshot_id)
     root_path = resolve_root(root)
     artifact = _artifact_path(root_path, str(manifest["artifact_sha256"]))
+    replay_parameters = {
+        "as_of": as_of or manifest["coverage_end"], "latest": latest,
+        "filters": [{"metric": metric, "operator": operator, "value": value}
+                    for metric, operator, value in normalized_filters],
+        "sort_by": sort_by, "sort_order": sort_order, "limit": limit, "offset": offset,
+    }
     connection = duckdb.connect(database=":memory:")
     try:
         try:
@@ -748,10 +884,9 @@ def query_full_market(
             ).fetchone()
             target_date = target_row[0] if target_row else None
             if target_date is None:
-                return build_full_market_unavailable_envelope(
-                    "as_of 之前没有可用的研究数据",
-                    as_of=as_of,
-                )
+                return _with_replay_receipt(build_full_market_unavailable_envelope(
+                    "as_of 之前没有可用的研究数据", as_of=as_of,
+                ), manifest, "query_full_market", replay_parameters)
             target_date_text = target_date.isoformat() if hasattr(target_date, "isoformat") else str(target_date)
 
             base_cte = (
@@ -885,7 +1020,7 @@ def query_full_market(
             "status": "normal" if evaluable else "INSUFFICIENT_HISTORY",
         }
 
-    return {
+    return _with_replay_receipt({
         "schema_version": FULL_MARKET_SCHEMA_VERSION,
         "dataset_id": manifest["dataset_id"],
         "provider_id": manifest.get("provider_id", PROVIDER_ID),
@@ -918,7 +1053,7 @@ def query_full_market(
             "各指标在历史观测不足时返回 null，并标记 INSUFFICIENT_HISTORY。",
             "旧日期行保留最后观测指标并标记 STALE；市场广度仅聚合同一 as_of 日期的行。",
         ],
-    }
+    }, manifest, "query_full_market", replay_parameters)
 
 
 def _validate_pattern_query(
@@ -1192,6 +1327,7 @@ def _evaluate_pattern_record(
 def query_patterns(
     *,
     root: str | Path | None = None,
+    snapshot_id: str | None = None,
     as_of: str | None = None,
     latest: bool = True,
     event_type: str | None = None,
@@ -1211,7 +1347,7 @@ def query_patterns(
         limit=limit,
         offset=offset,
     )
-    manifest = read_manifest(root)
+    manifest = read_manifest(root, snapshot_id=snapshot_id)
     root_path = resolve_root(root)
     artifact = _artifact_path(root_path, str(manifest["artifact_sha256"]))
     registry = tuple(
@@ -1219,6 +1355,10 @@ def query_patterns(
         if selected_event_type is None or item["event_type"] == selected_event_type
     )
     cutoff = as_of or manifest["coverage_end"]
+    replay_parameters = {
+        "as_of": cutoff, "latest": latest, "event_type": selected_event_type,
+        "limit": limit, "offset": offset,
+    }
     query = """
         WITH source AS (
             SELECT
@@ -1356,19 +1496,22 @@ def query_patterns(
         "avg_volume5", "volume20_count", "avg_volume20", "volume",
     )
     if not rows_result:
-        return build_patterns_unavailable_envelope("as_of 之前没有可用的研究数据", as_of=as_of)
+        return _with_replay_receipt(
+            build_patterns_unavailable_envelope("as_of 之前没有可用的研究数据", as_of=as_of),
+            manifest, "query_patterns", replay_parameters)
     raw_rows = [dict(zip(columns, raw)) for raw in rows_result]
     meta = raw_rows[0]
     raw_row_count = int(meta["raw_row_count"] or 0)
     unique_observation_count = int(meta["unique_observation_count"] or 0)
     invalid_identity_count = int(meta["invalid_identity_count"] or 0)
     if raw_row_count == 0 or not meta["source_end"]:
-        return build_patterns_unavailable_envelope("as_of 之前没有可用的研究数据", as_of=as_of)
+        return _with_replay_receipt(
+            build_patterns_unavailable_envelope("as_of 之前没有可用的研究数据", as_of=as_of),
+            manifest, "query_patterns", replay_parameters)
     if invalid_identity_count or unique_observation_count != raw_row_count:
-        return build_patterns_unavailable_envelope(
-            "PATTERN_SOURCE_DUPLICATE_OR_INVALID_OBSERVATION_IDENTITY",
-            as_of=as_of,
-        )
+        return _with_replay_receipt(build_patterns_unavailable_envelope(
+            "PATTERN_SOURCE_DUPLICATE_OR_INVALID_OBSERVATION_IDENTITY", as_of=as_of,
+        ), manifest, "query_patterns", replay_parameters)
 
     events: list[dict[str, Any]] = []
     not_evaluable: list[dict[str, Any]] = []
@@ -1408,7 +1551,7 @@ def query_patterns(
         limitations.append("存在 NOT_EVALUABLE 技术事件；不可评估不等于未触发。")
     if selected_event_type:
         limitations.append(f"当前仅筛选 event_type={selected_event_type}。")
-    return {
+    return _with_replay_receipt({
         "schema_version": PATTERN_SCHEMA_VERSION,
         "dataset_id": manifest["dataset_id"],
         "provider_id": manifest.get("provider_id", PROVIDER_ID),
@@ -1452,7 +1595,7 @@ def query_patterns(
         "next_offset": offset + len(page) if offset + len(page) < len(events) else None,
         "formal_state_write": {"performed": False, "scope": "pattern discovery read-only"},
         "limitations": limitations,
-    }
+    }, manifest, "query_patterns", replay_parameters)
 
 
 def build_unavailable_envelope(reason: str) -> dict[str, Any]:
