@@ -256,6 +256,22 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Run manual browser-local research notes E2E
+        working-directory: frontend
+        timeout-minutes: 3
+        env:
+          MANUAL_NOTES_BROWSER_OUTPUT_DIR: ${{ runner.temp }}/manual-notes-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/manual-notes.browser.mjs
+
+      - name: Preserve synthetic manual research notes screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: manual-notes-evidence
+          path: ${{ runner.temp }}/manual-notes-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
   e2e-data-health-smoke:
     name: Playwright data health smoke E2E
     runs-on: ubuntu-latest

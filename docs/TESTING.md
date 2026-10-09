@@ -91,6 +91,22 @@ PYTHON="$(cd ../backend && pwd)/.venv/bin/python" npm run test:e2e:final-familie
 
 Linux 打包的无服务生命周期测试另见 [安装包指南](LINUX_INSTALL.md)。
 
+## Research Data Plane 固定代际回归
+
+后端开发依赖准备好后，从仓库根目录运行（Linux）：
+
+```sh
+(cd backend && .venv/bin/python -m pytest -q tests/test_research_snapshot_replay.py)
+backend/.venv/bin/python tools/research/rdp_snapshot_replay_demo.py
+```
+
+Windows 使用同一开发环境的 `backend\.venv\Scripts\python.exe`；pytest 仍从
+`backend/` 执行。第一项覆盖固定代际、损坏/缺失输入、分页与因子读取合同；
+第二项使用临时合成 CSV 演示“当前 B 与重放 A 不同、A 的回执相同”。
+它们不验证真实备份恢复，也不替代全部后端、Windows 或市场数据验收。
+实际数据的 staging 重放检查见 [本地备份与恢复](LOCAL_BACKUP_AND_RECOVERY.md)，
+[代际合同](research/RDP_SNAPSHOT_REPLAY_20261009.md) 说明完整证据边界。
+
 ## 如何记录结果
 
 - 记录 exact commit、工作区差异、命令、环境、退出状态与实际覆盖场景

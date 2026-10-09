@@ -9,6 +9,7 @@ import * as notes from "../src/lib/notes.ts";
 // Browser download/dialog behavior is independently covered by notes-backup.browser.mjs.
 function createHarness(confirm = () => true) {
   const state = [], refs = [], cleanup = [], downloads = [];
+  const events = new EventTarget();
   let cursor = 0, initialized = false;
   const react = {
     useState(initial) {
@@ -34,11 +35,14 @@ function createHarness(confirm = () => true) {
   vm.runInNewContext(source, {
     exports, require: (name) => modules[name] ?? generic, Error, DOMException, AbortController,
     Blob, confirm, console,
+    window: { addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events) },
     URL: { createObjectURL: (blob) => { downloads.push(blob); return "blob:synthetic"; }, revokeObjectURL() {} },
     document: { createElement: () => ({ click() {}, remove() {} }), body: { appendChild() {} } },
   });
   return {
     downloads,
+    storageChanged(key) { const event = new Event("storage"); Object.defineProperty(event, "key", { value: key }); events.dispatchEvent(event); },
+    notesChanged() { events.dispatchEvent(new Event(notes.NOTES_CHANGED_EVENT)); },
     render() { cursor = 0; const tree = exports.Notes(); initialized = true; return tree; },
     unmount() { cleanup.forEach((fn) => fn?.()); },
   };
@@ -162,4 +166,22 @@ test("unreadable storage does not offer destructive recovery or claim an empty c
   assert.equal(button(tree, "从备份替换损坏记录"), undefined);
   assert.equal(button(tree, "下载损坏原始数据"), undefined);
   assert.doesNotMatch(label(tree), /还没有记录/);
+});
+
+test("Notes refreshes relevant storage events and removes listeners on unmount", () => {
+  const h = createHarness();
+  assert.ok(button(h.render(), "从备份替换损坏记录"));
+  storage.set("vr-notes", JSON.stringify([restoredNote]));
+  h.storageChanged("unrelated-key");
+  assert.ok(button(h.render(), "从备份替换损坏记录"), "unrelated storage changes do not alter the list");
+  h.storageChanged("vr-notes");
+  assert.equal(button(h.render(), "从备份替换损坏记录"), undefined);
+  assert.match(label(h.render()), /恢复后的研究记录/);
+  storage.set("vr-notes", "[]");
+  h.notesChanged();
+  assert.doesNotMatch(label(h.render()), /恢复后的研究记录/);
+  h.unmount();
+  storage.set("vr-notes", corruptedRaw);
+  h.storageChanged(null);
+  assert.equal(button(h.render(), "从备份替换损坏记录"), undefined, "unmounted subscriptions cannot update state");
 });

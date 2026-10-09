@@ -118,6 +118,80 @@ class ReportEvidenceQualityTests(unittest.TestCase):
         self.assertEqual(coverage["uncovered_reports"][0]["reason"], "STALE_HIT")
         self.assertIn("CURRENT_REVENUE_80", self.context(report, self.search(report))[0])
 
+    def test_corrected_extraction_of_unchanged_source_rejects_old_hit_even_same_clock(self):
+        report = self.upload("catalyst OLD_EXTRACTION_100")
+        old = self.search(report)
+        before = self.source(report).read_bytes()
+        state = self.ft.status_map(self.root, [report])[report["id"]]
+        with patch.object(self.ft, "extract", return_value=(
+            self.ft.STATUS_SEARCHABLE, [(0, "catalyst CORRECTED_EXTRACTION_80")], None, ""
+        )):
+            self.mr.index_report_text(report["id"])
+        # A wall-clock timestamp is not a unique content version.
+        with closing(sqlite3.connect(str(self.root / self.ft.INDEX_NAME))) as conn, conn:
+            conn.execute("UPDATE report_text_index SET indexed_at=? WHERE report_id=?",
+                         (state["indexed_at"], report["id"]))
+        self.assertEqual(self.source(report).read_bytes(), before)
+        context, sources, coverage = self.context(report, old)
+        self.assertEqual(sources, [])
+        self.assertNotIn("OLD_EXTRACTION_100", context)
+        self.assertEqual(coverage["rejected_hit_count"], 1)
+        self.assertEqual(coverage["uncovered_reports"][0]["reason"], "STALE_HIT")
+        current = self.search(report)
+        self.assertEqual(current[0]["file_sha256"], old[0]["file_sha256"])
+        self.assertIn("CORRECTED_EXTRACTION_80", self.context(report, current)[0])
+
+    def test_identical_reextraction_preserves_content_identity_without_writes(self):
+        report = self.upload("catalyst first\n\nline\twith spacing")
+        old = self.search(report)
+        self.mr.index_report_text(report["id"])
+        before = {p.name: p.read_bytes() for p in self.root.iterdir()}
+        context, sources, coverage = self.context(report, old)
+        self.assertIn(old[0]["snippet"], context)
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(coverage["rejected_hit_count"], 0)
+        self.assertEqual(before, {p.name: p.read_bytes() for p in self.root.iterdir()})
+
+    def test_correction_beyond_snippet_still_invalidates_old_chunk_identity(self):
+        report = self.upload("catalyst preliminary 100. " + "background " * 70)
+        old = self.search(report)
+        changed = self.source(report).read_text() + "Correction: final 80."
+        with patch.object(self.ft, "extract", return_value=(
+            self.ft.STATUS_SEARCHABLE, [(0, changed)], None, ""
+        )):
+            self.mr.index_report_text(report["id"])
+        fresh = self.search(report)
+        self.assertEqual(old[0]["snippet"], fresh[0]["snippet"])
+        self.assertNotEqual(old[0]["chunk_sha256"], fresh[0]["chunk_sha256"])
+        self.assertEqual(self.context(report, old)[1], [])
+        self.assertEqual(len(self.context(report, fresh)[1]), 1)
+        self.assertTrue(self.context(report, fresh)[2]["excerpt_truncated"])
+
+    def test_missing_digest_changed_snippet_and_wrong_location_are_not_evidence(self):
+        report = self.upload("catalyst SOURCE_TEXT")
+        hit = self.search(report)[0]
+        for change in ({"chunk_sha256": None}, {"chunk_sha256": "wrong"},
+                       {"snippet": "catalyst UNSUPPORTED_TEXT"}, {"page": 9},
+                       {"page": True}, {"page": -1}):
+            with self.subTest(change=change):
+                context, sources, coverage = self.context(report, [{**hit, **change}])
+                self.assertEqual(sources, [])
+                self.assertNotIn("UNSUPPORTED_TEXT", context)
+                self.assertEqual(coverage["rejected_hit_count"], 1)
+                self.assertEqual(coverage["uncovered_reports"][0]["reason"], "STALE_HIT")
+
+    def test_deleted_chunk_is_rejected_without_removing_current_index(self):
+        report = self.upload("catalyst deleted extraction")
+        old = self.search(report)
+        with closing(sqlite3.connect(str(self.root / self.ft.INDEX_NAME))) as conn, conn:
+            conn.execute("DELETE FROM report_text_chunks WHERE report_id=?", (report["id"],))
+        self.assertEqual(self.ft.status_map(self.root, [report])[report["id"]]["text_index_status"],
+                         self.ft.STATUS_SEARCHABLE)
+        context, sources, coverage = self.context(report, old)
+        self.assertEqual(sources, [])
+        self.assertNotIn("deleted extraction", context)
+        self.assertEqual(coverage["uncovered_reports"][0]["reason"], "STALE_HIT")
+
     def test_extraction_exception_invalidates_old_index_then_recovers(self):
         report = self.upload("catalyst OLD_REVENUE_100")
         old = self.search(report)

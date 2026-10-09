@@ -388,6 +388,57 @@ def _snippet(text: str, terms: list[str]) -> tuple[str, bool]:
     return _SPACE_RE.sub(" ", text[start:start + 320]).strip(), start > 0 or start + 320 < len(text)
 
 
+def _chunk_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def current_search_hits(reports_dir: Path, hits: list[dict]) -> list[dict]:
+    """Revalidate supplied hit locations against one read-only index snapshot.
+
+    File identity alone cannot distinguish corrected extractions of the same
+    bytes. Bind the whole extracted chunk, including text beyond the snippet,
+    without relying on a timestamp or introducing a new index schema. Callers
+    must scope hits to selected reports and independently check source freshness.
+    This checks extraction identity, not the factual truth of extracted text.
+    """
+    if not hits:
+        return []
+    conn = _connect_readonly(reports_dir)
+    if conn is None:
+        return []
+    current = []
+    checked = {}
+    try:
+        conn.execute("BEGIN")
+        for hit in hits:
+            page = hit.get("page")
+            if page is not None and (type(page) is not int or page <= 0):
+                continue
+            key = (hit.get("report_id"), 0 if page is None else page)
+            if key not in checked:
+                row = conn.execute(
+                    """SELECT c.text, i.file_sha256 FROM report_text_chunks c
+                       JOIN report_text_index i USING(report_id)
+                       WHERE c.report_id=? AND c.page=? AND i.status=?""",
+                    (*key, STATUS_SEARCHABLE),
+                ).fetchone()
+                checked[key] = (
+                    row["file_sha256"], _chunk_sha256(row["text"]),
+                    _SPACE_RE.sub(" ", row["text"]).strip(),
+                ) if row is not None and isinstance(row["text"], str) else None
+            value = checked[key]
+            snippet = hit.get("snippet")
+            if (value is not None and hit.get("file_sha256") == value[0]
+                    and hit.get("chunk_sha256") == value[1]
+                    and isinstance(snippet, str) and snippet and snippet in value[2]):
+                current.append(hit)
+    except sqlite3.Error as exc:
+        raise ReportTextIndexCorruptedError() from exc
+    finally:
+        conn.close()
+    return current
+
+
 def search(
     reports_dir: Path,
     reports: list[dict[str, Any]],
@@ -459,6 +510,7 @@ def search(
             "snippet": snippet,
             "excerpt_truncated": excerpt_truncated,
             "file_sha256": row["file_sha256"],
+            "chunk_sha256": _chunk_sha256(row["text"]),
             "score": score,
             "publish_date": report.get("publish_date") or "",
             "institution": report.get("institution") or "",

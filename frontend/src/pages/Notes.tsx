@@ -15,9 +15,11 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { ManualResearchNote } from "@/components/notes/ManualResearchNote";
 import { Disclaimer } from "@/components/ui/Disclaimer";
 import {
   addNote,
+  NOTES_CHANGED_EVENT,
   clearNotes,
   createNotesBackupJson,
   deleteNote,
@@ -60,6 +62,13 @@ export function Notes() {
   const focusedNoteId = searchParams.get("note");
   const [notesState, setNotesState] = useState(loadNotesState);
   const { notes, corruptedRaw } = notesState;
+  useEffect(() => {
+    const refresh = () => setNotesState(loadNotesState());
+    const onStorage = (event: StorageEvent) => { if (event.key === "vr-notes" || event.key === null) refresh(); };
+    window.addEventListener(NOTES_CHANGED_EVENT, refresh);
+    window.addEventListener("storage", onStorage);
+    return () => { window.removeEventListener(NOTES_CHANGED_EVENT, refresh); window.removeEventListener("storage", onStorage); };
+  }, []);
   const [openId, setOpenId] = useState<string | null>(() => focusedNoteId);
   const filteredNotes = securityCode ? notes.filter((note) => note.research?.securityCode === securityCode) : notes;
   useEffect(() => { setOpenId(focusedNoteId); }, [focusedNoteId]);
@@ -210,7 +219,7 @@ export function Notes() {
     <div>
       <PageHeader
         title="研究记录"
-        subtitle="把 AI 复盘、今日要点和问答保存在当前浏览器中，随时回看。"
+        subtitle="保存自己的研究记录，以及 AI 复盘、今日要点和问答；下次从这里继续核对。"
         actions={(
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button
@@ -289,6 +298,21 @@ export function Notes() {
       {backupStatus && <p className="mb-3 text-xs text-success" role="status">{backupStatus}</p>}
       {backupError && backupError !== notesState.error && <p className="mb-3 text-xs text-destructive" role="alert">{backupError}</p>}
 
+      <ManualResearchNote key={securityCode} initialCode={securityCode} disabled={Boolean(notesState.error) || importing} onSaved={next => {
+        setNotes(next);
+        const created = next[0];
+        setOpenId(created.id);
+        setBackupError("");
+        setBackupStatus("研究记录已保存在当前浏览器，尚未核验。");
+        setSearchParams(current => {
+          const params = new URLSearchParams(current);
+          params.set("note", created.id);
+          if (created.research?.securityCode) params.set("security_code", created.research.securityCode);
+          else params.delete("security_code");
+          return params;
+        });
+      }} />
+
       <div className="mb-4 flex flex-wrap items-end gap-3 text-xs">
         <label>按股票代码查看
           <input value={requestedCode} placeholder="全部记录" inputMode="numeric" maxLength={6} onChange={(event) => {
@@ -304,7 +328,7 @@ export function Notes() {
         <GlassCard>
           <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
             <NotebookPen className="h-8 w-8 text-muted-foreground/40" />
-            {securityCode ? `${securityCode} 暂无关联的研究记录。旧记录没有证券标签时仍在“全部记录”中。` : <>还没有记录。在「每日复盘」「资讯雷达」或「问 AI」里点 <b className="text-foreground">「存入沉淀」</b> 保存分析结果，或从已有 JSON 备份导入。</>}
+            {securityCode ? `${securityCode} 暂无关联的研究记录。旧记录没有证券标签时仍在“全部记录”中。` : <>还没有记录。点击「新建研究记录」写下自己的看法，或在「每日复盘」「资讯雷达」或「问 AI」里点 <b className="text-foreground">「存入沉淀」</b> 保存分析结果，或从已有 JSON 备份导入。</>}
           </div>
         </GlassCard>
       ) : (
@@ -335,7 +359,7 @@ export function Notes() {
                       {n.research.question && <p>研究问题：{n.research.question}</p>}
                       {n.research.nextQuestion && <p>下次核对：{n.research.nextQuestion}</p>}
                       {n.research.sourceLinks?.length ? <ul className="space-y-1">{n.research.sourceLinks.map((source, index) => <li key={`${source.url}-${index}`}><a href={source.url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{source.title}</a></li>)}</ul> : <p className="text-muted-foreground">未保存资料链接；不能据此认为已核验来源。</p>}
-                      <Link to={n.research.returnTo || `/candidates/${n.research.securityCode}#candidate-research-note`} className="inline-block pt-1 text-primary hover:underline">回到当时的研究位置 →</Link>
+                      <Link to={n.research.returnTo || `/candidates/${n.research.securityCode}#candidate-research-note`} className="inline-block pt-1 text-primary hover:underline">{n.research.returnTo ? "回到当时的研究位置 →" : "打开该股票的候选研究 →"}</Link>
                     </div>}
                     <div className="prose prose-sm dark:prose-invert max-w-none text-foreground">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>{n.content}</ReactMarkdown>

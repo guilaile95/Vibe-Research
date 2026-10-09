@@ -643,3 +643,78 @@ class TestTotalOrdering:
         assert _by_code(baseline, "000001")["input_trade_ids"] == [
             "1" * 32, "2" * 32, "3" * 32,
         ]
+
+
+@pytest.mark.parametrize("storage_state", ["missing_file", "missing_table"])
+@pytest.mark.parametrize("trade_ids", [["1" * 32], ["invalid"], ["1" * 32, "1" * 32]])
+def test_exact_trade_set_cannot_be_proven_by_missing_storage(env, storage_state, trade_ids):
+    path = env["trade_db"]
+    if storage_state == "missing_table":
+        with sqlite3.connect(path) as conn:
+            conn.execute("CREATE TABLE unrelated_table (id INTEGER)")
+    original = path.read_bytes() if path.exists() else None
+
+    with pytest.raises(svc.PerformanceAttributionProvenanceError):
+        svc.compute_attribution_for_trade_ids(trade_ids)
+
+    # Exact-set reads must not create or repair missing ledger state.
+    assert (path.read_bytes() if path.exists() else None) == original
+
+
+@pytest.mark.parametrize("storage_state", ["missing_file", "missing_table"])
+def test_explicit_empty_trade_set_preserves_empty_result(env, storage_state):
+    if storage_state == "missing_table":
+        with sqlite3.connect(env["trade_db"]) as conn:
+            conn.execute("CREATE TABLE unrelated_table (id INTEGER)")
+    result = svc.compute_attribution_for_trade_ids([])
+    assert result["selected_trade_ids"] == []
+    assert result["selected_trade_count"] == 0
+    assert result["positions"] == []
+
+
+@pytest.mark.parametrize("exact", [False, True])
+@pytest.mark.parametrize("price", [True, False, 0, -1, float("inf"), float("nan"), "Infinity", "invalid", None, 10 ** 400])
+def test_invalid_price_inputs_cannot_produce_attribution(env, price, exact):
+    trade = _trade(fee=0)
+    _insert(env, trade)
+    with pytest.raises(ValueError):
+        if exact:
+            svc.compute_attribution_for_trade_ids([trade["trade_id"]], price_map={"000001": price})
+        else:
+            svc.compute_attribution(price_map={"000001": price})
+
+
+@pytest.mark.parametrize("price", [True, False, "Infinity", "1e309"])
+def test_api_invalid_price_does_not_freeze_snapshot(env, price):
+    _insert(env, _trade(fee=0))
+    response = TestClient(make_app()).post(
+        "/api/performance-attribution/snapshot", json={"price_map": {"000001": price}}
+    )
+    assert response.status_code == 422
+    assert svc.list_attribution_snapshots() == []
+
+
+def test_numeric_price_strings_preserve_existing_api_compatibility(env):
+    _insert(env, _trade(fee=0))
+    response = TestClient(make_app()).post(
+        "/api/performance-attribution/snapshot", json={"price_map": {"000001": "12.0"}}
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["attribution"]["totals"]["total_unrealized_pnl"] == 2000
+
+
+@pytest.mark.parametrize("raw_price", ["1e309", "NaN", "Infinity", "-Infinity"])
+def test_api_raw_nonfinite_price_returns_controlled_422_without_writes(env, raw_price):
+    _insert(env, _trade(fee=0))
+    original_ledger = env["trade_db"].read_bytes()
+    client = TestClient(make_app(), raise_server_exceptions=False)
+    response = client.post(
+        "/api/performance-attribution/snapshot",
+        content='{"price_map":{"000001":' + raw_price + '}}',
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], str)
+    assert env["trade_db"].read_bytes() == original_ledger
+    assert not env["attr_db"].exists()
+    assert svc.list_attribution_snapshots() == []
