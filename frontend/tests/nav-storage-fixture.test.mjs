@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import vm from "node:vm";
+import { readFileSync } from "node:fs";
 import { injectStorageFailure, nativeStorageProbe, scenarios, navigationReply } from "./e2e/nav-storage.browser.mjs";
 
 function fixture(scenario) {
@@ -53,4 +54,13 @@ test("navigation fixture whitelists only two reads and never requests automatic 
     assert.equal(navigationReply("POST", path), null);
   }
   assert.equal(navigationReply("GET", "/api/valuation"), null);
+});
+
+test("navigation waits for the current committed Thesis empty state", () => {
+  const browser = readFileSync(new URL("./e2e/nav-storage.browser.mjs", import.meta.url), "utf8");
+  const component = readFileSync(new URL("../src/pages/ThesisList.tsx", import.meta.url), "utf8");
+  assert.ok(component.includes('"尚无投资逻辑条目"'));
+  assert.match(browser, /section\[aria-labelledby="thesis-list-heading"\]\[aria-busy="false"\]/);
+  assert.match(browser, /getByRole\("heading", \{ name: "尚无投资逻辑条目", exact: true \}\)\.waitFor\(\)/);
+  assert.doesNotMatch(browser, /getByText\("还没有投资逻辑"/);
 });

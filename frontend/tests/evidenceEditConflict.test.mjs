@@ -41,3 +41,22 @@ test("write handlers reject conflict/deletion and late route responses", () => {
   assert.match(page, /return \(\) => \{ \+\+runIdRef.current; \}/);
   assert.match(page, /evidenceDelete\(id, record.edit_token\)/);
 });
+
+test("all EvidenceDetail controls have explicit labels outside their value/option content", () => {
+  const labels = [...page.matchAll(/<label\s+htmlFor="([^"]+)"[^>]*>([\s\S]*?)<\/label>/g)];
+  const controls = [...page.matchAll(/<(input|select|textarea)\s+id="([^"]+)"/g)];
+  assert.equal(labels.length, 17, "ten evidence fields and seven temporal metadata fields");
+  assert.equal(controls.length, 17);
+  assert.equal(new Set(labels.map(label => label[1])).size, 17, "unique label targets");
+  assert.equal(new Set(controls.map(control => control[2])).size, 17, "unique control IDs");
+  for (const label of labels) {
+    assert.doesNotMatch(label[2], /<(select|input|textarea|option)\b/);
+    assert.ok(controls.some(control => control[2] === label[1]), label[1]);
+  }
+  for (const [field, text] of Object.entries({
+    "evidence-type": "证据类型", classification: "分类", confidence: "置信度", claim: "证据论断",
+    "source-title": "来源标题", "source-url": "来源 URL", "source-date": "来源日期", "accessed-at": "查阅时间",
+  })) {
+    assert.equal(labels.find(label => label[1] === `evidence-detail-form-${field}`)?.[2].trim(), text);
+  }
+});

@@ -147,6 +147,9 @@ async function run(browser, baseURL, width, output) {
     assert.equal(await page.locator("vite-error-overlay").count(), 0);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
     assert.equal(overflow, false, "no page-level horizontal overflow");
+    const codeWidth = await form.getByLabel("主体代码/标识", { exact: true }).evaluate(element => element.getBoundingClientRect().width);
+    assert.ok(codeWidth >= 159, "subject input retains at least 10rem instead of compressing to a few characters");
+    assert.equal(await form.locator('label[for="thesis-subject-id"]').evaluate(element => element.getClientRects().length), 1, "subject label stays on one readable line");
     await page.screenshot({ path: join(output, `thesis-${width}-normal.png`), fullPage: false });
     const initialReads = requests.length;
     await form.getByLabel("主体代码/标识", { exact: true }).fill("not-applied");
@@ -245,14 +248,14 @@ async function main() {
     await new Promise((done, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", done); });
     browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } : {}) });
     const baseURL = `http://127.0.0.1:${server.address().port}`;
-    for (const width of [1440, 390]) {
+    for (const width of [1440, 390, 320]) {
       try { result.results.push(await run(browser, baseURL, width, output)); }
       catch (error) {
         result.results.push({ width, status: "FAIL", error: error.message });
         console.error(`[Thesis ${width}] ${error.stack || error.message}`);
       }
     }
-    assert.equal(result.results.filter(row => row.status !== "PASS").length, 0, "both thesis viewports must pass");
+    assert.equal(result.results.filter(row => row.status !== "PASS").length, 0, "all three thesis viewports must pass");
     console.log(JSON.stringify(result, null, 2));
   } catch (error) { result.error = error.message; throw error; }
   finally {

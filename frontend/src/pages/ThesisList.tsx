@@ -30,7 +30,7 @@ function ThesisFilters({ query, loading, onApply }: { query: Query; loading: boo
           {type && !Object.prototype.hasOwnProperty.call(SUBJECT_LABELS, type) && <option value={type}>不支持的类型</option>}
           {Object.entries(SUBJECT_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select></div>
-      <div className="min-w-0 flex-1 sm:max-w-xs"><label htmlFor="thesis-subject-id" className="text-sm">主体代码/标识</label>
+      <div className="min-w-[10rem] flex-1 sm:max-w-xs"><label htmlFor="thesis-subject-id" className="text-sm">主体代码/标识</label>
         <input id="thesis-subject-id" className={control} value={id} placeholder="如 600519" onChange={event => { setId(event.target.value); setError(null); }} aria-describedby="thesis-filter-help" /></div>
       <div><label htmlFor="thesis-status" className="text-sm">跟踪状态</label>
         <select id="thesis-status" className={control} value={status} onChange={event => { setStatus(event.target.value); setError(null); }}>

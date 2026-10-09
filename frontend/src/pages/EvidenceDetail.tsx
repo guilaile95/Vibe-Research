@@ -518,13 +518,13 @@ export function EvidenceDetail() {
                 </div>
               )}
               <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label className={labelCls}>Source identity<input value={temporalForm.source_identity} onChange={(e) => setTemporalForm((p) => ({ ...p, source_identity: e.target.value }))} className={inputCls} placeholder="asserted source identity" /></label>
-                <label className={labelCls}>Source published at<input type="text" value={temporalForm.source_published_at} onChange={(e) => setTemporalForm((p) => ({ ...p, source_published_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
-                <label className={labelCls}>Event identity<input value={temporalForm.event_identity} onChange={(e) => setTemporalForm((p) => ({ ...p, event_identity: e.target.value }))} className={inputCls} placeholder="asserted event identity" /></label>
-                <label className={labelCls}>Event occurred at<input type="text" value={temporalForm.event_occurred_at} onChange={(e) => setTemporalForm((p) => ({ ...p, event_occurred_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
-                <label className={labelCls}>Observed at<input type="text" value={temporalForm.observed_at} onChange={(e) => setTemporalForm((p) => ({ ...p, observed_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
-                <label className={labelCls}>Created at<input type="text" value={temporalForm.created_at} onChange={(e) => setTemporalForm((p) => ({ ...p, created_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
-                <label className={labelCls}>Ingested at<input type="text" value={temporalForm.ingested_at} onChange={(e) => setTemporalForm((p) => ({ ...p, ingested_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></label>
+                <div className={labelCls}><label htmlFor="evidence-detail-temporalForm-source-identity">Source identity</label><input id="evidence-detail-temporalForm-source-identity" value={temporalForm.source_identity} onChange={(e) => setTemporalForm((p) => ({ ...p, source_identity: e.target.value }))} className={inputCls} placeholder="asserted source identity" /></div>
+                <div className={labelCls}><label htmlFor="evidence-detail-temporalForm-source-published-at">Source published at</label><input id="evidence-detail-temporalForm-source-published-at" type="text" value={temporalForm.source_published_at} onChange={(e) => setTemporalForm((p) => ({ ...p, source_published_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></div>
+                <div className={labelCls}><label htmlFor="evidence-detail-temporalForm-event-identity">Event identity</label><input id="evidence-detail-temporalForm-event-identity" value={temporalForm.event_identity} onChange={(e) => setTemporalForm((p) => ({ ...p, event_identity: e.target.value }))} className={inputCls} placeholder="asserted event identity" /></div>
+                <div className={labelCls}><label htmlFor="evidence-detail-temporalForm-event-occurred-at">Event occurred at</label><input id="evidence-detail-temporalForm-event-occurred-at" type="text" value={temporalForm.event_occurred_at} onChange={(e) => setTemporalForm((p) => ({ ...p, event_occurred_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></div>
+                <div className={labelCls}><label htmlFor="evidence-detail-temporalForm-observed-at">Observed at</label><input id="evidence-detail-temporalForm-observed-at" type="text" value={temporalForm.observed_at} onChange={(e) => setTemporalForm((p) => ({ ...p, observed_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></div>
+                <div className={labelCls}><label htmlFor="evidence-detail-temporalForm-created-at">Created at</label><input id="evidence-detail-temporalForm-created-at" type="text" value={temporalForm.created_at} onChange={(e) => setTemporalForm((p) => ({ ...p, created_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></div>
+                <div className={labelCls}><label htmlFor="evidence-detail-temporalForm-ingested-at">Ingested at</label><input id="evidence-detail-temporalForm-ingested-at" type="text" value={temporalForm.ingested_at} onChange={(e) => setTemporalForm((p) => ({ ...p, ingested_at: e.target.value }))} className={inputCls} placeholder="2026-08-17T08:30:00.000000Z" /></div>
               </div>
               <p className="mt-3 text-[11px] text-muted-foreground/70">仅接受明确带 Z 的 canonical UTC 文本。提交的 metadata 不会自行成为 source authority。</p>
               <button onClick={() => void submitTemporalIntake()} disabled={temporalBusy || conflict || Boolean(record.deleted)} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-xs text-primary hover:bg-primary/25 disabled:opacity-50">
@@ -540,9 +540,10 @@ export function EvidenceDetail() {
         ) : (
           <div>
             <fieldset disabled={busy} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <label className={labelCls}>
-                主体类型 <span className="text-xs text-muted-foreground/70">(只读)</span>
+              <div className={labelCls}>
+                <label htmlFor="evidence-detail-form-subject-type">主体类型 <span className="text-xs text-muted-foreground/70">(只读)</span></label>
                 <select
+                  id="evidence-detail-form-subject-type"
                   value={form.subject_type ?? "stock"}
                   disabled
                   className={`${inputCls} opacity-60 cursor-not-allowed`}
@@ -551,18 +552,20 @@ export function EvidenceDetail() {
                     <option key={t.value} value={t.value}>{t.label}</option>
                   ))}
                 </select>
-              </label>
-              <label className={labelCls}>
-                主体代码/标识 <span className="text-xs text-muted-foreground/70">(只读)</span>
+              </div>
+              <div className={labelCls}>
+                <label htmlFor="evidence-detail-form-subject-id">主体代码/标识 <span className="text-xs text-muted-foreground/70">(只读)</span></label>
                 <input
+                  id="evidence-detail-form-subject-id"
                   value={form.subject_id ?? ""}
                   disabled
                   className={`${inputCls} opacity-60 cursor-not-allowed`}
                 />
-              </label>
-              <label className={labelCls}>
-                证据类型
+              </div>
+              <div className={labelCls}>
+                <label htmlFor="evidence-detail-form-evidence-type">证据类型</label>
                 <select
+                  id="evidence-detail-form-evidence-type"
                   value={form.evidence_type ?? "news"}
                   onChange={(e) => set("evidence_type", e.target.value as EvidenceRecord["evidence_type"])}
                   className={inputCls}
@@ -571,10 +574,11 @@ export function EvidenceDetail() {
                     <option key={t.value} value={t.value}>{t.label}</option>
                   ))}
                 </select>
-              </label>
-              <label className={labelCls}>
-                分类
+              </div>
+              <div className={labelCls}>
+                <label htmlFor="evidence-detail-form-classification">分类</label>
                 <select
+                  id="evidence-detail-form-classification"
                   value={form.classification ?? "fact"}
                   onChange={(e) => set("classification", e.target.value as EvidenceRecord["classification"])}
                   className={inputCls}
@@ -583,10 +587,11 @@ export function EvidenceDetail() {
                     <option key={t.value} value={t.value}>{t.label}</option>
                   ))}
                 </select>
-              </label>
-              <label className={labelCls}>
-                置信度
+              </div>
+              <div className={labelCls}>
+                <label htmlFor="evidence-detail-form-confidence">置信度</label>
                 <select
+                  id="evidence-detail-form-confidence"
                   value={form.confidence ?? "medium"}
                   onChange={(e) => set("confidence", e.target.value as EvidenceRecord["confidence"])}
                   className={inputCls}
@@ -595,51 +600,56 @@ export function EvidenceDetail() {
                     <option key={t.value} value={t.value}>{t.label}</option>
                   ))}
                 </select>
-              </label>
-              <label className={`${labelCls} sm:col-span-2`}>
-                证据论断
+              </div>
+              <div className={`${labelCls} sm:col-span-2`}>
+                <label htmlFor="evidence-detail-form-claim">证据论断</label>
                 <textarea
+                  id="evidence-detail-form-claim"
                   value={form.claim ?? ""}
                   onChange={(e) => set("claim", e.target.value)}
                   rows={4}
                   className={`${inputCls} resize-y`}
                 />
-              </label>
-              <label className={`${labelCls} sm:col-span-2`}>
-                来源标题
+              </div>
+              <div className={`${labelCls} sm:col-span-2`}>
+                <label htmlFor="evidence-detail-form-source-title">来源标题</label>
                 <input
+                  id="evidence-detail-form-source-title"
                   value={form.source_title ?? ""}
                   onChange={(e) => set("source_title", e.target.value)}
                   className={inputCls}
                 />
-              </label>
-              <label className={labelCls}>
-                来源 URL
+              </div>
+              <div className={labelCls}>
+                <label htmlFor="evidence-detail-form-source-url">来源 URL</label>
                 <input
+                  id="evidence-detail-form-source-url"
                   value={form.source_url ?? ""}
                   onChange={(e) => set("source_url", e.target.value)}
                   placeholder="https://..."
                   className={inputCls}
                 />
-              </label>
-              <label className={labelCls}>
-                来源日期
+              </div>
+              <div className={labelCls}>
+                <label htmlFor="evidence-detail-form-source-date">来源日期</label>
                 <input
+                  id="evidence-detail-form-source-date"
                   type="date"
                   value={(form.source_date as string) ?? ""}
                   onChange={(e) => set("source_date", e.target.value as any)}
                   className={inputCls}
                 />
-              </label>
-              <label className={labelCls}>
-                查阅时间
+              </div>
+              <div className={labelCls}>
+                <label htmlFor="evidence-detail-form-accessed-at">查阅时间</label>
                 <input
+                  id="evidence-detail-form-accessed-at"
                   type="datetime-local"
                   value={(form.accessed_at as string) ?? ""}
                   onChange={(e) => set("accessed_at", e.target.value as any)}
                   className={inputCls}
                 />
-              </label>
+              </div>
             </fieldset>
 
             {editErr && (

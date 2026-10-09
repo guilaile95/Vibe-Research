@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { thesisReply, thesisViewReady } from "./e2e/thesis-list.browser.mjs";
 
 test("thesis browser fixtures preserve filtered status and distinguish record/frozen versions", () => {
@@ -20,4 +21,12 @@ test("thesis browser readiness rejects URL-first old DOM and stale tracking stat
   for (const mismatch of [{ busy: "true" }, { status: "共 51 条 · 第 1 / 2 页 · 本页 50 条" }, { firstId: "thesis-synthetic-fast-active-0" }, { tracking: "archived" }, { applied: "已应用：个股 / fast · 已归档" }]) {
     assert.equal(thesisViewReady(expected, { ...ready, ...mismatch }), false);
   }
+});
+
+test("Thesis code field has a responsive minimum width with 320px browser coverage", () => {
+  const component = readFileSync(new URL("../src/pages/ThesisList.tsx", import.meta.url), "utf8");
+  const browser = readFileSync(new URL("./e2e/thesis-list.browser.mjs", import.meta.url), "utf8");
+  assert.match(component, /min-w-\[10rem\] flex-1 sm:max-w-xs/);
+  assert.match(browser, /\[1440, 390, 320\]/);
+  assert.match(browser, /codeWidth >= 159/);
 });
