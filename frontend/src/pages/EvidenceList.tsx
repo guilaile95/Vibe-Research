@@ -34,14 +34,14 @@ function EvidenceFilters({ query, loading, onApply, onClear }: {
   return (
     <form onSubmit={submit} aria-label="证据筛选" className="space-y-3">
       <div className="flex flex-wrap items-end gap-3">
-        <label className="flex min-w-0 flex-col gap-1.5 text-sm">
-          <span>主体类型</span>
-          <select className={controlClass} value={type} onChange={event => { setType(event.target.value); setError(null); }} aria-describedby="evidence-filter-help">
+        <div className="flex min-w-0 flex-col gap-1.5 text-sm">
+          <label htmlFor="evidence-subject-type">主体类型</label>
+          <select id="evidence-subject-type" className={controlClass} value={type} onChange={event => { setType(event.target.value); setError(null); }} aria-describedby="evidence-filter-help">
             <option value="">全部</option>
             {type && !Object.prototype.hasOwnProperty.call(EVIDENCE_SUBJECT_LABELS, type) && <option value={type}>不支持的类型</option>}
             {Object.entries(EVIDENCE_SUBJECT_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
           </select>
-        </label>
+        </div>
         <label className="flex min-w-0 flex-1 flex-col gap-1.5 text-sm sm:max-w-xs">
           <span>主体代码/标识</span>
           <input className={cn(controlClass, "w-full")} value={id} placeholder="如 600519" onChange={event => { setId(event.target.value); setError(null); }} aria-describedby="evidence-filter-help" />

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { evidenceReply } from "./e2e/evidence-list.browser.mjs";
 
 test("browser fixture has disjoint production-shaped pages and explicit missing provenance", () => {
@@ -20,4 +21,13 @@ test("browser fixture provides empty and out-of-range pages without fabricated e
     const result = evidenceReply(new URL(`http://synthetic.invalid/api/evidence?${query}`));
     assert.deepEqual(result.items, []);
   }
+});
+
+// Structural guard only; the exact accessible-name interaction is exercised by browser CI.
+test("subject select has an explicit text-only label separate from its options", () => {
+  const source = readFileSync(new URL("../src/pages/EvidenceList.tsx", import.meta.url), "utf8");
+  assert.match(source, /<label htmlFor="evidence-subject-type">主体类型<\/label>/);
+  assert.match(source, /<select id="evidence-subject-type"/);
+  const browser = readFileSync(new URL("./e2e/evidence-list.browser.mjs", import.meta.url), "utf8");
+  assert.match(browser, /getByLabel\("主体类型", \{ exact: true \}\)\.selectOption\("stock"\)/);
 });

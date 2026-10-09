@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -149,7 +150,7 @@ def insert_record(db_path: str | Path, record: dict[str, Any]) -> None:
         path = Path(db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with _connect(path) as conn:
+            with closing(_connect(path)) as conn, conn:
                 _ensure_table(conn)
                 conn.execute(_INSERT_SQL, (
                     record["trade_id"],
@@ -185,7 +186,7 @@ def get_record(db_path: str | Path, trade_id: str) -> dict[str, Any] | None:
     if not path.is_file():
         return None
     try:
-        with _connect_readonly(path) as conn:
+        with closing(_connect_readonly(path)) as conn, conn:
             table = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
                 ("trade_records",),
@@ -214,7 +215,7 @@ def list_records(
     if not path.is_file():
         return []
     try:
-        with _connect_readonly(path) as conn:
+        with closing(_connect_readonly(path)) as conn, conn:
             table = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
                 ("trade_records",),
@@ -267,7 +268,7 @@ def void_record_atomic(
         if not path.is_file():
             raise TradeNotFoundError()
         try:
-            with _connect(path) as conn:
+            with closing(_connect(path)) as conn, conn:
                 table = conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
                     ("trade_records",),
