@@ -148,3 +148,29 @@ manifest 使用逻辑相对路径，不记录源机器绝对路径。资产状�
 - `ABSENT_OPTIONAL`：可选资产不存在，因此未归档。
 
 把 staging 数据重新放回正式位置是独立的人工恢复操作。必须保持 Vibe 关闭，重新核对目标路径和环境变量；本工具不会迁移、合并或安全覆盖现有正式目录。
+
+
+## Research Data Plane：恢复后仍能重放吗
+
+完整数据包会递归收集已声明的 Research Data Plane 目录；具体 staging 位置应按
+归档 manifest 中 `research_data_plane` 资产的 `archive_prefix` 核对，通常为
+`research-data/`，与其他资产共用根目录时可能使用其分区。不要猜测源机器的绝对路径。
+
+[固定数据代际与重放回执](research/RDP_SNAPSHOT_REPLAY_20261009.md) 依赖
+`snapshots/` 中的不可变元数据和 `artifacts/` 中对应的 Parquet 文件。
+只保存 `manifest.json`、截图或 `replay_receipt` 都不能备份历史数据；归档早于该代际时，
+也不能靠回执补出缺失文件。保存回执时需保留原查询参数，并妥善保护其中的研究信息。
+
+恢复演练仍只针对 staging，保持正式服务关闭，不覆盖正式目录：
+
+1. 完成本页的 archive 验证和 staging 恢复，核对该资产不是 `ABSENT_OPTIONAL`
+2. 使用保存回执对应的同一种查询，以 staging 内的 RDP 分区作为显式 `root`，
+   传入保存的 `snapshot_id` 和原有效查询参数；不要省略 ID 后改查当前代际
+3. 在相同引擎合同和依赖环境下比较返回的 `replay_receipt`；分页回执仅覆盖原有
+   页大小、offset 与筛选条件，不是整个数据集的校验结果
+4. 未找到代际、文件损坏或回执不一致时保留失败结果，停止正式切换，不回退成“最新数据重放成功”
+
+已归档的 pinned 查询不需要当前 `manifest.json`，也不会创建新归档。
+旧数据的无 ID 当前读取则可能触发归档，因此不能把它当作无副作用的恢复核验。
+ZIP SHA-256、SQLite `quick_check` 与 RDP 重放分别验证不同层次；
+即便全部通过，也不证明历史时点的公开可得性、来源许可或投资结论。

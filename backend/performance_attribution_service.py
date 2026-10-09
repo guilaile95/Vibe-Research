@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import sqlite3
 from datetime import datetime, timezone
@@ -104,17 +105,17 @@ def _load_trades(
 ) -> list[dict[str, Any]]:
     """读取计算投影（精确输入行集）。
 
-    合法空状态（既有产品语义，保留）：
+    普通全集查询的合法空状态（既有产品语义，保留）：
     - 交易流水 DB 文件不存在
     - trade_records 表不存在
+
+    精确非空交易集查询不能使用以上空状态证明输入；缺库/缺表必须失败。
 
     一旦 trade_records 存在：任何读取/查询失败（缺列、SQLite 损坏、
     查询失败）→ PerformanceAttributionProvenanceError（fail closed）。
 
     "无法证明输入集" 绝不降级为 "已证明空输入集"。
     """
-    if not db_path.is_file():
-        return []
     requested_ids: set[str] | None = None
     if trade_ids is not None:
         requested_ids = set()
@@ -126,6 +127,13 @@ def _load_trades(
             raise PerformanceAttributionProvenanceError(
                 "精确交易集含重复 trade_id，拒绝计算"
             )
+
+    if not db_path.is_file():
+        if requested_ids:
+            raise PerformanceAttributionProvenanceError(
+                "精确交易集无法由 Trade Ledger 完整证明：交易流水库不存在"
+            )
+        return []
 
     sql = _SELECT_TRADES
     params: list[Any] = []
@@ -160,7 +168,11 @@ def _load_trades(
             ("trade_records",),
         ).fetchone()
         if table is None:
-            return []  # 既有产品语义：表缺失 = 有效空状态
+            if requested_ids:
+                raise PerformanceAttributionProvenanceError(
+                    "精确交易集无法由 Trade Ledger 完整证明：trade_records 表不存在"
+                )
+            return []  # 普通全集查询：表缺失 = 有效空状态
         rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
     except sqlite3.DatabaseError as exc:
         raise PerformanceAttributionProvenanceError(
@@ -208,6 +220,28 @@ def _computation_fingerprint(
     return hashlib.sha256(_deterministic_json(payload).encode("utf-8")).hexdigest()
 
 
+def validate_price_map(price_map: Mapping[str, float] | None) -> dict[str, float] | None:
+    """Validate original quote values before coercion or financial computation."""
+    if price_map is None:
+        return None
+    if not isinstance(price_map, Mapping):
+        raise ValueError("price_map 必须是对象")
+    prices: dict[str, float] = {}
+    for code, value in price_map.items():
+        if not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code):
+            raise ValueError("price_map 代码须为 6 位数字")
+        if isinstance(value, bool):
+            raise ValueError("price_map 价格不能是布尔值")
+        try:
+            price = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("price_map 价格须为有限正数") from exc
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError("price_map 价格须为有限正数")
+        prices[code] = price
+    return prices
+
+
 def _compute_attribution_from_trades(
     *,
     trades: list[dict[str, Any]],
@@ -216,6 +250,7 @@ def _compute_attribution_from_trades(
     price_map: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     """Compute the existing PA1 algorithm over an already proven exact row set."""
+    prices = validate_price_map(price_map) or {}
     selected_trade_ids = [row["trade_id"] for row in trades]
 
     states: dict[str, dict[str, Any]] = {}
@@ -268,14 +303,6 @@ def _compute_attribution_from_trades(
             st["remaining_qty"] = remaining - sell_qty
             st["total_cost"] -= cost_removed
             st["closed_quantity"] += sell_qty
-
-    prices: dict[str, float] = {}
-    if price_map:
-        for key, val in price_map.items():
-            try:
-                prices[str(key)] = float(val)
-            except (TypeError, ValueError):
-                continue
 
     positions: list[dict[str, Any]] = []
     for st in states.values():

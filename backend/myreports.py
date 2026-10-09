@@ -895,9 +895,32 @@ def delete_report(rid: str) -> bool:
         if hit is None:
             return False
 
-        fulltext.remove_report(REPORTS_DIR, rid)
+        index_path = _index_path()
+        index_before = index_path.read_bytes()
         new_items = [r for r in items if r.get("id") != rid]
+        # Do not discard searchable text before the authoritative archive index
+        # is safely published. A rejected delete must leave research usable.
         _save_index(new_items)
+        try:
+            fulltext.remove_report(REPORTS_DIR, rid)
+        except Exception:
+            # The archive lock still covers this rollback, so a concurrent
+            # upload/edit cannot be overwritten. Keep both the source and the
+            # pre-delete .bak intact, including when rollback itself fails.
+            rollback_tmp = _tmp_name(str(index_path))
+            try:
+                with open(rollback_tmp, "wb") as stream:
+                    stream.write(index_before)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(rollback_tmp, index_path)
+            finally:
+                if os.path.exists(rollback_tmp):
+                    try:
+                        os.remove(rollback_tmp)
+                    except OSError:
+                        pass
+            raise
 
         fp = REPORTS_DIR / f"{rid}{hit.get('ext', '')}"
         try:
@@ -1253,6 +1276,15 @@ def build_chat_report_context(
             rejected.add(hit["report_id"])
         else:
             current_hits.append(hit)
+    # The source file may be unchanged while a reindex corrects extraction.
+    # Recheck exact supplied chunks, not wall-clock extraction timestamps.
+    try:
+        verified_hits = fulltext.current_search_hits(REPORTS_DIR, current_hits)
+    except fulltext.ReportTextIndexCorruptedError:
+        verified_hits = []
+    verified_ids = {id(hit) for hit in verified_hits}
+    rejected.update(hit["report_id"] for hit in current_hits if id(hit) not in verified_ids)
+    current_hits = verified_hits
     blocks = []
     sources = []
     used_chars = 0
