@@ -1146,7 +1146,7 @@ export function StockData() {
         </>
       )}
 
-      {!val && !err && !loading && (
+      {!val && !gstock && !err && !loading && (
         <GlassCard>
           <div className="py-10 text-center text-sm text-muted-foreground">
             输入一个 6 位股票代码，拉取它的行情、估值、研报与新闻。<br />

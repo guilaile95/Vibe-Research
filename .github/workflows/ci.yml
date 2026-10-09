@@ -240,6 +240,22 @@ jobs:
           PYTHON: python
         run: npm run test:e2e:evidence-effective-time
 
+      - name: Run evidence library query and navigation E2E
+        working-directory: frontend
+        timeout-minutes: 3
+        env:
+          EVIDENCE_LIST_BROWSER_OUTPUT_DIR: ${{ runner.temp }}/evidence-list-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/evidence-list.browser.mjs
+
+      - name: Preserve synthetic evidence library screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: evidence-list-evidence
+          path: ${{ runner.temp }}/evidence-list-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
   e2e-data-health-smoke:
     name: Playwright data health smoke E2E
     runs-on: ubuntu-latest
@@ -335,6 +351,23 @@ jobs:
         with:
           name: ai-settings-storage-evidence
           path: ${{ runner.temp }}/ai-settings-storage-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Run MARKET-02 overseas empty-state regression
+        working-directory: frontend
+        timeout-minutes: 3
+        env:
+          MARKET02_EVIDENCE_DIR: ${{ runner.temp }}/market02-evidence
+          MARKET02_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: npm run test:e2e:market02-empty-state
+
+      - name: Preserve MARKET-02 regression evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: market02-evidence
+          path: ${{ runner.temp }}/market02-evidence
           if-no-files-found: ignore
           retention-days: 7
 

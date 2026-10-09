@@ -15,7 +15,7 @@
 Vibe-Research 整合公开市场数据、研究记录、持仓与账户信息、决策记录及可选的
 AI 辅助能力。它不是自动交易、荐股或收益预测系统；最终判断与执行由使用者负责。
 
-[开始运行](docs/GETTING_STARTED.md) · [文档导航](docs/README.md) · [进度与验证范围](docs/research/PROJECT_STATUS_20261002.md) · [已知限制](docs/KNOWN_ISSUES.md)
+[开始运行](docs/GETTING_STARTED.md) · [文档导航](docs/README.md) · [进度与验证入口](docs/README.md) · [已知限制](docs/KNOWN_ISSUES.md)
 
 ![每日复盘界面](docs/screenshots/daily-review.png)
 
@@ -57,10 +57,13 @@ reasoning; the user owns the final decision.
 ## 版本与当前进度
 
 公开稳定线为 [`feature/research-system-v01`](https://github.com/guilaile95/Vibe-Research/tree/feature/research-system-v01)。
-截至 2026-10-02，可靠性与研究修复 #356–#360 仍为 Draft、未合并；本地组合源码已集成，运行服务未切换。
-全功能矩阵正在补测，17 个离线 AI 案例已有准备，真实模型调用仍为 0（`NOT_EVALUATED`）；多页设计仍是原型。
+源码能力、Draft 修复、稳定版本与已启动服务分别核验；不能根据本地集成或测试通过推定已合并、已部署。
+真实市场可靠性、真实模型回答质量与自然使用价值仍需各自证据。
 
-后续公共修复、整合依赖与验收缺口见 [2026-10-04 公共集成记录](docs/research/PUBLIC_INTEGRATION_20261004.md)；[2026-10-02 状态快照](docs/research/PROJECT_STATUS_20261002.md)保留其历史身份。
+带日期的 [2026-10-04 公共集成记录](docs/research/PUBLIC_INTEGRATION_20261004.md) 与
+[2026-10-02 状态快照](docs/research/PROJECT_STATUS_20261002.md) 是历史记录，不是实时进度表。
+当前 PR 和 exact-head CI 从 [文档导航](docs/README.md) 中的 GitHub 入口查看；
+本地验证命令与证据边界见 [测试指南](docs/TESTING.md)。
 接管任务读 [恢复坐标](docs/CURRENT_STAGE.md)；实时工程事实以 GitHub 分支、PR 和检查结果为准。
 
 ## 数据与隐私

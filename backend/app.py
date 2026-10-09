@@ -33,6 +33,7 @@ from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 from starlette.datastructures import Headers
 
 import account_profile
+import ai_answer_quality
 import ai_result_service
 import astock
 import chat as chat_layer
@@ -799,6 +800,8 @@ def chat(req: ChatReq):
                 events = chat_layer.run_chat_stream(cfg, req.messages, context, use_tools=False)
             else:
                 events = chat_layer.run_chat_stream(cfg, req.messages, context)
+            if req.report_page_context is not None or req.report_ids:
+                events = ai_answer_quality.audit_report_stream(events)
             for ev in events:
                 if disconnect_event.is_set():
                     return
