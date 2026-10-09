@@ -272,6 +272,38 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Run evidence edit conflict E2E
+        working-directory: frontend
+        timeout-minutes: 3
+        env:
+          EVIDENCE_EDIT_CONFLICT_BROWSER_OUTPUT_DIR: ${{ runner.temp }}/evidence-edit-conflict-evidence
+        run: npm run test:e2e:evidence-edit-conflict
+
+      - name: Preserve synthetic evidence conflict screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: evidence-edit-conflict-evidence
+          path: ${{ runner.temp }}/evidence-edit-conflict-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Run thesis list query and lifecycle E2E
+        working-directory: frontend
+        timeout-minutes: 3
+        env:
+          THESIS_LIST_BROWSER_OUTPUT_DIR: ${{ runner.temp }}/thesis-list-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/thesis-list.browser.mjs
+
+      - name: Preserve synthetic thesis list screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: thesis-list-evidence
+          path: ${{ runner.temp }}/thesis-list-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
   e2e-data-health-smoke:
     name: Playwright data health smoke E2E
     runs-on: ubuntu-latest

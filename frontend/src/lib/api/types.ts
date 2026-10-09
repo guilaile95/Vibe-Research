@@ -2152,6 +2152,7 @@ export interface NdjsonProtocolState extends NdjsonStreamResult {
 // ============================================================================
 
 export interface EvidenceRecord {
+  edit_token: string;
   id: string;
   subject_type: "stock" | "sector" | "theme";
   subject_id: string;
@@ -2316,6 +2317,7 @@ export interface EvidenceCreateInput {
 
 /** PUT /api/evidence/{id} - 更新证据请求 */
 export interface EvidenceUpdateInput {
+  expected_edit_token: string;
   evidence_type: "news" | "announcement" | "report" | "research_note" | "financial_filing" | "other";
   claim: string;
   source_title: string;

@@ -8,7 +8,7 @@ import { addNote, createNotesBackupJson, importNotesBackupJson, loadNotesState, 
 const evidence = (id: string, overrides: Partial<EvidenceRecord> = {}): EvidenceRecord => ({
   id, subject_type: "stock", subject_id: "600519", evidence_type: "financial_filing", claim: `fixture claim ${id}`,
   source_title: "合成财报摘录", source_url: "https://example.com/report", source_date: "2026-09-01", accessed_at: "2026-09-02T00:00:00Z",
-  classification: "inference", confidence: "low", created_at: "2026-09-02T00:00:00Z", updated_at: "2026-09-02T00:00:00Z", deleted: 0, deleted_at: null,
+  classification: "inference", confidence: "low", created_at: "2026-09-02T00:00:00Z", updated_at: "2026-09-02T00:00:00Z", deleted: 0, edit_token: "evidence-edit.v1:" + "a".repeat(64), deleted_at: null,
   ...overrides,
 });
 

@@ -181,6 +181,7 @@ test("evidenceUpdate 使用 PUT 且 body 为完整 EvidenceUpdateInput", async (
   reset();
   const body = {
     evidence_type: "news" as const,
+    expected_edit_token: "evidence-edit.v1:" + "a".repeat(64),
     claim: "new claim",
     source_title: "src",
     source_url: "https://example.com",
@@ -195,6 +196,7 @@ test("evidenceUpdate 使用 PUT 且 body 为完整 EvidenceUpdateInput", async (
   assert.equal(r.url, "/api/evidence/ev-1");
   const parsed = JSON.parse(r.body as string);
   assert.equal(parsed.claim, "new claim");
+  assert.equal(parsed.expected_edit_token, body.expected_edit_token);
   assert.equal(parsed.evidence_type, "news");
   assert.equal(parsed.source_date, "2024-11-15");
   assert.equal(parsed.classification, "fact");
@@ -226,9 +228,10 @@ test("thesisCreate body 不含 market/status（由服务端决定）", async () 
 
 test("evidenceDelete 路径包含 confirm=true 查询参数", async () => {
   reset();
-  await api.evidenceDelete("ev-1");
+  await api.evidenceDelete("ev-1", "evidence-edit.v1:" + "a".repeat(64));
   const r = lastReq();
   assert.equal(r.method, "DELETE");
+  assert.equal(new URL(r.url, "http://localhost").searchParams.get("expected_edit_token"), "evidence-edit.v1:" + "a".repeat(64));
   assert.ok(r.url.includes("/api/evidence/ev-1"));
   assert.ok(r.url.includes("confirm=true"), "必须带 confirm=true 防误调用");
 });
@@ -499,6 +502,24 @@ test("跨 subject 防护：linkEvidence 客户端不补 subject，由后端校�
   assert.equal(parsed.evidence_id, "ev-other-subject");
   assert.ok(!("subject_type" in parsed), "客户端不携带 subject_type，由后端权威校验");
 });
+
+
+for (const status of [409, 404, 422]) {
+  test(`evidence writes surface ${status} without retries or implicit token refresh`, async () => {
+    reset();
+    mockOnce((_url, method) => method === "PUT" || method === "DELETE", status, { detail: "Evidence write rejected" });
+    const expected_edit_token = "evidence-edit.v1:" + "f".repeat(64);
+    await assert.rejects(api.evidenceUpdate("ev-conflict", {
+      expected_edit_token, evidence_type: "news", claim: "Draft preserved by page", source_title: "Synthetic source",
+      source_url: null, source_date: null, accessed_at: "2026-10-09T00:00:00Z", classification: "fact", confidence: "high",
+    }), error => error instanceof ApiError && error.status === status);
+    assert.equal(requests.length, 1);
+    assert.equal(JSON.parse(lastReq().body!).expected_edit_token, expected_edit_token);
+    await assert.rejects(api.evidenceDelete("ev-conflict", expected_edit_token), error => error instanceof ApiError && error.status === status);
+    assert.equal(requests.length, 2);
+    assert.equal(new URL(lastReq().url, "http://localhost").searchParams.get("expected_edit_token"), expected_edit_token);
+  });
+}
 
 // 还原 fetch（避免污染其它测试）
 test("teardown: restore fetch", () => {

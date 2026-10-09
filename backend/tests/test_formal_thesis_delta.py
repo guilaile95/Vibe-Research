@@ -114,6 +114,7 @@ def test_evidence_snapshot_is_immutable(db):
     svc.freeze_formalization(db, tid, 3)
     delta = svc.create_thesis_delta(db, tid, "STRENGTHENED", "snapshot", [ev["id"]])
     svc.update_evidence(db, ev["id"], {
+        "expected_edit_token": ev["edit_token"],
         "evidence_type": "news", "claim": "after", "source_title": "changed", "source_url": None,
         "source_date": None, "accessed_at": "2026-01-03T00:00:00+00:00",
         "classification": "inference", "confidence": "low",
@@ -230,7 +231,7 @@ def test_post_freeze_new_evidence_rejections_leave_no_partial_delta(db):
     assert conn.execute('SELECT COUNT(*) FROM thesis_deltas').fetchone()[0] == 0
     assert conn.execute('SELECT COUNT(*) FROM thesis_delta_evidence_links').fetchone()[0] == 0
     # 已删除证据不能作为新的正常确认输入
-    svc.soft_delete_evidence(db, ev['id'])
+    svc.soft_delete_evidence(db, ev["id"], ev["edit_token"])
     with pytest.raises(svc.EvidenceNotFoundError):
         svc.create_thesis_delta(db, tid, 'WEAKENED', 'x', new_evidence=[
             {'evidence_id': ev['id'], 'stance': 'oppose'},
@@ -245,6 +246,7 @@ def test_evidence_edit_after_confirm_keeps_immutable_snapshot(db):
     ])
     before = svc.list_thesis_deltas(db, tid)['items'][0]['evidence_links'][0]
     svc.update_evidence(db, ev['id'], {
+        "expected_edit_token": ev["edit_token"],
         'evidence_type': 'news', 'claim': '事后被编辑过的陈述',
         'source_title': '新纪要', 'source_url': None,
         'source_date': '2026-09-01', 'accessed_at': '2026-09-01T00:00:00+00:00',

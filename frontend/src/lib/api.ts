@@ -1032,8 +1032,8 @@ export const api = {
   evidenceGet: (id: string) => get<EvidenceRecord>(`/evidence/${id}`),
   evidenceUpdate: (id: string, body: EvidenceUpdateInput) =>
     request<EvidenceRecord>(`/evidence/${id}`, "PUT", body),
-  evidenceDelete: (id: string) =>
-    request<EvidenceRecord>(`/evidence/${id}?confirm=true`, "DELETE"),
+  evidenceDelete: (id: string, expectedEditToken: string) =>
+    request<EvidenceRecord>(`/evidence/${id}?confirm=true&expected_edit_token=${encodeURIComponent(expectedEditToken)}`, "DELETE"),
   evidenceTemporalAuthority: (id: string, evaluationAsOf?: string) => {
     const qs = evaluationAsOf ? `?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}` : "";
     return get<EvidenceTemporalAuthority>(`/evidence/${encodeURIComponent(id)}/temporal-authority${qs}`);
