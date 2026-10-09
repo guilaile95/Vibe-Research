@@ -251,7 +251,9 @@ def _write_parquet(
             )
         finally:
             connection.close()
-        with temp_path.open("rb") as stream:
+        # Windows _commit (os.fsync) requires a writable descriptor. Reopen only
+        # our newly written temporary file, without truncating its Parquet bytes.
+        with temp_path.open("r+b") as stream:
             os.fsync(stream.fileno())
         digest = hashlib.sha256(temp_path.read_bytes()).hexdigest()
         target = _artifact_path(root, digest)

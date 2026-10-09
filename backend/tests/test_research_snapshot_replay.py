@@ -289,3 +289,76 @@ def test_full_market_receipt_replays_normalized_legacy_filter_and_sort_alias(tmp
     receipt = before["replay_receipt"]
     replay = rdp.query_full_market(root=root, snapshot_id=receipt["snapshot_id"], **receipt["parameters"])
     assert replay["replay_receipt"] == receipt
+
+
+def test_owned_temporary_parquet_is_fsynced_through_writable_handle_before_publication(tmp_path, monkeypatch):
+    original_open = Path.open
+    original_fsync = rdp.os.fsync
+    original_replace = rdp.os.replace
+    handles = []
+    flushed = []
+
+    def track_open(path, *args, **kwargs):
+        stream = original_open(path, *args, **kwargs)
+        if path.name.startswith("research-bars-") and path.suffix == ".parquet":
+            handles.append((path, stream))
+        return stream
+
+    def require_writable_fsync(descriptor):
+        for path, stream in handles:
+            if not stream.closed and stream.fileno() == descriptor:
+                assert stream.writable(), "Windows fsync requires a writable artifact descriptor"
+                assert stream.seekable()
+                content = stream.read()
+                assert content[:4] == content[-4:] == b"PAR1"
+                flushed.append((path, content, stream))
+        return original_fsync(descriptor)
+
+    def verify_publish(source, target):
+        if Path(source).name.startswith("research-bars-"):
+            assert len(flushed) == 1
+            path, content, stream = flushed[0]
+            assert Path(source) == path
+            assert stream.closed  # Windows rename must not retain our open handle
+            assert hashlib.sha256(content).hexdigest() == Path(target).stem
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "open", track_open)
+    monkeypatch.setattr(rdp.os, "fsync", require_writable_fsync)
+    monkeypatch.setattr(rdp.os, "replace", verify_publish)
+    manifest = _import(tmp_path)
+    assert len(flushed) == 1
+    assert rdp.read_manifest(tmp_path / "rdp") == manifest
+
+
+def test_artifact_fsync_failure_propagates_without_publishing_or_changing_current(tmp_path, monkeypatch):
+    first = _import(tmp_path)
+    root = tmp_path / "rdp"
+    current_bytes = (root / "manifest.json").read_bytes()
+    before_files = {path.relative_to(root) for path in root.rglob("*") if path.is_file()}
+    original_open = Path.open
+    original_fsync = rdp.os.fsync
+    handles = []
+    failed_flushes = []
+
+    def track_open(path, *args, **kwargs):
+        stream = original_open(path, *args, **kwargs)
+        if path.name.startswith("research-bars-") and path.suffix == ".parquet":
+            handles.append(stream)
+        return stream
+
+    def fail_artifact_fsync(descriptor):
+        if any(not stream.closed and stream.fileno() == descriptor for stream in handles):
+            failed_flushes.append(descriptor)
+            raise OSError(9, "simulated artifact flush failure")
+        return original_fsync(descriptor)
+
+    monkeypatch.setattr(Path, "open", track_open)
+    monkeypatch.setattr(rdp.os, "fsync", fail_artifact_fsync)
+    with pytest.raises(OSError, match="simulated artifact flush failure"):
+        _import(tmp_path, revised=True)
+    assert len(failed_flushes) == 1  # failure was neither swallowed nor retried without fsync
+    assert all(stream.closed for stream in handles)
+    assert (root / "manifest.json").read_bytes() == current_bytes
+    assert {path.relative_to(root) for path in root.rglob("*") if path.is_file()} == before_files
+    assert rdp.read_manifest(root, snapshot_id=first["snapshot_id"]) == first
