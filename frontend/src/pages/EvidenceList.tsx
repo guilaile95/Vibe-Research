@@ -1,257 +1,165 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Plus, Loader2, FileText, Filter, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, Loader2, FileText, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError, type EvidenceRecord } from "@/lib/api";
 import { cn } from "@/lib/utils";
-
-const PAGE_SIZE = 50;
-
-const SUBJECT_TYPE_LABELS: Record<string, string> = {
-  stock: "个股",
-  sector: "板块",
-  theme: "主题",
-};
+import {
+  EVIDENCE_PAGE_SIZE, EVIDENCE_SUBJECT_LABELS, parseEvidenceListQuery,
+  evidenceFilterQuery, evidencePageQuery, evidenceDateLabel,
+} from "@/lib/evidenceListView";
 
 const EVIDENCE_TYPE_LABELS: Record<string, string> = {
-  news: "新闻",
-  announcement: "公告",
-  report: "研报",
-  research_note: "研究笔记",
-  financial_filing: "财报",
-  other: "其他",
+  news: "新闻", announcement: "公告", report: "研报", research_note: "研究笔记", financial_filing: "财报", other: "其他",
 };
+const CLASSIFICATION_LABELS: Record<string, string> = { fact: "事实", inference: "推断", unknown: "未知" };
+const CONFIDENCE_LABELS: Record<string, string> = { high: "高", medium: "中", low: "低" };
+const controlClass = "min-h-10 rounded-md border border-border bg-background px-3 py-2 text-sm";
+const buttonClass = "inline-flex min-h-10 items-center justify-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50";
 
-const CLASSIFICATION_LABELS: Record<string, string> = {
-  fact: "事实",
-  inference: "推断",
-  unknown: "未知",
-};
-
-const CLASSIFICATION_COLOR: Record<string, string> = {
-  fact: "bg-success/15 text-success",
-  inference: "bg-warning/15 text-warning",
-  unknown: "bg-muted/50 text-muted-foreground",
-};
-
-const CONFIDENCE_LABELS: Record<string, string> = {
-  high: "高",
-  medium: "中",
-  low: "低",
-};
-
-const CONFIDENCE_COLOR: Record<string, string> = {
-  high: "bg-success/15 text-success",
-  medium: "bg-warning/15 text-warning",
-  low: "bg-danger/15 text-danger",
-};
-
-const fmtDate = (s: string | null) => {
-  if (!s) return "—";
-  try {
-    return new Date(s).toLocaleString("zh-CN", {
-      year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit",
-    });
-  } catch {
-    return s;
+type Query = ReturnType<typeof parseEvidenceListQuery>;
+function EvidenceFilters({ query, loading, onApply, onClear }: {
+  query: Query; loading: boolean; onApply: (type: string, id: string) => void; onClear: () => void;
+}) {
+  const [type, setType] = useState(query.subjectType);
+  const [id, setId] = useState(query.subjectId);
+  const [error, setError] = useState<string | null>(null);
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const validation = parseEvidenceListQuery(evidenceFilterQuery(new URLSearchParams(), type, id));
+    setError(validation.error);
+    if (!validation.error) onApply(type, id);
   }
-};
+  return (
+    <form onSubmit={submit} aria-label="证据筛选" className="space-y-3">
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="flex min-w-0 flex-col gap-1.5 text-sm">
+          <span>主体类型</span>
+          <select className={controlClass} value={type} onChange={event => { setType(event.target.value); setError(null); }} aria-describedby="evidence-filter-help">
+            <option value="">全部</option>
+            {type && !Object.prototype.hasOwnProperty.call(EVIDENCE_SUBJECT_LABELS, type) && <option value={type}>不支持的类型</option>}
+            {Object.entries(EVIDENCE_SUBJECT_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+          </select>
+        </label>
+        <label className="flex min-w-0 flex-1 flex-col gap-1.5 text-sm sm:max-w-xs">
+          <span>主体代码/标识</span>
+          <input className={cn(controlClass, "w-full")} value={id} placeholder="如 600519" onChange={event => { setId(event.target.value); setError(null); }} aria-describedby="evidence-filter-help" />
+        </label>
+        <button className={cn(buttonClass, "border-primary/30 bg-primary/10 text-primary")} type="submit" disabled={loading && type === query.subjectType && id.trim() === query.subjectId}>查询</button>
+        <button className={buttonClass} type="button" onClick={() => { setType(""); setId(""); setError(null); onClear(); }}>清除筛选</button>
+      </div>
+      <p id="evidence-filter-help" className="text-xs leading-5 text-muted-foreground">按标的检索时，请同时填写类型和代码。编辑后点击查询；列表仅显示已应用的筛选。</p>
+      {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+    </form>
+  );
+}
+
+type Result = { key: string; items: EvidenceRecord[]; total: number; status: "loading" | "success" | "error"; error?: string };
 
 export function EvidenceList() {
-  const [items, setItems] = useState<EvidenceRecord[]>([]);
-  const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
   const [searchParams, setSearchParams] = useSearchParams();
-  const rawSubjectType = searchParams.get("subject_type") ?? "";
-  const subjectType = ["stock", "sector", "theme"].includes(rawSubjectType) ? rawSubjectType : "";
-  const subjectId = searchParams.get("subject_id") ?? "";
+  const query = parseEvidenceListQuery(searchParams);
+  const { subjectType, subjectId, page, offset, error: queryError } = query;
+  const [refresh, setRefresh] = useState(0);
+  const requestKey = JSON.stringify([subjectType, subjectId, page, refresh]);
+  const [result, setResult] = useState<Result | null>(null);
+  // Ownership is checked during render as well as at completion: no frame of old rows under a new label.
+  const current = result?.key === requestKey ? result : null;
+  const loading = !queryError && (!current || current.status === "loading");
+  const items = current?.status === "success" ? current.items : [];
+  const total = current?.status === "success" ? current.total : 0;
+  const totalPages = Math.max(1, Math.ceil(total / EVIDENCE_PAGE_SIZE));
   const listReturnTo = `/evidence${searchParams.toString() ? `?${searchParams}` : ""}`;
 
-  const setFilter = (key: "subject_type" | "subject_id", value: string) => {
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current);
-      if (value) next.set(key, value);
-      else next.delete(key);
-      return next;
-    }, { replace: true });
-  };
-
-  const runIdRef = useRef(0);
-
-  const load = useCallback(async (off: number) => {
-    const rid = ++runIdRef.current;
-    setLoading(true);
-    setErr(null);
-    try {
-      const params: {
-        subject_type?: string;
-        subject_id?: string;
-        limit: number;
-        offset: number;
-      } = { limit: PAGE_SIZE, offset: off };
-      // subject_id 与 subject_type 成对提交
-      if (subjectType && subjectId.trim()) {
-        params.subject_type = subjectType;
-        params.subject_id = subjectId.trim();
-      }
-      const r = await api.evidenceList(params);
-      if (rid !== runIdRef.current) return;
-      setItems(r.items ?? []);
-      setTotal(r.total ?? 0);
-      setOffset(off);
-    } catch (e) {
-      if (rid !== runIdRef.current) return;
-      setErr(e instanceof ApiError ? e.message : "加载证据列表失败");
-    } finally {
-      if (rid === runIdRef.current) setLoading(false);
-    }
-  }, [subjectType, subjectId]);
-
   useEffect(() => {
-    void load(0);
-  }, [load]);
+    if (queryError) return;
+    let active = true;
+    const controller = new AbortController();
+    setResult({ key: requestKey, items: [], total: 0, status: "loading" });
+    void api.evidenceList({
+      ...(subjectType ? { subject_type: subjectType, subject_id: subjectId } : {}),
+      limit: EVIDENCE_PAGE_SIZE, offset, signal: controller.signal,
+    }).then(response => {
+      if (active) setResult({ key: requestKey, items: response.items ?? [], total: response.total ?? 0, status: "success" });
+    }).catch(error => {
+      if (active) setResult({ key: requestKey, items: [], total: 0, status: "error", error: error instanceof ApiError ? error.message : "加载证据列表失败，请重试。" });
+    });
+    return () => { active = false; controller.abort(); };
+  }, [requestKey, subjectType, subjectId, offset, queryError]);
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
+  function apply(type: string, id: string) {
+    const next = evidenceFilterQuery(searchParams, type, id);
+    if (next.toString() === searchParams.toString()) setRefresh(value => value + 1);
+    else setSearchParams(next);
+  }
 
   return (
-    <div>
-      <PageHeader
-        title="证据库"
-        subtitle="把支撑/反对投资逻辑的证据沉淀下来，按标的检索、关联到逻辑后形成可追溯的证据账本。"
-        actions={
-          <Link
-            to="/evidence/new"
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary shadow-glow hover:bg-primary/25"
-          >
-            <Plus className="h-4 w-4" /> 新建证据
-          </Link>
-        }
-      />
-
+    <div className="min-w-0">
+      <PageHeader title="证据库" subtitle="逐条分清资料事实与研究推断，保留来源和时间，再关联投资逻辑。" actions={
+        <Link to={`/evidence/new?${new URLSearchParams({ return_to: listReturnTo, ...(subjectType && subjectId && !queryError ? { subject_type: subjectType, subject_id: subjectId } : {}) })}`} className={cn(buttonClass, "border-primary/30 bg-primary/10 text-primary")}><Plus aria-hidden="true" className="h-4 w-4" />新建证据</Link>
+      } />
       <GlassCard className="mb-4">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-            <Filter className="h-4 w-4" /> 筛选：
-          </div>
-          <label className="block text-xs">
-            <span className="text-muted-foreground">主体类型</span>
-            <select
-              value={subjectType}
-              onChange={(e) => setFilter("subject_type", e.target.value)}
-              className="mt-0.5 block rounded border border-border/50 bg-background px-2 py-1 text-sm"
-            >
-              <option value="">全部</option>
-              {Object.entries(SUBJECT_TYPE_LABELS).map(([k, v]) => (
-                <option key={k} value={k}>{v}</option>
-              ))}
-            </select>
-          </label>
-          <label className="block text-xs">
-            <span className="text-muted-foreground">主体代码/标识</span>
-            <input
-              value={subjectId}
-              onChange={(e) => setFilter("subject_id", e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") void load(0); }}
-              placeholder="如 600519"
-              className="mt-0.5 block w-40 rounded border border-border/50 bg-background px-2 py-1 text-sm"
-            />
-          </label>
-          <button
-            onClick={() => void load(0)}
-            disabled={loading}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary/15 px-3 text-sm text-primary hover:bg-primary/25 disabled:opacity-50"
-          >
-            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-            查询
-          </button>
-          {(!err || items.length > 0) && (
-            <div className="ml-auto text-xs text-muted-foreground">
-              共 {total} 条 · 第 {currentPage} / {totalPages} 页
+        <EvidenceFilters key={searchParams.toString()} query={query} loading={loading} onApply={apply} onClear={() => apply("", "")} />
+      </GlassCard>
+      <p className="mb-5 rounded-md border border-warning/30 bg-warning/5 p-3 text-sm leading-6 text-muted-foreground">事实分类表示资料中的陈述，不等于业务事实已经确认。来源日期、记录时间与置信度也不代表已完成核验。</p>
+      <section aria-labelledby="evidence-list-heading" aria-busy={loading} className="min-w-0">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 id="evidence-list-heading" className="text-lg font-semibold">证据条目</h2>
+          <p className="min-w-0 break-all text-sm text-muted-foreground">已应用：{queryError ? "筛选无效" : subjectType ? `${EVIDENCE_SUBJECT_LABELS[subjectType]} / ${subjectId}` : "全部标的"}</p>
+        </div>
+        {queryError ? <GlassCard><p role="alert" className="text-sm text-danger">{queryError}</p></GlassCard> : loading ? (
+          <GlassCard><p role="status" className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />正在加载证据…</p></GlassCard>
+        ) : current?.status === "error" ? (
+          <GlassCard>
+            <div role="alert"><h3 className="font-medium">证据加载失败</h3><p className="mt-2 break-words text-sm text-muted-foreground">{current.error}</p></div>
+            <button type="button" className={cn(buttonClass, "mt-4")} onClick={() => setRefresh(value => value + 1)}><RotateCcw aria-hidden="true" className="h-4 w-4" />重新加载</button>
+          </GlassCard>
+        ) : items.length === 0 ? (
+          <GlassCard className="py-10 text-center">
+            <FileText aria-hidden="true" className="mx-auto mb-3 h-7 w-7 text-muted-foreground" />
+            <h3 className="font-medium">{page > 1 ? "此页暂无证据" : subjectType ? "此筛选下暂无证据" : "尚无证据条目"}</h3>
+            <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-muted-foreground">{page > 1 ? "条目可能已发生变化，请返回第一页查看。" : subjectType ? "可以调整标的，或清除筛选查看其他证据。" : "先查看报告原文，记录来源与时间，再区分事实和推断。"}</p>
+            <div className="mt-4 flex flex-wrap justify-center gap-3">
+              {page > 1 ? <button className={buttonClass} onClick={() => setSearchParams(evidencePageQuery(searchParams, 1))}>返回第一页</button> : subjectType ? <button className={buttonClass} onClick={() => apply("", "")}>查看全部证据</button> : <Link className={buttonClass} to="/my-reports">前往报告库</Link>}
             </div>
-          )}
-        </div>
-      </GlassCard>
-
-      {err && (
-        <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-          {err}
-        </div>
-      )}
-
-      <GlassCard>
-        {loading && items.length === 0 ? (
-          <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 加载中…
-          </div>
-        ) : items.length === 0 && !err ? (
-          <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
-            <FileText className="h-8 w-8 text-muted-foreground/40" />
-            还没有证据。点右上角「新建证据」开始沉淀。
-          </div>
+          </GlassCard>
         ) : (
-          <div className="divide-y divide-border/30">
-            {items.map((e) => (
-              <Link
-                key={e.id}
-                to={`/evidence/${e.id}?${new URLSearchParams({ return_to: listReturnTo })}`}
-                className="block py-3 transition-colors hover:bg-primary/5"
-              >
-                <div className="flex items-start gap-2.5">
-                  <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{e.claim}</p>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground/70">
-                      <span className="font-mono">{e.subject_type}/{e.subject_id}</span>
-                      {" · "}
-                      {EVIDENCE_TYPE_LABELS[e.evidence_type] ?? e.evidence_type}
-                      {" · "}
-                      {e.source_title || "（无来源标题）"}
-                      {" · "}
-                      {fmtDate(e.source_date)}
-                    </p>
-                    <div className="mt-1 flex flex-wrap items-center gap-1">
-                      <span className={cn("rounded px-1.5 py-0.5 text-[10px]", CLASSIFICATION_COLOR[e.classification] ?? "bg-muted/50 text-muted-foreground")}>
-                        {CLASSIFICATION_LABELS[e.classification] ?? e.classification}
-                      </span>
-                      <span className={cn("rounded px-1.5 py-0.5 text-[10px]", CONFIDENCE_COLOR[e.confidence] ?? "bg-muted/50 text-muted-foreground")}>
-                        置信度 {CONFIDENCE_LABELS[e.confidence] ?? e.confidence}
-                      </span>
+          <>
+            <p role="status" className="mb-3 text-xs text-muted-foreground">共 {total} 条 · 第 {page} / {totalPages} 页 · 本页 {items.length} 条</p>
+            <div className="space-y-3">
+              {items.map(evidence => (
+                <GlassCard key={evidence.id}>
+                  <article className="min-w-0" aria-labelledby={`evidence-${evidence.id}`}>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <h3 id={`evidence-${evidence.id}`} className="min-w-0 flex-1 break-words text-base font-semibold leading-7 [overflow-wrap:anywhere]">{evidence.claim}</h3>
+                      <span className={cn("rounded border px-2 py-1 text-xs", evidence.classification === "fact" ? "border-border text-muted-foreground" : "border-warning/30 bg-warning/10 text-warning")}>{CLASSIFICATION_LABELS[evidence.classification] ?? "未知"}</span>
                     </div>
-                  </div>
-                </div>
-              </Link>
-            ))}
-          </div>
+                    <p className="mt-2 break-words text-sm leading-6 text-muted-foreground [overflow-wrap:anywhere]">{EVIDENCE_SUBJECT_LABELS[evidence.subject_type] ?? evidence.subject_type} / <span className="font-mono">{evidence.subject_id}</span> · {EVIDENCE_TYPE_LABELS[evidence.evidence_type] ?? evidence.evidence_type}</p>
+                    <dl className="mt-3 grid min-w-0 gap-x-6 gap-y-2 text-sm leading-6 sm:grid-cols-2">
+                      <div className="min-w-0 sm:col-span-2"><dt className="text-xs text-muted-foreground">来源</dt><dd className="break-words [overflow-wrap:anywhere]">{evidence.source_title?.trim() || "未提供来源标题"}</dd></div>
+                      <div><dt className="text-xs text-muted-foreground">来源日期</dt><dd>{evidenceDateLabel(evidence.source_date)}</dd></div>
+                      <div><dt className="text-xs text-muted-foreground">记录时间</dt><dd>{evidenceDateLabel(evidence.created_at)}</dd></div>
+                    </dl>
+                    {(!evidence.source_title?.trim() || evidenceDateLabel(evidence.source_date).startsWith("未知")) && <p className="mt-3 text-sm text-warning">来源信息不完整，核验时请补充来源标题或日期。</p>}
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
+                      <p className="text-xs text-muted-foreground">记录置信度：{CONFIDENCE_LABELS[evidence.confidence] ?? "未知"} · 不代表核验状态</p>
+                      <Link className={cn(buttonClass, "text-primary")} to={`/evidence/${encodeURIComponent(evidence.id)}?${new URLSearchParams({ return_to: listReturnTo })}`} aria-label={`查看来源与详情：${evidence.claim}`}>查看来源与详情<ChevronRight aria-hidden="true" className="h-4 w-4" /></Link>
+                    </div>
+                  </article>
+                </GlassCard>
+              ))}
+            </div>
+          </>
         )}
-
-        {total > PAGE_SIZE && (
-          <div className="mt-3 flex items-center justify-between border-t border-border/30 pt-3 text-sm">
-            <button
-              onClick={() => void load(Math.max(0, offset - PAGE_SIZE))}
-              disabled={offset === 0 || loading}
-              className="inline-flex items-center gap-1 rounded border border-border/50 px-2.5 py-1 text-xs text-muted-foreground hover:border-primary/40 disabled:opacity-40"
-            >
-              <ChevronLeft className="h-3.5 w-3.5" /> 上一页
-            </button>
-            <span className="text-xs text-muted-foreground">
-              第 {currentPage} / {totalPages} 页
-            </span>
-            <button
-              onClick={() => void load(offset + PAGE_SIZE < total ? offset + PAGE_SIZE : offset)}
-              disabled={offset + PAGE_SIZE >= total || loading}
-              className="inline-flex items-center gap-1 rounded border border-border/50 px-2.5 py-1 text-xs text-muted-foreground hover:border-primary/40 disabled:opacity-40"
-            >
-              下一页 <ChevronRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
+        {!loading && current?.status === "success" && (total > EVIDENCE_PAGE_SIZE || page > 1) && (
+          <nav aria-label="证据分页" className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <button className={buttonClass} disabled={page === 1} onClick={() => setSearchParams(evidencePageQuery(searchParams, page - 1))}><ChevronLeft aria-hidden="true" className="h-4 w-4" />上一页</button>
+            <span className="text-xs text-muted-foreground">第 {page} 页 · 每页最多 {EVIDENCE_PAGE_SIZE} 条</span>
+            <button className={buttonClass} disabled={offset + EVIDENCE_PAGE_SIZE >= total} onClick={() => setSearchParams(evidencePageQuery(searchParams, page + 1))}>下一页<ChevronRight aria-hidden="true" className="h-4 w-4" /></button>
+          </nav>
         )}
-      </GlassCard>
+      </section>
     </div>
   );
 }

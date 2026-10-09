@@ -582,3 +582,46 @@ class TestKDJ:
         assert partial["status"] == "partial"
         assert any("KDJ(9,3,3)" in x for x in partial["limitations"])
         assert partial["limitations"].count(ti.KDJ_LIMITATION) == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value", "latest_close", "trigger"),
+    [
+        ("high", 0.0, 11.0, "close_above_20d_high"),
+        ("high", 9.0, 11.0, "close_above_20d_high"),
+        ("low", 11.0, 9.0, "close_below_20d_low"),
+        ("low", -1.0, 9.0, "close_below_20d_low"),
+        ("high", True, 11.0, "close_above_20d_high"),
+        ("low", True, 9.0, "close_below_20d_low"),
+    ],
+)
+def test_impossible_historical_range_does_not_prove_breakout(
+    field, invalid_value, latest_close, trigger
+):
+    rows = _klines_from_closes([10.0] * 69 + [latest_close])
+    # In the 20-session breakout window, outside the latest 9-session KDJ window.
+    rows[50][field] = invalid_value
+    result = ti.compute_indicators(
+        rows, code="000001", period="daily", days=70,
+        fetched_at="2026-03-12T00:00:00Z",
+    )
+    assert result["status"] == "partial"
+    assert trigger not in {item["type"] for item in result["triggers"]}
+    assert any("价格区间触发不可评估" in item for item in result["limitations"])
+    # Bad range evidence must not erase the independently valid closing prices.
+    assert result["latest"]["sma60"] is not None
+    assert result["latest"]["close"] == latest_close
+    assert result["latest"]["kdj_k"] is not None
+
+
+@pytest.mark.parametrize(("field", "value"), [("high", 9.0), ("low", 11.0)])
+def test_impossible_current_range_cannot_produce_kdj(field, value):
+    rows = _klines_from_closes([10.0] * 70, highs=[12.0] * 70, lows=[8.0] * 70)
+    rows[-1][field] = value
+    result = ti.compute_indicators(
+        rows, code="000001", period="daily", days=70,
+        fetched_at="2026-03-12T00:00:00Z",
+    )
+    assert result["status"] == "partial"
+    assert result["latest"]["kdj_k"] is None
+    assert result["latest"]["sma60"] == 10.0

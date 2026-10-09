@@ -5,7 +5,10 @@
 | 我要做什么 | 入口 | 内容边界 |
 | --- | --- | --- |
 | 安装、启动、检查本机服务 | [运行指南](GETTING_STARTED.md) | Windows / Linux、三个服务、AI 配置与常见问题 |
-| 了解当前进度和验证缺口 | [2026-10-04 公共集成记录](research/PUBLIC_INTEGRATION_20261004.md) | 带日期的交付索引；实时状态回读 GitHub |
+| 了解当前进度和验证缺口 | [恢复坐标](CURRENT_STAGE.md) / 下文 GitHub 入口 | 回读当前 PR 与 exact-head CI；历史快照不充当实时状态 |
+| 运行本地工程验证 | [测试指南](TESTING.md) | 离线测试、构建、隔离浏览器用例与验证边界 |
+| 检测当前 API 配置 | [AI 连接检测](AI_CONNECTION_TEST.md) | 手动合成请求、费用与取消；不评价回答质量 |
+| 制作 Linux 用户目录安装包 | [Linux 打包与运行](LINUX_INSTALL.md) | 独立安装/生命周期路径；不等于云端部署验收 |
 | 接管工程任务 | [恢复坐标](CURRENT_STAGE.md) → [AGENTS.md](../AGENTS.md) | 当前授权、实际 Git 状态和协作边界 |
 | 理解数据与研究调用链 | [架构](ARCHITECTURE.md) / [后端参考](../backend/README.md) | 实现入口；具体行为以当前源码为准 |
 | 判断适用范围 | [已知限制](KNOWN_ISSUES.md) | 数据、模型、手工账户事实和真实使用边界 |
@@ -28,6 +31,8 @@
 ## 历史资料
 
 `research/` 下的评估、实验、执行记录按各自日期、基线和数据范围阅读。
+[2026-10-04 公共集成记录](research/PUBLIC_INTEGRATION_20261004.md) 与
+[2026-10-02 状态快照](research/PROJECT_STATUS_20261002.md) 保留历史身份。
 [PROJECT_STATE](PROJECT_STATE.md)、[NEXT_TASK](NEXT_TASK.md) 和 [BK-11 执行记录](research/EXECUTION_STATE.md) 是历史入口，不作为当前任务队列。
 新增结论优先链接原有证据，不复制整套日志；项目代理规则只在根 [AGENTS.md](../AGENTS.md) 维护。
 

@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query
 
 import alert_rule_router
-import app as app_module
 import astock
 import dragon_tiger_discovery as dtd
 import northbound_capital_flow as ncf
@@ -72,6 +71,10 @@ def get_technical_indicators(
     period: str = Query("daily"),
     days: int = Query(_DAYS_DEFAULT),
 ):
+    # Resolve shared app state only when handling a request. Importing app
+    # while this aggregate router is being built creates an import cycle.
+    import app as app_module
+
     code = app_module._validate(code)
     period = (period or "daily").strip().lower()
     if period not in _ALLOWED_PERIODS:
@@ -140,6 +143,8 @@ dragon_tiger_discovery_router = APIRouter(prefix="/api/market", tags=["market"])
 @dragon_tiger_discovery_router.get("/dragon-tiger")
 def market_dragon_tiger(trade_date: str | None = Query(None)):
     """Market-level Dragon-Tiger report rows; read-only and explicitly bounded."""
+    import app as app_module
+
     try:
         requested = dtd.normalize_trade_date(trade_date)
     except dtd.DragonTigerDiscoveryValidationError as exc:
@@ -161,6 +166,8 @@ def market_northbound_history(
     days: int = Query(20, description="历史交易日点数，仅支持 10、20、30"),
 ):
     """北向成交历史（成交额 / 成交笔数 / ETF 成交额），不提供净买入。"""
+    import app as app_module
+
     try:
         days_n = ncf.validate_history_days(days)
     except ncf.NorthboundHistoryDaysError as exc:
