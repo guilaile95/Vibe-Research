@@ -79,3 +79,14 @@ export function summarizeStockFundFlow(rows: readonly FundFlowRow[]) {
     latestDate: recent[0]?.date ?? null,
   };
 }
+
+/** Capital fields can be unavailable without being a reported zero. */
+export function formatStockCapitalValue(value: unknown, kind: "balance" | "count" | "percent"): string {
+  if (typeof value !== "number" && typeof value !== "string") return "—";
+  if (typeof value === "string" && !value.trim()) return "—";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  if (kind === "balance") return `${(number / 1e8).toFixed(2)} 亿`;
+  if (kind === "percent") return `${number.toFixed(2)}%`;
+  return number.toLocaleString();
+}

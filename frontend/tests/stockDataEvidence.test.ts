@@ -5,7 +5,7 @@ import type { FundFlowRow, Report } from "../src/lib/api/types.ts";
 import {
   type EvidenceState, loadEvidenceSource, resolveEvidence, evidenceStatusText,
   resolveEvidenceList, evidenceListStatusText, reportEvidenceContext,
-  announcementEvidenceContext, quoteEvidenceContext, summarizeStockFundFlow,
+  announcementEvidenceContext, quoteEvidenceContext, summarizeStockFundFlow, formatStockCapitalValue,
 } from "../src/lib/stockDataEvidence.ts";
 
 const report: Report = { title: "Synthetic report", publishDate: "2026-09-01", orgSName: "Synthetic institution", pdfUrl: "https://example.com/report.pdf" };
@@ -167,4 +167,29 @@ test("each secondary source wires an independently guarded request and visible s
   assert.ok(source.includes("evidenceStatusText(pctlResult)"));
   assert.doesNotMatch(source, /api\.(news|percentile)\(c\)\.catch/);
   assert.doesNotMatch(source, /暂无新闻|未来 90 天无待解禁/);
+});
+
+test("capital metrics distinguish unavailable values from a reported zero", () => {
+  for (const value of [null, undefined, "", " ", "-", "--", "bad", NaN, Infinity, -Infinity, "NaN", "Infinity", true, false]) {
+    for (const kind of ["balance", "count", "percent"] as const) {
+      assert.equal(formatStockCapitalValue(value, kind), "—");
+    }
+  }
+  for (const value of [0, "0"]) {
+    assert.equal(formatStockCapitalValue(value, "balance"), "0.00 亿");
+    assert.equal(formatStockCapitalValue(value, "count"), "0");
+    assert.equal(formatStockCapitalValue(value, "percent"), "0.00%");
+  }
+  assert.equal(formatStockCapitalValue(" 125000000 ", "balance"), "1.25 亿");
+  assert.equal(formatStockCapitalValue(1234, "count"), (1234).toLocaleString());
+  assert.equal(formatStockCapitalValue("-12.5", "percent"), "-12.50%");
+});
+
+test("StockData capital cards use unknown-aware formatting at every displayed sink", () => {
+  const page = readFileSync(new URL("../src/pages/StockData.tsx", import.meta.url), "utf8");
+  for (const expression of ['formatStockCapitalValue(margin[0].rzye, "balance")',
+    'formatStockCapitalValue(margin[0].rqye, "balance")',
+    'formatStockCapitalValue(holders[0].holder_num, "count")',
+    'formatStockCapitalValue(holders[0].change_ratio, "percent")']) assert.ok(page.includes(expression));
+  assert.ok(!page.includes("Number(holders[0].holder_num)"));
 });

@@ -933,6 +933,14 @@ function createApiMockController() {
       return;
     }
 
+    if (state.capitalFixture && ["/api/margin", "/api/holders"].includes(pathname)) {
+      const value = state.capitalFixture.value;
+      await route.fulfill(jsonOk([pathname === "/api/margin"
+        ? { date: "2026-10-09", rzye: value, rqye: value }
+        : { date: "2026-09-30", holder_num: value, change_ratio: value }]));
+      return;
+    }
+
     // Auto-fired side panels: empty success
     if (
       pathname.includes("/margin")
@@ -1935,6 +1943,26 @@ async function runSmoke(page, mock, errors) {
   await openTab(page, "capital");
   await page.locator('[data-source="融资融券"][data-source-state="success"]').waitFor();
   if (!(await page.locator('[data-source="融资融券"]').innerText()).includes("不能排除上游缺失")) errors.push("empty source falsely treated as complete absence");
+  // Actual rendered cards must distinguish missing fields from a genuine zero.
+  for (const value of [null, 0, ""]) {
+    mock.state.capitalFixture = { value };
+    await clickQuery(page);
+    await waitForStockHeader(page, "000001", "平安银行");
+    await openTab(page, "capital");
+    await page.locator('[data-source="股东户数"][data-source-state="success"]').waitFor();
+    const balance = value === 0 ? "0.00 亿" : "—";
+    const count = value === 0 ? "0" : "—";
+    const ratio = value === 0 ? "环比 0.00%" : "环比 —";
+    for (const [name, expected] of [["融资余额", balance], ["融券余额", balance], ["股东户数", count]]) {
+      const card = page.getByText(name, { exact: true }).locator("..");
+      await card.locator("p.font-mono").filter({ hasText: expected }).waitFor();
+      const actual = await card.locator("p.font-mono").innerText();
+      if (actual !== expected) errors.push(`capital ${name}: ${JSON.stringify(value)} displayed ${actual}`);
+    }
+    const holderCard = page.getByText("股东户数", { exact: true }).locator("..");
+    if (!(await holderCard.innerText()).includes(ratio)) errors.push(`capital ratio: ${JSON.stringify(value)} lost unknown/zero distinction`);
+  }
+  delete mock.state.capitalFixture;
 }
 
 async function main() {

@@ -1560,6 +1560,16 @@ def eastmoney_datacenter(report_name: str, columns: str = "ALL", filter_str: str
     return []
 
 
+def _capital_number(value) -> float | None:
+    """Scoped margin/holder numbers: unknown is not zero; keep finite numeric strings."""
+    if isinstance(value, bool):
+        return None
+    try:
+        return _optional_float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+
+
 def margin_trading(code: str, page_size: int = 30) -> list[dict]:
     """融资融券明细（日级）：融资余额 / 融资买入 / 融券余额 / 两融合计。"""
     data = eastmoney_datacenter(
@@ -1567,9 +1577,9 @@ def margin_trading(code: str, page_size: int = 30) -> list[dict]:
         page_size=page_size, sort_columns="DATE", sort_types="-1")
     return [{
         "date": str(r.get("DATE", ""))[:10],
-        "rzye": r.get("RZYE", 0), "rzmre": r.get("RZMRE", 0), "rzche": r.get("RZCHE", 0),
-        "rqye": r.get("RQYE", 0), "rqmcl": r.get("RQMCL", 0),
-        "rzrqye": r.get("RZRQYE", 0),
+        "rzye": _capital_number(r.get("RZYE")), "rzmre": _capital_number(r.get("RZMRE")), "rzche": _capital_number(r.get("RZCHE")),
+        "rqye": _capital_number(r.get("RQYE")), "rqmcl": _capital_number(r.get("RQMCL")),
+        "rzrqye": _capital_number(r.get("RZRQYE")),
     } for r in data]
 
 
@@ -1599,9 +1609,9 @@ def holder_num_change(code: str, page_size: int = 10) -> list[dict]:
         page_size=page_size, sort_columns="END_DATE", sort_types="-1")
     return [{
         "date": str(r.get("END_DATE", ""))[:10],
-        "holder_num": r.get("HOLDER_NUM", 0),
-        "change_ratio": r.get("HOLDER_NUM_RATIO", 0),
-        "avg_shares": r.get("AVG_FREE_SHARES", 0),
+        "holder_num": _capital_number(r.get("HOLDER_NUM")),
+        "change_ratio": _capital_number(r.get("HOLDER_NUM_RATIO")),
+        "avg_shares": _capital_number(r.get("AVG_FREE_SHARES")),
     } for r in data]
 
 
