@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Swords, Play, Square, Save, CheckCircle2, Circle, AlertTriangle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { noRemoteImages } from "@/lib/noRemoteImages";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -234,7 +235,7 @@ export function Debate() {
               {!s.done && <span className="animate-pulse text-[11px] text-muted-foreground">生成中…</span>}
             </div>
             <div className="prose prose-sm dark:prose-invert max-w-none text-foreground prose-table:text-sm">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{s.content || "…"}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>{s.content || "…"}</ReactMarkdown>
             </div>
           </div>
         ))}

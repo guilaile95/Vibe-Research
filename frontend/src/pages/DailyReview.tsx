@@ -6,6 +6,7 @@ import {
   GitCompare, Inbox, Star, HeartPulse,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { noRemoteImages } from "@/lib/noRemoteImages";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -1160,7 +1161,7 @@ export function DailyReview() {
         )}
         {taskContent ? (
           <>
-            <div className="prose prose-sm dark:prose-invert mt-4 max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{taskContent}</ReactMarkdown></div>
+            <div className="prose prose-sm dark:prose-invert mt-4 max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>{taskContent}</ReactMarkdown></div>
             {(taskStatus === "success" || taskStatus === "restored") && <div className="mt-3"><SaveNoteButton kind="复盘" title={`每日复盘 ${dr?.trade_date || today}`} content={taskContent} /></div>}
           </>
         ) : !needConfig && taskStatus === "idle" ? (
@@ -1169,7 +1170,7 @@ export function DailyReview() {
         {taskStatus === "running" && taskStreamContent && (
           <div className="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
             <p className="mb-2 text-xs font-medium text-primary">新结果临时预览（完成并保存后才会替换旧结果）</p>
-            <div className="prose prose-sm dark:prose-invert max-w-none text-foreground/90"><ReactMarkdown remarkPlugins={[remarkGfm]}>{taskStreamContent}</ReactMarkdown></div>
+            <div className="prose prose-sm dark:prose-invert max-w-none text-foreground/90"><ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>{taskStreamContent}</ReactMarkdown></div>
           </div>
         )}
       </GlassCard>

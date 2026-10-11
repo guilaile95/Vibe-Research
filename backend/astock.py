@@ -1606,7 +1606,7 @@ def holder_num_change(code: str, page_size: int = 10) -> list[dict]:
 
 
 def dividend_history(code: str, page_size: int = 20, *, strict: bool = False) -> list[dict]:
-    """分红送转历史：每股派息（税前）/ 每10股转增 / 每10股送股 / 进度。
+    """分红送转历史：每10股派息（税前，人民币元）/ 每10股转增 / 每10股送股 / 进度。
 
     ``strict`` 仅供需要区分“真实空结果”和“源失败”的只读组合层使用；
     默认保持既有调用方的空结果降级语义。
@@ -1616,7 +1616,8 @@ def dividend_history(code: str, page_size: int = 20, *, strict: bool = False) ->
         page_size=page_size, sort_columns="EX_DIVIDEND_DATE", sort_types="-1", strict=strict)
     return [{
         "date": str(r.get("EX_DIVIDEND_DATE", ""))[:10],
-        "bonus_rmb": r.get("PRETAX_BONUS_RMB", 0),
+        "bonus_rmb": r.get("PRETAX_BONUS_RMB"),
+        "bonus_rmb_unit": "CNY/10_shares",
         "transfer_ratio": r.get("TRANSFER_RATIO", 0),
         "bonus_ratio": r.get("BONUS_RATIO", 0),
         "plan": r.get("ASSIGN_PROGRESS", ""),

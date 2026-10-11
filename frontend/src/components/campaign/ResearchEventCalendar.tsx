@@ -62,7 +62,7 @@ function detailEntries(event: ResearchEventCalendarEvent): Array<[string, string
     type: "类型",
     provider_status: "provider 状态",
     ex_dividend_date: "除权除息日",
-    bonus_rmb: "税前派息",
+    bonus_rmb: "税前派息（元/每10股）",
     transfer_ratio: "转增比例",
     bonus_ratio: "送股比例",
     shares: "解禁股数",

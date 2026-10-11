@@ -14,6 +14,7 @@ import {
   XCircle,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { noRemoteImages } from "@/lib/noRemoteImages";
 import remarkGfm from "remark-gfm";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import {
@@ -585,12 +586,12 @@ export default function MarketIntelPanel({ embedded = false, compact = false }: 
                 ) : digest?.phase === "saving" ? (
                   <div className="space-y-2">
                     <p className="flex items-center gap-2 text-sm text-primary"><Loader2 className="h-3.5 w-3.5 animate-spin" />摘要已生成，正在保存到数据库…</p>
-                    {digest.text && <div className="prose prose-sm dark:prose-invert max-w-none text-foreground opacity-80"><ReactMarkdown remarkPlugins={[remarkGfm]}>{digest.text}</ReactMarkdown></div>}
+                    {digest.text && <div className="prose prose-sm dark:prose-invert max-w-none text-foreground opacity-80"><ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>{digest.text}</ReactMarkdown></div>}
                   </div>
                 ) : digest?.text ? (
                   <>
                     {digest.err && <div className="mb-2 flex items-center gap-1.5 rounded bg-destructive/10 p-2 text-xs text-destructive"><AlertCircle className="h-3.5 w-3.5 shrink-0" />{digest.err}</div>}
-                    <div className="prose prose-sm dark:prose-invert max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{digest.text}</ReactMarkdown></div>
+                    <div className="prose prose-sm dark:prose-invert max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>{digest.text}</ReactMarkdown></div>
                     <div className="mt-2"><SaveNoteButton kind="今日要点" title={`${currentIndustry.name} 今日要点`} content={digest.text} /></div>
                   </>
                 ) : digest?.needKey ? (

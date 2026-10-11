@@ -368,6 +368,38 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Run Markdown image guard E2E
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          E2E_MARKDOWN_IMAGES_OUTPUT_DIR: ${{ runner.temp }}/markdown-images-evidence
+        run: node tests/e2e/markdown-images.browser.mjs
+
+      - name: Preserve synthetic Markdown image guard evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: markdown-images-evidence
+          path: ${{ runner.temp }}/markdown-images-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Run live quote timer ownership E2E
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          E2E_LIVE_QUOTES_OUTPUT_DIR: ${{ runner.temp }}/live-quotes-ownership-evidence
+        run: node tests/e2e/live-quotes-ownership.browser.mjs
+
+      - name: Preserve synthetic live quote timer ownership evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: live-quotes-ownership-evidence
+          path: ${{ runner.temp }}/live-quotes-ownership-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
   e2e-data-health-smoke:
     name: Playwright data health smoke E2E
     runs-on: ubuntu-latest

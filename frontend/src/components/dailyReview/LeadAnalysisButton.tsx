@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Loader2, Sparkles, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { noRemoteImages } from "@/lib/noRemoteImages";
 import remarkGfm from "remark-gfm";
 import { ApiError, streamNdjson } from "@/lib/api";
 import { loadLlm } from "@/lib/llm";
@@ -106,7 +107,7 @@ export function LeadAnalysisButton({ kind, subject = null, label }: { kind: Lead
         {error && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
         {content && <div data-testid="lead-analysis-answer" data-state={complete ? "complete" : "incomplete"}>
           <p className="mb-2 text-xs text-muted-foreground">{complete ? "非正式 AI 草稿" : "未完成的分析片段"} · 不自动保存为研究证据或今日复盘</p>
-          <div className="prose prose-sm max-w-none break-words dark:prose-invert"><ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown></div>
+          <div className="prose prose-sm max-w-none break-words dark:prose-invert"><ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>{content}</ReactMarkdown></div>
         </div>}
         {!loading && !needsConfig && <button type="button" onClick={() => void analyze()} className="rounded border border-border px-3 py-2 text-xs">重新读取并分析</button>}
       </div>

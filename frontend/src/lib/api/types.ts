@@ -1536,7 +1536,7 @@ export interface BlockTradeRow { date: string; price: number; close: number; pre
 
 export interface HolderRow { date: string; holder_num: number; change_ratio: number; avg_shares: number }
 
-export interface DividendRow { date: string; bonus_rmb: number; transfer_ratio: number; bonus_ratio: number | null; plan: string }
+export interface DividendRow { date: string; bonus_rmb: number | null; bonus_rmb_unit?: "CNY/10_shares"; transfer_ratio: number; bonus_ratio: number | null; plan: string }
 
 export interface FundFlowRow { date: string; main_net: number | null; small_net: number | null; mid_net: number | null; large_net: number | null; super_net: number | null }
 
