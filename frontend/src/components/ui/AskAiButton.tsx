@@ -3,6 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Sparkles, X, Settings, Send, Loader2, Wrench, AlertCircle, Trash2, Square } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { noRemoteImages } from "@/lib/noRemoteImages";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
 import {
@@ -487,7 +488,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                                   NON_AUTHORITATIVE_AI_DRAFT
                                 </div>
                                 <div className="prose prose-sm dark:prose-invert max-w-none break-words text-foreground">
-                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>{m.content}</ReactMarkdown>
                                 </div>
                                 {m.partial && !(loading && i === msgs.length - 1) && (
                                   <p className="mt-2 text-xs text-amber-600">回答未完成，不会作为完整记录保存或用于下一轮对话</p>

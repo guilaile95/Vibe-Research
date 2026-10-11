@@ -12,6 +12,7 @@ import {
   Upload,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { noRemoteImages } from "@/lib/noRemoteImages";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -362,7 +363,7 @@ export function Notes() {
                       <Link to={n.research.returnTo || `/candidates/${n.research.securityCode}#candidate-research-note`} className="inline-block pt-1 text-primary hover:underline">{n.research.returnTo ? "回到当时的研究位置 →" : "打开该股票的候选研究 →"}</Link>
                     </div>}
                     <div className="prose prose-sm dark:prose-invert max-w-none text-foreground">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{n.content}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>{n.content}</ReactMarkdown>
                     </div>
 
                     <div className="mt-3 flex items-center gap-2 border-t border-border/40 pt-3">
@@ -381,7 +382,7 @@ export function Notes() {
                         {reflectErr && <p className="text-xs text-destructive" role="alert">{reflectErr}</p>}
                         {reflectTruncated && <p className="text-xs text-muted-foreground">原文较长，本次仅审计截取部分，未覆盖全文。</p>}
                         <div className="prose prose-sm dark:prose-invert max-w-none text-foreground">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{reflectText}</ReactMarkdown>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>{reflectText}</ReactMarkdown>
                         </div>
                         {reflectComplete && !reflecting && !reflectErr && (
                           <button onClick={() => saveReflection(n)} disabled={reflectSaved}

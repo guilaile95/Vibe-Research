@@ -127,6 +127,10 @@ export function useLiveQuotes(codes: string[], enabled: boolean): LiveQuotesStat
     // mount→unmount→mount 必然触发，生产环境里切换开关同样会）。
     // 所以每次 await 之后都要重新检查 cancelled，且定时器句柄不跨 effect 共享。
     let cancelled = false;
+    // 请求锁只防止重叠请求；整拍也要有归属，避免可见性事件重复排下一拍。
+    // Scheduler ownership adapted from simonlin1212/Vibe-Research (MIT; root LICENSE),
+    // commit d643728e79b955dfdcdcd8b0dd362bd7c90c35c8, desktop/src/verticals/finance/lib/pollLoop.ts.
+    let running = false;
     let timer: number | null = null;
 
     const clear = () => {
@@ -139,7 +143,8 @@ export function useLiveQuotes(codes: string[], enabled: boolean): LiveQuotesStat
     const shouldRun = () => enabled && !document.hidden && isTradingHours() && codesRef.current.length > 0;
 
     const loop = async () => {
-      if (cancelled) return;
+      if (cancelled || running) return;
+      clear();
       if (!shouldRun()) {
         setPolling(false);
         // 没在跑也要保持一个心跳，好在开盘 / 页面切回来时自动恢复
@@ -147,7 +152,13 @@ export function useLiveQuotes(codes: string[], enabled: boolean): LiveQuotesStat
         return;
       }
       setPolling(true);
-      const ok = await fetchOnce();
+      running = true;
+      let ok: boolean;
+      try {
+        ok = await fetchOnce();
+      } finally {
+        running = false;
+      }
       if (cancelled) return;          // 请求期间被卸载/切换：到此为止，别再排下一拍
       const wait = ok
         ? LIVE_INTERVAL_MS

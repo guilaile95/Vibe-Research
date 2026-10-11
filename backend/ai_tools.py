@@ -126,7 +126,7 @@ TOOLS: list[dict] = [
     _t("query_holders", "查个股股东户数变化（户数增减 = 筹码集中或分散的直接证据）。", _CODE, ["code"]),
     _t("query_block_trade", "查个股大宗交易记录：成交价、折溢价率、成交量、买卖营业部。", _CODE, ["code"]),
     _t("query_dragon_tiger", "查个股龙虎榜：近 30 日上榜记录、最近一次买卖席位 TOP5、机构专用席位净买额。", _CODE, ["code"]),
-    _t("query_dividend", "查个股历史分红方案：每股派息、股息率、除权除息日、分红进度。", _CODE, ["code"]),
+    _t("query_dividend", "查个股历史分红方案：bonus_rmb 为每10股税前派息（人民币元，原值未除以10），bonus_rmb_unit 为 CNY/10_shares；缺失为 null，不代表零。另含每10股转增/送股、除权除息日、分红进度。", _CODE, ["code"]),
 
     # —— 事件与风险 ——
     _t("query_announcements", "查个股近期公告元数据（标题/日期/原始时间/类型/来源链接），不是全文。查风险与重大事项先用这个。", _CODE, ["code"]),

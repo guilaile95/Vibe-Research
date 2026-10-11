@@ -34,7 +34,7 @@ async function staticServer(unexpected) {
   return server;
 }
 async function scenario(browser, baseURL, spec, width, evidenceDir) {
-  const requests = [], writes = [], unexpected = [], external = [], errors = [], expectedFailures = [];
+  const requests = [], writes = [], unexpected = [], external = [], errors = [], expectedFailures = [], dismissedToasts = [];
   let context, page, reads = 0, failReads = true, failWrite = true, saved = structuredClone(spec.initial);
   const prefix = `${spec.name}-${width}`;
   const shot = phase => page.screenshot({ path: join(evidenceDir, `${prefix}-${phase}.png`), fullPage: true });
@@ -76,6 +76,15 @@ async function scenario(browser, baseURL, spec, width, evidenceDir) {
     page = await context.newPage(); page.setDefaultTimeout(10000);
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error' && !/^Failed to load resource: the server responded with a status of 503/.test(message.text())) errors.push(message.text()); });
+    // A user can dismiss the app's existing accessible close buttons. Clear each
+    // asserted error before retrying so hovering an obscured mobile Save button
+    // cannot expand the toast stack and indefinitely pause its expiry timer.
+    const dismissError = async message => {
+      const toast = page.locator('[data-sonner-toast]').filter({ has: page.getByText(message, { exact: true }) });
+      await toast.getByRole('button', { name: 'Close toast', exact: true }).click();
+      await toast.waitFor({ state: 'detached' });
+      dismissedToasts.push(message);
+    };
     await page.goto('/settings');
     const error = page.getByRole('alert').filter({ hasText: spec.error });
     const save = page.getByRole('button', { name: spec.save, exact: true });
@@ -84,29 +93,36 @@ async function scenario(browser, baseURL, spec, width, evidenceDir) {
       await error.waitFor(); assert.equal(await field.count(), 0);
       assert.ok(await save.count() === 0 || await save.isDisabled()); assert.equal(writes.length, 0);
     };
-    await gated(); assert.equal(reads, 1); await shot('initial-failure');
+    await gated(); assert.equal(reads, 1);
+    await dismissError('SYNTHETIC_READ_FAILURE'); await shot('initial-failure');
     await Promise.all([
       page.waitForResponse(response => new URL(response.url()).pathname === spec.path && response.status() === 503),
       page.getByRole('button', { name: spec.retry, exact: true }).click(),
     ]);
-    await gated(); assert.equal(reads, 2); await shot('retry-failure');
+    await gated(); assert.equal(reads, 2);
+    await dismissError('SYNTHETIC_READ_FAILURE'); await shot('retry-failure');
     failReads = false;
     await page.getByRole('button', { name: spec.retry, exact: true }).click(); await field.waitFor();
     assert.equal(await field.inputValue(), spec.before); assert.equal(await save.isEnabled(), true); assert.equal(writes.length, 0);
     await field.fill(spec.draft); await save.click();
     await page.getByText('SYNTHETIC_SAVE_FAILURE', { exact: true }).waitFor();
     assert.equal(await field.inputValue(), spec.draft); assert.equal(await save.isEnabled(), true); assert.equal(writes.length, 1);
+    await dismissError('SYNTHETIC_SAVE_FAILURE');
+    assert.equal(await field.inputValue(), spec.draft, 'dismissing the error cannot discard the draft');
+    assert.equal(writes.length, 1, 'dismissing the error cannot retry the write');
     failWrite = false; await save.click(); await page.getByText(spec.success, { exact: true }).waitFor();
     await field.waitFor(); assert.equal(await field.inputValue(), spec.draft); assert.equal(writes.length, 2);
     await page.reload(); await field.waitFor(); assert.equal(await field.inputValue(), spec.draft);
     assert.equal(writes.length, 2, 'reopening cannot perform a write');
     assert.equal(new URL(page.url()).pathname, '/settings'); assert.equal(await page.locator('vite-error-overlay').count(), 0);
     assert.deepEqual(errors, []); assert.deepEqual(unexpected, []); assert.deepEqual(external, []);
-    assert.equal(expectedFailures.length, 3); await shot('pass');
-    return { scenario: spec.name, width, status: 'PASS', reads, writes, requests, expectedFailures };
+    assert.equal(expectedFailures.length, 3);
+    assert.deepEqual(dismissedToasts, ['SYNTHETIC_READ_FAILURE', 'SYNTHETIC_READ_FAILURE', 'SYNTHETIC_SAVE_FAILURE']);
+    await shot('pass');
+    return { scenario: spec.name, width, status: 'PASS', reads, writes, requests, expectedFailures, dismissedToasts };
   } catch (error) {
     await shot('failure').catch(() => {});
-    const failure = { scenario: spec.name, width, status: 'FAIL', error: error.message, reads, writes, requests, expectedFailures, errors, unexpected, external };
+    const failure = { scenario: spec.name, width, status: 'FAIL', error: error.message, reads, writes, requests, expectedFailures, dismissedToasts, errors, unexpected, external };
     writeFileSync(join(evidenceDir, `${prefix}-failure.json`), JSON.stringify(failure, null, 2)); return failure;
   } finally { await context?.close(); }
 }

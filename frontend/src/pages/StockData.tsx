@@ -1084,7 +1084,7 @@ export function StockData() {
                         v={fundFlowSummary.total === null ? "未知（数据不完整）" : yi(fundFlowSummary.total)}
                         sub={`有效 ${fundFlowSummary.valid}/${fundFlowSummary.observed} 条（目标20条）；最新 ${fundFlowSummary.latestDate ?? "未知"}；不代表连续20个交易日`}
                       />}
-                      {dividend[0] && <Metric k="最近派息(每10股)" v={`${dividend[0].bonus_rmb} 元`} sub={dividend[0].date} />}
+                      {dividend[0] && <Metric k="最近税前派息(每10股)" v={dividend[0].bonus_rmb == null ? "未知" : `${dividend[0].bonus_rmb} 元`} sub={dividend[0].date} />}
                     </div>
                     {blockT.length > 0 && (
                       <div className="mt-3 border-t border-border/40 pt-3">

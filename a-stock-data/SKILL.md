@@ -105,7 +105,7 @@ version: 3.7.1
 ├── 融资融券明细   → 日级融资余额/买入/偿还 + 融券 (datacenter-web)
 ├── 大宗交易       → 成交价/量 + 买卖方营业部 (datacenter-web)
 ├── 股东户数变化   → 季度股东户数 + 环比变化 (datacenter-web)
-├── 分红送转       → 历史每股派息/送股/转增 (datacenter-web)
+├── 分红送转       → 历史每10股税前派息/送股/转增 (datacenter-web)
 ├── 个股资金流120日 → 主力/大单/中单/小单 日级净流入 (push2his)
 └── 筹码分布 CYQ   → 获利比例/平均成本/90-70成本区间/筹码峰 (本地计算，V3.7 新增)
 
@@ -288,7 +288,7 @@ ETF期权层 (V3.3 新增)
 - 用户要看**融资融券 / 两融数据**（融资余额 + 融券余额）
 - 用户要看**大宗交易**（成交价/量 + 买卖方营业部）
 - 用户要看**股东户数变化**（筹码集中度）
-- 用户要看**分红送转历史**（每股派息 + 送股 + 转增）
+- 用户要看**分红送转历史**（每10股税前派息 + 送股 + 转增）
 - 用户要看**指数/ETF行情**（上证指数 / 沪深300 / 创业板指 / ETF）
 - 用户要看**涨停 / 打板情绪**（涨停池 / 连板梯队 / 炸板率 / 跌停 / 涨停原因题材）
 - 用户要看**ETF 期权**（T型报价 / 希腊字母 Delta·Gamma·Theta·Vega / 隐含波动率 IV）
@@ -2119,7 +2119,7 @@ for d in data[:5]:
 def dividend_history(code: str, page_size: int = 20) -> list[dict]:
     """
     分红送转历史。
-    返回: [{date, bonus_rmb(每股派息), transfer_ratio(转增比例), bonus_ratio(送股比例)}]
+    返回: [{date, bonus_rmb(每10股税前派息), transfer_ratio(转增比例), bonus_ratio(送股比例)}]
     """
     data = eastmoney_datacenter(
         "RPT_SHAREBONUS_DET",
@@ -2131,7 +2131,8 @@ def dividend_history(code: str, page_size: int = 20) -> list[dict]:
     for row in data:
         rows.append({
             "date": str(row.get("EX_DIVIDEND_DATE", ""))[:10],
-            "bonus_rmb": row.get("PRETAX_BONUS_RMB", 0),    # 每股派息(税前)
+            "bonus_rmb": row.get("PRETAX_BONUS_RMB"),       # 每10股税前派息(人民币元)，缺失为 None
+            "bonus_rmb_unit": "CNY/10_shares",
             "transfer_ratio": row.get("TRANSFER_RATIO", 0),  # 每10股转增
             "bonus_ratio": row.get("BONUS_RATIO", 0),        # 每10股送股
             "plan": row.get("ASSIGN_PROGRESS", ""),           # 进度
@@ -2141,7 +2142,7 @@ def dividend_history(code: str, page_size: int = 20) -> list[dict]:
 # 用法
 data = dividend_history("600519")
 for d in data[:5]:
-    print(f"{d['date']}: 每股派息={d['bonus_rmb']}元 转增={d['transfer_ratio']} 送={d['bonus_ratio']}")
+    print(f"{d['date']}: 每10股税前派息={d['bonus_rmb']}元 转增={d['transfer_ratio']} 送={d['bonus_ratio']}")
 ```
 
 ### 4.5 个股资金流（120日，日级）
