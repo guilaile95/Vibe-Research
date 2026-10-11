@@ -1530,11 +1530,11 @@ export interface AiGeneratedResultMetadata {
 
 
 // 资金面 / 筹码 / 信号（v3.3 并入，均为「用户查的那只股」的公开数据）
-export interface MarginRow { date: string; rzye: number; rzmre: number; rzche: number; rqye: number; rqmcl: number; rzrqye: number }
+export interface MarginRow { date: string; rzye: number | null; rzmre: number | null; rzche: number | null; rqye: number | null; rqmcl: number | null; rzrqye: number | null }
 
 export interface BlockTradeRow { date: string; price: number; close: number; premium_pct: number; vol: number; amount: number; buyer: string; seller: string }
 
-export interface HolderRow { date: string; holder_num: number; change_ratio: number; avg_shares: number }
+export interface HolderRow { date: string; holder_num: number | null; change_ratio: number | null; avg_shares: number | null }
 
 export interface DividendRow { date: string; bonus_rmb: number | null; bonus_rmb_unit?: "CNY/10_shares"; transfer_ratio: number; bonus_ratio: number | null; plan: string }
 

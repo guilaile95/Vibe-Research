@@ -43,7 +43,7 @@ import { safeInternalReturnTo } from "@/lib/internalReturnTo";
 import { cn } from "@/lib/utils";
 import {
   type EvidenceListState, type EvidenceState, resolveEvidenceList, evidenceListStatusText, evidenceStatusText, loadEvidenceSource,
-  reportEvidenceContext, announcementEvidenceContext, quoteEvidenceContext, summarizeStockFundFlow,
+  reportEvidenceContext, announcementEvidenceContext, quoteEvidenceContext, summarizeStockFundFlow, formatStockCapitalValue,
 } from "@/lib/stockDataEvidence";
 
 // 金额格式化（后端资金单位：元 / 万元）
@@ -1076,9 +1076,9 @@ export function StockData() {
                     <SourceStatus label="大宗交易" state={blockTResult} />
 
                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                      {margin[0] && <Metric k="融资余额" v={yi(margin[0].rzye)} sub={margin[0].date} />}
-                      {margin[0] && <Metric k="融券余额" v={yi(margin[0].rqye)} />}
-                      {holders[0] && <Metric k="股东户数" v={Number(holders[0].holder_num).toLocaleString()} sub={`环比 ${pct(holders[0].change_ratio)}`} />}
+                      {margin[0] && <Metric k="融资余额" v={formatStockCapitalValue(margin[0].rzye, "balance")} sub={margin[0].date} />}
+                      {margin[0] && <Metric k="融券余额" v={formatStockCapitalValue(margin[0].rqye, "balance")} />}
+                      {holders[0] && <Metric k="股东户数" v={formatStockCapitalValue(holders[0].holder_num, "count")} sub={`环比 ${formatStockCapitalValue(holders[0].change_ratio, "percent")}`} />}
                       {fundFlow.length > 0 && <Metric
                         k="最近至多20条主力净流入合计"
                         v={fundFlowSummary.total === null ? "未知（数据不完整）" : yi(fundFlowSummary.total)}
