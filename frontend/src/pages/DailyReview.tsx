@@ -1228,7 +1228,7 @@ export function DailyReview() {
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Flame className="h-4 w-4" /> 短线情绪</h3>
         <span className="text-[11px] text-muted-foreground/50">连板股 · 打板情绪</span>
-        {emotion?.date && <span className="ml-auto text-[11px] text-muted-foreground/50">{emotion.date}</span>}
+        {emotion?.date && <span className="ml-auto text-[11px] text-muted-foreground/50">{emotion.date_verified === false ? "请求交易日（来源日期未核实） " : ""}{emotion.date}</span>}
         {reviewBadge(emotionEnv?.status) && (
           <span className={cn("rounded-full px-2 py-0.5 text-[10px]", reviewBadge(emotionEnv?.status)!.cls)}>
             {reviewBadge(emotionEnv?.status)!.text}
@@ -1271,7 +1271,7 @@ export function DailyReview() {
             <div className="mt-3">
               <p className="mb-1.5 text-[11px] text-muted-foreground">连板股（2 板以上连续涨停）</p>
               {!emotion.lianban_stocks?.length ? (
-                <p className="text-xs text-muted-foreground/50">今日无 2 板以上个股</p>
+                <p className="text-xs text-muted-foreground/50">{emotion.lianban_count == null ? "连板股数据暂不可用" : "该池未见 2 板以上个股"}</p>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">

@@ -17,6 +17,8 @@ import copy
 import json
 import os
 import threading
+
+import trade_calendar
 from typing import Any
 
 CACHE_SCHEMA_VERSION = "daily-review-cache-v0.1"
@@ -56,6 +58,78 @@ def _is_structurally_cacheable(review: Any) -> bool:
     return review.get("status") in ("normal", "partial")
 
 
+def pool_provenance(review: Any) -> dict:
+    if not isinstance(review, dict):
+        return {}
+    emotion = review.get("short_term_emotion")
+    if not isinstance(emotion, dict):
+        return {}
+    provenance = emotion.get("provenance")
+    if isinstance(provenance, dict):
+        return provenance
+    data = emotion.get("data")
+    return data if isinstance(data, dict) else {}
+
+
+def qualified_pool_replaces_normal(new_review: Any, existing_review: Any) -> bool:
+    """Narrow latest-cache migration, not a general preference for partial data.
+
+    Only a complete nonempty four-pool observation whose sole degradation is
+    the newly disclosed date uncertainty may replace an old unverified normal.
+    A genuinely verified normal for the same session remains protected.
+    """
+    if not isinstance(new_review, dict) or new_review.get("status") != "partial":
+        return False
+    provenance = pool_provenance(new_review)
+    if provenance.get("observation_schema") != "legacy-market-pool-observation-v1":
+        return False
+    session = provenance.get("date")
+    if not session or trade_calendar.observation_trade_date_at(provenance.get("as_of")) != session:
+        return False
+    health = new_review.get("data_health")
+    if not isinstance(health, dict):
+        return False
+    components = health.get("components")
+    if not isinstance(components, dict):
+        return False
+    if components.get("emotion") != "partial" or not all(
+        components.get(key) == "normal" for key in (
+            "indices", "global_indices", "breadth", "turnover", "industry_boards", "concept_boards", "region_boards",
+        )
+    ):
+        return False
+    # Cross-check actual component envelopes, not just a healthy status map.
+    for section, component in (
+        ("market_environment", "indices"), ("market_environment", "global_indices"),
+        ("market_environment", "breadth"), ("capital_activity", "turnover_top"),
+        ("sector_rotation", "industry"), ("sector_rotation", "concept"), ("sector_rotation", "region"),
+    ):
+        container = new_review.get(section)
+        envelope = container.get(component) if isinstance(container, dict) else None
+        if not isinstance(envelope, dict) or envelope.get("status") != "normal":
+            return False
+    emotion = new_review.get("short_term_emotion")
+    data = emotion.get("data") if isinstance(emotion, dict) else None
+    if not isinstance(data, dict) or emotion.get("status") != "partial":
+        return False
+    pools = provenance.get("pool_observations")
+    if not isinstance(pools, dict) or set(pools) != {"zt", "zb", "dt", "yzt"}:
+        return False
+    for key, pool in pools.items():
+        if (not isinstance(pool, dict) or pool.get("status") != "partial"
+                or pool.get("observation_schema") != provenance["observation_schema"]
+                or pool.get("observed_empty") is not False
+                or pool.get("observed_row_count") != pool.get("count")
+                or data.get(f"{key}_count") != pool.get("count")
+                or pool.get("reason_codes") != ["DATE_BINDING_UNVERIFIED"]
+                or type(pool.get("count")) is not int or pool["count"] <= 0
+                or pool.get("requested_trade_date") != session):
+            return False
+    old = pool_provenance(existing_review)
+    old_date = old.get("source_business_date") or old.get("date")
+    return not (old.get("date_verified") is True and old_date == session)
+
+
 def should_persist_review(new_review: Any, existing_review: Any | None = None) -> bool:
     """是否允许将 new_review 写入磁盘（相对 existing_review）。"""
     if not _is_structurally_cacheable(new_review):
@@ -66,8 +140,10 @@ def should_persist_review(new_review: Any, existing_review: Any | None = None) -
         return False
     if new_review.get("status") == "partial":
         if isinstance(existing_review, dict) and existing_review.get("status") == "normal":
-            # partial 不得覆盖 normal
-            return False
+            # The only exception is a versioned pool-provenance correction;
+            # real degradation and current verified normal remain protected.
+            if not qualified_pool_replaces_normal(new_review, existing_review):
+                return False
     return True
 
 

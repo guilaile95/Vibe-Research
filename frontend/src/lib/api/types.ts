@@ -700,12 +700,21 @@ export interface LianbanStock {
 
 export interface ShortTermEmotion {
   date: string;
-  zt_count: number; dt_count: number; zb_count: number;
-  max_boards: number; lianban_count: number;
+  zt_count: number | null; dt_count: number | null; zb_count: number | null;
+  max_boards: number | null; lianban_count: number | null;
   ladder: EmotionTier[];
   lianban_stocks: LianbanStock[];
   seal_rate: number | null; break_rate: number | null; promotion_rate: number | null;
-  yzt_count: number;
+  yzt_count: number | null;
+  status?: "normal" | "partial" | "unavailable";
+  requested_date?: string;
+  as_of?: string;
+  source_business_date?: string | null;
+  date_basis?: "provider_business_date" | "requested_session_inferred" | "unverified";
+  date_verified?: boolean;
+  is_stale?: boolean;
+  warnings?: string[];
+  pool_observations?: Record<string, Record<string, unknown>>;
 }
 
 /** 与 ShortTermEmotion 同构，供每日复盘聚合包使用 */

@@ -995,6 +995,7 @@ def _em_get_page_with_retries(
 # 原始池含个股 code/name，由 market.py 聚合为短线情绪指标，也可输出连板股清单。
 # ---------------------------------------------------------------------------
 _ZTB_UT = "7eea3edcaed734bea9cbfc24409ed989"
+LEGACY_POOL_OBSERVATION_SCHEMA = "legacy-market-pool-observation-v1"
 
 
 def em_zt_topic_pool(endpoint: str, date: str, sort: str = "fbt:asc") -> list[dict]:
@@ -1002,15 +1003,150 @@ def em_zt_topic_pool(endpoint: str, date: str, sort: str = "fbt:asc") -> list[di
     endpoint: getTopicZTPool(涨停) / getTopicZBPool(炸板) / getTopicDTPool(跌停) / getYesterdayZTPool(昨涨停)
     date: YYYYMMDD 交易日。非交易日 / 参数错 → []。
     池内每项字段含 lbc(连板数) / zbc(炸板次数) / hybk(行业) 等。"""
+    try:
+        r = _em_zt_topic_response(endpoint, date, sort)
+        return (r.json().get("data") or {}).get("pool") or []
+    except Exception:
+        return []
+
+
+def _em_zt_topic_response(endpoint: str, date: str, sort: str):
+    """Shared transport only; the legacy list wrapper keeps its original contract."""
     url = f"https://push2ex.eastmoney.com/{endpoint}"
     params = {"ut": _ZTB_UT, "dpt": "wz.ztzt", "Pageindex": 0,
               "pagesize": 10000, "sort": sort, "date": date}
     headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
+    return em_get(url, params=params, headers=headers, timeout=10)
+
+
+def _pool_date(value) -> str | None:
+    """Strict provider date, matching existing adapter conventions (not its authority)."""
+    if type(value) is int:
+        value = str(value)
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if re.fullmatch(r"[0-9]{8}", value):
+        value = f"{value[:4]}-{value[4:6]}-{value[6:]}"
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+        return None
     try:
-        r = em_get(url, params=params, headers=headers, timeout=10)
-        return (r.json().get("data") or {}).get("pool") or []
+        return datetime.strptime(value, "%Y-%m-%d").date().isoformat()
+    except ValueError:
+        return None
+
+
+def em_zt_topic_observation(endpoint: str, date: str, sort: str = "fbt:asc", *,
+                            as_of: str) -> dict:
+    """Qualified legacy pool observation, not a BK-11/final or legal-zero producer.
+
+    qdate is the provider's latest session, including for historical requests;
+    it must never be treated as a historical row date. Explicit [] is retained
+    as observed_empty, but cannot independently establish a complete-market zero.
+    """
+    import trade_calendar
+
+    want = _pool_date(date)
+    result = {
+        "observation_schema": LEGACY_POOL_OBSERVATION_SCHEMA,
+        "endpoint": endpoint, "requested_trade_date": want,
+        "as_of": as_of, "fetched_at": None, "status": "unavailable",
+        "reason_codes": [], "rows": [], "count": None,
+        "observed_row_count": None, "observed_empty": False,
+        "source_business_date": None, "provider_latest_trade_date": None,
+        "date_basis": "unverified", "date_verified": False,
+        "completeness_verified": False, "http_status": None, "provider_reported_dates": [],
+    }
+
+    def reject(reason):
+        result["reason_codes"] = [reason]
+        return result
+
+    if endpoint not in {"getTopicZTPool", "getTopicZBPool", "getTopicDTPool", "getYesterdayZTPool"} or want is None:
+        return reject("INVALID_REQUEST")
+    # Reuse the official local 09:30 observation policy, never infer sessions
+    # from nonempty responses or modify BK-11 calendar authority.
+    observation_date = trade_calendar.observation_trade_date_at(as_of)
+    sessions = trade_calendar._load_calendar()
+    if observation_date is None or sessions is None:
+        return reject("TRADING_CALENDAR_UNAVAILABLE")
+    if want not in sessions or want > observation_date:
+        return reject("NON_TRADING_OR_UNAVAILABLE_DATE")
+    try:
+        response = _em_zt_topic_response(endpoint, want.replace("-", ""), sort)
     except Exception:
-        return []
+        return reject("TRANSPORT_ERROR")
+    result["fetched_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    code = getattr(response, "status_code", None)
+    if type(code) is int and 100 <= code < 600:
+        result["http_status"] = code
+    if type(code) is not int or not 200 <= code < 300:
+        return reject("HTTP_ERROR")
+    try:
+        payload = response.json()
+    except Exception:
+        return reject("PARSE_ERROR")
+    if not isinstance(payload, dict):
+        return reject("INVALID_RESPONSE")
+    # Explicit success is required. Missing/malformed rc is not zero.
+    if type(payload.get("rc")) is not int or payload["rc"] != 0:
+        return reject("BUSINESS_STATUS_UNAVAILABLE")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return reject("DATA_UNAVAILABLE")
+    # Treat all provided qdate candidates as latest-market-date metadata.
+    latest = []
+    for obj in (payload, data):
+        if obj.get("qdate") is not None:
+            parsed = _pool_date(obj["qdate"])
+            if parsed is None:
+                return reject("INVALID_PROVIDER_DATE")
+            latest.append(parsed)
+    if len(set(latest)) > 1:
+        return reject("CONFLICTING_PROVIDER_DATE")
+    if latest:
+        result["provider_latest_trade_date"] = latest[0]
+        if want > latest[0]:
+            return reject("SOURCE_SESSION_UNAVAILABLE")
+    business_dates = []
+    for obj in (payload, data):
+        for key in ("trade_date", "date"):
+            if obj.get(key) is not None:
+                parsed = _pool_date(obj[key])
+                if parsed is None:
+                    return reject("INVALID_BUSINESS_DATE")
+                business_dates.append(parsed)
+    result["provider_reported_dates"] = business_dates
+    if any(d != want for d in business_dates):
+        return reject("BUSINESS_DATE_MISMATCH")
+    # These generic date fields are consistency evidence only: no pinned
+    # four-pool provider contract establishes them as row business dates.
+    result["date_basis"] = "requested_session_inferred"
+    if "pool" not in data or data["pool"] is None:
+        return reject("POOL_UNAVAILABLE")
+    pool = data["pool"]
+    if not isinstance(pool, list):
+        return reject("INVALID_POOL")
+    result["observed_row_count"] = len(pool)
+    result["observed_empty"] = not pool
+    if not pool:
+        result.update(status="partial", reason_codes=["OBSERVED_EMPTY_UNVERIFIED"])
+        return result
+    # Invalid/duplicate rows cannot silently shrink a count or fabricate ladder
+    # facts. No universe filtering: this is the legacy provider pool contract.
+    seen = set()
+    for row in pool:
+        if not isinstance(row, dict) or not isinstance(row.get("c"), str) or not re.fullmatch(r"[0-9]{6}", row["c"]):
+            return reject("INVALID_POOL_ROW")
+        if row["c"] in seen:
+            return reject("DUPLICATE_POOL_ROW")
+        seen.add(row["c"])
+        if endpoint == "getTopicZTPool" and (type(row.get("lbc")) is not int or row["lbc"] < 1):
+            return reject("INVALID_BOARD_COUNT")
+    result.update(rows=pool, count=len(pool), status="partial")
+    # Count is observed rows, not independently certified whole-market coverage.
+    result["reason_codes"] = ["DATE_BINDING_UNVERIFIED"]
+    return result
 
 
 def _numf(v):

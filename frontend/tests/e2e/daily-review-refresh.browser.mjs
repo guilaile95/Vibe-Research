@@ -4,7 +4,7 @@
  */
 import { chromium } from "playwright";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import http, { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -19,6 +19,8 @@ const shotDir = path.resolve(
 );
 const backendDir = path.join(root, "backend");
 const e2eDir = __dirname;
+const poolProvenanceOnly = process.argv.includes("--pool-provenance-only");
+const poolResults = [];
 
 let backendPort = 0;
 let frontendPort = 0;
@@ -142,6 +144,7 @@ async function main() {
     VIBE_RESEARCH_REVIEW_DB: reviewDb,
     VR_ALLOW_ORIGINS: `http://127.0.0.1:${frontendPort}`,
     VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH: "1",
+    VR_E2E_POOL_PROVENANCE: poolProvenanceOnly ? "1" : "0",
     PYTHONPATH: [backendDir, e2eDir, process.env.PYTHONPATH || ""].filter(Boolean).join(path.delimiter),
   };
 
@@ -157,6 +160,7 @@ async function main() {
   const errors = [];
   let staticServer;
   let browser;
+  let page;
   try {
     await waitHttp(`http://127.0.0.1:${backendPort}/api/health`).catch(() =>
       waitHttp(`http://127.0.0.1:${backendPort}/api/daily-review`),
@@ -237,7 +241,20 @@ async function main() {
     }
     browser = await launchBrowser();
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    const page = await context.newPage();
+    if (poolProvenanceOnly) {
+      await context.route("**/*", route => {
+        const request = route.request();
+        const url = new URL(request.url());
+        if (request.method() === "GET" && request.resourceType() === "stylesheet"
+            && url.href === "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap") {
+          return route.fulfill({ status: 200, contentType: "text/css", body: "" });
+        }
+        if (url.hostname === "127.0.0.1" && Number(url.port) === frontendPort) return route.continue();
+        errors.push(`External browser request blocked: ${url.origin}`);
+        return route.abort();
+      });
+    }
+    page = await context.newPage();
     const pageErrors = [];
     page.on("pageerror", (e) => pageErrors.push(String(e)));
     const apiLog = { get: 0, refreshPost: 0, advicePost: 0, adviceBodies: [], refreshStatuses: [], adviceStatuses: [] };
@@ -260,6 +277,84 @@ async function main() {
       }
     });
 
+    if (poolProvenanceOnly) {
+      for (const scenario of ["qualified", "secondary_failure", "empty_zt"]) {
+        // Use the real same-origin application API and actual page component.
+        const setup = await context.request.post(`http://127.0.0.1:${frontendPort}/api/e2e/daily-review/pool-scenario/${scenario}`);
+        if (!setup.ok()) throw new Error(`Scenario setup failed: ${setup.status()}`);
+        const responsePromise = page.waitForResponse(response => response.url().endsWith("/api/daily-review") && response.request().method() === "GET");
+        await page.goto(`http://127.0.0.1:${frontendPort}/daily-review`, { waitUntil: "domcontentloaded" });
+        const response = await responsePromise;
+        const responseBody = await response.json();
+        const review = responseBody.data;
+        const emotion = review?.short_term_emotion;
+        const data = emotion?.data;
+        if (!response.ok() || emotion?.status !== "partial" || data?.date_verified !== false || review?.trade_date !== null
+            || data.requested_date !== "2026-10-10" || data.date !== "2026-10-09"
+            || data.source_business_date !== null || data.as_of !== "2026-10-10T04:10:00Z") {
+          throw new Error(`${scenario}: truthful partial/inferred API contract was not retained`);
+        }
+        const pools = data.pool_observations;
+        if (!pools || Object.keys(pools).sort().join(",") !== "dt,yzt,zb,zt") throw new Error(`${scenario}: four-pool provenance missing`);
+        for (const [key, observation] of Object.entries(pools)) {
+          const expectedLatest = scenario === "secondary_failure" && key !== "zt" ? null : "2026-10-09";
+          if (observation.requested_trade_date !== "2026-10-09" || observation.provider_latest_trade_date !== expectedLatest
+              || observation.source_business_date !== null || observation.date_verified !== false) {
+            throw new Error(`${scenario}/${key}: provider latest day or inferred query session was mislabeled`);
+          }
+        }
+        const lead = page.getByTestId("today-lead-短线情绪");
+        await lead.waitFor({ state: "visible", timeout: 15000 });
+        await page.waitForFunction(() => document.querySelector('[data-testid="today-lead-短线情绪"]')?.textContent?.includes("来源日期未核实"));
+        const leadText = await lead.innerText();
+        if (!leadText.includes("数据不完整") || !leadText.includes("请求交易日（来源日期未核实）") || !leadText.includes("2026-10-09")) {
+          throw new Error(`${scenario}: rendered lead lost status/date qualification`);
+        }
+        await lead.getByRole("button", { name: "查看情绪详情" }).click();
+        const details = page.locator("#market-detail-emotion");
+        await page.waitForFunction(() => document.querySelector("#market-detail-emotion")?.open === true);
+        const detailText = await details.innerText();
+        const warningsSummary = page.getByText(/^查看 \d+ 条来源提示$/);
+        await warningsSummary.click();
+        const bodyText = await page.locator("body").innerText();
+        if (!bodyText.includes("来源未完整确认池内数据所属日期")) throw new Error(`${scenario}: provenance warning not rendered`);
+        if (!/交易日期：\s*—/.test(bodyText) || !/生成时间：\s*2026-10-10 12:10/.test(bodyText)
+            || !bodyText.includes("未提供（不能以生成时间代替）")) {
+          throw new Error(`${scenario}: rendered unknown trade/cutoff date or distinct observation time was replaced`);
+        }
+        if (scenario === "qualified") {
+          if (!leadText.includes("涨停 1 家 · 跌停 1 家 · 最高 2 板") || !detailText.includes("合成样本")) {
+            throw new Error("Qualified nonempty partial data disappeared");
+          }
+          if (data.seal_rate !== 0.5 || data.break_rate !== 0.5) throw new Error("Qualified rates changed");
+          // Refresh must retain the same truthful partial, not report a generic failure.
+          const refreshed = page.waitForResponse(r => r.url().endsWith("/api/daily-review/refresh") && r.request().method() === "POST");
+          await page.getByTestId("daily-review-refresh").click();
+          const refreshResponse = await refreshed;
+          if (!refreshResponse.ok() || (await refreshResponse.json()).data?.short_term_emotion?.status !== "partial") {
+            throw new Error("Qualified partial explicit refresh failed");
+          }
+        } else if (scenario === "secondary_failure") {
+          if (!leadText.includes("涨停 1 家 · 跌停 — 家") || data.dt_count !== null || data.seal_rate !== null || data.break_rate !== null) {
+            throw new Error("Secondary failure rendered as zero or healthy rates");
+          }
+          if (detailText.includes("100.0%") || !bodyText.includes("炸板池数据不可用")) throw new Error("Secondary failure qualification lost");
+        } else {
+          if (!leadText.includes("涨停 — 家") || data.zt_count !== null || !data.pool_observations?.zt?.observed_empty) {
+            throw new Error("Explicit empty became a claimed zero");
+          }
+          if (!detailText.includes("连板股数据暂不可用") || detailText.includes("该池未见 2 板以上个股")) {
+            throw new Error("Unknown ladder rendered as no stocks");
+          }
+          if (!bodyText.includes("涨停池返回空列表")) throw new Error("Explicit-empty warning missing");
+        }
+        await page.screenshot({ path: path.join(shotDir, `market-pool-${scenario}.png`), fullPage: true });
+        poolResults.push({ scenario, status: emotion.status, date: data.date, date_verified: data.date_verified,
+          requested_date: data.requested_date, as_of: data.as_of, source_business_date: data.source_business_date,
+          provider_latest_trade_date: data.pool_observations?.zt?.provider_latest_trade_date,
+          trade_date: review.trade_date, lead_text: leadText, detail_text: detailText, warnings: review.warnings });
+      }
+    } else {
     // —— 每日复盘刷新 ——
     await page.goto(`http://127.0.0.1:${frontendPort}/daily-review`, { waitUntil: "networkidle" });
     await page.waitForTimeout(1500);
@@ -409,6 +504,7 @@ async function main() {
     }
     await page.screenshot({ path: path.join(shotDir, "portfolio-advice.png"), fullPage: true });
 
+    }
     if (pageErrors.length) {
       errors.push(...pageErrors.map((e) => `pageerror: ${e}`));
     }
@@ -416,6 +512,7 @@ async function main() {
   } catch (e) {
     errors.push(`harness: ${e && e.stack ? e.stack : e}`);
     if (uvLog) errors.push(`uvicorn: ${uvLog.slice(-1500)}`);
+    if (poolProvenanceOnly && page) await page.screenshot({ path: path.join(shotDir, "market-pool-failure.png"), fullPage: true }).catch(() => {});
   } finally {
     if (browser) await browser.close().catch(() => {});
     if (staticServer) staticServer.close();
@@ -425,12 +522,19 @@ async function main() {
     await rm(reportsDir, { recursive: true, force: true }).catch(() => {});
   }
 
+  if (poolProvenanceOnly) {
+    await writeFile(path.join(shotDir, "market-pool-backend.log"), uvLog);
+    await writeFile(path.join(shotDir, "market-pool-summary.json"), JSON.stringify({
+      synthetic: true, full_app: true, scenarios: poolResults, errors,
+      fonts: "Exact known Google Fonts stylesheet stubbed locally; system fallback font",
+    }, null, 2));
+  }
   if (errors.length) {
-    console.error("FAIL daily-review-refresh / advice acceptance");
+    console.error(poolProvenanceOnly ? "FAIL market-pool provenance acceptance" : "FAIL daily-review-refresh / advice acceptance");
     for (const e of errors) console.error(" -", e);
     process.exit(1);
   }
-  console.log("PASS daily-review-refresh / advice acceptance");
+  console.log(poolProvenanceOnly ? "PASS market-pool provenance acceptance" : "PASS daily-review-refresh / advice acceptance");
 }
 
 main().catch((e) => {

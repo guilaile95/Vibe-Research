@@ -169,8 +169,14 @@ def test_emotion_dirty_amount(monkeypatch):
         "getTopicDTPool": [],
         "getYesterdayZTPool": [{}],
     }
-    monkeypatch.setattr(astock, "em_zt_topic_pool", lambda ep, d, sort="": pools.get(ep, []))
-    out = market._emotion()
+    class PoolResponse:
+        status_code = 200
+        def __init__(self, rows):
+            self.rows = rows
+        def json(self):
+            return {"rc": 0, "data": {"trade_date": "20261009", "pool": self.rows}}
+    monkeypatch.setattr(astock, "em_get", lambda url, **kw: PoolResponse(pools[url.rsplit("/", 1)[-1]]))
+    out = market._emotion("2026-10-09T07:10:00Z")
     stocks = out["lianban_stocks"]
     assert [s["code"] for s in stocks] == ["600001", "600002"]  # 排序没崩、按连板数降序
     assert stocks[0]["amount"] is None    # '-' 归一为 None

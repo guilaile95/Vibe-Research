@@ -455,7 +455,7 @@ def test_cache_mutation_does_not_pollute(monkeypatch):
 def test_cache_ttl_expiry_regenerates(monkeypatch):
     counts = _install_all_ok(monkeypatch)
     monkeypatch.setattr(daily_review, "_REVIEW_TTL", 1)
-    t0 = 1000.0
+    t0 = time.time()  # retain the real supported calendar session while testing TTL
     clock = {"now": t0}
 
     def fake_time():

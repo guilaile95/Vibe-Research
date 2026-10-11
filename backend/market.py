@@ -17,6 +17,7 @@ import astock
 import daily_review_errors
 import gstock
 import push2_guard
+import trade_calendar
 
 BEIJING = timezone(timedelta(hours=8))
 _CACHE: dict = {}
@@ -82,6 +83,28 @@ def _speculation_label(zt_count: int | None) -> str | None:
     return "冰点"
 
 
+
+def _usable_qualified_pools(observations: object) -> bool:
+    """A provenance qualification is cacheable; missing/failed data is not."""
+    if not isinstance(observations, dict) or set(observations) != {"zt", "zb", "dt", "yzt"}:
+        return False
+    return all(
+        isinstance(obs, dict) and obs.get("status") == "partial"
+        and obs.get("reason_codes") == ["DATE_BINDING_UNVERIFIED"]
+        and type(obs.get("count")) is int and obs["count"] > 0
+        and obs.get("observed_row_count") == obs["count"]
+        and obs.get("observed_empty") is False
+        for obs in observations.values()
+    )
+
+
+def _emotion_provenance(emotion: dict) -> dict:
+    return {key: emotion.get(key) for key in (
+        "observation_schema", "status", "requested_date", "date", "as_of", "source_business_date",
+        "date_basis", "date_verified", "is_stale", "pool_observations",
+    )}
+
+
 def _sentiment() -> dict:
     """市场情绪：涨跌家数来自全 A 快照广度；涨跌停来自东财涨停池。
 
@@ -124,6 +147,9 @@ def _sentiment() -> dict:
         emotion = {}
         emotion_warns.append(f"涨跌停池数据不可用：{type(e).__name__}: {e}")
 
+    if emotion.get("status") in ("partial", "unavailable"):
+        emotion_warns.extend(emotion.get("warnings") or ["涨跌停池数据不完整"])
+
     b_status = breadth_payload.get("status") if isinstance(breadth_payload, dict) else None
     b_warns = list(breadth_payload.get("warnings") or []) if isinstance(breadth_payload, dict) else []
     b_data = breadth_payload.get("data") if isinstance(breadth_payload, dict) else None
@@ -158,6 +184,8 @@ def _sentiment() -> dict:
             "stock_count": None, "valid_count": None,
             "up_3pct_count": None, "down_3pct_count": None, "total_amount": None,
             "date": date,
+            "breadth_status": b_status,
+            "emotion_provenance": _emotion_provenance(emotion),
             "limit_count_source": "eastmoney_limit_pool",
         }
 
@@ -187,6 +215,7 @@ def _sentiment() -> dict:
     # 广度 normal 但情绪池缺失 → partial
     emotion_ok = (
         bool(emotion)
+        and emotion.get("status", "normal") == "normal"
         and emotion.get("zt_count") is not None
         and emotion.get("dt_count") is not None
     )
@@ -218,6 +247,8 @@ def _sentiment() -> dict:
         "down_3pct_count": down_3pct if isinstance(down_3pct, (int, float)) else None,
         "total_amount": total_amount if isinstance(total_amount, (int, float)) else None,
         "date": date,
+        "breadth_status": b_status,
+        "emotion_provenance": _emotion_provenance(emotion),
         "limit_count_source": "eastmoney_limit_pool",
     }
 
@@ -244,37 +275,82 @@ def _sectors() -> list[dict]:
 
 def get_overview() -> dict:
     """市场情绪 + 板块资金（含缓存）。资金轮动由前端从 sectors 头尾取。"""
+    session = trade_calendar.observation_trade_date_at(datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    hit = _CACHE.get("overview")
+    if hit and len(hit) == 3 and hit[2] == session and time.time() - hit[0] < _TTL:
+        return hit[1]
+
     def build():
         if push2_guard.is_read_only():
             raise push2_guard.Push2Blocked("Push2 overview refresh is unavailable in read-only context")
         return {
             "sentiment": _sentiment(),
-            "sectors": _sectors(),
+            "sectors": _cached("sectors", _sectors),
             "updated": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
         }
-    return _cached("overview", build, valid=lambda v: bool(v.get("sentiment") or v.get("sectors")))
+    # Qualified-success partial aggregates remain reusable in read-only views.
+    # Real partial/failure must not suppress retries; status is never upgraded.
+    result = build()
+    sentiment = result.get("sentiment") or {}
+    provenance = sentiment.get("emotion_provenance") or {}
+    qualified_success = (
+        sentiment.get("status") == "partial" and sentiment.get("breadth_status") == "normal"
+        and _usable_qualified_pools(provenance.get("pool_observations"))
+    )
+    if session is not None and (sentiment.get("status") == "normal" or qualified_success):
+        _CACHE["overview"] = (time.time(), result, session)
+    return result
 
 
-def _emotion() -> dict:
-    """短线情绪：连板梯队 / 最高连板 / 炸板率 / 封板率 / 晋级率 / 涨跌停家数 + 连板股清单。
-
-    数据源＝东财涨停板四池（push2ex）。
-    """
-    # 定位最近交易日：从今天往前回溯，第一日有涨停池即取（非交易日/盘前返空则继续回溯）。
-    today = datetime.now(BEIJING).date()
-    resolved, zt = "", []
-    for back in range(8):
-        d = (today - timedelta(days=back)).strftime("%Y%m%d")
-        zt = astock.em_zt_topic_pool("getTopicZTPool", d, "fbt:asc")
-        if zt:
-            resolved = d
-            break
-    if not resolved:
-        return {}
-
-    zb = astock.em_zt_topic_pool("getTopicZBPool", resolved, "fbt:asc")    # 炸板池
-    dt = astock.em_zt_topic_pool("getTopicDTPool", resolved, "fund:asc")   # 跌停池
-    yzt = astock.em_zt_topic_pool("getYesterdayZTPool", resolved, "zs:desc")  # 昨涨停池
+def _emotion(as_of: str | None = None) -> dict:
+    """Legacy research metrics with per-pool missingness and date provenance."""
+    as_of = as_of or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    instant = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    requested_date = instant.astimezone(BEIJING).date().isoformat()
+    resolved = trade_calendar.observation_trade_date_at(as_of)
+    base = {
+        "observation_schema": astock.LEGACY_POOL_OBSERVATION_SCHEMA,
+        "date": resolved or "", "requested_date": requested_date,
+        "as_of": as_of, "source_business_date": None,
+        "date_basis": "unverified", "date_verified": False,
+        "status": "unavailable", "warnings": [], "is_stale": False,
+        "zt_count": None, "dt_count": None, "zb_count": None,
+        "max_boards": None, "lianban_count": None, "yzt_count": None,
+        "ladder": [], "lianban_stocks": [],
+        "seal_rate": None, "break_rate": None, "promotion_rate": None,
+        "pool_observations": {},
+    }
+    if resolved is None:
+        base["warnings"] = ["交易日历不可用，短线情绪日期无法确认。"]
+        return base
+    specs = {"zt": ("getTopicZTPool", "fbt:asc"), "zb": ("getTopicZBPool", "fbt:asc"),
+             "dt": ("getTopicDTPool", "fund:asc"), "yzt": ("getYesterdayZTPool", "zs:desc")}
+    observations = {
+        key: astock.em_zt_topic_observation(endpoint, resolved.replace("-", ""), sort, as_of=as_of)
+        for key, (endpoint, sort) in specs.items()
+    }
+    base["pool_observations"] = {key: {k: v for k, v in obs.items() if k != "rows"}
+                                 for key, obs in observations.items()}
+    counts = {key: obs["count"] for key, obs in observations.items()}
+    base.update({f"{key}_count": value for key, value in counts.items()})
+    usable = any(value is not None for value in counts.values())
+    base["status"] = ("normal" if all(obs["status"] == "normal" for obs in observations.values())
+                      else "partial" if usable or any(obs["observed_empty"] for obs in observations.values())
+                      else "unavailable")
+    verified = all(obs["date_verified"] and obs["status"] != "unavailable" for obs in observations.values())
+    base.update(date_verified=verified, source_business_date=resolved if verified else None,
+                date_basis="provider_business_date" if verified else "requested_session_inferred")
+    labels = {"zt": "涨停", "zb": "炸板", "dt": "跌停", "yzt": "昨涨停"}
+    for key, obs in observations.items():
+        if obs["status"] == "unavailable":
+            base["warnings"].append(f"{labels[key]}池数据不可用，相关指标未知。")
+        elif obs["observed_empty"]:
+            base["warnings"].append(f"{labels[key]}池返回空列表，尚不能确认完整零值。")
+    if not verified:
+        base["warnings"].append("日期按请求交易日推定，来源未完整确认池内数据所属日期。")
+    zt = observations["zt"]["rows"]
+    if counts["zt"] is None:
+        return base
 
     boards = [_num(p.get("lbc")) or 1 for p in zt]      # 每只连板数（缺省按 1 板）
     lianban = [b for b in boards if b >= 2]             # 2 板及以上（连板）
@@ -296,32 +372,27 @@ def _emotion() -> dict:
         key=lambda x: (-x["boards"], -(x["amount"] or 0)),
     )
 
-    zt_count, zb_count, yzt_count = len(zt), len(zb), len(yzt)
-    attempts = zt_count + zb_count                       # 尝试涨停 = 封住 + 炸板
-    seal_rate = round(zt_count / attempts, 3) if attempts else None      # 封板率
-    break_rate = round(zb_count / attempts, 3) if attempts else None     # 炸板率
-    # 晋级率＝今日 2 板+（＝昨涨停今又停）÷ 昨日涨停家数
-    promotion_rate = round(len(lianban) / yzt_count, 3) if yzt_count else None
-
-    return {
-        "date": f"{resolved[:4]}-{resolved[4:6]}-{resolved[6:]}",
-        "zt_count": zt_count,
-        "dt_count": len(dt),
-        "zb_count": zb_count,
-        "max_boards": max(boards) if boards else 0,
-        "lianban_count": len(lianban),
-        "ladder": ladder,
-        "lianban_stocks": lianban_stocks,
-        "seal_rate": seal_rate,
-        "break_rate": break_rate,
-        "promotion_rate": promotion_rate,
-        "yzt_count": yzt_count,
-    }
+    zt_count, zb_count, yzt_count = counts["zt"], counts["zb"], counts["yzt"]
+    attempts = zt_count + zb_count if zb_count is not None else None
+    base.update({
+        "max_boards": max(boards) if boards else None,
+        "lianban_count": len(lianban), "ladder": ladder, "lianban_stocks": lianban_stocks,
+        "seal_rate": round(zt_count / attempts, 3) if attempts else None,
+        "break_rate": round(zb_count / attempts, 3) if attempts else None,
+        "promotion_rate": round(len(lianban) / yzt_count, 3) if yzt_count else None,
+    })
+    return base
 
 
 def get_short_term_emotion() -> dict:
-    """短线情绪（含缓存，5 分钟）。"""
-    return _cached("emotion", _emotion)
+    """Cache usable observations without upgrading their status; retry failures."""
+    as_of = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    session = trade_calendar.observation_trade_date_at(as_of)
+    key = "emotion"
+    hit = _CACHE.get(key)
+    if hit and hit[1].get("date") != session:
+        _CACHE.pop(key, None)
+    return _cached(key, lambda: _emotion(as_of), valid=lambda v: _usable_qualified_pools(v.get("pool_observations")))
 
 
 def get_turnover_top() -> dict:

@@ -167,3 +167,19 @@ def test_prompt_contains_only_selected_context_and_treats_strings_as_data():
         assert text in system
     assert "industry-provider" not in messages[1]["content"]
     assert "wrong-provider" not in messages[1]["content"]
+
+
+def test_inferred_emotion_date_is_not_promoted_to_source_truth():
+    payload = display_payload()
+    envelope = payload["data"]["short_term_emotion"]
+    envelope["status"] = "partial"
+    envelope["data"].update(date="2026-10-09", date_verified=False,
+                            date_basis="requested_session_inferred", dt_count=None)
+    before = copy.deepcopy(payload)
+    context = build_lead_context(payload, "emotion", None)
+    assert context["source"]["trade_date"] is None
+    assert context["source"]["status"] == "partial"
+    assert context["facts"]["zt_count"] == 0  # preserve a supplied old valid zero
+    assert context["facts"]["dt_count"] is None
+    assert any("2026-10-09" in text and "推定" in text for text in context["unknowns"])
+    assert payload == before

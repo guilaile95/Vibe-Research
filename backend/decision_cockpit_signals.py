@@ -690,7 +690,13 @@ def evaluate_market_short(breadth: dict | None, emotion: dict | None) -> dict:
     try:
         if isinstance(breadth, dict) and breadth.get("status") == "normal":
             if isinstance(emotion, dict) and emotion:
-                status = "normal"
+                emotion_status = emotion.get("status", "normal")
+                if emotion_status == "normal":
+                    status = "normal"
+                else:
+                    warnings.extend(emotion.get("warnings") or ["情绪数据不完整"])
+                    if emotion_status == "unavailable":
+                        data["emotion"] = None
             else:
                 warnings.append("情绪数据不可用")
         else:
