@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useLayoutEffect, useId, useRef, useState } from "react";
 import { AlertCircle, CalendarClock, Loader2, RefreshCw } from "lucide-react";
 import {
   api,
@@ -96,46 +96,71 @@ export function ResearchContinuityCard({
   prefetched?: ResearchContinuity | null;
   awaitingPrefetch?: boolean;
 }) {
-  const [data, setData] = useState<ResearchContinuity | null>(prefetched ?? null);
-  const [loading, setLoading] = useState(awaitingPrefetch || prefetched === undefined);
-  const [error, setError] = useState(prefetched === null ? "批量读取失败，可单独刷新" : "");
+  const [storedData, setData] = useState<ResearchContinuity | null>(prefetched ?? null);
+  const [isLoading, setLoading] = useState(awaitingPrefetch || prefetched === undefined);
+  const [loadError, setError] = useState(prefetched === null ? "批量读取失败，可单独刷新" : "");
 
-  const load = async () => {
+  const [isExpanded, setExpanded] = useState(false);
+  const changesId = useId();
+  const requestRef = useRef(0);
+  const mountedRef = useRef(false);
+  const contextRef = useRef({ campaignId, prefetched, awaitingPrefetch });
+  const [stateContext, setStateContext] = useState({ campaignId, prefetched, awaitingPrefetch });
+  const ownsState = stateContext.campaignId === campaignId
+    && stateContext.prefetched === prefetched
+    && stateContext.awaitingPrefetch === awaitingPrefetch;
+  // Render only this context's data, without changing committed request ownership.
+  // A speculative render may be abandoned; shared refs change only on commit.
+  const data = ownsState ? storedData : awaitingPrefetch ? null : prefetched ?? null;
+  const loading = ownsState ? isLoading : awaitingPrefetch || prefetched === undefined;
+  const error = ownsState ? loadError : prefetched === null ? "批量读取失败，可单独刷新" : "";
+  const expanded = ownsState && isExpanded;
+
+  const load = useCallback(async () => {
+    const context = contextRef.current;
+    if (!mountedRef.current || context.awaitingPrefetch) return;
+    const request = ++requestRef.current;
+    const ownsRequest = () => mountedRef.current
+      && requestRef.current === request && contextRef.current === context;
     setLoading(true);
     setError("");
+    setData(null);
+    setExpanded(false);
     try {
-      setData(await api.getResearchContinuity(campaignId));
+      const value = await api.getResearchContinuity(context.campaignId);
+      if (ownsRequest()) setData(value);
     } catch (cause) {
-      setData(null);
-      setError(cause instanceof ApiError ? cause.message : "研究变化读取失败");
+      if (ownsRequest()) {
+        setData(null);
+        setError(cause instanceof ApiError ? cause.message : "研究变化读取失败");
+      }
     } finally {
-      setLoading(false);
+      if (ownsRequest()) setLoading(false);
     }
-  };
+  }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const context = { campaignId, prefetched, awaitingPrefetch };
+    contextRef.current = context;
+    setStateContext(context);
+    mountedRef.current = true;
+    setExpanded(false);
     if (awaitingPrefetch) {
       setData(null);
       setError("");
       setLoading(true);
-      return;
-    }
-    if (prefetched !== undefined) {
+    } else if (prefetched !== undefined) {
       setData(prefetched);
       setError(prefetched === null ? "批量读取失败，可单独刷新" : "");
       setLoading(false);
-      return;
+    } else {
+      void load();
     }
-    let active = true;
-    setLoading(true);
-    setError("");
-    setData(null);
-    api.getResearchContinuity(campaignId)
-      .then((value) => { if (active) setData(value); })
-      .catch((cause) => { if (active) setError(cause instanceof ApiError ? cause.message : "研究变化读取失败"); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [awaitingPrefetch, campaignId, prefetched]);
+    return () => {
+      mountedRef.current = false;
+      ++requestRef.current;
+    };
+  }, [awaitingPrefetch, campaignId, prefetched, load]);
 
   return (
     <GlassCard data-testid="research-continuity" data-campaign-id={campaignId}>
@@ -170,19 +195,35 @@ export function ResearchContinuityCard({
             ) : data.changes.items.length === 0 ? (
               <p className="mt-1 text-muted-foreground">已有后续观察，未发现事实字段变化。</p>
             ) : (
-              <ul className="mt-2 space-y-1.5">
-                {data.changes.items.slice(0, 8).map((item) => (
-                  <li
-                    key={`${item.change_type}:${item.record_key}`}
-                    className="rounded bg-muted/40 px-2 py-1.5"
-                    data-testid={`research-change-${item.change_type.toLowerCase()}`}
+              <>
+                <p className="mt-2 text-muted-foreground" aria-live="polite">
+                  本次返回的变化共 {data.changes.items.length} 条，当前显示 {expanded ? data.changes.items.length : Math.min(8, data.changes.items.length)} 条
+                </p>
+                <ul id={changesId} className="mt-2 space-y-1.5">
+                  {(expanded ? data.changes.items : data.changes.items.slice(0, 8)).map((item) => (
+                    <li
+                      key={`${item.change_type}:${item.record_key}`}
+                      className="rounded bg-muted/40 px-2 py-1.5"
+                      data-testid={`research-change-${item.change_type.toLowerCase()}`}
+                    >
+                      <span className="font-medium">{changeLabel[item.change_type]}</span>
+                      {changeDetails(item)}
+                      <p className="mt-1 font-mono text-[10px] text-muted-foreground">Evidence ID：{item.record_key}</p>
+                    </li>
+                  ))}
+                </ul>
+                {data.changes.items.length > 8 && (
+                  <button
+                    type="button"
+                    aria-expanded={expanded}
+                    aria-controls={changesId}
+                    onClick={() => setExpanded((value) => !value)}
+                    className="mt-2 rounded border border-border/50 px-2 py-1 text-primary hover:bg-muted/40"
                   >
-                    <span className="font-medium">{changeLabel[item.change_type]}</span>
-                    {changeDetails(item)}
-                    <p className="mt-1 font-mono text-[10px] text-muted-foreground">Evidence ID：{item.record_key}</p>
-                  </li>
-                ))}
-              </ul>
+                    {expanded ? "收起变化" : `展开剩余 ${data.changes.items.length - 8} 条变化`}
+                  </button>
+                )}
+              </>
             )}
           </div>
 

@@ -21,7 +21,7 @@ Optional statement failure preserves the reliable summary.
 
 The enriched API caller is `/api/financials`; the user-facing consumer is the
 Stock Data `EarningsSnapshot` and its history table. Legacy batch consumers leave
-statement enrichment disabled. Snapshot/cumulative and no-PIT disclosures remain.
+statement enrichment disabled. Snapshot and no-PIT disclosures remain.
 
 ## Confirmed defect and minimal repair
 
@@ -41,3 +41,29 @@ need a real supported-field contract and representative authorized fixture first
 `data_quality.status="normal"` describes field availability, not verification of
 all accounting comparability assumptions. This work does not introduce PIT,
 single-quarter reconstruction, financial scoring, or automated recommendations.
+
+## Display disclosure (2026-10-11)
+
+The existing Data Quality section distinguishes selected-field availability from
+verified accounting comparability. `normal` does not mean every displayed or
+derived field exists: the backend required-field list does not include the
+income operands `revenue_amount` and `net_profit_amount`.
+
+Exact report-date alignment is not verification of common currency, amount scale,
+consolidation scope or revision. The pinned adapter coerces numeric-looking values;
+it does not normalize currency or units. The UI labels its existing amount
+formatting assumption: values displayed as 亿元 are treated as CNY base units and
+divided by 1e8. This disclosure does not apply that conversion to legacy summary
+strings, nor claim that source units have been independently verified.
+
+The period note distinguishes report-period cumulative profit/cash flows from
+period-end balance-sheet amounts. The history note cautions against treating
+unequal cumulative lengths as directly comparable trends. It does not reconstruct
+single quarters, annualize flows, use average assets, or validate upstream metric
+definitions. Metadata absence alone is not evidence of incorrect values.
+
+This is a copy-only qualification of the existing display. No financial values,
+formulas, thresholds, availability states, or provider requests change. Offline
+render tests exercise the actual component, including zero/negative/unknown
+values, normal/partial states, and the history disclosure; they do not establish
+provider accounting semantics or browser visual acceptance.
