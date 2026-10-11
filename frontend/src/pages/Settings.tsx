@@ -679,6 +679,7 @@ function SourceRegistrySection() {
 function NativeIntelFilterSettingsSection() {
   const [profile, setProfile] = useState<FilterProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [updatingTags, setUpdatingTags] = useState(false);
@@ -693,6 +694,8 @@ function NativeIntelFilterSettingsSection() {
   const [tags, setTags] = useState<InterestTag[]>([]);
 
   const fetchProfile = async () => {
+    setLoading(true);
+    setLoadError(false);
     try {
       const res = await api.nativeIntelFilterProfile();
       setProfile(res);
@@ -712,6 +715,7 @@ function NativeIntelFilterSettingsSection() {
       );
       setTags(res.tags || []);
     } catch (err) {
+      setLoadError(true);
       toast.error(err instanceof ApiError ? err.message : "读取筛选配置失败");
     } finally {
       setLoading(false);
@@ -723,6 +727,7 @@ function NativeIntelFilterSettingsSection() {
   }, []);
 
   const handleSave = async () => {
+    if (loading || loadError || !profile || saving) return;
     setSaving(true);
     try {
       const isInterestsChanged =
@@ -952,7 +957,7 @@ function NativeIntelFilterSettingsSection() {
         <button
           type="button"
           onClick={() => void handleSave()}
-          disabled={saving || loading}
+          disabled={saving || loading || loadError || !profile}
           className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
         >
           {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
@@ -964,6 +969,11 @@ function NativeIntelFilterSettingsSection() {
         <div className="py-8 text-center text-xs text-muted-foreground">
           <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />
           读取筛选配置中…
+        </div>
+      ) : loadError ? (
+        <div role="alert" className="py-4 text-xs text-destructive">
+          读取筛选配置失败，请重试后再编辑。
+          <button type="button" onClick={() => void fetchProfile()} className="ml-2 underline">重试</button>
         </div>
       ) : (
         <div className="mt-4 space-y-4">
@@ -1271,6 +1281,7 @@ function NativeIntelFilterSettingsSection() {
 
 function NativeIntelDisplayAndProxySection() {
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [sources, setSources] = useState<NativeIntelSourceRecord[]>([]);
 
@@ -1303,6 +1314,7 @@ function NativeIntelDisplayAndProxySection() {
 
   const loadConfig = async () => {
     setLoading(true);
+    setLoadError(false);
     try {
       const [cfg, srcRes] = await Promise.all([
         api.nativeIntelConfig(),
@@ -1331,6 +1343,7 @@ function NativeIntelDisplayAndProxySection() {
       setAiTranslationEnabled(Boolean(cfg.ai_translation_enabled));
       setAiTranslationTargetLanguage(cfg.ai_translation_target_language || "English");
     } catch (err) {
+      setLoadError(true);
       toast.error(err instanceof ApiError ? err.message : "读取展示与抓取配置失败");
     } finally {
       setLoading(false);
@@ -1342,6 +1355,7 @@ function NativeIntelDisplayAndProxySection() {
   }, []);
 
   const handleSave = async () => {
+    if (loading || loadError || saving) return;
     setSaving(true);
     try {
       await api.updateNativeIntelConfig({
@@ -1420,6 +1434,10 @@ function NativeIntelDisplayAndProxySection() {
         <div className="p-6 text-center text-xs text-muted-foreground">
           <Loader2 className="mr-1.5 inline h-4 w-4 animate-spin" />
           正在读取配置…
+        </div>
+      ) : loadError ? (
+        <div role="alert" className="py-4 text-xs text-destructive">
+          读取展示与抓取配置失败，请重试后再编辑。
         </div>
       ) : (
         <div className="space-y-5">

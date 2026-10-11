@@ -215,10 +215,9 @@ def merge_watchlist(incoming: Any, *, expected_etag: str | None = None) -> dict:
     整个 check / read / merge / backup / write 在同一文件锁内。
     返回并入结果 {"codes", "added", "updated_at", "etag"}。
     """
-    incoming = _normalize_codes(
-        incoming if isinstance(incoming, list) else [],
-        enforce_limit=False,  # 单方可能已超，合并后再强制
-    )
+    # Import is a mutation, not damaged-file recovery: never truncate a draft.
+    # A unique incoming set over the limit cannot fit in any merged result.
+    incoming = _normalize_codes(incoming, enforce_limit=True)
 
     with _LOCK:
         if expected_etag is not None:

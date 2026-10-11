@@ -74,9 +74,12 @@ def fetch(code: str, period: str, count: int, *, adjustment: str,
 
 def unadjusted_bars(code: str, period: str, count: int) -> list[dict]:
     rows = fetch(code, period, count, adjustment="")
+    # STAR K-line volume is already shares; other supported equities/funds
+    # report lots. This is specific to K-lines, not Tencent tick volumes.
+    # Source: a-stock-data v3.10.1 (#57); see upstream adoption record.
+    shares_per_unit = 1 if code.startswith(("688", "689")) else 100
     for row in rows:
-        # Tencent reports lots, while the astock bars contract reports shares.
-        shares = row["volume"] * 100
+        shares = row["volume"] * shares_per_unit
         if not math.isfinite(shares):
             raise ValueError("Tencent K-line share volume overflow")
         row.update(volume=shares, vol=shares, amount=None,

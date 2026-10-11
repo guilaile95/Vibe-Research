@@ -6,8 +6,10 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import {
   addCodes,
+  parseCodes,
   filterAndSortWatchlistCodes,
   loadWatchAuthoritative,
+  loadLocalDraft,
   saveWatchAuthoritative,
   type WatchlistSort,
 } from "@/lib/watchlist";
@@ -55,6 +57,7 @@ export function Watchlist() {
   const [hint, setHint] = useState<string | null>(null);
   const [watchlistLoading, setWatchlistLoading] = useState(true);
   const [watchlistError, setWatchlistError] = useState<string | null>(null);
+  const [migrationError, setMigrationError] = useState<string | null>(null);
   const [anomalies, setAnomalies] = useState<WatchlistAnomalies | null>(null);
   const [anomalyLoading, setAnomalyLoading] = useState(false);
   const [anomalyError, setAnomalyError] = useState<string | null>(null);
@@ -62,6 +65,7 @@ export function Watchlist() {
   const [sort, setSort] = useState<WatchlistSort>("anomaly");
   const anomalyRunRef = useRef(0);
   const listHeadingRef = useRef<HTMLHeadingElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   // 实时行情默认**关闭**——开着会持续请求，让用户自己决定要不要开。
   const [live, setLive] = useState(loadLive);
 
@@ -78,10 +82,12 @@ export function Watchlist() {
   const load = useCallback(async () => {
     setWatchlistLoading(true);
     setWatchlistError(null);
+    setMigrationError(null);
     try {
       const r = await loadWatchAuthoritative();
       setCodes(r.codes);
       setEtag(r.etag);
+      setMigrationError(r.migrationError ?? null);
       if (r.migrated) {
         setHint(`已从本地草稿迁移至后端权威自选（共 ${r.codes.length} 只）`);
       }
@@ -131,6 +137,7 @@ export function Watchlist() {
       setCodes(r.codes);
       setEtag(r.etag);
       setWatchlistError(null);
+      setMigrationError(null);
       if (msg) setHint(msg);
     } catch (e) {
       setHint(e instanceof Error ? e.message : "保存失败（可能版本冲突，请刷新）");
@@ -142,13 +149,15 @@ export function Watchlist() {
 
   const add = () => {
     const { next, added } = addCodes(codes, input);
-    if (added === 0) {
+    // An explicitly edited migration draft may retain only existing codes.
+    // Still save through the authority/ETag path before clearing that draft.
+    if (added === 0 && !(migrationError && parseCodes(input).length > 0)) {
       setHint(input.trim() ? "没识别到新的 6 位代码（可能已在自选里）" : null);
       setInput("");
       return;
     }
     setInput("");
-    void persist(next, `已添加 ${added} 只（后端权威）`);
+    void persist(next, added > 0 ? `已添加 ${added} 只（后端权威）` : "已保存自选（后端权威）");
   };
 
   const remove = (c: string) => {
@@ -260,6 +269,7 @@ export function Watchlist() {
         </label>
         <div className="flex gap-2">
           <textarea
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -278,6 +288,19 @@ export function Watchlist() {
           </button>
         </div>
         <p role="status" aria-live="polite" className="mt-2 text-xs text-muted-foreground/70">{hint}</p>
+        {migrationError && (
+          <div role="alert" className="mt-3 rounded-lg border border-warning/30 p-3 text-sm text-warning">
+            <p>本地草稿未导入：{migrationError}</p>
+            <p className="mt-1">原草稿已保留。可重试导入，或编辑本地草稿，在上方输入框删减后点击“添加”保存；与后端自选合并后最多 50 只，保存成功才清除原草稿。</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button type="button" disabled={watchlistLoading || saving} onClick={() => void load()} className="min-h-11 px-3 text-primary disabled:opacity-50">重试导入</button>
+              <button type="button" disabled={watchlistLoading || saving} onClick={() => {
+                setInput(loadLocalDraft().join(" "));
+                inputRef.current?.focus();
+              }} className="min-h-11 px-3 text-primary disabled:opacity-50">编辑本地草稿</button>
+            </div>
+          </div>
+        )}
       </GlassCard>
 
       <GlassCard glow>

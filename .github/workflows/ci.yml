@@ -336,6 +336,38 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Run settings read recovery E2E
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          SETTINGS_RECOVERY_EVIDENCE_DIR: ${{ runner.temp }}/settings-recovery-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/settings-recovery.browser.mjs
+
+      - name: Preserve synthetic settings read recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: settings-recovery-evidence
+          path: ${{ runner.temp }}/settings-recovery-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Run watchlist import recovery E2E
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          WATCHLIST_IMPORT_EVIDENCE_DIR: ${{ runner.temp }}/watchlist-import-retention-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/watchlist-import-retention.browser.mjs
+
+      - name: Preserve synthetic watchlist import recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: watchlist-import-retention-evidence
+          path: ${{ runner.temp }}/watchlist-import-retention-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
   e2e-data-health-smoke:
     name: Playwright data health smoke E2E
     runs-on: ubuntu-latest
