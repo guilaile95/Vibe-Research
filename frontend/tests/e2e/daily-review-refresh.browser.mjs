@@ -243,7 +243,12 @@ async function main() {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     if (poolProvenanceOnly) {
       await context.route("**/*", route => {
-        const url = new URL(route.request().url());
+        const request = route.request();
+        const url = new URL(request.url());
+        if (request.method() === "GET" && request.resourceType() === "stylesheet"
+            && url.href === "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap") {
+          return route.fulfill({ status: 200, contentType: "text/css", body: "" });
+        }
         if (url.hostname === "127.0.0.1" && Number(url.port) === frontendPort) return route.continue();
         errors.push(`External browser request blocked: ${url.origin}`);
         return route.abort();
@@ -521,6 +526,7 @@ async function main() {
     await writeFile(path.join(shotDir, "market-pool-backend.log"), uvLog);
     await writeFile(path.join(shotDir, "market-pool-summary.json"), JSON.stringify({
       synthetic: true, full_app: true, scenarios: poolResults, errors,
+      fonts: "Exact known Google Fonts stylesheet stubbed locally; system fallback font",
     }, null, 2));
   }
   if (errors.length) {
