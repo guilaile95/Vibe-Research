@@ -60,6 +60,6 @@ def test_active_bundled_guidance_does_not_restore_per_share_contract():
     from pathlib import Path
     root = Path(__file__).resolve().parents[2]
     for name in ("README.md", "SKILL.md"):
-        guidance = (root / "a-stock-data" / name).read_text()
+        guidance = (root / "a-stock-data" / name).read_text(encoding="utf-8")
         assert "每股派息" not in guidance
         assert "每10股税前派息" in guidance
