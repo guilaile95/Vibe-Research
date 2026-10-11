@@ -4,11 +4,38 @@ Isolated VR_DATA_DIR / VIBE_RESEARCH_REVIEW_DB. Not production.
 """
 from __future__ import annotations
 
+import copy
+import os
+import socket
+
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
+# Pool acceptance is strictly offline. Permit only local harness connections.
+_POOL_MODE = os.environ.get("VR_E2E_POOL_PROVENANCE") == "1"
+if _POOL_MODE:
+    _connect = socket.socket.connect
+    _connect_ex = socket.socket.connect_ex
+    _getaddrinfo = socket.getaddrinfo
+    def _local_connect(self, address):
+        if not isinstance(address, tuple) or address[0] not in {"127.0.0.1", "::1", "localhost"}:
+            raise AssertionError("External network forbidden in synthetic pool harness")
+        return _connect(self, address)
+    def _local_connect_ex(self, address):
+        if not isinstance(address, tuple) or address[0] not in {"127.0.0.1", "::1", "localhost"}:
+            raise AssertionError("External network forbidden in synthetic pool harness")
+        return _connect_ex(self, address)
+    def _local_dns(host, *args, **kwargs):
+        if host not in {"127.0.0.1", "::1", "localhost", None}:
+            raise AssertionError("External DNS forbidden in synthetic pool harness")
+        return _getaddrinfo(host, *args, **kwargs)
+    socket.socket.connect = _local_connect
+    socket.socket.connect_ex = _local_connect_ex
+    socket.getaddrinfo = _local_dns
+
 import app as app_module
 import daily_review
+import daily_review_cache
 import portfolio
 import portfolio_advice_service as advice_svc
 import ai_result_service
@@ -21,6 +48,9 @@ BEIJING = timezone(timedelta(hours=8))
 _gen_counter = {"n": 0}
 # When True, next _build_daily_review raises (for failure-retention E2E).
 _fail_next_build = {"on": False}
+_pool_scenario = {"name": "qualified"}
+_POOL_AS_OF = "2026-10-10T04:10:00Z"
+_real_build_daily_review = daily_review._build_daily_review
 
 
 def _now() -> str:
@@ -78,6 +108,9 @@ def _build_packet_or_fail() -> dict:
     if _fail_next_build["on"]:
         _fail_next_build["on"] = False
         raise RuntimeError("e2e forced refresh failure")
+    if _POOL_MODE:
+        _gen_counter["n"] += 1
+        return _real_build_daily_review()
     return _packet()
 
 
@@ -196,3 +229,67 @@ market.get_short_term_emotion = lambda: {"date": _trade_date(), "zt_count": 1}  
 astock.tencent_quote = lambda codes: {c: {"price": 10.0, "name": c} for c in codes}  # type: ignore
 
 _seed_portfolio()
+
+
+if _POOL_MODE:
+    class PoolClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            instant = datetime.fromisoformat(_POOL_AS_OF.replace("Z", "+00:00"))
+            return instant.astimezone(tz or BEIJING)
+
+    daily_review.datetime = PoolClock
+    _row = {"c": "600001", "n": "合成样本", "lbc": 2, "p": 10000,
+            "zdp": 10, "amount": 1000, "ltsz": 2000, "hybk": "合成行业"}
+
+    class PoolResponse:
+        status_code = 200
+        def __init__(self, payload):
+            self.payload = payload
+        def json(self):
+            return copy.deepcopy(self.payload)
+
+    def _pool_get(url, params, **kwargs):
+        endpoint = url.rsplit("/", 1)[-1]
+        if endpoint not in {"getTopicZTPool", "getTopicDTPool", "getTopicZBPool", "getYesterdayZTPool"}:
+            raise AssertionError("Unexpected provider in synthetic pool harness")
+        if params["date"] != "20261009":
+            raise AssertionError("Unexpected pool query session")
+        if _pool_scenario["name"] == "secondary_failure" and endpoint != "getTopicZTPool":
+            return PoolResponse({"rc": 102, "data": None})
+        rows = [] if _pool_scenario["name"] == "empty_zt" and endpoint == "getTopicZTPool" else [_row]
+        return PoolResponse({"rc": 0, "data": {"qdate": 20261009, "pool": rows}})
+
+    def _envelope(data):
+        return {"status": "normal", "source": "synthetic_offline_fixture",
+                "trade_date": None, "data_time": None, "fetched_at": None,
+                "is_stale": False, "warnings": [], "data": data}
+
+    astock.em_get = _pool_get
+    astock.index_quote = lambda: [{"code": "000001", "name": "合成指数", "price": 3000, "change_pct": 0}]
+    market.get_short_term_emotion = lambda: market._emotion(_POOL_AS_OF)
+    market.get_global_indices = lambda: [{"name": "合成全球指数", "price": 100, "change_pct": 0}]
+    market.get_market_breadth = lambda: _envelope({
+        "stock_count": 1, "valid_count": 1, "up_count": 1, "down_count": 0,
+        "flat_count": 0, "up_ratio": 1, "total_amount": 1000, "amount_valid_count": 1,
+        "amount_top": [], "high_turnover": [],
+    })
+    market.get_turnover_top = lambda: {"stocks": [{"code": "600001", "name": "合成样本", "amount": 1000}]}
+    market.get_board_ranking = lambda board_type="industry", top_n=10: _envelope({
+        "type": board_type, "top": [], "bottom": [], "total": 0,
+    })
+    market.get_market_cloud = lambda *args, **kwargs: {
+        "status": "unavailable", "data": None, "warnings": ["合成情绪验收未提供云图"],
+    }
+
+    @app.post("/api/e2e/daily-review/pool-scenario/{scenario}")
+    def e2e_pool_scenario(scenario: str):
+        from fastapi import HTTPException
+        if scenario not in {"qualified", "secondary_failure", "empty_zt"}:
+            raise HTTPException(400, "Unknown synthetic scenario")
+        _pool_scenario["name"] = scenario
+        daily_review._clear_review_cache()
+        daily_review_cache.clear_latest_review_file()  # isolated temporary latest only
+        daily_review._clear_refresh_failure()
+        market._CACHE.clear()
+        return {"data": {"scenario": scenario, "as_of": _POOL_AS_OF}}

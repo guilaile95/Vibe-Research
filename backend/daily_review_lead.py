@@ -102,7 +102,7 @@ def build_lead_context(payload: dict, kind: LeadKind, subject: str | None) -> di
         raise LeadContextError(503, unavailable)
     facts = {key: _fact(item.get(key)) for key in _FACT_KEYS[kind]}
     trade_date = _text(envelope.get("trade_date"))
-    if kind == "emotion" and trade_date is None:
+    if kind == "emotion" and trade_date is None and item.get("date_verified", True):
         trade_date = _text(item.get("date"))
     source = {
         "status": _text(envelope.get("status")) or "unknown",
@@ -113,6 +113,8 @@ def build_lead_context(payload: dict, kind: LeadKind, subject: str | None) -> di
         "is_stale": _bool(envelope.get("is_stale")),
     }
     unknowns = []
+    if kind == "emotion" and item.get("date_verified") is False:
+        unknowns.append(f"请求交易日 {item.get('date') or '未知'} 为推定日期，来源数据所属交易日未核实")
     for key, value in source.items():
         if value is None or (key == "status" and value == "unknown"):
             unknowns.append(f"{_FIELD_LABELS[key]}未提供或未知")

@@ -180,7 +180,12 @@ def _get_candidate_pool_inputs(holdings: list[dict] | None = None) -> dict:
     emotion = _safe_call(market.get_short_term_emotion) or {}
     breadth = _safe_call(market.get_market_breadth) or {}
     turnover_top = _safe_call(market.get_turnover_top) or {}
-    lianban = list(emotion.get("lianban_stocks") or []) if isinstance(emotion, dict) else []
+    lianban = (
+        list(emotion.get("lianban_stocks") or [])
+        if isinstance(emotion, dict) and emotion.get("status") != "unavailable"
+        and ("status" not in emotion or emotion.get("zt_count") is not None)
+        else []
+    )
     tt_stocks = list(turnover_top.get("stocks") or []) if isinstance(turnover_top, dict) else []
     high_turnover = (
         list((breadth.get("data") or {}).get("high_turnover") or [])

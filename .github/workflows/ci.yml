@@ -650,6 +650,22 @@ jobs:
         working-directory: frontend
         run: npm run test:e2e:today-market-context
 
+      - name: Run legacy market pool provenance E2E
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          VR_E2E_PYTHON: python
+          DAILY_REVIEW_SCREENSHOT_DIR: ${{ runner.temp }}/market-pool-provenance-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/daily-review-refresh.browser.mjs --pool-provenance-only
+
+      - name: Preserve synthetic market pool provenance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: market-pool-provenance-evidence
+          path: ${{ runner.temp }}/market-pool-provenance-evidence
+          if-no-files-found: warn
+
       - name: Run Sector industry context E2E
         working-directory: frontend
         env:
