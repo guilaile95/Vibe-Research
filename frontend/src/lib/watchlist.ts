@@ -113,19 +113,23 @@ export async function loadWatchAuthoritative(): Promise<{
   etag: string | null;
   status: WatchlistStatus["status"];
   migrated: boolean;
+  migrationError?: string;
 }> {
   let st = await getWatchlist();
   let migrated = false;
+  let migrationError: string | undefined;
   if (hasLocalDraft()) {
     try {
       const m = await migrateLocalWatchlistOnce(
         st.status === "valid" ? st.etag : undefined,
       );
       migrated = m.migrated;
-      st = await getWatchlist();
-    } catch {
+    } catch (error) {
       // 迁移失败时仍返回后端状态；草稿保留供用户重试
+      migrationError = error instanceof Error ? error.message : "本地草稿导入失败，请重试";
     }
+    // A failed read after a successful import is not a retained-draft failure.
+    if (migrated) st = await getWatchlist();
   }
   if (st.status === "valid") {
     return {
@@ -133,9 +137,10 @@ export async function loadWatchAuthoritative(): Promise<{
       etag: st.etag,
       status: st.status,
       migrated,
+      migrationError,
     };
   }
-  return { codes: [], etag: null, status: st.status, migrated };
+  return { codes: [], etag: null, status: st.status, migrated, migrationError };
 }
 
 /** 后端权威保存（无 localStorage 双写）。 */

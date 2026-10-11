@@ -95,3 +95,76 @@ def test_backup_failure_preserves_both_snapshots(monkeypatch):
     assert path.read_bytes() == before
     assert backup.read_bytes() == backup_before
     assert not list(path.parent.glob("*.tmp.*"))
+
+
+@pytest.mark.parametrize("existing", [[], ["600000"], [f"{600000 + i:06d}" for i in range(50)]])
+def test_import_oversized_draft_rejects_without_losing_tail_or_changing_snapshots(existing):
+    original = store.save_watchlist(existing)
+    path = Path(store._watchlist_path())
+    before = path.read_bytes()
+    incoming = [f"{600000 + i:06d}" for i in range(51)]
+    with pytest.raises(store.WatchlistLimitExceededError) as error:
+        store.merge_watchlist(incoming, expected_etag=original["etag"])
+    assert error.value.count == 51
+    assert path.read_bytes() == before
+    assert not Path(str(path) + ".bak").exists()
+    assert restart_store().load_watchlist() == existing
+
+
+def test_import_limit_counts_unique_codes_and_repeated_import_is_idempotent():
+    codes = [f"{600000 + i:06d}" for i in range(50)]
+    first = store.merge_watchlist(codes + codes)
+    assert first["codes"] == codes
+    assert first["added"] == codes
+    second = store.merge_watchlist(codes + codes, expected_etag=first["etag"])
+    assert second["codes"] == codes
+    assert second["added"] == []
+    assert second["etag"] == first["etag"]
+
+
+@pytest.mark.parametrize("incoming", [["AAPL"], ["00700"], ["600519.SH"], [123456], "600519", None])
+def test_invalid_import_rejected_without_modifying_watchlist(incoming):
+    original = store.save_watchlist(["600001"])
+    path = Path(store._watchlist_path())
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        store.merge_watchlist(incoming, expected_etag=original["etag"])
+    assert path.read_bytes() == before
+
+
+def test_concurrent_imports_preserve_both_additions_without_etag():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    store.save_watchlist(["600001"])
+    barrier = Barrier(2)
+
+    def merge(code):
+        barrier.wait(timeout=5)
+        return store.merge_watchlist([code])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(merge, ["600002", "600003"]))
+    assert {code for result in results for code in result["added"]} == {"600002", "600003"}
+    assert set(restart_store().load_watchlist()) == {"600001", "600002", "600003"}
+
+
+def test_concurrent_replacements_reject_stale_etag_instead_of_losing_update():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    original = store.save_watchlist(["600001"])
+    barrier = Barrier(2)
+
+    def save(code):
+        barrier.wait(timeout=5)
+        try:
+            return store.save_watchlist(["600001", code], expected_etag=original["etag"])
+        except store.WatchlistVersionConflictError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(save, ["600002", "600003"]))
+    winners = [result for result in results if result is not None]
+    assert len(winners) == 1
+    assert restart_store().load_watchlist() == winners[0]["codes"]

@@ -39,13 +39,14 @@ def test_unadjusted_contract_and_lot_conversion(monkeypatch, period):
     assert result[0]["price_adjustment"] == "none"
 
 
-def test_ai_retains_qfq_lots_and_reuses_validation(monkeypatch):
-    state = install(monkeypatch, {"qfqday": [deepcopy(BAR)]})
-    assert ai_tools._kline_tencent("600519", "day", 5)[0]["volume"] == 23
+@pytest.mark.parametrize("code", ["600519", "688981", "689009"])
+def test_ai_retains_qfq_provider_units_and_reuses_validation(monkeypatch, code):
+    state = install(monkeypatch, {"qfqday": [deepcopy(BAR)]}, code="sh" + code)
+    assert ai_tools._kline_tencent(code, "day", 5)[0]["volume"] == 23
     assert state["calls"][0][1]["params"]["param"].endswith(",qfq")
-    install(monkeypatch, {"qfqday": [], "day": [BAR]})
+    install(monkeypatch, {"qfqday": [], "day": [BAR]}, code="sh" + code)
     with pytest.raises(ValueError):
-        ai_tools._kline_tencent("600519", "day", 5)
+        ai_tools._kline_tencent(code, "day", 5)
 
 
 @pytest.mark.parametrize("series", [
@@ -155,21 +156,72 @@ def test_http_failure_closes_response(monkeypatch):
 
 @pytest.mark.parametrize("category,period", [(4, "day"), (5, "week"), (6, "month")])
 @pytest.mark.parametrize("mode", ["empty", "error"])
-def test_mootdx_uncovered_routes_get_bounded_fallback(monkeypatch, category, period, mode):
+@pytest.mark.parametrize("code,shares", [("600519", 2300), ("688981", 23), ("689009", 23)])
+def test_mootdx_uncovered_routes_get_bounded_fallback(monkeypatch, category, period, mode, code, shares):
     monkeypatch.setattr(hithink, "is_configured", lambda: False)
     def client():
         if mode == "error": raise astock.DependencyMissing("missing")
         return SimpleNamespace(bars=lambda **_: None)
     monkeypatch.setattr(astock, "_mootdx_client", client)
-    state = install(monkeypatch, {period: [BAR]})
-    assert astock.kline("600519", category, 5)[0]["amount"] is None
+    state = install(monkeypatch, {period: [BAR]}, code="sh" + code)
+    result = astock.kline(code, category, 5)[0]
+    assert result["amount"] is None
+    assert result["volume"] == result["vol"] == shares
     assert len(state["calls"]) == 1
 
 
-@pytest.mark.parametrize("code,category", [("600519", 11), ("920001", 5), ("830001", 6)])
+@pytest.mark.parametrize("code,category", [("600519", 11), ("688981", 11), ("689009", 11), ("920001", 5), ("830001", 6)])
 def test_unqualified_routes_never_fake_empty_success(monkeypatch, code, category):
     monkeypatch.setattr(astock, "_mootdx_client", lambda: SimpleNamespace(bars=lambda **_: None))
     state = install(monkeypatch, {"day": [BAR]})
     with pytest.raises(RuntimeError, match="qualified"):
         astock.kline(code, category, 5)
     assert not state["calls"]
+
+
+# Synthetic rows in the provider's documented array shape, not live captures.
+@pytest.mark.parametrize("period", ["day", "week", "month"])
+@pytest.mark.parametrize("code,factor", [
+    ("688981", 1), ("689009", 1),  # STAR shares, including CDR prefix
+    ("600519", 100), ("000001", 100), ("300750", 100),
+    ("900901", 100), ("200002", 100),  # SH/SZ B shares
+    ("588000", 100), ("510300", 100), ("159915", 100),  # ETFs, even STAR ETF
+    ("160105", 100), ("508000", 100),  # LOF / REIT units
+])
+@pytest.mark.parametrize("volume", ["0", "23.5"])
+def test_normalized_volume_by_security(monkeypatch, period, code, factor, volume):
+    row = deepcopy(BAR)
+    row[5] = volume
+    install(monkeypatch, {period: [row]}, code=astock.get_prefix(code) + code)
+    result = tencent.unadjusted_bars(code, period, 5)[0]
+    assert result["volume"] == result["vol"] == float(volume) * factor
+    assert result["amount"] is None
+    assert result["provider_id"] == "tencent"
+    assert result["provider_contract"] == "tencent-fqkline-unadjusted.v1"
+    assert result["price_adjustment"] == "none"
+    assert (result["open"], result["close"], result["high"], result["low"]) == (10, 11, 12, 9)
+
+
+@pytest.mark.parametrize("code", ["688981", "689009", "600519"])
+@pytest.mark.parametrize("volume", [None, True, "", "bad", "nan", "inf", "-1"])
+def test_invalid_volume_fails_for_every_unit(monkeypatch, code, volume):
+    row = deepcopy(BAR)
+    row[5] = volume
+    install(monkeypatch, {"day": [BAR, ["2026-08-21", *row[1:]]]}, code="sh" + code)
+    with pytest.raises(ValueError):
+        tencent.unadjusted_bars(code, "day", 5)
+
+
+@pytest.mark.parametrize("code", ["688981", "689009", "600519"])
+def test_absent_volume_fails_for_every_unit(monkeypatch, code):
+    install(monkeypatch, {"day": [BAR[:5]]}, code="sh" + code)
+    with pytest.raises(ValueError, match="malformed"):
+        tencent.unadjusted_bars(code, "day", 5)
+
+
+def test_lot_conversion_overflow_is_rejected(monkeypatch):
+    row = deepcopy(BAR)
+    row[5] = "1e307"
+    install(monkeypatch, {"day": [row]})
+    with pytest.raises(ValueError, match="overflow"):
+        tencent.unadjusted_bars("600519", "day", 5)
