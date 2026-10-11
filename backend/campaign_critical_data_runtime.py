@@ -213,6 +213,13 @@ def _validate_capability_result(
 # 无界挂起：共享截止时间到点仍未返回的 capability 如实记 ERROR（UNAVAILABLE
 # 语义，与 provider failure 同形），其余 capability 判定不受影响。
 _CAPABILITY_WALL_CLOCK_BUDGET_SECONDS = 25.0
+NETWORK_BUDGET_EXHAUSTED_REF = "critical-data:network-budget-exhausted"
+
+
+def network_capability_deadline() -> float:
+    """One existing network wait budget, optionally shared by an Inbox snapshot."""
+    return time.monotonic() + _CAPABILITY_WALL_CLOCK_BUDGET_SECONDS
+
 
 _NETWORK_DEPENDENCY_IDS = (
     market_sector_adapter.DEPENDENCY_ID,
@@ -250,7 +257,8 @@ def _evaluate_capability(
 
 
 def _capability_results(
-    definition: Mapping[str, Any], *, lake: FactLake | None, ports: CriticalDataPorts
+    definition: Mapping[str, Any], *, lake: FactLake | None, ports: CriticalDataPorts,
+    network_deadline: float | None = None,
 ) -> list[Mapping[str, Any]]:
     """评估本 Campaign 全部 capability；网络型并发，结果顺序保持声明序。
 
@@ -258,8 +266,8 @@ def _capability_results(
     线程内联评估；market_sector / disclosures / financials 是互相独立的真实
     外部读取，串行时端到端延迟为三者之和（慢网下可达分钟级），因此并发执行，
     共享同一 wall-clock 预算。到点未返回的 capability 记 ERROR；迟到的 worker
-    结果被丢弃（production evaluator 的 Data Health 观察事件可能晚到，该事件
-    只是观察副作用，从不参与 CCD authority）。
+    结果被丢弃（既有 Data Health 诊断事件仍可能晚到，但不是 CCD authority）。
+    调用方可共享 network_deadline；到期或关闭后不再接纳新读取，明确 NOT_EVALUATED。
     """
     dependency_ids: list[Any] = definition.get("required_dependency_ids", [])
     known_ids = {price_adapter.DEPENDENCY_ID, *_NETWORK_DEPENDENCY_IDS}
@@ -273,21 +281,38 @@ def _capability_results(
 
     results: dict[str, Mapping[str, Any]] = {}
     network_ids = [d for d in dependency_ids if d in _NETWORK_DEPENDENCY_IDS]
-    deadline = time.monotonic() + _CAPABILITY_WALL_CLOCK_BUDGET_SECONDS
+    deadline = network_capability_deadline() if network_deadline is None else network_deadline
 
     # daemon 线程：预算耗尽后被放弃的 provider 读取不得阻塞解释器退出。
     worker_errors: list[BaseException] = []
     threads: list[threading.Thread] = []
+    started_ids: set[str] = set()
+    state_lock = threading.Lock()
+    closed = False
 
     def _worker(dependency_id: str) -> None:
+        # Admission and snapshot closure share one ownership boundary. An
+        # admitted worker is pending/ERROR if late; a closed request cannot
+        # admit an unstarted worker. Never hold this lock during provider I/O.
+        with state_lock:
+            if closed or time.monotonic() >= deadline:
+                return
+            started_ids.add(dependency_id)
         try:
-            results[dependency_id] = _evaluate_capability(
+            result = _evaluate_capability(
                 dependency_id, definition, lake=None, ports=ports
             )
+            with state_lock:
+                if not closed and time.monotonic() <= deadline:
+                    results[dependency_id] = result
         except BaseException as exc:  # noqa: BLE001 - 与串行路径同语义向上传播
-            worker_errors.append(exc)
+            with state_lock:
+                if not closed and time.monotonic() <= deadline:
+                    worker_errors.append(exc)
 
     for network_id in network_ids:
+        if time.monotonic() >= deadline:
+            break
         thread = threading.Thread(
             # Each worker gets its own copy: preserve request-local source
             # read-only scope without leaking it to concurrent writable requests.
@@ -303,8 +328,13 @@ def _capability_results(
         remaining = deadline - time.monotonic()
         if remaining > 0:
             thread.join(timeout=remaining)
-    if worker_errors:
-        raise worker_errors[0]
+    with state_lock:
+        closed = True
+        completed_results = dict(results)
+        admitted_ids = frozenset(started_ids)
+        completed_errors = list(worker_errors)
+    if completed_errors:
+        raise completed_errors[0]
 
     ordered: list[Mapping[str, Any]] = []
     for dependency_id in dependency_ids:
@@ -312,11 +342,16 @@ def _capability_results(
             result = _evaluate_capability(
                 dependency_id, definition, lake=lake, ports=ports
             )
-        elif dependency_id in results:
-            result = results[dependency_id]
+        elif dependency_id in completed_results:
+            result = completed_results[dependency_id]
         else:
             # 共享预算内未返回：如实 UNAVAILABLE，不等待迟到 worker。
-            result = _error_result(dependency_id, definition["as_of"])
+            result = (
+                _error_result(dependency_id, definition["as_of"])
+                if dependency_id in admitted_ids
+                else _not_evaluated_result(dependency_id, definition["as_of"])
+            )
+            result["authority_refs"] = [NETWORK_BUDGET_EXHAUSTED_REF]
         ordered.append(
             _validate_capability_result(
                 result, dependency_id=dependency_id, as_of=definition["as_of"]
@@ -334,6 +369,7 @@ def project_campaign_critical_data(
     as_of: str,
     ports: CriticalDataPorts = PRODUCTION_PORTS,
     lake: FactLake | None | object = _UNSET,
+    network_deadline: float | None = None,
 ) -> Mapping[str, Any]:
     """Resolve and project the real Campaign-scoped CCD authority."""
 
@@ -351,7 +387,9 @@ def project_campaign_critical_data(
     _assert_identity(definition, campaign, "DDA")
     _assert_as_of(definition.get("as_of"), as_of, "DDA")
     lake_value = ports.lake_provider() if lake is _UNSET else lake
-    results = _capability_results(definition, lake=lake_value, ports=ports)
+    results = _capability_results(
+        definition, lake=lake_value, ports=ports, network_deadline=network_deadline
+    )
     ccd = _require_mapping(
         project_campaign_critical_data_projection(
             security_code=definition["security_code"],

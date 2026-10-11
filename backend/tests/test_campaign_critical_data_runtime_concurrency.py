@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import pytest
 
@@ -131,7 +132,7 @@ def test_shared_budget_timeout_records_error_without_blocking_others(monkeypatch
     assert elapsed < 3.0, f"timeout budget did not bound the wait: {elapsed:.2f}s"
     by_id = {r["dependency_id"]: r for r in ccd["dependency_results"]}
     assert by_id[FINANCIALS_ID]["state"] == "ERROR"
-    assert by_id[FINANCIALS_ID]["authority_refs"] == []
+    assert by_id[FINANCIALS_ID]["authority_refs"] == [cdr.NETWORK_BUDGET_EXHAUSTED_REF]
     assert by_id[SECTOR_ID]["state"] == "USABLE"
     assert by_id[DISCLOSURES_ID]["state"] == "USABLE"
 
@@ -186,3 +187,150 @@ def test_single_network_capability_still_evaluated():
 def test_empty_dependency_set_returns_empty_results():
     ccd = project(_ports([]))
     assert ccd["dependency_results"] == []
+
+
+def test_expired_shared_deadline_starts_no_provider_but_evaluates_local_price():
+    calls = []
+
+    def network(*args):
+        pytest.fail("expired request started a provider")
+
+    def local_price(lake, definition):
+        calls.append(lake)
+        return _usable(PRICE_ID)
+
+    ids = [PRICE_ID, SECTOR_ID, DISCLOSURES_ID, FINANCIALS_ID]
+    result = cdr._capability_results(
+        _definition(ids), lake="local", ports=_ports(
+            ids, price=local_price, sector=network, disclosures=network, financials=network
+        ), network_deadline=time.monotonic() - 1,
+    )
+    assert calls == ["local"]
+    assert result[0]["state"] == "USABLE"
+    assert [r["dependency_id"] for r in result] == ids
+    for item in result[1:]:
+        assert item["state"] == "NOT_EVALUATED"
+        assert item["authority_refs"] == [cdr.NETWORK_BUDGET_EXHAUSTED_REF]
+
+
+def test_expired_shared_deadline_still_validates_dependency_contract():
+    with pytest.raises(cdr.CriticalDataRuntimeIntegrityError, match="unknown capability"):
+        cdr._capability_results(
+            _definition(["cap.unknown"]), lake=None, ports=_ports([]),
+            network_deadline=time.monotonic() - 1,
+        )
+
+
+def test_shared_deadline_accounts_for_earlier_campaign_time(monkeypatch):
+    # A deterministic clock proves the second projection cannot reset its budget.
+    clock = [10.0]
+    monkeypatch.setattr(cdr.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(cdr, "_CAPABILITY_WALL_CLOCK_BUDGET_SECONDS", 25.0)
+    deadline = cdr.network_capability_deadline()
+    assert deadline == 35.0
+    first = cdr._capability_results(
+        _definition([DISCLOSURES_ID]), lake=None, ports=_ports([DISCLOSURES_ID]),
+        network_deadline=deadline,
+    )
+    assert first[0]["state"] == "USABLE"
+    clock[0] = 35.0
+    second = cdr._capability_results(
+        _definition([DISCLOSURES_ID]), lake=None, ports=_ports([DISCLOSURES_ID]),
+        network_deadline=deadline,
+    )
+    assert second[0]["state"] == "NOT_EVALUATED"
+
+
+def test_late_worker_preserves_existing_diagnostic_observation_contract(monkeypatch, tmp_path):
+    import threading
+    import data_health_event_store as events
+    import push2_guard
+
+    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(cdr, "_CAPABILITY_WALL_CLOCK_BUDGET_SECONDS", 0.05)
+    release = threading.Event()
+    finished = threading.Event()
+    contexts = []
+
+    def delayed(_lake, definition):
+        release.wait(2)
+        contexts.append(push2_guard.is_read_only())
+        cdr.record_observation_event("announcements", "SUCCESS")
+        finished.set()
+        return _usable(DISCLOSURES_ID)
+
+    try:
+        with push2_guard.read_only():
+            result = cdr._capability_results(
+                _definition([DISCLOSURES_ID]), lake=None,
+                ports=_ports([DISCLOSURES_ID], disclosures=delayed),
+            )
+        assert result[0]["state"] == "ERROR"
+        assert not Path(events.events_path()).exists()
+    finally:
+        release.set()
+    assert finished.wait(1)
+    assert contexts == [True]
+    # Existing observability is explicitly preserved; it is not decision authority.
+    assert events.load_events_readonly()["announcements"]["last_success_at"]
+    assert result[0]["state"] == "ERROR"
+    assert not push2_guard.is_read_only()
+
+
+@pytest.mark.parametrize("admitted", [False, True])
+def test_snapshot_closure_atomically_owns_preempted_workers(monkeypatch, admitted):
+    import linecache
+    import threading
+
+    paused, release, invoked = (threading.Event() for _ in range(3))
+    worker_threads = []
+    original_thread = threading.Thread
+
+    class TracedThread(original_thread):
+        def run(self):
+            import sys
+
+            def trace(frame, event, arg):
+                if frame.f_code.co_name == "_worker" and event == "line":
+                    line = linecache.getline(frame.f_code.co_filename, frame.f_lineno).strip()
+                    boundary = "result = _evaluate_capability(" if admitted else "with state_lock:"
+                    if line == boundary and not paused.is_set():
+                        paused.set()
+                        release.wait(2)
+                return trace
+
+            sys.settrace(trace)
+            try:
+                super().run()
+            finally:
+                sys.settrace(None)
+
+    def thread_factory(*args, **kwargs):
+        thread = TracedThread(*args, **kwargs)
+        worker_threads.append(thread)
+        return thread
+
+    def provider(_lake, definition):
+        invoked.set()
+        return _usable(DISCLOSURES_ID)
+
+    monkeypatch.setattr(cdr.threading, "Thread", thread_factory)
+    started = time.monotonic()
+    try:
+        result = cdr._capability_results(
+            _definition([DISCLOSURES_ID]), lake=None,
+            ports=_ports([DISCLOSURES_ID], disclosures=provider),
+            network_deadline=started + 0.05,
+        )
+        assert time.monotonic() - started < 0.3
+        assert paused.is_set()
+        assert result[0]["state"] == ("ERROR" if admitted else "NOT_EVALUATED")
+        assert not invoked.is_set()
+    finally:
+        release.set()
+        for thread in worker_threads:
+            thread.join(1)
+            assert not thread.is_alive()
+    # An admitted read can finish late; a closed, unadmitted worker cannot start.
+    assert invoked.is_set() == admitted
+    assert result[0]["state"] == ("ERROR" if admitted else "NOT_EVALUATED")
