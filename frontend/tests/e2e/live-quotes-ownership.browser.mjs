@@ -32,7 +32,6 @@ try {
     let currentCase = 'initial-readiness';
     page.on('pageerror', error => errors.push(error.message));
     await page.clock.install({ time: new Date('2026-10-12T01:59:59Z') });
-    await page.clock.pauseAt(new Date('2026-10-12T02:00:00Z'));
     await context.addInitScript(() => {
       localStorage.setItem('vr-watchlist-live', 'off');
       let hidden = false;
@@ -110,8 +109,18 @@ try {
     };
     try {
       await page.goto(`${origin}/watchlist`, { waitUntil: 'domcontentloaded' });
+      currentCase = 'initial-quote-request';
       await count(1); await settle(0);
+      currentCase = 'initial-quote-render';
       await page.getByText('Synthetic quote', { exact: true }).first().waitFor();
+      await page.getByTitle('开启实时行情（交易时段每 3 秒自动刷新）', { exact: true }).waitFor();
+      // React's lazy-route Suspense reveal uses a timer. Keep the installed clock
+      // running through concrete app readiness, then freeze while polling is off.
+      // The one-second future boundary is required by pauseAt; no quote timer
+      // exists yet, so every tested interval still starts from a paused clock.
+      await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 1000)));
+      await timers([]);
+      currentCase = 'enable-first-poll';
       await page.getByTitle('开启实时行情（交易时段每 3 秒自动刷新）', { exact: true }).click();
       await count(2);
       currentCase = 'held-visibility-single-owner';
