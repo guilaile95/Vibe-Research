@@ -88,6 +88,9 @@ export function MyReports() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [edit, setEdit] = useState<EditForm>(EMPTY_EDIT);
   const [editBusy, setEditBusy] = useState(false);
+  const editBusyRef = useRef(false);
+  const editSessionRef = useRef(0);
+  const mountedRef = useRef(false);
   const [editErr, setEditErr] = useState<string | null>(null);
   const [hasLoaded, setHasLoaded] = useState(false);
 
@@ -135,8 +138,13 @@ export function MyReports() {
     }
   };
   useEffect(() => {
+    mountedRef.current = true;
     load();
-    return () => { listRequestRef.current += 1; };
+    return () => {
+      mountedRef.current = false;
+      editSessionRef.current += 1;
+      listRequestRef.current += 1;
+    };
   }, []);
 
   useEffect(() => {
@@ -245,6 +253,7 @@ export function MyReports() {
   };
 
   const startEdit = (r: MyReport) => {
+    editSessionRef.current += 1;
     setEditingId(r.id);
     setEdit({
       title: r.title ?? "",
@@ -257,8 +266,21 @@ export function MyReports() {
     setEditErr(null);
   };
 
+  const cancelEdit = () => {
+    editSessionRef.current += 1;
+    setEditingId(null);
+    setEditErr(null);
+  };
+
+  const updateEdit = (next: EditForm | ((previous: EditForm) => EditForm)) => {
+    // Edits made while a save is pending belong to a new unsaved draft.
+    editSessionRef.current += 1;
+    setEdit(next);
+    setEditErr(null);
+  };
+
   const toggleSectorKey = (key: string) => {
-    setEdit((prev) => ({
+    updateEdit((prev) => ({
       ...prev,
       sector_keys: prev.sector_keys.includes(key)
         ? prev.sector_keys.filter((k) => k !== key)
@@ -267,6 +289,11 @@ export function MyReports() {
   };
 
   const saveEdit = async (id: string) => {
+    // State alone cannot prevent two invocations before React commits a render.
+    if (editBusyRef.current || !mountedRef.current) return;
+    editBusyRef.current = true;
+    const session = editSessionRef.current;
+    const ownsEditor = () => mountedRef.current && session === editSessionRef.current;
     setEditBusy(true);
     setEditErr(null);
     try {
@@ -279,12 +306,17 @@ export function MyReports() {
         source_url: edit.source_url,
         source_kind: edit.source_kind,
       });
-      setEditingId(null);
+      if (!mountedRef.current) return;
+      if (ownsEditor()) setEditingId(null);
       await refreshAll();
     } catch (e) {
-      setEditErr(e instanceof ApiError ? e.message : "保存失败");
+      if (!mountedRef.current) return;
+      const detail = e instanceof ApiError ? e.message : "保存失败";
+      if (ownsEditor()) setEditErr(detail);
+      else setErr(`研报「${edit.title || id}」保存失败：${detail}`);
     } finally {
-      setEditBusy(false);
+      editBusyRef.current = false;
+      if (mountedRef.current) setEditBusy(false);
     }
   };
 
@@ -405,7 +437,7 @@ export function MyReports() {
                 <span className="text-muted-foreground">标题</span>
                 <input
                   value={edit.title}
-                  onChange={(e) => setEdit({ ...edit, title: e.target.value })}
+                  onChange={(e) => updateEdit({ ...edit, title: e.target.value })}
                   className="mt-0.5 w-full rounded border border-border/50 bg-background px-2 py-1 text-sm"
                   placeholder={r.name}
                 />
@@ -414,7 +446,7 @@ export function MyReports() {
                 <span className="text-muted-foreground">机构</span>
                 <input
                   value={edit.institution}
-                  onChange={(e) => setEdit({ ...edit, institution: e.target.value })}
+                  onChange={(e) => updateEdit({ ...edit, institution: e.target.value })}
                   className="mt-0.5 w-full rounded border border-border/50 bg-background px-2 py-1 text-sm"
                   placeholder="未确认机构"
                 />
@@ -423,7 +455,7 @@ export function MyReports() {
                 <span className="text-muted-foreground">发布日期</span>
                 <input
                   value={edit.publish_date}
-                  onChange={(e) => setEdit({ ...edit, publish_date: e.target.value })}
+                  onChange={(e) => updateEdit({ ...edit, publish_date: e.target.value })}
                   className="mt-0.5 w-full rounded border border-border/50 bg-background px-2 py-1 text-sm"
                   placeholder="YYYY-MM-DD / YYYY-MM / YYYY"
                 />
@@ -432,7 +464,7 @@ export function MyReports() {
                 <span className="text-muted-foreground">来源类型</span>
                 <select
                   value={edit.source_kind}
-                  onChange={(e) => setEdit({ ...edit, source_kind: e.target.value })}
+                  onChange={(e) => updateEdit({ ...edit, source_kind: e.target.value })}
                   className="mt-0.5 w-full rounded border border-border/50 bg-background px-2 py-1 text-sm"
                 >
                   <option value="">（未设置）</option>
@@ -445,7 +477,7 @@ export function MyReports() {
                 <span className="text-muted-foreground">来源链接</span>
                 <input
                   value={edit.source_url}
-                  onChange={(e) => setEdit({ ...edit, source_url: e.target.value })}
+                  onChange={(e) => updateEdit({ ...edit, source_url: e.target.value })}
                   className="mt-0.5 w-full rounded border border-border/50 bg-background px-2 py-1 text-sm"
                   placeholder="https://..."
                 />
@@ -482,7 +514,7 @@ export function MyReports() {
                 <Save className="h-3.5 w-3.5" /> {editBusy ? "保存中…" : "保存"}
               </button>
               <button
-                onClick={() => setEditingId(null)}
+                onClick={cancelEdit}
                 className="inline-flex items-center gap-1 rounded border border-border/50 px-2.5 py-1 text-xs text-muted-foreground hover:border-primary/40"
               >
                 <X className="h-3.5 w-3.5" /> 取消

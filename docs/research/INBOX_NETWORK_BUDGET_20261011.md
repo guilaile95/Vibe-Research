@@ -71,3 +71,23 @@ Independent review found and repaired a worker-preemption race between admission
 and snapshot closure. Two deterministic trace-based regressions verify both sides
 of the ownership boundary without delaying return on a provider. Final focused
 CCD/Inbox tests: 69 passed after that repair.
+
+## Timed-wait completion correction
+
+A later Windows CI run preserved the elapsed-time bound but observed two disclosure
+calls where the blocked first campaign should consume the shared budget. The runtime
+had treated one timed `Thread.join` return as deadline expiry. An early timed-wait
+return could therefore close the first campaign prematurely with `ERROR`, leave
+budget for the next campaign, and discard a valid result arriving within that budget.
+
+A controlled offline early-return join reproduces the exact count mismatch. A second
+regression proves that the old path discards remaining-budget completion. These
+establish the code defect; the precise native Windows timer behavior is inferred,
+not directly measured from the CI trace.
+
+The wait now rechecks worker liveness and the same monotonic deadline after each
+join. Completion or actual deadline expiry ends the wait. No deadline reset,
+additional concurrency, provider invocation, or ownership-contract change is added.
+The original strict count, per-campaign states, local-authority preservation, and
+elapsed-bound assertions remain. Under a process-wide socket guard, both new
+regressions fail before the correction and the final Inbox/CCD group passes 71 tests.

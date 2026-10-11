@@ -334,3 +334,41 @@ def test_snapshot_closure_atomically_owns_preempted_workers(monkeypatch, admitte
     # An admitted read can finish late; a closed, unadmitted worker cannot start.
     assert invoked.is_set() == admitted
     assert result[0]["state"] == ("ERROR" if admitted else "NOT_EVALUATED")
+
+
+def test_early_join_return_keeps_remaining_budget_for_valid_completion(monkeypatch):
+    import threading
+
+    release = threading.Event()
+    finished = threading.Event()
+    join_calls = []
+    original_join = threading.Thread.join
+
+    def provider(_lake, definition):
+        try:
+            assert release.wait(2)
+            return _usable(DISCLOSURES_ID)
+        finally:
+            finished.set()
+
+    def early_then_complete(thread, timeout=None):
+        if thread.name == "ccd-capability-cap.security.disclosures" and timeout is not None:
+            join_calls.append(timeout)
+            if len(join_calls) == 1:
+                return  # A timed wait alone cannot prove the deadline elapsed.
+            release.set()
+        return original_join(thread, timeout)
+
+    monkeypatch.setattr(threading.Thread, "join", early_then_complete)
+    try:
+        result = cdr._capability_results(
+            _definition([DISCLOSURES_ID]), lake=None,
+            ports=_ports([DISCLOSURES_ID], disclosures=provider),
+            network_deadline=time.monotonic() + 0.5,
+        )
+        assert len(join_calls) >= 2
+        assert result[0]["state"] == "USABLE"
+        assert cdr.NETWORK_BUDGET_EXHAUSTED_REF not in result[0]["authority_refs"]
+    finally:
+        release.set()
+        assert finished.wait(1)

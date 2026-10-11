@@ -1328,7 +1328,8 @@ class TestHardRiskIntegration:
             _assemble(ports)
 
 
-def test_inbox_shares_one_network_budget_preserving_all_local_authorities(monkeypatch):
+@pytest.mark.parametrize("early_join_return", [False, True])
+def test_inbox_shares_one_network_budget_preserving_all_local_authorities(monkeypatch, early_join_return):
     import threading
     import time
     import push2_guard
@@ -1338,6 +1339,17 @@ def test_inbox_shares_one_network_budget_preserving_all_local_authorities(monkey
     finished = threading.Event()
     observed_context = []
     hr_calls = []
+    original_join = threading.Thread.join
+    returned_early = []
+
+    def controlled_join(thread, timeout=None):
+        if (early_join_return and timeout is not None and not returned_early
+                and thread.name == "ccd-capability-cap.security.disclosures"):
+            returned_early.append(True)
+            return  # Simulate a timed wait returning before the monotonic deadline.
+        return original_join(thread, timeout)
+
+    monkeypatch.setattr(threading.Thread, "join", controlled_join)
 
     def delayed_disclosures(_lake, definition):
         assert push2_guard.is_read_only()

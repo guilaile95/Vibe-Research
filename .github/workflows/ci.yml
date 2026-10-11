@@ -320,6 +320,22 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Run report edit interruption E2E
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          E2E_REPORT_EDIT_OUTPUT_DIR: ${{ runner.temp }}/report-edit-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/report-edit-ownership.browser.mjs
+
+      - name: Preserve synthetic report edit screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: report-edit-evidence
+          path: ${{ runner.temp }}/report-edit-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
   e2e-data-health-smoke:
     name: Playwright data health smoke E2E
     runs-on: ubuntu-latest

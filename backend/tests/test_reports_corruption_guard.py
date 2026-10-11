@@ -555,3 +555,43 @@ def test_api_reports_corrupted_returns_http_500():
             assert res_del.status_code != 404
     finally:
         import shutil; shutil.rmtree(tmp, ignore_errors=True)
+
+
+@pytest.mark.parametrize("second_ext", [".txt", ".md"])
+@pytest.mark.parametrize("operation", ["list", "path", "delete", "upload", "index"])
+def test_duplicate_report_ids_fail_closed(tmp_path, monkeypatch, second_ext, operation):
+    """An ambiguous archive identity must never select or delete multiple reports."""
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path)
+    rows = [
+        {"id": "duplicate", "ext": ".txt", "name": "first.txt"},
+        {"id": "duplicate", "ext": second_ext, "name": "second" + second_ext},
+    ]
+    (tmp_path / "index.json").write_text(json.dumps(rows), encoding="utf-8")
+    (tmp_path / "index.json.bak").write_text("[]", encoding="utf-8")
+    (tmp_path / "duplicate.txt").write_text("first source", encoding="utf-8")
+    if second_ext != ".txt":
+        (tmp_path / ("duplicate" + second_ext)).write_text("second source", encoding="utf-8")
+    before = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
+    operations = {
+        "list": mr.list_reports,
+        "path": lambda: mr.report_path("duplicate"),
+        "delete": lambda: mr.delete_report("duplicate"),
+        "upload": lambda: mr.save_report("new.txt", _B64_SMALL),
+        "index": lambda: mr.index_report_text("duplicate"),
+    }
+    with pytest.raises(mr.ReportIndexCorruptedError):
+        operations[operation]()
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == before
+
+
+def test_save_duplicate_report_ids_preserves_index_and_backup(tmp_path, monkeypatch):
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path)
+    (tmp_path / "index.json").write_text('[{"id": "old", "ext": ".txt"}]', encoding="utf-8")
+    (tmp_path / "index.json.bak").write_text("[]", encoding="utf-8")
+    before = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
+    with pytest.raises(mr.ReportIndexCorruptedError):
+        mr._save_index([
+            {"id": "duplicate", "ext": ".txt"},
+            {"id": "duplicate", "ext": ".md"},
+        ])
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == before
