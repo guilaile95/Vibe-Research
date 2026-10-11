@@ -325,8 +325,13 @@ def _capability_results(
         threads.append(thread)
 
     for thread in threads:
-        remaining = deadline - time.monotonic()
-        if remaining > 0:
+        # A timed join can return before this monotonic deadline (for example,
+        # platform timer granularity). Only completion or actual expiry closes
+        # this wait; otherwise we could discard valid remaining-budget results.
+        while thread.is_alive():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             thread.join(timeout=remaining)
     with state_lock:
         closed = True
