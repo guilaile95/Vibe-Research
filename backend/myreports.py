@@ -145,15 +145,19 @@ def _tmp_name(base: str) -> str:
 
 
 def _validate_index_data(data):
-    """宽松校验（加载 / 保存通用）：只核查 id + ext，向后兼容旧格式条目与测试夹具。"""
+    """宽松校验（加载 / 保存通用）：核查唯一 id + ext，兼容旧格式条目。"""
     if not isinstance(data, list):
         raise ReportIndexCorruptedError()
+    seen_ids: set[str] = set()
     for entry in data:
         if not isinstance(entry, dict):
             raise ReportIndexCorruptedError()
         rid = entry.get("id")
-        if not isinstance(rid, str) or not rid:
+        if not isinstance(rid, str) or not rid or rid in seen_ids:
             raise ReportIndexCorruptedError()
+        # File access, deletion and the text index all use id as the identity.
+        # Ambiguous rows must fail closed before selecting or mutating either.
+        seen_ids.add(rid)
         ext = entry.get("ext")
         if not isinstance(ext, str):
             raise ReportIndexCorruptedError()
