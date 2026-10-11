@@ -92,6 +92,7 @@ export function MyReports() {
   const editSessionRef = useRef(0);
   const mountedRef = useRef(false);
   const [editErr, setEditErr] = useState<string | null>(null);
+  const [detachedSaveErr, setDetachedSaveErr] = useState<{ id: string; message: string } | null>(null);
   const [hasLoaded, setHasLoaded] = useState(false);
 
   // URL 查询参数：report（定位高亮）/ sector / institution / year / month。
@@ -296,6 +297,7 @@ export function MyReports() {
     const ownsEditor = () => mountedRef.current && session === editSessionRef.current;
     setEditBusy(true);
     setEditErr(null);
+    setDetachedSaveErr((previous) => previous?.id === id ? null : previous);
     try {
       // 始终发送字符串（含 ""）：后端 "" 清空字段，缺省则保留。
       await api.patchReport(id, {
@@ -308,16 +310,20 @@ export function MyReports() {
       });
       if (!mountedRef.current) return;
       if (ownsEditor()) setEditingId(null);
-      await refreshAll();
     } catch (e) {
       if (!mountedRef.current) return;
       const detail = e instanceof ApiError ? e.message : "保存失败";
       if (ownsEditor()) setEditErr(detail);
-      else setErr(`研报「${edit.title || id}」保存失败：${detail}`);
+      else setDetachedSaveErr({ id, message: `研报「${edit.title || id}」保存失败：${detail}` });
+      return;
     } finally {
       editBusyRef.current = false;
       if (mountedRef.current) setEditBusy(false);
     }
+    // The PATCH is settled. Readback owns its own generation and list error state;
+    // an unbounded GET must not hold the mutation lock for subsequent editors.
+    // Start its generation synchronously so older reads cannot overwrite this save.
+    await refreshAll();
   };
 
   const displayTitle = (r: MyReport) => r.title || r.name;
@@ -615,9 +621,10 @@ export function MyReports() {
         </div>
       </GlassCard>
 
-      {err && (
+      {(err || detachedSaveErr) && (
         <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-          {err}
+          {err && <p>{err}</p>}
+          {detachedSaveErr && <p>{detachedSaveErr.message}</p>}
         </div>
       )}
 

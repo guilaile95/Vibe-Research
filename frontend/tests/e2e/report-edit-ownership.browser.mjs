@@ -1,6 +1,6 @@
 /** Full-app synthetic report metadata interruption acceptance. No backend or AI calls.
  * Run after npm run build, with E2E_REPORT_EDIT_OUTPUT_DIR set to an artifact directory.
- * The inherited unbounded list-refresh wait is deliberately not claimed as covered.
+ * Includes held list-readback ordering and detached save failure ownership.
  */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -28,16 +28,31 @@ try {
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
     const patches = [], pending = new Set(), errors = [], blocked = [];
-    let nextHold, currentCase = 'initial-readiness', readCount = 0;
+    let nextHold, nextReadHold, currentCase = 'initial-readiness', readCount = 0;
     const reports = ['A', 'B'].map(id => ({ id, name: `${id}.pdf`, title: `Synthetic ${id}`, size: 100, ts: 1, sector_keys: [] }));
     page.on('pageerror', error => errors.push(error.message));
-    const holdNextPatch = (failure = false) => {
-      assert.equal(nextHold, undefined);
+    const createHold = (kind, failure = false) => {
       let release, entered;
       const gate = new Promise(done => { release = done; });
       const started = new Promise(done => { entered = done; });
-      const hold = { gate, started, release, entered, failure };
-      nextHold = hold; pending.add(hold); return hold;
+      const hold = { gate, started, release, entered, failure, kind };
+      pending.add(hold); return hold;
+    };
+    const holdNextPatch = (failure = false) => {
+      assert.equal(nextHold, undefined);
+      nextHold = createHold('PATCH', failure); return nextHold;
+    };
+    const holdNextRead = () => {
+      assert.equal(nextReadHold, undefined);
+      nextReadHold = createHold('GET'); return nextReadHold;
+    };
+    const waitForRelease = async hold => {
+      let timer;
+      try {
+        await Promise.race([hold.gate, new Promise(done => {
+          timer = setTimeout(() => { errors.push(`Unreleased ${hold.kind} hold expired`); done(); }, 15000);
+        })]);
+      } finally { clearTimeout(timer); }
     };
     await context.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url());
@@ -50,21 +65,30 @@ try {
       if (url.origin !== frontend) { blocked.push(request.url()); return route.abort(); }
       if (!url.pathname.startsWith('/api/')) return route.continue();
       if (url.pathname === '/api/myreports' && request.method() === 'GET') {
-        readCount++; return route.fulfill({ json: { data: reports } });
+        readCount++;
+        // Capture persisted metadata when this GET starts, not when released.
+        // Otherwise a delayed response would falsely contain later PATCH writes.
+        const snapshot = structuredClone(reports);
+        const hold = nextReadHold; nextReadHold = undefined;
+        if (!hold) return route.fulfill({ json: { data: snapshot } });
+        hold.request = request; hold.entered();
+        try {
+          await waitForRelease(hold);
+          return await route.fulfill({ json: { data: snapshot } });
+        } finally { pending.delete(hold); }
       }
       if (/^\/api\/myreports\/[AB]$/.test(url.pathname) && request.method() === 'PATCH') {
         const id = url.pathname.split('/').at(-1), body = request.postDataJSON();
         patches.push({ id, body });
         const hold = nextHold; nextHold = undefined;
         if (!hold) { errors.push('Unexpected metadata PATCH without a hold'); return route.fulfill({ status: 500, json: { detail: 'UNEXPECTED_PATCH' } }); }
-        hold.entered();
-        let timer;
+        hold.request = request; hold.entered();
         try {
-          await Promise.race([hold.gate, new Promise(done => { timer = setTimeout(() => { errors.push('Unreleased PATCH hold expired'); done(); }, 15000); })]);
+          await waitForRelease(hold);
           if (hold.failure) return await route.fulfill({ status: 400, json: { detail: 'SYNTHETIC_SAVE_FAILURE' } });
           Object.assign(reports.find(report => report.id === id), body);
           return await route.fulfill({ json: { data: reports.find(report => report.id === id) } });
-        } finally { clearTimeout(timer); pending.delete(hold); }
+        } finally { pending.delete(hold); }
       }
       // Full-app bootstrap reads remain synthetic too. Any mutation outside this
       // bounded contract is a test failure, never forwarded to a real service.
@@ -80,12 +104,12 @@ try {
       let timer;
       try {
         await Promise.race([hold.started, new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error('Expected metadata PATCH did not start')), 10000);
+          timer = setTimeout(() => reject(new Error(`Expected metadata ${hold.kind} did not start`)), 10000);
         })]);
       } finally { clearTimeout(timer); }
     };
     const finish = async hold => {
-      const response = page.waitForResponse(response => response.request().method() === 'PATCH' && /\/api\/myreports\/[AB]$/.test(new URL(response.url()).pathname));
+      const response = page.waitForResponse(response => response.request() === hold.request);
       hold.release(); await (await response).finished();
       await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
     };
@@ -135,6 +159,47 @@ try {
       const recovered = holdNextPatch(); await save('A').click(); await entered(recovered); await finish(recovered);
       await cancel('A').waitFor({ state: 'hidden' }); assert.equal(patches.length, before + 2);
       await screenshot(currentCase);
+      currentCase = 'held-readback-unlocks-new-save-and-keeps-newer-list';
+      await edit('A'); await title('A').fill('HELD READ PERSISTED A');
+      const firstWrite = holdNextPatch(); await save('A').click(); await entered(firstWrite);
+      await cancel('A').click(); await edit('B'); await title('B').fill('NEWER PERSISTED B');
+      const olderRead = holdNextRead(); await finish(firstWrite); await entered(olderRead);
+      await save('B').waitFor(); assert.equal(await save('B').isEnabled(), true);
+      assert.equal(await title('B').inputValue(), 'NEWER PERSISTED B');
+      await screenshot('held-readback-editor-unlocked');
+      const secondWrite = holdNextPatch(); await save('B').click(); await entered(secondWrite);
+      assert.equal(patches.at(-1).id, 'B'); assert.equal(patches.at(-1).body.title, 'NEWER PERSISTED B');
+      const newerRead = holdNextRead(); await finish(secondWrite); await entered(newerRead);
+      await cancel('B').waitFor({ state: 'hidden' });
+      await finish(newerRead); await row('B').getByText('NEWER PERSISTED B', { exact: true }).waitFor();
+      await finish(olderRead);
+      assert.equal(await row('B').getByText('NEWER PERSISTED B', { exact: true }).isVisible(), true);
+      assert.equal(await row('A').getByText('HELD READ PERSISTED A', { exact: true }).isVisible(), true);
+      await screenshot(currentCase);
+
+      currentCase = 'failed-next-save-retains-earlier-readback-and-detached-error';
+      await edit('A'); await title('A').fill('EARLIER SUCCESSFUL A');
+      const persistedWrite = holdNextPatch(); await save('A').click(); await entered(persistedWrite);
+      const persistedRead = holdNextRead(); await finish(persistedWrite); await entered(persistedRead);
+      await edit('B'); await title('B').fill('FAILED SECOND B');
+      const rejectedWrite = holdNextPatch(true); await save('B').click(); await entered(rejectedWrite);
+      await cancel('B').click(); await edit('A'); await title('A').fill('UNSAVED REOPENED A');
+      await finish(rejectedWrite); await save('A').waitFor();
+      const detachedError = page.getByText('研报「FAILED SECOND B」保存失败：SYNTHETIC_SAVE_FAILURE', { exact: true });
+      await detachedError.waitFor(); await finish(persistedRead);
+      await row('A').getByText('EARLIER SUCCESSFUL A', { exact: true }).waitFor();
+      assert.equal(await detachedError.isVisible(), true, 'Earlier GET must not erase newer detached failure');
+      assert.equal(await title('A').inputValue(), 'UNSAVED REOPENED A');
+      assert.doesNotMatch(await row('A').innerText(), /SYNTHETIC_SAVE_FAILURE/);
+      assert.equal(reports[1].title, 'NEWER PERSISTED B', 'Failed PATCH must not mutate persisted data');
+      await screenshot(currentCase);
+      await cancel('A').click(); await edit('B'); await title('B').fill('RECOVERED SECOND B');
+      const matchingRetry = holdNextPatch(); await save('B').click(); await entered(matchingRetry);
+      await detachedError.waitFor({ state: 'hidden' }); await finish(matchingRetry);
+      await cancel('B').waitFor({ state: 'hidden' });
+      await row('B').getByText('RECOVERED SECOND B', { exact: true }).waitFor();
+      await screenshot('detached-failure-matching-report-retry');
+      assert.equal(pending.size, 0, 'Every held request was explicitly released');
       assert.deepEqual(errors, []); assert.deepEqual(blocked, []);
       await context.tracing.stop({ path: join(output, `${width}-trace.zip`) });
     } catch (error) {
