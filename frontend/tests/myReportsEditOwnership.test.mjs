@@ -13,7 +13,7 @@ const source = ts.transpileModule(readFileSync(new URL('../src/pages/MyReports.t
 const tick = () => new Promise(done => setImmediate(done));
 function nodes(v) { return !v || typeof v !== 'object' ? [] : Array.isArray(v) ? v.flatMap(nodes) : [v, ...nodes(v.props?.children)]; }
 function text(v) { return v == null || typeof v === 'boolean' ? '' : typeof v === 'string' || typeof v === 'number' ? String(v) : Array.isArray(v) ? v.map(text).join('') : text(v.props?.children); }
-function harness() {
+function harness({ deferRefresh = false } = {}) {
   let cursor = 0, dirty = true, tree, writes = 0;
   const cells = [], effects = [], calls = [], reads = [];
   const reports = ['A', 'B'].map(id => ({ id, name: `${id}.pdf`, title: id, size: 100 }));
@@ -29,7 +29,7 @@ function harness() {
     react, 'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
     'react-router-dom': { Link: 'link', useSearchParams: () => [params, () => {}] },
     '@/lib/myReportsView': view, '@/data/sectors.json': { default: { sectors: [] } }, '@/lib/utils': { cn: () => '' },
-    '@/lib/api': { ApiError: Error, api: { myReports: async () => { reads.push(true); return reports; }, patchReport: (id, payload) => new Promise((resolve, reject) => calls.push({ id, payload, resolve, reject })) } },
+    '@/lib/api': { ApiError: Error, api: { myReports: () => { if (!reads.length || !deferRefresh) { reads.push(true); return Promise.resolve(reports); } return new Promise((resolve, reject) => reads.push({ resolve, reject })); }, patchReport: (id, payload) => new Promise((resolve, reject) => calls.push({ id, payload, resolve, reject })) } },
   };
   const exports = {}, generic = new Proxy({}, { get: (_, key) => key === '__esModule' ? true : String(key) });
   vm.runInNewContext(source, { exports, URLSearchParams, Error, require: name => modules[name] ?? generic });
@@ -91,4 +91,87 @@ test('late save rejection after unmount cannot update state', async () => {
   const h = harness(); await h.flush(); h.edit('A'); await h.flush(); h.button('A', '保存').props.onClick(); await h.flush();
   h.unmount(); const writes = h.writes; h.calls[0].reject(new Error('LATE FAILURE')); await tick(); await tick();
   assert.equal(h.writes, writes); assert.equal(h.reads.length, 1);
+});
+
+test('successful PATCH releases the mutation lock even when its list readback never settles', async () => {
+  const h = harness({ deferRefresh: true }); await h.flush(); h.edit('A'); await h.flush();
+  h.button('A', '保存').props.onClick(); await h.flush();
+  h.button('A', '取消').props.onClick(); await h.flush(); h.edit('B'); await h.flush();
+  assert.equal(h.button('B', '保存中…').props.disabled, true, 'issued PATCH remains locked after Cancel');
+  h.calls[0].resolve({}); await h.flush();
+  assert.equal(h.reads.length, 2, 'persisted metadata still uses list readback');
+  assert.equal(h.button('B', '保存')?.props.disabled, false, 'unsettled readback must not lock new editors');
+  const save = h.button('B', '保存').props.onClick; save(); save();
+  assert.equal(h.calls.length, 2, 'new PATCH retains same-turn duplicate guard');
+  h.calls[1].resolve({}); await h.flush(); h.unmount();
+});
+
+test('previous persisted readback remains usable if a subsequent PATCH fails', async () => {
+  const h = harness({ deferRefresh: true }); await h.flush(); h.edit('A'); await h.flush();
+  h.button('A', '保存').props.onClick(); h.calls[0].resolve({}); await h.flush();
+  h.edit('B'); await h.flush();
+  nodes(h.row('B')).find(n => n.type === 'input' && n.props.placeholder === 'B.pdf').props.onChange({ target: { value: 'NEW UNSAVED DRAFT' } }); await h.flush();
+  h.button('B', '保存').props.onClick(); await h.flush(); h.calls[1].reject(new Error('SECOND PATCH FAILURE')); await h.flush();
+  h.reads[1].resolve([{ id: 'A', title: 'FIRST PERSISTED TITLE', name: 'A.pdf', size: 100 }, { id: 'B', title: 'B', name: 'B.pdf', size: 100 }]); await h.flush();
+  assert.match(text(h.row('A')), /FIRST PERSISTED TITLE/);
+  assert.match(text(h.row('B')), /SECOND PATCH FAILURE/);
+  assert.ok(nodes(h.row('B')).some(n => n.type === 'input' && n.props.value === 'NEW UNSAVED DRAFT'));
+  h.button('B', '保存').props.onClick(); assert.equal(h.calls[2].payload.title, 'NEW UNSAVED DRAFT');
+  h.calls[2].resolve({}); await h.flush(); h.unmount();
+});
+
+test('older readback during the next PATCH cannot unlock or close its editor', async () => {
+  const h = harness({ deferRefresh: true }); await h.flush(); h.edit('A'); await h.flush();
+  h.button('A', '保存').props.onClick(); h.calls[0].resolve({}); await h.flush();
+  h.edit('B'); await h.flush(); h.button('B', '保存').props.onClick(); await h.flush();
+  h.reads[1].resolve([{ id: 'A', title: 'FIRST PERSISTED TITLE', name: 'A.pdf', size: 100 }, { id: 'B', title: 'B', name: 'B.pdf', size: 100 }]); await h.flush();
+  assert.equal(h.button('B', '保存中…').props.disabled, true); assert.ok(h.button('B', '取消'));
+  h.button('B', '保存中…').props.onClick(); assert.equal(h.calls.length, 2);
+  h.calls[1].resolve({}); await h.flush(); h.unmount();
+});
+
+for (const staleResult of ['success', 'failure']) test(`older list ${staleResult} after newer persisted readback cannot overwrite it`, async () => {
+  const h = harness({ deferRefresh: true }); await h.flush(); h.edit('A'); await h.flush();
+  h.button('A', '保存').props.onClick(); h.calls[0].resolve({}); await h.flush();
+  h.edit('B'); await h.flush(); h.button('B', '保存').props.onClick(); h.calls[1].resolve({}); await h.flush();
+  h.reads[2].resolve([{ id: 'B', title: 'AUTHORITATIVE NEW TITLE', name: 'B.pdf', size: 100 }]); await h.flush();
+  const before = h.writes;
+  if (staleResult === 'success') h.reads[1].resolve([{ id: 'B', title: 'OLD TITLE', name: 'B.pdf', size: 100 }]);
+  else h.reads[1].reject(new Error('STALE READ FAILURE'));
+  await h.flush(); assert.equal(h.writes, before); assert.match(text(h.row('B')), /AUTHORITATIVE NEW TITLE/); h.unmount();
+});
+
+test('readback failure is a list error, leaves persisted rows unchanged and permits another save', async () => {
+  const h = harness({ deferRefresh: true }); await h.flush(); h.edit('A'); await h.flush();
+  nodes(h.row('A')).find(n => n.type === 'input' && n.props.placeholder === 'A.pdf').props.onChange({ target: { value: 'UNCONFIRMED TITLE' } }); await h.flush();
+  h.button('A', '保存').props.onClick(); h.calls[0].resolve({}); await h.flush();
+  assert.doesNotMatch(text(h.row('A')), /UNCONFIRMED TITLE/, 'PATCH request must not optimistically replace list metadata');
+  h.reads[1].reject(new Error('LIST READBACK FAILURE')); await h.flush();
+  assert.match(text(h.tree), /LIST READBACK FAILURE/); assert.doesNotMatch(text(h.tree), /保存失败/);
+  h.edit('B'); await h.flush(); h.button('B', '保存').props.onClick(); h.calls[1].resolve({}); await h.flush();
+  h.reads[2].resolve([{ id: 'A', title: 'PERSISTED TITLE', name: 'A.pdf', size: 100 }]); await h.flush();
+  assert.match(text(h.row('A')), /PERSISTED TITLE/); assert.doesNotMatch(text(h.tree), /LIST READBACK FAILURE/); h.unmount();
+});
+
+test('unmounted pending readback cannot update state', async () => {
+  const h = harness({ deferRefresh: true }); await h.flush(); h.edit('A'); await h.flush();
+  h.button('A', '保存').props.onClick(); h.calls[0].resolve({}); await h.flush(); h.unmount(); const before = h.writes;
+  h.reads[1].resolve([]); await tick(); await tick(); assert.equal(h.writes, before);
+});
+
+test('earlier list readback cannot erase a newer detached PATCH failure', async () => {
+  const h = harness({ deferRefresh: true }); await h.flush(); h.edit('A'); await h.flush();
+  h.button('A', '保存').props.onClick(); h.calls[0].resolve({}); await h.flush();
+  h.edit('B'); await h.flush(); h.button('B', '保存').props.onClick(); await h.flush();
+  h.button('B', '取消').props.onClick(); await h.flush(); h.edit('A'); await h.flush();
+  h.calls[1].reject(new Error('DETACHED SECOND FAILURE')); await h.flush();
+  assert.match(text(h.tree), /研报「B」保存失败：DETACHED SECOND FAILURE/);
+  h.reads[1].resolve([{ id: 'A', title: 'FIRST PERSISTED TITLE', name: 'A.pdf', size: 100 }, { id: 'B', title: 'B', name: 'B.pdf', size: 100 }]); await h.flush();
+  assert.match(text(h.tree), /研报「B」保存失败：DETACHED SECOND FAILURE/);
+  assert.doesNotMatch(text(h.row('A')), /DETACHED SECOND FAILURE/);
+  h.button('A', '保存').props.onClick(); h.calls[2].resolve({}); await h.flush();
+  assert.match(text(h.tree), /DETACHED SECOND FAILURE/, 'unrelated save must not erase failure');
+  h.edit('B'); await h.flush(); h.button('B', '保存').props.onClick(); await h.flush();
+  assert.doesNotMatch(text(h.tree), /DETACHED SECOND FAILURE/, 'retrying the failed report clears its old error');
+  h.calls[3].resolve({}); await h.flush(); h.unmount();
 });
