@@ -13,7 +13,7 @@ const root = fileURLToPath(new URL('../..', import.meta.url));
 assert.ok(process.env.E2E_REPORT_EDIT_OUTPUT_DIR, 'Set E2E_REPORT_EDIT_OUTPUT_DIR for acceptance artifacts');
 const output = resolve(process.env.E2E_REPORT_EDIT_OUTPUT_DIR);
 mkdirSync(output, { recursive: true });
-const results = { suite: 'report-edit-ownership', transport: 'synthetic; no backend/model', cases: [], status: 'running' };
+const results = { suite: 'report-edit-ownership', transport: 'synthetic; no backend/model', fonts: 'Known Google Fonts stylesheet stubbed locally; system fallback font', cases: [], status: 'running' };
 const record = () => writeFileSync(join(output, 'results.json'), JSON.stringify(results, null, 2));
 record();
 let server, browser;
@@ -41,6 +41,12 @@ try {
     };
     await context.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url());
+      // index.html requests this presentation-only stylesheet. Keep the test
+      // offline using the app's fallback font; never allow a font-service fetch.
+      if (request.method() === 'GET' && request.resourceType() === 'stylesheet'
+          && url.href === 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap') {
+        return route.fulfill({ contentType: 'text/css', body: '/* Synthetic offline font fixture: use system fallback. */' });
+      }
       if (url.origin !== frontend) { blocked.push(request.url()); return route.abort(); }
       if (!url.pathname.startsWith('/api/')) return route.continue();
       if (url.pathname === '/api/myreports' && request.method() === 'GET') {
