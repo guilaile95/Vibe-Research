@@ -46,7 +46,7 @@ export function EarningsSnapshot({ fin, error }: Props) {
         <ClipboardList className="h-4 w-4 text-primary" /> 单股财务体检
         {latest?.period_end && <span className="text-xs font-normal text-muted-foreground/60">· 报告期末 {latest.period_end}</span>}
       </h3>
-      <p className="mb-3 text-[11px] text-muted-foreground/70">同花顺当前快照 · 报告期累计口径 · 事实观察，不构成评分或买卖建议。</p>
+      <p className="mb-3 text-[11px] text-muted-foreground/70">同花顺当前快照 · 事实观察，不构成评分或买卖建议。</p>
 
       {state === "error" && <p className="rounded-lg bg-destructive/5 p-3 text-sm text-destructive">财务数据暂不可用</p>}
       {state === "empty" && <p className="rounded-lg bg-muted/30 p-3 text-sm text-muted-foreground">当前数据源未返回财务记录</p>}
@@ -75,7 +75,7 @@ export function EarningsSnapshot({ fin, error }: Props) {
           <section>
             <h4 className="mb-2 text-xs font-semibold">Cash Flow Quality · 现金流质量</h4>
             <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-              <Fact label="经营现金流" value={formatFinancialAmount(latest.operating_cash_flow)} sub="与净利润同一报告期" />
+              <Fact label="经营现金流" value={formatFinancialAmount(latest.operating_cash_flow)} sub="与净利润按报告期末对齐" />
               <Fact label="现金转化率" value={formatFinancialRatio(latest.cash_conversion_ratio)} sub="经营现金流 / 净利润" />
               <Fact label="自由现金流" value={formatFinancialAmount(latest.free_cash_flow)} sub="经营现金流 - 资本开支" />
               <Fact label="自由现金流率" value={formatFinancialRatio(latest.free_cash_flow_margin)} sub="自由现金流 / 营业收入" />
@@ -103,15 +103,17 @@ export function EarningsSnapshot({ fin, error }: Props) {
               <span>披露日期：未知（数据源未提供）</span>
               <span>来源：同花顺，经 AKShare 读取</span>
               <span>历史 PIT：不支持</span>
-              <span>字段状态：{state === "partial" ? `部分缺失（${missing.length}）` : "本期字段完整"}</span>
-              <span>口径：报告期累计值，不按相邻期推算单季变化</span>
+              <span>字段状态：{state === "partial" ? `部分缺失（${missing.length}）` : "已检查字段齐备（不代表口径已核验）"}</span>
+              <span>口径：利润与现金流按报告期累计，资产负债为期末值；不推算单季变化</span>
+              <span className="sm:col-span-2">可比性：币种、单位、合并范围及修订版本尚未核验；同报告期末不代表口径已一致。</span>
+              <span className="sm:col-span-2">金额展示：标为“亿元”的金额暂按人民币元换算，源币种及单位未独立核验。</span>
             </div>
           </section>
 
           {fin.history?.length > 1 && (
             <details className="rounded-lg border border-border/60 p-3">
               <summary className="cursor-pointer text-xs font-semibold">查看最近 {fin.history.length} 个报告期现金利润匹配</summary>
-              <p className="mt-2 text-[11px] text-muted-foreground">仅按完全相同的报告期末合并三表；未知值不补零。</p>
+              <p className="mt-2 text-[11px] text-muted-foreground">按相同报告期末对齐；未知值不补零。币种、单位、合并范围及修订版本未核验，累计期长度不同不直接作趋势比较。</p>
               <div className="mt-2 overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead className="text-muted-foreground"><tr><th className="px-2 py-2 text-left">报告期末</th><th className="px-2 py-2 text-right">净利润</th><th className="px-2 py-2 text-right">经营现金流</th><th className="px-2 py-2 text-right">现金转化</th><th className="px-2 py-2 text-right">自由现金流</th></tr></thead>

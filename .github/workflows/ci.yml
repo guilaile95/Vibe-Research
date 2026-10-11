@@ -304,6 +304,22 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Run research continuity component DOM regression
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          RESEARCH_CONTINUITY_BROWSER_OUTPUT_DIR: ${{ runner.temp }}/research-continuity-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/research-continuity.browser.mjs
+
+      - name: Preserve synthetic research continuity screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: research-continuity-evidence
+          path: ${{ runner.temp }}/research-continuity-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
   e2e-data-health-smoke:
     name: Playwright data health smoke E2E
     runs-on: ubuntu-latest

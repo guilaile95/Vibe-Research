@@ -7,6 +7,7 @@
  * 无 info() 替代验收。
  */
 
+import { mutateThesis } from "./thesis-mutation-readiness.mjs";
 import { chromium } from "playwright";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -279,7 +280,7 @@ async function main() {
     await page.goto(`${baseUrl}/evidence/${evId}`);
     // Hard assert: source_date displayed without timezone shift
     await page.waitForLoadState("networkidle");
-    await page.waitForTimeout(500);
+    await page.getByRole("button", { name: "编辑", exact: true }).waitFor({ state: "visible" });
     const readonlyClaim = page.locator("p").filter({ hasText: /^茅台公开资讯观察$/ });
     assert.equal(await readonlyClaim.count(), 2, "read-only detail must show the exact claim and source title");
     assert.equal(await page.locator('a[href="https://example.com/native-intel-maotai"]').filter({ hasText: "https://example.com/native-intel-maotai" }).count(), 1, "read-only detail must show the exact source URL link");
@@ -294,7 +295,7 @@ async function main() {
     const editBtn = page.locator('button:has-text("编辑")');
     if (await editBtn.count() === 0) throw new Error("Edit button not found");
     await editBtn.click();
-    await page.waitForTimeout(600);
+    await page.locator("select").first().waitFor({ state: "visible" });
 
     // Hard assert: subject_type is readonly
     const firstSelect = page.locator("select").first();
@@ -445,7 +446,7 @@ async function main() {
 
     // Hard assert: revision 1 shown
     await page.waitForLoadState("networkidle");
-    await page.waitForTimeout(500);
+    await page.locator("p").filter({ hasText: /^v1$/ }).waitFor({ state: "visible" });
     const thText1 = await page.locator("body").innerText();
     if (!thText1.includes("v1")) {
       console.log(`  [debug] Thesis page text (300-600): ${thText1.substring(300, 600)}`);
@@ -460,25 +461,15 @@ async function main() {
     const linkBtn = page.locator('button:has-text("关联证据")');
     if (await linkBtn.count() === 0) throw new Error("Link evidence button not found");
     await linkBtn.click();
-    await page.waitForTimeout(300);
-
-    // Select evidence from dropdown
+    // selectOption waits for this exact option, including asynchronous list loading.
     const linkSelect = page.locator("select").first();
-    if (await linkSelect.count() > 0) {
-      // The dropdown loads evidence list — select by evidence ID value
-      await linkSelect.selectOption(evId);
-    }
-    // Set stance to "支撑" (support)
-    const stanceSelect = page.locator("label:has-text('立场') select");
-    if (await stanceSelect.count() > 0) {
-      await stanceSelect.selectOption("support");
-    }
-    // Click confirm link button
-    const confirmLink = page.getByRole("button", { name: "关联", exact: true });
-    if (await confirmLink.count() > 0) {
-      await confirmLink.click();
-      await page.waitForTimeout(500);
-    }
+    await linkSelect.selectOption(evId);
+    await page.locator("label:has-text('立场') select").selectOption("support");
+
+    // Register before the action; response identity and committed revision are separate gates.
+    await mutateThesis(page, thesisId, "POST", `/api/thesis/${thesisId}/evidence`,
+      page.getByRole("button", { name: "关联", exact: true }), 2);
+    await page.getByRole("button", { name: "关联", exact: true }).waitFor({ state: "hidden" });
 
     // Verify by API: revision should be 2
     const agg1 = await (await fetch(`${apiUrl}/api/thesis/${thesisId}`)).json();
@@ -497,18 +488,14 @@ async function main() {
 
     // Find and click "修改立场" button
     const stanceEditBtn = page.locator('button:has-text("修改立场")');
-    if (await stanceEditBtn.count() > 0) {
-      await stanceEditBtn.first().click();
-      await page.waitForTimeout(300);
-
-      // Select "中性" (neutral)
-      const editStanceSelect = page.locator("label:has-text('立场') select").first();
-      if (await editStanceSelect.count() > 0) {
-        await editStanceSelect.selectOption("neutral");
-      }
-      await page.click('button:has-text("保存")');
-      await page.waitForTimeout(500);
-    }
+    await stanceEditBtn.first().click();
+    // The inline stance editor has no label wrapper; require its actual select.
+    await page.locator("select").selectOption("neutral");
+    const stanceResult = await mutateThesis(page, thesisId, "PUT", `/api/thesis/${thesisId}/evidence/${evId}`,
+      page.getByRole("button", { name: "保存", exact: true }), 3);
+    assert.equal(stanceResult.evidence_links.find(link => link.evidence_id === evId)?.stance, "neutral");
+    await page.locator("select").waitFor({ state: "hidden" });
+    await page.getByText("中性", { exact: true }).waitFor({ state: "visible" });
 
     const agg2 = await (await fetch(`${apiUrl}/api/thesis/${thesisId}`)).json();
     if (agg2.data.thesis.current_revision < 3) {
@@ -524,11 +511,11 @@ async function main() {
     await page.waitForLoadState("networkidle");
 
     await page.click('button:has-text("编辑")');
-    await page.waitForTimeout(300);
     const summaryTextarea = page.locator("textarea").first();
     await summaryTextarea.fill("基于Q3财报，公司营收增长超市场预期，毛利率稳定");
-    await page.click('button:has-text("保存")');
-    await page.waitForTimeout(300);
+    await mutateThesis(page, thesisId, "PUT", `/api/thesis/${thesisId}`,
+      page.getByRole("button", { name: "保存", exact: true }), 4);
+    await summaryTextarea.waitFor({ state: "hidden" });
 
     const agg3 = await (await fetch(`${apiUrl}/api/thesis/${thesisId}`)).json();
     if (agg3.data.thesis.current_revision < 4) {
@@ -548,7 +535,7 @@ async function main() {
       throw new Error("版本对比 Tab not found");
     }
     await diffTab.click();
-    await page.waitForTimeout(400);
+    await page.locator("label:has-text('起始版本') select").waitFor({ state: "visible" });
 
     // 起始版本 / 目标版本 — 与 ThesisDetail UI 文案一致
     const fromSelect = page.locator("label:has-text('起始版本') select").first();
@@ -559,6 +546,11 @@ async function main() {
     await fromSelect.selectOption("3");
     await toSelect.selectOption("4");
 
+    const diffResponse = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === "GET" && url.pathname === `/api/thesis/${thesisId}/diff`
+        && url.searchParams.get("from") === "3" && url.searchParams.get("to") === "4";
+    }, { timeout: 15000 });
     // 按钮文案是「对比」，不是「加载对比」；不存在假路由 /revisions/3/compare/4
     const loadDiffBtn = page.locator('button:has-text("对比")').filter({ hasNotText: "版本对比" });
     if (await loadDiffBtn.count() === 0) {
@@ -569,7 +561,8 @@ async function main() {
     } else {
       await loadDiffBtn.first().click();
     }
-    await page.waitForTimeout(600);
+    assert.equal((await diffResponse).status(), 200, "Exact revision diff GET must succeed");
+    await page.getByText("对比 v3 → v4", { exact: true }).waitFor({ state: "visible", timeout: 15000 });
 
     const diffText = await page.locator("body").innerText();
     // 硬断言：显示对比范围与字段变化（summary 编辑内容）
@@ -607,7 +600,7 @@ async function main() {
 
     // Wait for the detail page to fully load
     await page.waitForLoadState("networkidle");
-    await page.waitForTimeout(500);
+    await page.getByRole("button", { name: "删除", exact: true }).waitFor({ state: "visible" });
 
     const deleteButton = page.locator('button:has-text("删除")');
     if (await deleteButton.count() === 0) {
@@ -618,7 +611,6 @@ async function main() {
     }
     await deleteButton.click();
     await page.waitForURL(/\/evidence$/);
-    await page.waitForTimeout(300);
 
     // Hard assert: correct delete confirmation text
     if (!dialogMsg.includes("历史版本中的证据快照仍会保留")) {
@@ -660,14 +652,21 @@ async function main() {
     if (await archiveBtn.count() === 0) {
       throw new Error("Archive button not found");
     }
-    await archiveBtn.click();
-    await page.waitForTimeout(500);
+    const [archiveResponse] = await Promise.all([
+      page.waitForResponse(response =>
+        response.request().method() === "DELETE"
+        && new URL(response.url()).pathname === `/api/thesis/${thesisId}`,
+      { timeout: 15000 }),
+      archiveBtn.click(),
+    ]);
+    assert.equal(archiveResponse.status(), 200, "Real archive request must succeed");
+    const archivePayload = await archiveResponse.json();
+    assert.equal(archivePayload.data?.thesis?.id, thesisId, "Archive response must belong to this thesis");
+    assert.equal(archivePayload.data?.thesis?.status, "archived", "Archive response must confirm archived state");
 
-    // Hard assert: archived banner visible
-    const archivedText = await page.locator("body").innerText();
-    if (!archivedText.includes("已归档")) {
-      throw new Error("Archived status banner not shown after archiving");
-    }
+    // The committed UI may render after the HTTP response; wait for its exact state.
+    await page.getByText("已归档，内容冻结。所有编辑/关联/取消关联/归档操作均不可用。", { exact: true })
+      .waitFor({ state: "visible", timeout: 15000 });
     console.log("  ✓ Thesis archived, frozen banner shown");
 
     // Hard assert: edit/associate buttons disabled
