@@ -162,6 +162,15 @@ jobs:
         working-directory: frontend
         run: npm run test:e2e:dragon-tiger-discovery
 
+      - name: Preserve synthetic Dragon-Tiger evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dragon-tiger-discovery-evidence
+          path: docs/screenshots/dragon-tiger-discovery1-r2
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Run Pattern Discovery E2E
         working-directory: frontend
         run: npm run test:e2e:patterns
