@@ -86,9 +86,16 @@ try {
     assert.equal(await editor.getByLabel("复查笔记",{exact:true}).inputValue(),"Synthetic uncertain saved note");
     await overview.getByText("模式卡 · 版本历史与复用",{exact:true}).click();
     for (const [label,value] of [["名称","Synthetic mode"],["适用环境","Synthetic setup"],["入场规则","Synthetic entry"],["退出规则","Synthetic exit"],["失效条件","Synthetic invalidation"]]) await overview.getByLabel(label,{exact:true}).fill(value);
-    await overview.getByRole("button",{name:"发布新版本到本地"}).click();
+    const patternReads = page.waitForResponse(response => response.url() === `${origin}/api/personal-review` && response.request().method() === "GET" && response.status() === 200);
+    const patternWrite = page.waitForResponse(response => response.url().startsWith(`${origin}/api/personal-review/patterns/`) && response.request().method() === "PUT" && response.status() === 200);
+    await Promise.all([patternReads,patternWrite,overview.getByRole("button",{name:"发布新版本到本地"}).click()]);
+    const savedMode = overview.getByRole("heading",{name:"Synthetic mode v1",exact:true,includeHidden:true});
+    await savedMode.waitFor({state:"attached",timeout:10000});
+    const modeDisclosure = overview.locator("details").filter({has:overview.getByText("模式卡 · 版本历史与复用",{exact:true})});
+    if (!await modeDisclosure.evaluate(element => element.open)) await modeDisclosure.locator(":scope > summary").click();
     await overview.getByRole("heading",{name:"Synthetic mode v1",exact:true}).waitFor();
     await overview.getByRole("button",{name:"复制为新模式草稿"}).click();
+    await page.waitForFunction(element => element.value === "Synthetic mode（副本）", await overview.getByLabel("名称",{exact:true}).elementHandle(), {timeout:10000});
     assert.equal(await overview.getByLabel("名称",{exact:true}).inputValue(),"Synthetic mode（副本）");
     const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1);
     assert.equal(overflow,false,"review controls fit desktop/mobile viewport");

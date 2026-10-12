@@ -89,5 +89,12 @@ test("actual editor JSX recovers malformed GET and locks uncertain PUT without w
     element=tree();state.queue.push({state:"RAW_INTERIOR_PRICE_RANGE",mfe_pct:null,mae_pct:null,raw_interior_high:null,raw_interior_low:null,boundary:"EXCLUDED",reason:"UNKNOWN",source:null,adjusted_bound:{state:"BASIS_ARCHIVE_INVALID",limitations:{},source:{provider_revision:{}}}});
     nodes(element).find(n=>n.type==="button"&&n.props.children==="读取本地持有期价格证据").props.onClick();await drain();
     element=tree();assert.match(renderToStaticMarkup(element),/响应无法核验/);
+    const mode={pattern_id:"c".repeat(32),revision:1,content:{name:"Synthetic mode",setup:"Synthetic setup",entry_rule:"Synthetic entry",exit_rule:"Synthetic exit",invalidation:"Synthetic invalidation"},saved_at:"2026-07-28T00:00:00Z",effective_from:"2026-07-29",effective_rule:"NEXT_SHANGHAI_CALENDAR_DAY",effective_until:null,statistics:zero};
+    state.queue.push({...valid,patterns:[mode]});tree();state.effects[0]();await drain();
+    element=tree();const modeDetails=nodes(element).find(n=>n.type==="details"&&nodes(n).some(c=>c.type==="summary"&&c.props.children==="模式卡 · 版本历史与复用"));
+    assert.ok(modeDetails);assert.equal(modeDetails.props.open,undefined,"fresh readback recreates an ordinary closed disclosure");
+    assert.match(renderToStaticMarkup(modeDetails),/<h3>Synthetic mode v1<\/h3>/);
+    nodes(modeDetails).find(n=>n.type==="button"&&n.props.children==="复制为新模式草稿").props.onClick();
+    element=tree();assert.equal(nodes(element).find(n=>n.type==="textarea"&&n.props.id.endsWith("-name")).props.value,"Synthetic mode（副本）");
   }finally{delete globalThis.__personalReviewTestHooks;}
 });
