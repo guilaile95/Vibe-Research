@@ -153,14 +153,19 @@ def _fact(day: str, as_of: datetime) -> dict | None:
         return None
     try:
         record = facts_store.load_final_fact_record(day)
-        if record is None:
-            return None
-        stored = _instant(record["stored_at"])
-        if stored is None or stored > as_of:
-            return None
-        env = record["envelope"]
     except facts_store.FactStoreError:
         return None
+    return _fact_record(record, day, as_of)
+
+
+def _fact_record(record: dict | None, day: str, as_of: datetime) -> dict | None:
+    """Qualify one already-read record without I/O; shared by archive inspection."""
+    if record is None:
+        return None
+    stored = _instant(record["stored_at"])
+    if stored is None or stored > as_of:
+        return None
+    env = record["envelope"]
     if not isinstance(env, dict):
         return None
     section = env.get("sections", {}).get("facts") if isinstance(env.get("sections"), dict) else None

@@ -1,0 +1,680 @@
+{
+  "schema_version": "short-term-theme-research-archive-v1",
+  "trade_date": "2026-09-30",
+  "status": "complete",
+  "reason_codes": [],
+  "message": "当前归档版本的五交易日事后研究；涨停原因是供应商编辑归因，不是公司确认事实。",
+  "projection": {
+    "schema_version": "short-term-theme-research-v1",
+    "trade_date": "2026-09-30",
+    "sessions": [
+      "2026-09-23",
+      "2026-09-24",
+      "2026-09-28",
+      "2026-09-29",
+      "2026-09-30"
+    ],
+    "status": "complete",
+    "days": [
+      {
+        "date": "2026-09-23",
+        "available": true,
+        "complete": true,
+        "limit_up": 2,
+        "covered": 2,
+        "concentration": 0.5,
+        "concentration_numerator": 1,
+        "concentration_denominator": 2,
+        "highest_board": 2,
+        "broken_rate": 0.0,
+        "pool_overlap_count": 0,
+        "leaders": [
+          {
+            "stock_code": "000001",
+            "source_trade_date": "2026-09-23",
+            "boards": 2,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "seal_fund_yuan": 1000.0,
+            "zt_stat": null,
+            "tags": [
+              "芯片",
+              "半导体"
+            ],
+            "theme_source_date": "2026-09-23",
+            "theme_first_seal": "09:35:00"
+          }
+        ],
+        "firstboards": [
+          {
+            "stock_code": "000002",
+            "source_trade_date": "2026-09-23",
+            "boards": 1,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "seal_fund_yuan": 1000.0,
+            "zt_stat": null,
+            "tags": [
+              "昨日题材"
+            ],
+            "theme_source_date": "2026-09-23",
+            "theme_first_seal": "09:35:00"
+          }
+        ],
+        "source": {
+          "synthetic_fixture": true
+        }
+      },
+      {
+        "date": "2026-09-24",
+        "available": true,
+        "complete": true,
+        "limit_up": 2,
+        "covered": 2,
+        "concentration": 0.5,
+        "concentration_numerator": 1,
+        "concentration_denominator": 2,
+        "highest_board": 2,
+        "broken_rate": 0.0,
+        "pool_overlap_count": 0,
+        "leaders": [
+          {
+            "stock_code": "000001",
+            "source_trade_date": "2026-09-24",
+            "boards": 2,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "seal_fund_yuan": 1000.0,
+            "zt_stat": null,
+            "tags": [
+              "芯片",
+              "半导体"
+            ],
+            "theme_source_date": "2026-09-24",
+            "theme_first_seal": "09:35:00"
+          }
+        ],
+        "firstboards": [
+          {
+            "stock_code": "000002",
+            "source_trade_date": "2026-09-24",
+            "boards": 1,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "seal_fund_yuan": 1000.0,
+            "zt_stat": null,
+            "tags": [
+              "昨日题材"
+            ],
+            "theme_source_date": "2026-09-24",
+            "theme_first_seal": "09:35:00"
+          }
+        ],
+        "source": {
+          "synthetic_fixture": true
+        }
+      },
+      {
+        "date": "2026-09-28",
+        "available": true,
+        "complete": true,
+        "limit_up": 2,
+        "covered": 2,
+        "concentration": 0.5,
+        "concentration_numerator": 1,
+        "concentration_denominator": 2,
+        "highest_board": 2,
+        "broken_rate": 0.0,
+        "pool_overlap_count": 0,
+        "leaders": [
+          {
+            "stock_code": "000001",
+            "source_trade_date": "2026-09-28",
+            "boards": 2,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "seal_fund_yuan": 1000.0,
+            "zt_stat": null,
+            "tags": [
+              "芯片",
+              "半导体"
+            ],
+            "theme_source_date": "2026-09-28",
+            "theme_first_seal": "09:35:00"
+          }
+        ],
+        "firstboards": [
+          {
+            "stock_code": "000002",
+            "source_trade_date": "2026-09-28",
+            "boards": 1,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "seal_fund_yuan": 1000.0,
+            "zt_stat": null,
+            "tags": [
+              "昨日题材"
+            ],
+            "theme_source_date": "2026-09-28",
+            "theme_first_seal": "09:35:00"
+          }
+        ],
+        "source": {
+          "synthetic_fixture": true
+        }
+      },
+      {
+        "date": "2026-09-29",
+        "available": true,
+        "complete": true,
+        "limit_up": 2,
+        "covered": 2,
+        "concentration": 0.5,
+        "concentration_numerator": 1,
+        "concentration_denominator": 2,
+        "highest_board": 2,
+        "broken_rate": 0.0,
+        "pool_overlap_count": 0,
+        "leaders": [
+          {
+            "stock_code": "000001",
+            "source_trade_date": "2026-09-29",
+            "boards": 2,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "seal_fund_yuan": 1000.0,
+            "zt_stat": null,
+            "tags": [
+              "芯片",
+              "半导体"
+            ],
+            "theme_source_date": "2026-09-29",
+            "theme_first_seal": "09:35:00"
+          }
+        ],
+        "firstboards": [
+          {
+            "stock_code": "000002",
+            "source_trade_date": "2026-09-29",
+            "boards": 1,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "seal_fund_yuan": 1000.0,
+            "zt_stat": null,
+            "tags": [
+              "昨日题材"
+            ],
+            "theme_source_date": "2026-09-29",
+            "theme_first_seal": "09:35:00"
+          }
+        ],
+        "source": {
+          "synthetic_fixture": true
+        }
+      },
+      {
+        "date": "2026-09-30",
+        "available": true,
+        "complete": true,
+        "limit_up": 2,
+        "covered": 2,
+        "concentration": 0.5,
+        "concentration_numerator": 1,
+        "concentration_denominator": 2,
+        "highest_board": 2,
+        "broken_rate": 0.0,
+        "pool_overlap_count": 0,
+        "leaders": [
+          {
+            "stock_code": "000001",
+            "source_trade_date": "2026-09-30",
+            "boards": 2,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "seal_fund_yuan": 1000.0,
+            "zt_stat": null,
+            "tags": [
+              "芯片",
+              "半导体"
+            ],
+            "theme_source_date": "2026-09-30",
+            "theme_first_seal": "09:35:00"
+          }
+        ],
+        "firstboards": [
+          {
+            "stock_code": "000003",
+            "source_trade_date": "2026-09-30",
+            "boards": 1,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "seal_fund_yuan": 1000.0,
+            "zt_stat": null,
+            "tags": [
+              "新题材"
+            ],
+            "theme_source_date": "2026-09-30",
+            "theme_first_seal": "09:35:00"
+          }
+        ],
+        "source": {
+          "synthetic_fixture": true
+        }
+      }
+    ],
+    "tree": [
+      {
+        "tag": "半导体",
+        "first_seal": "09:35:00",
+        "first_boards": 0,
+        "highest": 2,
+        "cohort_broken": 0,
+        "cohort_limit_down": 0,
+        "outcome_attribution_basis": "CURRENT_OR_PREVIOUS_DATED_TAGGED_COHORT",
+        "count": 1,
+        "lower_bound": false,
+        "members": [
+          {
+            "stock_code": "000001",
+            "source_trade_date": "2026-09-30",
+            "boards": 2,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "seal_fund_yuan": 1000.0,
+            "zt_stat": null,
+            "tags": [
+              "芯片",
+              "半导体"
+            ],
+            "theme_source_date": "2026-09-30",
+            "theme_first_seal": "09:35:00"
+          }
+        ],
+        "previous_members": [
+          {
+            "stock_code": "000001",
+            "source_trade_date": "2026-09-29",
+            "boards": 2,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "seal_fund_yuan": 1000.0,
+            "zt_stat": null,
+            "tags": [
+              "芯片",
+              "半导体"
+            ],
+            "theme_source_date": "2026-09-29",
+            "theme_first_seal": "09:35:00"
+          }
+        ],
+        "previous_count": 1,
+        "continued_count": 1,
+        "continuation_rate": 1.0,
+        "continuation_sample_only": false,
+        "state": "observed"
+      },
+      {
+        "tag": "新题材",
+        "first_seal": "09:35:00",
+        "first_boards": 1,
+        "highest": 1,
+        "cohort_broken": 0,
+        "cohort_limit_down": 0,
+        "outcome_attribution_basis": "CURRENT_OR_PREVIOUS_DATED_TAGGED_COHORT",
+        "count": 1,
+        "lower_bound": false,
+        "members": [
+          {
+            "stock_code": "000003",
+            "source_trade_date": "2026-09-30",
+            "boards": 1,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "seal_fund_yuan": 1000.0,
+            "zt_stat": null,
+            "tags": [
+              "新题材"
+            ],
+            "theme_source_date": "2026-09-30",
+            "theme_first_seal": "09:35:00"
+          }
+        ],
+        "previous_members": [],
+        "previous_count": 0,
+        "continued_count": 0,
+        "continuation_rate": null,
+        "continuation_sample_only": false,
+        "state": "observed"
+      },
+      {
+        "tag": "昨日题材",
+        "first_seal": null,
+        "first_boards": 0,
+        "highest": 0,
+        "cohort_broken": 0,
+        "cohort_limit_down": 0,
+        "outcome_attribution_basis": "CURRENT_OR_PREVIOUS_DATED_TAGGED_COHORT",
+        "count": 0,
+        "lower_bound": false,
+        "members": [],
+        "previous_members": [
+          {
+            "stock_code": "000002",
+            "source_trade_date": "2026-09-29",
+            "boards": 1,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "seal_fund_yuan": 1000.0,
+            "zt_stat": null,
+            "tags": [
+              "昨日题材"
+            ],
+            "theme_source_date": "2026-09-29",
+            "theme_first_seal": "09:35:00"
+          }
+        ],
+        "previous_count": 1,
+        "continued_count": 0,
+        "continuation_rate": 0.0,
+        "continuation_sample_only": false,
+        "state": "no_current_limit_up"
+      },
+      {
+        "tag": "芯片",
+        "first_seal": "09:35:00",
+        "first_boards": 0,
+        "highest": 2,
+        "cohort_broken": 0,
+        "cohort_limit_down": 0,
+        "outcome_attribution_basis": "CURRENT_OR_PREVIOUS_DATED_TAGGED_COHORT",
+        "count": 1,
+        "lower_bound": false,
+        "members": [
+          {
+            "stock_code": "000001",
+            "source_trade_date": "2026-09-30",
+            "boards": 2,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "seal_fund_yuan": 1000.0,
+            "zt_stat": null,
+            "tags": [
+              "芯片",
+              "半导体"
+            ],
+            "theme_source_date": "2026-09-30",
+            "theme_first_seal": "09:35:00"
+          }
+        ],
+        "previous_members": [
+          {
+            "stock_code": "000001",
+            "source_trade_date": "2026-09-29",
+            "boards": 2,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "seal_fund_yuan": 1000.0,
+            "zt_stat": null,
+            "tags": [
+              "芯片",
+              "半导体"
+            ],
+            "theme_source_date": "2026-09-29",
+            "theme_first_seal": "09:35:00"
+          }
+        ],
+        "previous_count": 1,
+        "continued_count": 1,
+        "continuation_rate": 1.0,
+        "continuation_sample_only": false,
+        "state": "observed"
+      }
+    ],
+    "rotation": [
+      {
+        "tag": "半导体",
+        "cells": [
+          {
+            "date": "2026-09-23",
+            "count": 1,
+            "rank": 1,
+            "highest": 2,
+            "lower_bound": false
+          },
+          {
+            "date": "2026-09-24",
+            "count": 1,
+            "rank": 1,
+            "highest": 2,
+            "lower_bound": false
+          },
+          {
+            "date": "2026-09-28",
+            "count": 1,
+            "rank": 1,
+            "highest": 2,
+            "lower_bound": false
+          },
+          {
+            "date": "2026-09-29",
+            "count": 1,
+            "rank": 1,
+            "highest": 2,
+            "lower_bound": false
+          },
+          {
+            "date": "2026-09-30",
+            "count": 1,
+            "rank": 1,
+            "highest": 2,
+            "lower_bound": false
+          }
+        ],
+        "observed_active_days": 5,
+        "top3_days": 5,
+        "streak": 5,
+        "streak_lower_bound": true
+      },
+      {
+        "tag": "新题材",
+        "cells": [
+          {
+            "date": "2026-09-23",
+            "count": 0,
+            "rank": null,
+            "highest": 0,
+            "lower_bound": false
+          },
+          {
+            "date": "2026-09-24",
+            "count": 0,
+            "rank": null,
+            "highest": 0,
+            "lower_bound": false
+          },
+          {
+            "date": "2026-09-28",
+            "count": 0,
+            "rank": null,
+            "highest": 0,
+            "lower_bound": false
+          },
+          {
+            "date": "2026-09-29",
+            "count": 0,
+            "rank": null,
+            "highest": 0,
+            "lower_bound": false
+          },
+          {
+            "date": "2026-09-30",
+            "count": 1,
+            "rank": 1,
+            "highest": 1,
+            "lower_bound": false
+          }
+        ],
+        "observed_active_days": 1,
+        "top3_days": 1,
+        "streak": 1,
+        "streak_lower_bound": false
+      },
+      {
+        "tag": "昨日题材",
+        "cells": [
+          {
+            "date": "2026-09-23",
+            "count": 1,
+            "rank": 1,
+            "highest": 1,
+            "lower_bound": false
+          },
+          {
+            "date": "2026-09-24",
+            "count": 1,
+            "rank": 1,
+            "highest": 1,
+            "lower_bound": false
+          },
+          {
+            "date": "2026-09-28",
+            "count": 1,
+            "rank": 1,
+            "highest": 1,
+            "lower_bound": false
+          },
+          {
+            "date": "2026-09-29",
+            "count": 1,
+            "rank": 1,
+            "highest": 1,
+            "lower_bound": false
+          },
+          {
+            "date": "2026-09-30",
+            "count": 0,
+            "rank": null,
+            "highest": 0,
+            "lower_bound": false
+          }
+        ],
+        "observed_active_days": 4,
+        "top3_days": 4,
+        "streak": 0,
+        "streak_lower_bound": false
+      },
+      {
+        "tag": "芯片",
+        "cells": [
+          {
+            "date": "2026-09-23",
+            "count": 1,
+            "rank": 1,
+            "highest": 2,
+            "lower_bound": false
+          },
+          {
+            "date": "2026-09-24",
+            "count": 1,
+            "rank": 1,
+            "highest": 2,
+            "lower_bound": false
+          },
+          {
+            "date": "2026-09-28",
+            "count": 1,
+            "rank": 1,
+            "highest": 2,
+            "lower_bound": false
+          },
+          {
+            "date": "2026-09-29",
+            "count": 1,
+            "rank": 1,
+            "highest": 2,
+            "lower_bound": false
+          },
+          {
+            "date": "2026-09-30",
+            "count": 1,
+            "rank": 1,
+            "highest": 2,
+            "lower_bound": false
+          }
+        ],
+        "observed_active_days": 5,
+        "top3_days": 5,
+        "streak": 5,
+        "streak_lower_bound": true
+      }
+    ],
+    "lineage": [
+      {
+        "stock_code": "000001",
+        "name": null,
+        "appear_date": "2026-09-23",
+        "boards_then": 2,
+        "is_current_top": true,
+        "series": [
+          {
+            "date": "2026-09-23",
+            "cum_return_pct": 0.0
+          },
+          {
+            "date": "2026-09-24",
+            "cum_return_pct": 10.0
+          },
+          {
+            "date": "2026-09-28",
+            "cum_return_pct": 20.0
+          },
+          {
+            "date": "2026-09-29",
+            "cum_return_pct": 30.0
+          },
+          {
+            "date": "2026-09-30",
+            "cum_return_pct": 40.0
+          }
+        ],
+        "cum_return_pct": 40.0,
+        "peak_cum_return_pct": 40.0,
+        "drawdown_from_peak_pct": 0.0,
+        "price_unit": "CNY/share",
+        "adjustment": "forward_adjusted",
+        "adjustment_basis_id": "sha256:7be7e86901a2334c1b359379dd6964c42ebf2981f9b3183f6335fa7d3624c1b3",
+        "source": {
+          "synthetic_fixture": true
+        },
+        "status": "complete"
+      }
+    ],
+    "attribution": "PROVIDER_EDITORIAL_NOT_COMPANY_FACT",
+    "point_in_time_claim": "NONE",
+    "multi_label_policy": "distinct stock per exact tag; denominator distinct qualified pool stocks; labels overlap",
+    "rank_policy": "competition rank by count; all ties retained; incomplete days unranked",
+    "canonical_authority": false,
+    "fixture": true
+  },
+  "archive_only": true,
+  "ingestion_enabled": false,
+  "calendar_authority": "trade_calendar:completed_trade_date:v0.1",
+  "selection_mode": "CURRENT_STORED_POSTHOC",
+  "point_in_time_claim": "NONE"
+}

@@ -1546,10 +1546,26 @@ export interface DataHealthDetailResult {
 
 
 
+export interface DailyReviewInputBasis {
+  schema_version: "daily-review-input-basis.v1";
+  context_schema_version: "daily-review-ai-context-v0.1";
+  review_schema_version: string | null;
+  trade_date: string;
+  source_review_generated_at: string;
+  source_data_cutoff: string | null;
+  review_status: "normal" | "partial" | "unavailable" | "unknown";
+  component_statuses: Record<string, "normal" | "partial" | "unavailable" | "unknown">;
+  omitted_component_count: number;
+  warning_count: number;
+  unknown_count: number;
+  context_sha256: string;
+}
+
 export interface DailyReviewAiPayload {
   markdown: string;
   source_review_generated_at: string;
   source_data_cutoff: string | null;
+  input_basis?: DailyReviewInputBasis;
 }
 
 

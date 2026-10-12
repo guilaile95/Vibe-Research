@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 
 import app as app_module
 import chat as chat_layer
+import daily_review_context
+from ai_result_service import save_daily_review_ai as _REAL_SAVE_DAILY_REVIEW
 
 client = TestClient(app_module.app)
 
@@ -35,8 +37,10 @@ _REVIEW = {
 }
 
 
+_CONTEXT_JSON = daily_review_context.render_daily_review_ai_context(_REVIEW)
+
 def _prepared():
-    return {"review": _REVIEW, "context_json": "{}", "messages": _MESSAGES}
+    return {"review": _REVIEW, "context_json": _CONTEXT_JSON, "messages": _MESSAGES}
 
 
 @pytest.fixture(autouse=True)
@@ -377,9 +381,10 @@ def test_analyze_persists_full_markdown_before_business_done(monkeypatch):
         yield {"type": "delta", "text": "复盘"}
         yield {"type": "done", "trace": [], "rounds": 1}
 
-    def save(review, markdown, cfg, *, should_cancel=None):
+    def save(review, markdown, cfg, *, should_cancel=None, input_basis=None):
         order.append("save")
-        assert review is _REVIEW
+        assert review == {key: _REVIEW.get(key) for key in ("trade_date", "generated_at", "data_cutoff")}
+        assert input_basis["trade_date"] == _REVIEW["trade_date"]
         assert markdown == "# 完整复盘"
         assert cfg["apiKey"] == "sk-test"
         assert should_cancel is not None
@@ -615,10 +620,16 @@ def test_analyze_disconnect_during_save_cancels_transaction(monkeypatch):
     save_started = threading.Event()
     disconnect_delivered = threading.Event()
     persisted = threading.Event()
+    cancellation_observed = threading.Event()
 
-    def save(_review, _markdown, _cfg, *, should_cancel=None):
+    def save(_review, _markdown, _cfg, *, should_cancel=None, input_basis=None):
         save_started.set()
         assert disconnect_delivered.wait(timeout=2)
+        # receive() producing a disconnect is not the response observing it.
+        # Wait for the actual product cancellation signal, not thread scheduling.
+        if not _cfg["_cancel_event"].wait(timeout=2):
+            raise AssertionError("response did not observe disconnect")
+        cancellation_observed.set()
         if should_cancel is not None and should_cancel():
             raise RuntimeError("cancelled before commit")
         persisted.set()
@@ -669,6 +680,7 @@ def test_analyze_disconnect_during_save_cancels_transaction(monkeypatch):
 
     assert save_started.is_set()
     assert disconnect_delivered.is_set()
+    assert cancellation_observed.is_set()
     assert not persisted.is_set()
     response_chunks = b"".join(
         message.get("body", b"")
@@ -747,3 +759,46 @@ def test_analyze_codex_disconnect_cancels_agent_runtime(monkeypatch):
 
     assert elapsed < 1.5
     assert captured["cancel_event"].is_set()
+
+
+def test_exact_prepared_basis_survives_review_mutation_and_saves_v2(tmp_path, monkeypatch):
+    import hashlib
+    import ai_result_store
+    import ai_result_service
+    # Imported function retained at module load, before the safety mock fixture.
+    r = {**_REVIEW, "status": "partial", "warnings": ["unsafe provider text"]}
+    context = daily_review_context.render_daily_review_ai_context(r)
+    monkeypatch.setattr(chat_layer, "prepare_daily_review_analysis", lambda *_: {
+        "review": r, "context_json": context, "messages": _MESSAGES,
+    })
+    path = tmp_path / "results.sqlite3"
+    monkeypatch.setattr(ai_result_service.review_history, "resolve_review_db_path", lambda: path)
+    monkeypatch.setattr(ai_result_service, "save_daily_review_ai", _REAL_SAVE_DAILY_REVIEW)
+    def stream(*_args, **_kwargs):
+        r.update(trade_date="2026-07-24", data_cutoff=None)
+        r["warnings"].clear()
+        yield {"type": "delta", "text": "Synthetic result"}
+        yield {"type": "done", "trace": [], "rounds": 1}
+    monkeypatch.setattr(chat_layer, "stream_messages", stream)
+    response = client.post("/api/daily-review/analyze", json={"llm": _LLM})
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert events[-1]["type"] == "done"
+    assert events[-1]["result"]["schema_version"] == "daily_review_ai.v2"
+    saved = ai_result_store.get_result(path, "daily_review_ai", _REVIEW["trade_date"])
+    snapshot = saved["payload"]["input_basis"]
+    assert snapshot["trade_date"] == _REVIEW["trade_date"]
+    assert snapshot["context_sha256"] == hashlib.sha256(context.encode()).hexdigest()
+    assert snapshot["warning_count"] == 1
+    assert "unsafe provider text" not in json.dumps(saved)
+    ai_result_service._validate_restored_record(saved, "daily_review_ai")
+
+
+def test_invalid_prepared_context_blocks_before_model_and_storage(monkeypatch):
+    prepared = _prepared(); prepared["context_json"] = "{}"
+    monkeypatch.setattr(chat_layer, "prepare_daily_review_analysis", lambda *_: prepared)
+    model = MagicMock(); save = MagicMock()
+    monkeypatch.setattr(chat_layer, "stream_messages", model)
+    monkeypatch.setattr(app_module.ai_result_service, "save_daily_review_ai", save)
+    response = client.post("/api/daily-review/analyze", json={"llm": _LLM})
+    assert response.status_code == 502
+    model.assert_not_called(); save.assert_not_called()

@@ -6,6 +6,7 @@ export type * from "./api/types.ts";
 import { storageSetChecked, storageRemoveChecked } from "./storage.ts";
 
 import type { MarketCloudEnvelope } from "./marketCloud.ts";
+import type { EvidenceReadiness } from "./evidenceReadiness.ts";
 import type { CohortIdentity } from "./cohortIdentity.ts";
 import type { SealQualityArchive } from "./sealQuality.ts";
 import { parseReportChatCoverage } from "./reportChatCoverage.ts";
@@ -665,6 +666,8 @@ export const api = {
       signal ? { signal } : undefined,
     ),
   /** 只读已连接归档；不创建归档、不启动采集、不请求供应商。 */
+  evidenceReadiness: (tradeDate: string, signal?: AbortSignal) =>
+    get<EvidenceReadiness>(`/market/evidence-readiness?trade_date=${encodeURIComponent(tradeDate)}`, signal ? { signal } : undefined),
   cohortIdentity: (tradeDate: string, signal?: AbortSignal) =>
     get<CohortIdentity>(`/market/cohort-identity?trade_date=${encodeURIComponent(tradeDate)}`, signal ? { signal } : undefined),
   sealQuality: (tradeDate: string, signal?: AbortSignal) =>

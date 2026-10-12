@@ -14,7 +14,7 @@ export function getDailyReviewAiRestoreTradeDate(
   if (
     !result
     || result.result_type !== "daily_review_ai"
-    || result.schema_version !== "daily_review_ai.v1"
+    || !["daily_review_ai.v1", "daily_review_ai.v2"].includes(result.schema_version)
     || !TRADE_DATE_RE.test(result.trade_date)
     || !GENERATED_AT_RE.test(result.generated_at)
   ) {

@@ -1,0 +1,62 @@
+{
+  "schema_version": "shortline-adoption-ledger.v1",
+  "upstream_commit": "d5bf80d2ed1629f8fa602058093f8d41bb0c7ace",
+  "features": [
+    {
+      "id": "A04",
+      "software_status": "IMPLEMENTED_PENDING_CUMULATIVE_CI",
+      "entry": "daily/cohort projections",
+      "acceptance": "money/loss, premium, source consecutive transitions and gaps",
+      "runtime_data_status": "NOT_ACTIVATED_NOT_REAL_ACQUISITION",
+      "contract": "SHORTLINE_RESEARCH_ADOPTION_20261012.md"
+    },
+    {
+      "id": "A08",
+      "software_status": "IMPLEMENTED_PENDING_CUMULATIVE_CI",
+      "entry": "history windows",
+      "acceptance": "fixed prior 10/20/30/60 sessions and full-coverage midpoint percentile",
+      "runtime_data_status": "NOT_ACTIVATED_NOT_REAL_ACQUISITION",
+      "contract": "SHORTLINE_RESEARCH_ADOPTION_20261012.md"
+    },
+    {
+      "id": "A10",
+      "software_status": "IMPLEMENTED_PENDING_CUMULATIVE_CI",
+      "entry": "sample windows",
+      "acceptance": "20/30/60/90 entry cohorts, entry-time groups and censoring",
+      "runtime_data_status": "NOT_ACTIVATED_NOT_REAL_ACQUISITION",
+      "contract": "SHORTLINE_RESEARCH_ADOPTION_20261012.md"
+    },
+    {
+      "id": "A11",
+      "software_status": "IMPLEMENTED_PENDING_CUMULATIVE_CI",
+      "entry": "structure and manual annotations",
+      "acceptance": "10-vs-20, source price bands, raw field versions, explicit user notes",
+      "runtime_data_status": "NOT_ACTIVATED_NOT_REAL_ACQUISITION",
+      "contract": "SHORTLINE_RESEARCH_ADOPTION_20261012.md"
+    },
+    {
+      "id": "A41",
+      "software_status": "IMPLEMENTED_PENDING_CUMULATIVE_CI",
+      "entry": "seal quality",
+      "acceptance": "source first/last seals, reopens, count/amount coverage",
+      "runtime_data_status": "NOT_ACTIVATED_NOT_REAL_ACQUISITION",
+      "contract": "SHORTLINE_RESEARCH_ADOPTION_20261012.md"
+    },
+    {
+      "id": "A42",
+      "software_status": "IMPLEMENTED_PENDING_CUMULATIVE_CI",
+      "entry": "full cohort feedback",
+      "acceptance": "complete prior pool union and all target-date outcomes",
+      "runtime_data_status": "NOT_ACTIVATED_NOT_REAL_ACQUISITION",
+      "contract": "SHORTLINE_RESEARCH_ADOPTION_20261012.md"
+    },
+    {
+      "id": "A46",
+      "software_status": "IMPLEMENTED_PENDING_CUMULATIVE_CI",
+      "entry": "capture_close_batch",
+      "acceptance": "five raw source families, immutable failures and cohort binding",
+      "runtime_data_status": "NOT_ACTIVATED_NOT_REAL_ACQUISITION",
+      "contract": "SHORTLINE_RESEARCH_ADOPTION_20261012.md"
+    }
+  ]
+}

@@ -215,7 +215,7 @@ def test_read_errors_never_expose_paths_or_error_text(monkeypatch):
     monkeypatch.setenv("VR_FACT_LAKE_ROOT", "/PRIVATE_SENTINEL/path")
     def fail(*args, **kwargs):
         raise RuntimeError("PRIVATE_SENTINEL https://provider.invalid/secret")
-    monkeypatch.setattr(service, "open_existing_fact_lake", fail)
+    monkeypatch.setattr(service, "open_existing_fact_lake_snapshot", fail)
     result = service.query_seal_quality(DAY)
     assert result["reason_codes"] == ["ARCHIVE_VALIDATION_FAILED"]
     assert "PRIVATE_SENTINEL" not in json.dumps(result)

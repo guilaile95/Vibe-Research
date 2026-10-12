@@ -1339,6 +1339,61 @@ class FactLake:
         finally:
             conn.close()
 
+    def list_observations(
+        self, *, dataset_id: str, start_trade_date: str,
+        end_trade_date: str, limit: int = 1000, max_payload_bytes: int = 64 * 1024 * 1024,
+    ) -> tuple[StoredObservation, ...]:
+        """Bounded, verified raw receipts in deterministic business-date order.
+
+        This is current-archive retrieval, never a point-in-time selector.
+        ``fetched_at`` is not local commit time. A result reaching ``limit``
+        may be truncated; callers must fail closed or explicitly disclose it.
+        No database initialization, writes, normalization or network access.
+        """
+        from datetime import date
+        self._require_publication_text(dataset_id, "dataset_id")
+        if len(dataset_id) > 160 or not re.fullmatch(r"[A-Za-z0-9_.-]+", dataset_id):
+            raise ValueError("invalid dataset_id")
+        try:
+            if any(type(value) is not str or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)
+                   for value in (start_trade_date, end_trade_date)):
+                raise ValueError()
+            start, end = date.fromisoformat(start_trade_date), date.fromisoformat(end_trade_date)
+            if not 0 <= (end - start).days <= 366:
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise ValueError("invalid or excessive observation date range") from None
+        if type(limit) is not int or not 1 <= limit <= 10000:
+            raise ValueError("limit must be an integer between 1 and 10000")
+        if type(max_payload_bytes) is not int or not 1 <= max_payload_bytes <= 128 * 1024 * 1024:
+            raise ValueError("invalid raw receipt byte budget")
+        conn = self._connect(readonly=True)
+        try:
+            rows = conn.execute(
+                "SELECT * FROM observations WHERE dataset_id = ? AND commit_state = 'COMMITTED'"
+                " AND json_extract(observation_json, '$.trade_date') BETWEEN ? AND ?"
+                " ORDER BY json_extract(observation_json, '$.trade_date'), fetched_at, observation_id LIMIT ?",
+                (dataset_id, start_trade_date, end_trade_date, limit),
+            ).fetchall()
+        finally:
+            conn.close()
+        result = []
+        remaining = max_payload_bytes
+        for row in rows:
+            stored = self._row_to_stored(row, verify_blob=False)
+            path = self._blob_path(stored.blob_relpath, stored.observation)
+            if not path.is_file() or path.stat().st_size > remaining:
+                raise FactLakeCorruptedError("raw receipt read budget exceeded or blob missing")
+            with path.open("rb") as stream:
+                raw = stream.read(remaining + 1)
+            if len(raw) > remaining:
+                raise FactLakeCorruptedError("raw receipt read budget exceeded")
+            if payload_sha256(raw).lower() != stored.blob_hash.lower():
+                raise FactLakeCorruptedError("committed observation blob is corrupted")
+            remaining -= len(raw)
+            result.append(stored)
+        return tuple(result)
+
     def read_payload(self, observation_id: str) -> bytes | None:
         stored = self.get_observation(observation_id)
         if stored is None:
@@ -2077,6 +2132,156 @@ class FactLake:
         return tuple(results)
 
 
+# Deliberately independent from short_term_fact_store: neither storage authority
+# imports the other. Keep the proven bounded-read/Windows identity contract here.
+_SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024
+_SNAPSHOT_WINDOWS_CTIME = os.name == "nt"
+
+
+def _snapshot_identity(value):
+    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns,
+            value.st_ctime_ns, getattr(value, "st_birthtime_ns", None))
+
+
+def _snapshot_descriptor_matches(path_identity, descriptor_identity):
+    # Windows 3.12 path ctime is birthtime; fstat ctime is ChangeTime. Track
+    # complete per-API identities separately, comparing common fields across APIs.
+    if (_SNAPSHOT_WINDOWS_CTIME and path_identity[5] is not None
+            and descriptor_identity[5] is not None):
+        return (path_identity[:4] == descriptor_identity[:4]
+                and path_identity[5] == descriptor_identity[5])
+    return path_identity == descriptor_identity
+
+
+class _ControlSnapshot:
+    def __init__(self, path: Path):
+        self.path = path
+        self.before = self.fingerprint()
+        self.descriptor_identity = None
+        self.blob = self.read_bounded()
+        if self.read_bounded() != self.blob:
+            raise FactLakeBusyError("Fact Lake control bytes changed")
+        blob = self.blob
+        if blob[:16] != b"SQLite format 3\x00" or blob[18:20] not in (b"\x01\x01", b"\x02\x02"):
+            raise FactLakeCorruptedError("Fact Lake control header is invalid")
+        page_size = int.from_bytes(blob[16:18], "big")
+        page_size = 65536 if page_size == 1 else page_size
+        pages = int.from_bytes(blob[28:32], "big")
+        if (page_size < 512 or page_size > 65536 or page_size & (page_size - 1)
+                or len(blob) % page_size or pages < 1 or pages > len(blob) // page_size):
+            raise FactLakeCorruptedError("Fact Lake control pages are invalid")
+        # Only the private image loses WAL mode. Source bytes never reach SQLite.
+        self.image = blob[:18] + b"\x01\x01" + blob[20:]
+
+    def fingerprint(self):
+        if any(_is_link_or_reparse(part) for part in (self.path, *self.path.parents)):
+            raise FactLakePathError("Fact Lake snapshot path is unsafe")
+        source = self.path.stat()
+        if not stat.S_ISREG(source.st_mode) or not 100 <= source.st_size <= _SNAPSHOT_MAX_BYTES:
+            raise FactLakeCorruptedError("Fact Lake control size or type is invalid")
+        sidecars = []
+        for suffix in ("-wal", "-journal", "-shm"):
+            sidecar = Path(str(self.path) + suffix)
+            if _is_link_or_reparse(sidecar):
+                raise FactLakePathError("Fact Lake snapshot sidecar is unsafe")
+            if sidecar.exists():
+                value = sidecar.stat()
+                if not stat.S_ISREG(value.st_mode) or (suffix != "-shm" and value.st_size):
+                    raise FactLakeBusyError("Fact Lake has pending journal data")
+                sidecars.append(_snapshot_identity(value))
+            else:
+                sidecars.append(None)
+        return _snapshot_identity(source), tuple(sidecars)
+
+    def read_bounded(self):
+        if self.fingerprint() != self.before:
+            raise FactLakeBusyError("Fact Lake control identity changed")
+        fd = os.open(self.path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "rb") as stream:
+            opened = os.fstat(stream.fileno())
+            identity = _snapshot_identity(opened)
+            if not stat.S_ISREG(opened.st_mode) or not _snapshot_descriptor_matches(self.before[0], identity):
+                raise FactLakeBusyError("Fact Lake control descriptor changed")
+            if self.descriptor_identity is None:
+                self.descriptor_identity = identity
+            elif identity != self.descriptor_identity:
+                raise FactLakeBusyError("Fact Lake control descriptor drifted")
+            value = stream.read(_SNAPSHOT_MAX_BYTES + 1)
+            if _snapshot_identity(os.fstat(stream.fileno())) != self.descriptor_identity:
+                raise FactLakeBusyError("Fact Lake control changed during read")
+        if len(value) != self.before[0][2] or self.fingerprint() != self.before:
+            raise FactLakeBusyError("Fact Lake control changed during read")
+        return value
+
+    def assert_unchanged(self):
+        try:
+            if self.read_bounded() != self.blob:
+                raise FactLakeBusyError("Fact Lake control bytes changed")
+        except OSError as exc:
+            raise FactLakeBusyError("Fact Lake snapshot is no longer stable") from exc
+
+    def connect(self):
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.deserialize(self.image)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only=ON")
+            conn.execute("PRAGMA trusted_schema=OFF")
+            return conn
+        except Exception:
+            conn.close()
+            raise
+
+
+class FactLakeSnapshot(FactLake):
+    """Frozen control metadata with normal hash-checked public artifact readers.
+
+    Call assert_unchanged after the complete multi-read operation, before exposing
+    its result. This is an observation snapshot, never a new publication authority.
+    """
+    def __init__(self, root: Path, snapshot: _ControlSnapshot):
+        super().__init__(root, readonly=True)
+        self._snapshot = snapshot
+
+    def _connect(self, *, readonly: bool | None = None) -> sqlite3.Connection:
+        if readonly is False:
+            self._require_write()
+        self.assert_unchanged()
+        return self._snapshot.connect()
+
+    def assert_unchanged(self) -> None:
+        self._snapshot.assert_unchanged()
+
+
+def open_existing_fact_lake_snapshot(root: str | Path) -> FactLakeSnapshot:
+    """Open a bounded checkpointed image without ever opening source SQLite.
+
+    Active journals are refused instead of checkpointed. Existing writable and
+    lock-aware FactLake handles retain their original behavior.
+    """
+    root_path = _root_path(root)
+    db_path = _control_db_path(root_path)
+    try:
+        if any(_is_link_or_reparse(part) for part in (db_path, *db_path.parents)):
+            raise FactLakePathError("Fact Lake snapshot path is unsafe")
+        if not root_path.is_dir() or not db_path.is_file():
+            raise FactLakeNotInitializedError("Fact Lake is not initialized")
+        snapshot = _ControlSnapshot(db_path)
+        for directory in (_raw_root(root_path), _canonical_root(root_path)):
+            if not directory.is_dir() or _is_link_or_reparse(directory):
+                raise FactLakeCorruptedError("Fact Lake artifact directory is unsafe")
+        conn = snapshot.connect()
+        try:
+            _assert_current_version_on_connection(conn)
+            _validate_schema_layout(conn)
+        finally:
+            conn.close()
+        snapshot.assert_unchanged()
+        return FactLakeSnapshot(root_path, snapshot)
+    except (OSError, sqlite3.Error) as exc:
+        raise FactLakeCorruptedError("Fact Lake snapshot is unreadable") from exc
+
+
 __all__ = [
     "CANONICAL_DIRECTORY_NAME",
     "CONTROL_DB_FILENAME",
@@ -2102,5 +2307,7 @@ __all__ = [
     "StoredReconciliation",
     "initialize_fact_lake",
     "open_existing_fact_lake",
+    "open_existing_fact_lake_snapshot",
+    "FactLakeSnapshot",
     "payload_sha256",
 ]

@@ -1,0 +1,64 @@
+{
+  "2026-07-31": {
+    "schema_version": "shortline-research.v1",
+    "trade_date": "2026-07-31",
+    "previous_trade_date": "2026-07-30",
+    "status": "unavailable",
+    "reason_codes": [
+      "ARCHIVE_NOT_CONNECTED"
+    ],
+    "message": "尚未连接研究归档；需先配置归档与原始数据采集，当前页面不会启动采集",
+    "selection_mode": "CURRENT_STORED_POSTHOC",
+    "point_in_time_claim": "NONE",
+    "research_only": true,
+    "fixture": false,
+    "ingestion_enabled": false,
+    "schedule_enabled": false,
+    "projection": null,
+    "evidence": [],
+    "input_requirements": [
+      "固定交易日的完整涨停/炸板/跌停池原始响应，含源业务日期、总数与分页回执",
+      "昨日涨停与炸板完整并集每只股票的目标日daily OHLC/pre_close和stk_limit原始响应",
+      "既有FactLake归档需由明确授权的手动采集流程写入；浏览本页不会联网或创建归档",
+      "历史窗口需要逐日真实积累；离线合成案例不代表实盘取数或历史验收"
+    ],
+    "limitations": [
+      "当前归档版本的事后研究；后续来源修订可能改变结果，不证明历史当时已知。",
+      "完整昨日名单固定分母；缺行情、停牌、退市和不兼容价格保持未知，不作为零收益。",
+      "收益为来源同日可比参考价至收盘的描述性变动，不含排队成交、手续费、滑点或可成交性。",
+      "10/20/30/60及20/30/60/90窗口均为固定交易日跨度，缺失日期不向前补齐。",
+      "统计不构成预测、买卖建议、正式晋级权威或Day 1验收；既有冻结决策不变。"
+    ]
+  },
+  "2026-10-08": {
+    "schema_version": "shortline-research.v1",
+    "trade_date": "2026-10-08",
+    "previous_trade_date": "2026-09-30",
+    "status": "unavailable",
+    "reason_codes": [
+      "ARCHIVE_NOT_CONNECTED"
+    ],
+    "message": "尚未连接研究归档；需先配置归档与原始数据采集，当前页面不会启动采集",
+    "selection_mode": "CURRENT_STORED_POSTHOC",
+    "point_in_time_claim": "NONE",
+    "research_only": true,
+    "fixture": false,
+    "ingestion_enabled": false,
+    "schedule_enabled": false,
+    "projection": null,
+    "evidence": [],
+    "input_requirements": [
+      "固定交易日的完整涨停/炸板/跌停池原始响应，含源业务日期、总数与分页回执",
+      "昨日涨停与炸板完整并集每只股票的目标日daily OHLC/pre_close和stk_limit原始响应",
+      "既有FactLake归档需由明确授权的手动采集流程写入；浏览本页不会联网或创建归档",
+      "历史窗口需要逐日真实积累；离线合成案例不代表实盘取数或历史验收"
+    ],
+    "limitations": [
+      "当前归档版本的事后研究；后续来源修订可能改变结果，不证明历史当时已知。",
+      "完整昨日名单固定分母；缺行情、停牌、退市和不兼容价格保持未知，不作为零收益。",
+      "收益为来源同日可比参考价至收盘的描述性变动，不含排队成交、手续费、滑点或可成交性。",
+      "10/20/30/60及20/30/60/90窗口均为固定交易日跨度，缺失日期不向前补齐。",
+      "统计不构成预测、买卖建议、正式晋级权威或Day 1验收；既有冻结决策不变。"
+    ]
+  }
+}

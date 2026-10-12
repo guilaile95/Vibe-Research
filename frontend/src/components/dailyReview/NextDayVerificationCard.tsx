@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { request } from "@/lib/api";
 import {
-  boundaryLabels, conditionDraft, directionLabels, formatMetric, percent, resultLabel, verificationDate, ownsVerificationDate,
+  boundaryLabels, conditionDraft, directionLabels, formatMetric, percent, resultLabel, verificationDate, ownsVerificationDate, isVerificationViewForDate,
   type Direction, type Metric, type VerificationCondition, type VerificationView,
 } from "@/lib/nextDayVerification";
 
@@ -13,6 +13,7 @@ export function NextDayVerificationCard({ initialDate }: { initialDate?: string 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [readbackRejected, setReadbackRejected] = useState(false);
   const [reload, setReload] = useState(0);
   const sequence = useRef(0);
   const savingLock = useRef(false);
@@ -27,14 +28,18 @@ export function NextDayVerificationCard({ initialDate }: { initialDate?: string 
     const controller = new AbortController();
     setView(null); setDraft([]); setMessage("");
     setLoading(true);
-    request<VerificationView>(`/next-day-verification/${encodeURIComponent(day)}`, "GET", undefined, { signal: controller.signal })
-      .then((data) => { if (id === sequence.current) { setView(data); setDraft(conditionDraft(data)); } })
+    request<unknown>(`/next-day-verification/${encodeURIComponent(day)}`, "GET", undefined, { signal: controller.signal })
+      .then((data) => {
+        if (id !== sequence.current) return;
+        if (!isVerificationViewForDate(data, day)) throw new Error("验证记录响应未通过校验，请重新读取");
+        setView(data); setDraft(conditionDraft(data)); setReadbackRejected(false);
+      })
       .catch((error) => { if (id === sequence.current && !controller.signal.aborted) setMessage(error instanceof Error ? error.message : "读取失败"); })
       .finally(() => { if (id === sequence.current) setLoading(false); });
     return () => { ++sequence.current; controller.abort(); };
   }, [day, reload]);
 
-  const editable = ownsVerificationDate(view, day) && view.state === "OPEN" && !loading && !saving;
+  const editable = ownsVerificationDate(view, day) && view.state === "OPEN" && !loading && !saving && !readbackRejected;
   function change(metric: Metric, direction: Direction | "", reason?: string) {
     userTouched.current = true;
     setDraft((items) => {
@@ -47,7 +52,12 @@ export function NextDayVerificationCard({ initialDate }: { initialDate?: string 
     savingLock.current = true; setSaving(true); setMessage("");
     const id = ++sequence.current;
     try {
-      const data = await request<VerificationView>(`/next-day-verification/${encodeURIComponent(day)}`, "PUT", { revision: view.revision, items: draft });
+      const data = await request<unknown>(`/next-day-verification/${encodeURIComponent(day)}`, "PUT", { revision: view.revision, items: draft });
+      if (id !== sequence.current) return;
+      if (!isVerificationViewForDate(data, day)) {
+        setReadbackRejected(true);
+        throw new Error("保存响应未通过校验，保存结果尚未确认");
+      }
       if (id === sequence.current) { setView(data); setDraft(conditionDraft(data)); setMessage("已保存；仅记录研究条件，不产生交易或正式决策"); }
     } catch (error) {
       if (id === sequence.current) setMessage(`${error instanceof Error ? error.message : "保存失败"}。输入已保留；可重新读取确认最新记录`);
@@ -87,11 +97,29 @@ export function NextDayVerificationCard({ initialDate }: { initialDate?: string 
       </fieldset>
       <h4 className="mb-2 mt-4 text-sm font-semibold">已保存条件与对账</h4>
       {!view.items.length && <p className="text-sm text-muted-foreground">此交易日尚无条件；不会自动补写</p>}
+      {readbackRejected && <p role="alert" className="mb-2 text-sm text-warning">请先重新读取确认服务端记录，再继续保存；当前输入仍保留在表单中</p>}
       {view.items.map((item) => <div key={item.metric} className="mb-2 rounded bg-muted/25 p-3 text-sm">
         <p>{view.metrics.find((m) => m.key === item.metric)?.label} · 预期{directionLabels[item.direction]} · {resultLabel(item)}</p>
         <p className="mt-1 text-xs text-muted-foreground">事前冻结值 {formatMetric(item.metric, item.prior_value)} → 当前收盘观察 {formatMetric(item.metric, item.current_value)}</p>
         <p className="text-xs text-muted-foreground">历史同方向发生频率 {percent(item.baseline.rate)} · 可比 {item.baseline.samples}/{item.baseline.possible_pairs} 对（至少 12 对才显示频率）</p>
         <p className="break-words text-xs text-muted-foreground">写入时间 {item.written_at}{item.reason ? ` · ${item.reason}` : ""}</p>
+        <details className="mt-2 text-xs" data-testid={`verification-evidence-${item.metric}`}>
+          <summary className="cursor-pointer">查看事前与收盘观察来源</summary>
+          <p className="mt-2 text-muted-foreground">事前值与历史基准在保存时冻结；当前收盘观察来自目前存档，后续来源更正可能改变对账结果，不代表历史当时可知数据</p>
+          {([
+            { label: "已冻结事前证据", date: view.trade_date, evidence: item.prior_evidence },
+            { label: "当前存档收盘观察", date: item.target_date, evidence: item.current_evidence },
+          ]).map(({ label, date, evidence }) => <div key={label} className="mt-2 break-words">
+            <p className="font-medium">{label} · 对应交易日 {date ?? "未知"}</p>
+            {evidence ? <>
+              <p>来源：<span className="break-all">{evidence.source_ids.join("、")}</span></p>
+              <p>抓取时间（UTC）：{evidence.fetched_at}</p>
+              <p>快照时间（UTC）：{evidence.snapshot_at}</p>
+              <p>落库时间（UTC）：{evidence.stored_at}</p>
+            </> : <p className="text-muted-foreground">未提供合格证据；不代表读数为零或条件不成立</p>}
+          </div>)}
+          <p className="mt-2 break-words text-muted-foreground">基准窗口：{item.baseline.from} 至 {item.baseline.through} · 保存时点（UTC）：{item.baseline.as_of}</p>
+        </details>
       </div>)}
       <p className="mt-3 text-sm">近 60 个交易日条件：已判定 {view.history.summary.decided}/{view.history.summary.total}，成立 {view.history.summary.hit}，待核验 {view.history.summary.unknown}；成立率 {percent(view.history.summary.rate)}，覆盖率 {percent(view.history.summary.coverage)}</p>
       <p className="mt-1 text-xs text-muted-foreground">有基准覆盖 {view.history.summary.baseline_covered} 条；对应历史频率 {percent(view.history.summary.expected_rate)}，同一覆盖子集差额 {percent(view.history.summary.edge)}。不是投资收益或策略胜率</p>

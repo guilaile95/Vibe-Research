@@ -329,3 +329,18 @@ def test_browser_golden_payloads_match_real_journal_service(monkeypatch):
     from next_day_verification_browser_fixture import contracts
     fixture = Path(__file__).resolve().parents[2] / "frontend/tests/fixtures/next-day-verification.json"
     assert contracts(monkeypatch) == json.loads(fixture.read_text(encoding="utf-8"))
+
+
+def test_provenance_readback_golden_matches_real_api(guarded, monkeypatch):
+    from pathlib import Path
+    from next_day_verification_provenance_fixture import contracts
+    fixture = Path(__file__).resolve().parents[2] / "frontend/tests/fixtures/next-day-verification-provenance.json"
+    results = contracts(monkeypatch)
+    assert results == json.loads(fixture.read_text(encoding="utf-8"))
+    response = guarded[1]("GET", f"/api/next-day-verification/{DAY}")
+    assert response.status_code == 200
+    assert response.json()["data"] == results["corrected"]
+    for before, after in zip(results["verified"]["items"], results["corrected"]["items"]):
+        assert before["prior_evidence"] == after["prior_evidence"]
+        assert before["baseline"] == after["baseline"]
+        assert before["verified"] is True and after["verified"] is False

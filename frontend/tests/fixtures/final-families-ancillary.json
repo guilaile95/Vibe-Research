@@ -71,5 +71,67 @@
     "projection": null,
     "archive_only": true,
     "ingestion_enabled": false
+  },
+  "readiness": {
+    "schema_version": "evidence-readiness.v0.1",
+    "trade_date": "2026-10-08",
+    "generated_at": "2026-10-08T08:00:00.000000+00:00",
+    "read_only": true,
+    "ingestion_enabled": false,
+    "features": [
+      {
+        "feature": "seal_quality",
+        "status": "not_configured",
+        "reason_codes": [
+          "ARCHIVE_NOT_CONNECTED"
+        ],
+        "required_dates": [
+          "2026-10-08"
+        ],
+        "requirements": "所选交易日的已发布涨停池原始回执，日期绑定、重放校验和封板字段覆盖通过现有检查。",
+        "next_step": "查看封板质量卡的来源与字段覆盖；缺少归档时需先通过现有获准来源获得证据，此处不能采集或导入。"
+      },
+      {
+        "feature": "cohort_identity",
+        "status": "missing",
+        "reason_codes": [
+          "ARCHIVE_MISSING"
+        ],
+        "required_dates": [
+          "2026-09-30",
+          "2026-10-08"
+        ],
+        "requirements": "所选日及前一交易日的完整 v0.2 收盘名单；来源、时间、全名单与涨停家数一致。",
+        "next_step": "查看两日名单卡的来源明细；缺少任一天完整归档时保持未知，不用连板精选名单补齐。"
+      },
+      {
+        "feature": "next_day_verification",
+        "status": "ineligible",
+        "reason_codes": [
+          "CALENDAR_UNKNOWN"
+        ],
+        "required_dates": [
+          "2026-10-08"
+        ],
+        "requirements": "写下条件前已落库的合格收盘事实；次日收盘后另需目标日事实。基线至少需要 12 个有效相邻日样本。",
+        "next_step": "在明日验证卡查看保存窗口与逐项证据；先有事实再写条件，历史日期不能补写预测。"
+      }
+    ],
+    "journal": {
+      "state": "CALENDAR_UNKNOWN",
+      "next_trade_date": null,
+      "seals_at": null,
+      "prior_metric_available": {
+        "limit_up_count": false,
+        "failed_board_rate": false
+      },
+      "verification_claim": "NONE"
+    },
+    "limitations": [
+      "只检查服务端已配置的归档；不连接来源、不上传导入、不创建归档。",
+      "各功能依次读取已有归档；不是跨数据源的原子快照。",
+      "可读取仅指现有合同检查通过；不证明上游真实性、历史当时已知或真实使用验收。",
+      "明日验证的可读取状态仅指所选日事前事实；不是预测已保存、次日已验证或有统计优势。"
+    ]
   }
 }

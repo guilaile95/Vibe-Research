@@ -3,7 +3,13 @@ import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 
 export const golden = JSON.parse(readFileSync(new URL("../fixtures/next-day-verification.json", import.meta.url), "utf8"));
+const shortlineGolden = JSON.parse(readFileSync(new URL("../fixtures/shortline-research-unavailable.json", import.meta.url), "utf8"));
+const themeGolden = JSON.parse(readFileSync(new URL("../fixtures/theme-research-unavailable.json", import.meta.url), "utf8"));
 const cohortGolden = JSON.parse(readFileSync(new URL("../fixtures/cohort-identity-unavailable.json", import.meta.url), "utf8"));
+export const aiBasisGolden = JSON.parse(readFileSync(new URL("../fixtures/daily-review-ai-basis.json", import.meta.url), "utf8"));
+export const integratedGolden = JSON.parse(readFileSync(new URL("../fixtures/daily-review-integrated.json", import.meta.url), "utf8"));
+export const unavailableReadiness = JSON.parse(readFileSync(new URL("../fixtures/daily-review-readiness-unavailable.json", import.meta.url), "utf8"));
+export const HISTORY_DAYS = Object.freeze(["2026-07-30", "2026-07-29"]);
 export const DAY = "2026-07-31";
 export const CLOCK = "2026-08-03T00:00:00Z";
 export const JOURNAL_VIEWPORTS = Object.freeze([
@@ -13,19 +19,28 @@ export const JOURNAL_VIEWPORTS = Object.freeze([
 export const json = (body, status = 200) => ({ kind: "json", status, body });
 const copy = (value) => structuredClone(value);
 
-export function createFixture(origin, { withSealQuality = false } = {}) {
+export function createFixture(origin, { withSealQuality = false, fullReview = false, aiMode = fullReview ? "v2" : null } = {}) {
   const requests = [];
   const violations = [];
   const writes = [];
   const expectedWrites = [];
   const views = new Map([[DAY, "open_empty"], ["2026-08-03", "cold"], ["2026-07-30", "older"], ["2026-12-31", "calendar_unknown"]]);
   const getErrors = new Map();
+  const malformedReads = new Map();
+  const malformedReadinessReads = new Map();
+  const journalValue = (key) => fullReview && key === "open_saved" ? integratedGolden[DAY]["journal-saved"] : golden[key];
+  const review = (day) => ({ schema_version: "daily-review-v0.1", status: "partial", trade_date: day,
+    generated_at: CLOCK, data_cutoff: null, warnings: [], data_health: { components: {} } });
+  const snapshots = HISTORY_DAYS.map((day, index) => ({ id: index + 701, trade_date: day,
+    generated_at: CLOCK, created_at: CLOCK, schema_version: "daily-review-v0.1", status: "partial", review: review(day) }));
   const deny = (reason) => { violations.push(reason); return { kind: "deny", reason }; };
   return {
     requests, violations, writes, expectedWrites,
     setView: (day, key) => views.set(day, key),
     failGet: (day) => getErrors.set(day, true),
-    expectSave: (body, responseKey, status = 200) => expectedWrites.push({ body, responseKey, status }),
+    malformedGet: (day, value) => malformedReads.set(day, copy(value)),
+    malformedReadiness: (day, value) => malformedReadinessReads.set(day, copy(value)),
+    expectSave: (body, responseKey, status = 200, responseOverride) => expectedWrites.push({ body, responseKey, status, responseOverride }),
     handle(rawUrl, method = "GET", body) {
       let url;
       try { url = new URL(rawUrl); } catch { return deny("malformed URL"); }
@@ -39,14 +54,42 @@ export function createFixture(origin, { withSealQuality = false } = {}) {
         writes.push(copy(body));
         if (expected.responseKey) views.set(DAY, expected.responseKey);
         return expected.status === 200
-          ? json({ data: copy(golden[expected.responseKey]) })
+          ? json({ data: copy(expected.responseOverride === undefined ? journalValue(expected.responseKey) : expected.responseOverride) })
           : json({ detail: expected.status === 409 ? "记录已改变，请重新读取后再保存" : "验证记录不可写入，未保存修改" }, expected.status);
       }
       if (pathname.startsWith("/api/next-day-verification/")) {
         const day = pathname.slice("/api/next-day-verification/".length);
         if (url.search || !views.has(day)) return deny(`unexpected journal GET ${day}${url.search}`);
         if (getErrors.get(day)) { getErrors.delete(day); return json({ detail: "验证记录不可读取，已停止操作" }, 503); }
-        return json({ data: copy(golden[views.get(day)]) });
+        if (malformedReads.has(day)) { const value = malformedReads.get(day); malformedReads.delete(day); return json({ data: copy(value) }); }
+        return json({ data: copy(journalValue(views.get(day))) });
+      }
+      if (pathname === "/api/market/evidence-readiness") {
+        const day = (fullReview ? [DAY, ...HISTORY_DAYS] : [DAY]).find(day => url.search === `?trade_date=${day}`);
+        if (!withSealQuality || !day) return deny("unexpected evidence readiness request");
+        if (malformedReadinessReads.has(day)) {
+          const value = malformedReadinessReads.get(day); malformedReadinessReads.delete(day);
+          return json({ data: copy(value) });
+        }
+        return json({ data: copy(fullReview ? integratedGolden[day]["evidence-readiness"] : unavailableReadiness) });
+      }
+      if (fullReview && ["/api/market/cohort-identity", "/api/market/seal-quality"].includes(pathname)) {
+        const day = [DAY, ...HISTORY_DAYS].find(day => url.search === `?trade_date=${day}`);
+        if (!withSealQuality || !day) return deny("unexpected integrated archive request");
+        return json({ data: copy(integratedGolden[day][pathname.split("/").at(-1)]) });
+      }
+      if (pathname.startsWith("/api/daily-review/history/")) {
+        const snapshot = snapshots.find(item => pathname === `/api/daily-review/history/${item.id}`);
+        if (!fullReview || !snapshot || url.search) return deny("unexpected history detail request");
+        return json({ data: copy(snapshot) });
+      }
+      if (pathname === "/api/market/shortline-research") {
+        if (!withSealQuality || url.search !== `?trade_date=${DAY}`) return deny("unexpected shortline-research request");
+        return json({ data: copy(shortlineGolden[DAY]) });
+      }
+      if (pathname === "/api/market/theme-research") {
+        if (!withSealQuality || url.search !== `?trade_date=${DAY}`) return deny("unexpected theme-research request");
+        return json({ data: copy(themeGolden[DAY]) });
       }
       if (pathname === "/api/market/cohort-identity") {
         if (!withSealQuality || url.search !== `?trade_date=${DAY}`) return deny("unexpected cohort-identity request");
@@ -75,8 +118,14 @@ export function createFixture(origin, { withSealQuality = false } = {}) {
         schema_version: "daily-review-v0.1", status: "partial", trade_date: DAY,
         generated_at: CLOCK, data_cutoff: null, warnings: [], data_health: { components: {} },
       }, cache_meta: { source: "persisted", stale: false, refreshing: false } });
-      if (pathname === "/api/daily-review/history") return json({ data: { items: [], count: 0, limit: 20, offset: 0 } });
+      if (pathname === "/api/daily-review/history") return json({ data: { items: fullReview ? snapshots.map(({ review, ...item }) => item) : [], count: fullReview ? snapshots.length : 0, limit: 20, offset: 0 } });
       if (pathname === "/api/watchlist") return json({ data: { status: "valid", data: { codes: [], updated_at: CLOCK }, etag: "synthetic" } });
+      if (pathname === "/api/ai-results/daily_review_ai" && fullReview && aiMode) {
+        if (url.search !== `?trade_date=${DAY}`) return deny("unexpected saved AI basis date");
+        const value = copy(aiBasisGolden[aiMode === "v1" ? "v1" : "v2"]);
+        if (aiMode === "malformed_v2") value.payload.input_basis.trade_date = "2026-07-30";
+        return json({ data: value });
+      }
       if (["/api/ai-results/daily_review_ai", "/api/ai-results/portfolio_advice"].includes(pathname)) return json({ data: null });
       if (pathname === "/api/radar") return json({ data: { generated_at: CLOCK, industries: [], stats: { total_sources: 0, failed_sources: 0, industries: 0 } } });
       if (pathname === "/api/native-intel/status") return json({ status: "unavailable", generated_at: CLOCK, store: { readable: false }, error: "synthetic unavailable" });

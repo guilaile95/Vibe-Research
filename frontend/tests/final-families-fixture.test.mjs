@@ -127,3 +127,28 @@ test("cohort ancillary read is exact dated service evidence and never backend fa
   result.reason_codes.push("MUTATED");
   assert.deepEqual(ancillaryReply("GET", path, search).data.reason_codes, ["ARCHIVE_MISSING"]);
 });
+
+test("shared Markdown/history readiness startup uses only exact fixed-date readonly fixture", () => {
+  const path = "/api/market/evidence-readiness", search = `?trade_date=${ANCILLARY_TRADE_DATE}`;
+  const value = ancillaryReply("GET", path, search).data;
+  assert.equal(value.schema_version, "evidence-readiness.v0.1");
+  assert.equal(value.trade_date, ANCILLARY_TRADE_DATE);
+  assert.equal(value.read_only, true); assert.equal(value.ingestion_enabled, false);
+  assert.deepEqual(value.features.map(row => row.status), ["not_configured", "missing", "ineligible"]);
+  assert.deepEqual(value.features[2].reason_codes, ["CALENDAR_UNKNOWN"]);
+  assert.equal(value.journal.state, "CALENDAR_UNKNOWN");
+  assert.equal(value.journal.verification_claim, "NONE");
+  for (const method of ["POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]) assert.equal(ancillaryReply(method, path, search), null);
+  for (const query of ["", "?", "?trade_date=2026-10-12", "?trade_date=2026-09-30", "?trade_date=2026-07-31",
+    "?trade_date=2026%2D10%2D08", "?date=2026-10-08", `${search}&trade_date=${ANCILLARY_TRADE_DATE}`,
+    `${search}&as_of=x`, `${search}&observed_at=x`, `${search}&root=/tmp`, `${search}&refresh=1`]) {
+    assert.equal(ancillaryReply("GET", path, query), null, query);
+  }
+  assert.equal(ancillaryReply("GET", `${path}/`, search), null);
+  assert.equal(ancillaryReply("GET", `https://external.invalid${path}`, search), null);
+  for (const scenario of ["history-late-success", "history-late-error", "report-upload", "calendar-422"]) {
+    assert.equal(realRouteAllowed("GET", path, scenario), false);
+  }
+  value.features.length = 0;
+  assert.equal(ancillaryReply("GET", path, search).data.features.length, 3);
+});

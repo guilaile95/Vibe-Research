@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { observeIntegratedReads, runIntegratedReview, runSavedAiBasis } from "./daily-review-integrated.scenarios.mjs";
 import { createFixture, golden, DAY, CLOCK, JOURNAL_VIEWPORTS } from "./next-day-verification.fixture.mjs";
 
 const frontend = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -24,13 +25,10 @@ let currentViewport;
 let browser, context, page, origin;
 let fixture;
 const fixtureRuns = [];
-function resetFixture(label) { fixture = createFixture(origin, { withSealQuality }); fixtureRuns.push({ label: `${currentViewport?.label || "setup"}/${label}`, fixture }); }
-async function until(predicate) {
-  for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise((done) => setTimeout(done, 25)); }
-  assert.fail("Timed out waiting for fixture request receipt");
-}
+function resetFixture(label, options = {}) { fixture = createFixture(origin, { withSealQuality, ...options }); fixtureRuns.push({ label: `${currentViewport?.label || "setup"}/${label}`, fixture }); }
 let dailyGate = deferred();
 let writeGate = null;
+let writeObserved = null;
 const server = createServer((req, res) => {
   const raw = req.url || "/";
   if (req.method !== "GET" || req.headers.host !== new URL(origin).host || raw.startsWith("/api")) {
@@ -154,6 +152,7 @@ try {
     const result = fixture.handle(req.url(), req.method(), payload);
     if (result.kind === "deny") return route.abort("blockedbyclient");
     if (result.kind === "static") return route.continue();
+    if (req.method() === "PUT") writeObserved?.resolve();
     const gate = req.method() === "PUT" ? writeGate : null;
     if (gate) { writeGate = null; await gate.promise; }
     try { await route.fulfill({ status: result.status, contentType: "application/json", body: JSON.stringify(result.body) }); }
@@ -180,6 +179,7 @@ try {
       return original(input, init);
     };
   });
+  await context.addInitScript(observeIntegratedReads);
   page = await context.newPage();
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.clock.setFixedTime(new Date(CLOCK));
@@ -202,6 +202,11 @@ try {
     await cohort.getByText("缺少完整的两日名单归档，无法进行对照", { exact: true }).waitFor();
     assert.equal(await cohort.getByTestId("cohort-members-table").count(), 0);
     results.push(`${currentViewport.label}-integrated-cohort-archive-missing-smoke`);
+    const readiness = page.getByTestId("evidence-readiness-card");
+    await readiness.getByTestId("readiness-seal_quality").getByText("封板质量：未连接归档", { exact: true }).waitFor();
+    await readiness.getByTestId("readiness-cohort_identity").getByText("两日名单：缺少所需归档", { exact: true }).waitFor();
+    await readiness.getByTestId("readiness-next_day_verification").getByText("明日验证事前事实：缺少所需归档", { exact: true }).waitFor();
+    results.push(`${currentViewport.label}-integrated-readiness-missing-smoke`);
 
   }
   await shot("01-cold-canonical-and-loaded-date", "可记录，下一交易日");
@@ -210,12 +215,12 @@ try {
   await card.getByLabel("涨停家数理由").fill("Synthetic prior condition");
   assert.equal(fixture.writes.length, 0, "editing never autosaves");
   fixture.expectSave(body(0, "up", "Synthetic prior condition"), "open_saved");
-  const saveGate = deferred(); writeGate = saveGate;
+  const saveGate = deferred(); writeGate = saveGate; writeObserved = deferred();
   await card.getByRole("button", { name: "保存整晚条件", exact: true }).click();
   await page.waitForFunction(() => document.querySelector('[aria-label="验证复盘交易日"]').disabled);
   assert.equal(await card.getByLabel("涨停家数方向").isDisabled(), true);
   await card.getByRole("button", { name: "保存中…", exact: true }).evaluate((el) => el.click());
-  await until(() => fixture.writes.length === 1);
+  await writeObserved.promise;
   assert.equal(fixture.writes.length, 1, "repeated save while pending must not duplicate");
   saveGate.resolve();
   await card.getByText(/已保存；仅记录研究条件/).waitFor();
@@ -316,6 +321,25 @@ try {
   await page.waitForFunction(() => document.body.textContent.includes("2026-07-31 · 当前市场快照"));
   assert.equal(await card.getByLabel("验证复盘交易日").inputValue(), "2026-12-31");
   await shot("08-user-date-survives-late-market-response", "交易日历未知或日期不是支持的交易日");
+  if (withSealQuality) {
+    await page.close();
+    resetFixture("full-current-history-readonly-acceptance", { fullReview: true });
+    page = await context.newPage();
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.clock.setFixedTime(new Date(CLOCK));
+    await page.goto(`${origin}/daily-review`, { waitUntil: "domcontentloaded" });
+    await runIntegratedReview({ page, fixture, viewport, evidenceDir, results, captures, shot });
+    for (const aiMode of ["v1", "malformed_v2"]) {
+      await page.close();
+      resetFixture(`saved-ai-basis-${aiMode}`, { fullReview: true, aiMode });
+      page = await context.newPage();
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      await page.clock.setFixedTime(new Date(CLOCK));
+      await page.goto(`${origin}/daily-review`, { waitUntil: "domcontentloaded" });
+      await runSavedAiBasis({ page, viewport, evidenceDir, results, captures, mode: aiMode });
+      assert.equal(fixture.writes.length, 0, "restoring saved AI never writes or invokes models");
+    }
+  }
   await context.close();
   context = undefined;
   }
@@ -326,6 +350,7 @@ try {
 } catch (error) {
   if (page && !page.isClosed()) {
     const prefix = currentViewport?.label || "setup";
+    writeFileSync(path.join(evidenceDir, `${prefix}-failure-dom.html`), await page.content(), "utf8");
     await page.getByTestId("next-day-verification").screenshot({ path: path.join(evidenceDir, `${prefix}-failure-card.png`), animations: "disabled" }).catch(() => {});
     await page.screenshot({ path: path.join(evidenceDir, `${prefix}-failure-viewport.png`), fullPage: false }).catch(() => {});
   }

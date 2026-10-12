@@ -107,3 +107,92 @@ test("integrated cohort ancillary read keeps exact opt-in date and unknown membe
   result.reason_codes.push("MUTATED");
   assert.deepEqual(f.handle(url).body.data.reason_codes, ["ARCHIVE_MISSING"]);
 });
+
+test("full review permits only selected golden archive dates and two exact history IDs", () => {
+  const f = createFixture(origin, { withSealQuality: true, fullReview: true });
+  for (const kind of ["seal-quality", "cohort-identity", "evidence-readiness"]) {
+    for (const day of [DAY, "2026-07-30", "2026-07-29"]) {
+      const value = f.handle(`${origin}/api/market/${kind}?trade_date=${day}`).body.data;
+      assert.equal(value.trade_date, day);
+      if (kind === "evidence-readiness") assert.deepEqual(value.features.map(row => row.status), ["ready", "ready", "ready"]);
+      else assert.equal(value.status, "normal");
+      value.trade_date = "MUTATED";
+      assert.equal(f.handle(`${origin}/api/market/${kind}?trade_date=${day}`).body.data.trade_date, day);
+    }
+    for (const suffix of ["", "?trade_date=2026-08-03", "?trade_date=2026%2D07%2D30", "?trade_date=2026-07-30&refresh=1", "?trade_date=2026-07-30&trade_date=2026-07-30"]) {
+      assert.equal(f.handle(`${origin}/api/market/${kind}${suffix}`).kind, "deny");
+    }
+    for (const method of ["PUT", "POST", "PATCH", "DELETE", "HEAD", "OPTIONS"]) {
+      assert.equal(f.handle(`${origin}/api/market/${kind}?trade_date=${DAY}`, method).kind, "deny");
+    }
+  }
+  assert.equal(f.handle(`${origin}/api/daily-review/history?limit=20&offset=0`).body.data.items.length, 2);
+  for (const id of [701, 702]) assert.equal(f.handle(`${origin}/api/daily-review/history/${id}`).body.data.id, id);
+  for (const suffix of ["700", "703", "701?refresh=1", "701/", "0701"]) {
+    assert.equal(f.handle(`${origin}/api/daily-review/history/${suffix}`).kind, "deny");
+  }
+  assert.equal(f.handle(`http://127.0.0.1:18762/api/daily-review/history/701`).kind, "deny");
+  assert.equal(f.handle(`${origin}/api/daily-review/history/701`, "POST").kind, "deny");
+  assert.deepEqual(f.writes, []);
+});
+
+test("malformed journal reply is one-shot and never changes valid persisted fixture", () => {
+  const f = createFixture(origin, { withSealQuality: true, fullReview: true });
+  f.malformedGet(DAY, { items: null });
+  assert.deepEqual(f.handle(`${origin}/api/next-day-verification/${DAY}`).body.data, { items: null });
+  assert.deepEqual(f.handle(`${origin}/api/next-day-verification/${DAY}`).body.data, golden.open_empty);
+  assert.deepEqual(f.writes, []);
+});
+
+test("integrated full-page acceptance retains semantic races and no local sleeps", () => {
+  const source = readFileSync(new URL("./e2e/daily-review-integrated.scenarios.mjs", import.meta.url), "utf8");
+  assert.match(source, /url.origin === location.origin && method === "GET"/);
+  assert.match(source, /record.parsed = true/);
+  assert.match(source, /signal: undefined/);
+  assert.match(source, /window.__reviewReads\[index\]\?\.parsed/);
+  assert.match(source, /INDEPENDENT_UNSAVED_JOURNAL/);
+  assert.match(source, /history navigation and archive retry never save/);
+  assert.match(source, /malformed data hides editor/);
+  assert.doesNotMatch(source, /waitForTimeout|setTimeout|sleep\(/);
+});
+
+test("malformed write reply can represent one persisted write with truthful reread", () => {
+  const f = createFixture(origin);
+  f.expectSave(payload, "open_saved", 200, { items: null });
+  assert.deepEqual(f.handle(`${origin}/api/next-day-verification/${DAY}`, "PUT", payload).body.data, { items: null });
+  assert.equal(f.writes.length, 1);
+  assert.deepEqual(f.handle(`${origin}/api/next-day-verification/${DAY}`).body.data, golden.open_saved);
+  assert.equal(f.handle(`${origin}/api/next-day-verification/${DAY}`, "PUT", payload).kind, "deny");
+});
+
+
+test("readiness unavailable fixture is exact-date opt-in and malformed reads recover", () => {
+  const url = `${origin}/api/market/evidence-readiness?trade_date=${DAY}`;
+  assert.equal(createFixture(origin).handle(url).kind, "deny");
+  const f = createFixture(origin, { withSealQuality: true });
+  assert.deepEqual(f.handle(url).body.data.features.map(row => row.status), ["not_configured", "missing", "missing"]);
+  f.malformedReadiness(DAY, { trade_date: "wrong" });
+  assert.deepEqual(f.handle(url).body.data, { trade_date: "wrong" });
+  assert.equal(f.handle(url).body.data.trade_date, DAY);
+  assert.equal(f.handle(`${origin}/api/market/evidence-readiness?trade_date=2026-07-30`).kind, "deny");
+  assert.equal(f.handle(url + "&refresh=1").kind, "deny");
+  assert.deepEqual(f.writes, []);
+});
+
+test("saved AI basis fixtures are dated readonly restores, with explicitly separate corrupt input", () => {
+  const url = `${origin}/api/ai-results/daily_review_ai?trade_date=${DAY}`;
+  for (const aiMode of ["v1", "v2", "malformed_v2"]) {
+    const f = createFixture(origin, { withSealQuality: true, fullReview: true, aiMode });
+    const value = f.handle(url).body.data;
+    assert.equal(value.trade_date, DAY);
+    assert.equal(value.schema_version, `daily_review_ai.${aiMode === "v1" ? "v1" : "v2"}`);
+    if (aiMode === "v1") assert.equal(value.payload.input_basis, undefined);
+    else assert.equal(value.payload.input_basis.trade_date, aiMode === "v2" ? DAY : "2026-07-30");
+    for (const method of ["POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]) assert.equal(f.handle(url, method).kind, "deny");
+    for (const query of ["", "?trade_date=2026-07-30", `?trade_date=${DAY}&refresh=1`, `?trade_date=${DAY}&trade_date=${DAY}`]) {
+      assert.equal(f.handle(`${origin}/api/ai-results/daily_review_ai${query}`).kind, "deny");
+    }
+    assert.equal(f.handle(`${origin}/api/daily-review/ai`, "POST").kind, "deny");
+    assert.equal(f.writes.length, 0);
+  }
+});

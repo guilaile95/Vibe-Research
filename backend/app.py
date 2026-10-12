@@ -35,6 +35,7 @@ from starlette.datastructures import Headers
 import account_profile
 import ai_answer_quality
 import ai_result_service
+import daily_review_basis
 import astock
 import chat as chat_layer
 import agent_runtime
@@ -80,7 +81,10 @@ import performance_attribution_store
 import technical_indicators_router
 import bk11_history_router
 import short_term_seal_quality_router
+import short_term_theme_research_router
 import cohort_identity_router
+import evidence_readiness_router
+import shortline_research_router
 import intel_digest_router
 import native_intel_router
 import position_reality_router
@@ -158,7 +162,7 @@ def _safe_daily_review_ai_done_result(record) -> dict[str, str]:
     if result_type != ai_result_service.DAILY_REVIEW_AI:
         raise ai_result_service.AiResultValidationError("unexpected committed result type")
     schema_version = record.get("schema_version")
-    if schema_version != "daily_review_ai.v1":
+    if schema_version not in {"daily_review_ai.v1", "daily_review_ai.v2"}:
         raise ai_result_service.AiResultValidationError("unexpected committed schema")
     generated_at = ai_result_service._valid_timestamp(record.get("generated_at"), "generated_at")
     return {
@@ -424,7 +428,10 @@ app.include_router(technical_indicators_router.router)
 # BK-11 短线市场历史只读查询
 app.include_router(bk11_history_router.router)
 app.include_router(short_term_seal_quality_router.router)
+app.include_router(short_term_theme_research_router.router)
 app.include_router(cohort_identity_router.router)
+app.include_router(evidence_readiness_router.router)
+app.include_router(shortline_research_router.router)
 # Intel Daily Digest
 app.include_router(intel_digest_router.router)
 # NATIVE-INTEL1：Vibe 自有资讯能力（MIT 原生，无 TrendRadar sidecar/runtime）
@@ -2151,6 +2158,9 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
             req.user_request,
         )
         review = prepared["review"]
+        input_basis = daily_review_basis.capture_basis(prepared["context_json"], review)
+        # Keep save identity bound to this request, not a later mutable review.
+        review = {key: review.get(key) for key in ("trade_date", "generated_at", "data_cutoff")}
         messages = prepared["messages"]
     except Exception:  # noqa: BLE001 — no prompt, path, or source error leakage
         raise HTTPException(502, "每日复盘AI上下文准备失败") from None
@@ -2203,6 +2213,7 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
                 markdown,
                 cfg,
                 should_cancel=disconnect_event.is_set,
+                input_basis=input_basis,
             )
             if disconnect_event.is_set():
                 return

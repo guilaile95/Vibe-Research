@@ -1,0 +1,53 @@
+{
+  "v1": {
+    "result_type": "daily_review_ai",
+    "trade_date": "2026-07-31",
+    "schema_version": "daily_review_ai.v1",
+    "payload": {
+      "markdown": "SYNTHETIC_SAVED_REVIEW_v1",
+      "source_data_cutoff": "2026-07-31 15:00:00",
+      "source_review_generated_at": "2026-07-31 15:30:00"
+    },
+    "generated_at": "2026-07-31 16:00:00",
+    "model_provider": "fixture",
+    "model_name": "fixture",
+    "stale": false
+  },
+  "v2": {
+    "result_type": "daily_review_ai",
+    "trade_date": "2026-07-31",
+    "schema_version": "daily_review_ai.v2",
+    "payload": {
+      "input_basis": {
+        "component_statuses": {
+          "breadth": "partial",
+          "concept_boards": "unknown",
+          "emotion": "unknown",
+          "global_indices": "unknown",
+          "indices": "unknown",
+          "industry_boards": "unknown",
+          "region_boards": "unknown",
+          "turnover": "unknown"
+        },
+        "context_schema_version": "daily-review-ai-context-v0.1",
+        "context_sha256": "5e138a2203567b9c1ccba81baf0154a96d2f1924f2bdeca1bc2fe8574e73b7e9",
+        "omitted_component_count": 0,
+        "review_schema_version": "daily-review-v0.1",
+        "review_status": "partial",
+        "schema_version": "daily-review-input-basis.v1",
+        "source_data_cutoff": "2026-07-31 15:00:00",
+        "source_review_generated_at": "2026-07-31 15:30:00",
+        "trade_date": "2026-07-31",
+        "unknown_count": 6,
+        "warning_count": 1
+      },
+      "markdown": "SYNTHETIC_SAVED_REVIEW_v2",
+      "source_data_cutoff": "2026-07-31 15:00:00",
+      "source_review_generated_at": "2026-07-31 15:30:00"
+    },
+    "generated_at": "2026-07-31 16:00:00",
+    "model_provider": "fixture",
+    "model_name": "fixture",
+    "stale": false
+  }
+}

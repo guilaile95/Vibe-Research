@@ -6,6 +6,7 @@ import socket
 
 import next_day_verification as journal
 import short_term_seal_quality_service as seal
+import evidence_readiness_service as readiness
 
 
 def test_fixed_ancillary_responses_match_empty_service_contracts(monkeypatch, tmp_path):
@@ -21,4 +22,5 @@ def test_fixed_ancillary_responses_match_empty_service_contracts(monkeypatch, tm
         monkeypatch.setattr(owner, name, forbidden)
     assert journal.view("2026-10-08") == fixture["journal"]
     assert seal.query_seal_quality("2026-10-08") == fixture["seal"]
+    assert readiness.query_evidence_readiness("2026-10-08") == fixture["readiness"]
     assert not (tmp_path / "not-created").exists()

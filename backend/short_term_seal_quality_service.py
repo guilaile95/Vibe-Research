@@ -16,13 +16,15 @@ from fact_lake_publication_selection import (
     PublicationSelectionMode, PublicationSelectionRequest, select_canonical_publications,
 )
 from fact_lake_store import (
-    FactLakeNotInitializedError, FactLakeSchemaVersionError, open_existing_fact_lake,
+    FactLakeBusyError, FactLakeNotInitializedError, FactLakeSchemaVersionError,
+    open_existing_fact_lake_snapshot,
 )
 import limit_up_shadow as shadow
 from short_term_seal_quality import build_seal_quality_observation
 
 SCHEMA_VERSION = "short-term-seal-quality-archive-v0.1"
 _MESSAGES = {
+    "ARCHIVE_BUSY": "归档正在变化，暂时无法取得稳定只读证据；请稍后重试。",
     "ARCHIVE_NOT_CONNECTED": "封板质量归档证据未连接；不会自动启用采集或请求行情。",
     "ARCHIVE_NOT_INITIALIZED": "配置的归档尚不存在或未初始化；本次只读查询不会创建它。",
     "ARCHIVE_OBSERVATION_MISSING": "这个交易日没有已发布的涨停池归档；不会用其他日期代替。",
@@ -57,7 +59,11 @@ def query_seal_quality(trade_date: str) -> dict[str, Any]:
     if not root:
         return _empty(trade_date, "ARCHIVE_NOT_CONNECTED")
     try:
-        lake = open_existing_fact_lake(root, readonly=True)
+        lake = open_existing_fact_lake_snapshot(root)
+        def finish(result):
+            lake.assert_unchanged()
+            return result
+
         candidates = lake.list_canonical_publications(
             dataset_id=shadow.DATASET_ID, primary_temporal_field=TemporalSemantics.TRADE_DATE,
             primary_temporal_value=trade_date,
@@ -73,14 +79,14 @@ def query_seal_quality(trade_date: str) -> dict[str, Any]:
         )
         ids = selection.selected_publication_ids
         if not ids:
-            return _empty(trade_date, "ARCHIVE_OBSERVATION_MISSING")
+            return finish(_empty(trade_date, "ARCHIVE_OBSERVATION_MISSING"))
         publication = next(item for item in candidates if item.publication_id == ids[0])
         if (
             publication.dataset_contract_revision != shadow.DATASET_CONTRACT_REVISION
             or publication.normalizer_version != shadow.NORMALIZER_VERSION
             or publication.artifact_schema_version != shadow.ARTIFACT_SCHEMA_VERSION
         ):
-            return _empty(trade_date, "ARCHIVE_VERSION_UNSUPPORTED")
+            return finish(_empty(trade_date, "ARCHIVE_VERSION_UNSUPPORTED"))
         verification = shadow.verify_normalization_replay(lake, publication.source_observation_id)
         replay = verification.replay
         observation = replay.observation.observation
@@ -95,7 +101,7 @@ def query_seal_quality(trade_date: str) -> dict[str, Any]:
             or tuple(publication.fact.source_observation_ids) != (observation.observation_id,)
             or publication.fact.canonical_payload != replay.normalized_payload
         ):
-            return _empty(trade_date, "ARCHIVE_VALIDATION_FAILED")
+            return finish(_empty(trade_date, "ARCHIVE_VALIDATION_FAILED"))
         # All metadata comes from the verified persisted receipt, never the URL.
         payload = lake.read_payload(observation.observation_id)
         projection = build_seal_quality_observation(
@@ -106,7 +112,8 @@ def query_seal_quality(trade_date: str) -> dict[str, Any]:
             f"sha256:{projection['raw_payload_sha256']}" != publication.raw_payload_hash
             or projection["source_trade_date"] != trade_date
         ):
-            return _empty(trade_date, "ARCHIVE_VALIDATION_FAILED")
+            return finish(_empty(trade_date, "ARCHIVE_VALIDATION_FAILED"))
+        lake.assert_unchanged()
         return {
             "schema_version": SCHEMA_VERSION, "trade_date": trade_date,
             "status": projection["status"], "reason_codes": projection["reason_codes"],
@@ -120,6 +127,8 @@ def query_seal_quality(trade_date: str) -> dict[str, Any]:
             },
             "projection": projection, "archive_only": True, "ingestion_enabled": False,
         }
+    except FactLakeBusyError:
+        return _empty(trade_date, "ARCHIVE_BUSY")
     except FactLakeNotInitializedError:
         return _empty(trade_date, "ARCHIVE_NOT_INITIALIZED")
     except (FactLakeSchemaVersionError, shadow.LimitUpReplayUnsupportedError):
