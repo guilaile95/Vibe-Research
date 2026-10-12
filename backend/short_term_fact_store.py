@@ -35,6 +35,7 @@ _STORED_SCHEMA_VERSIONS = frozenset({
 _TABLE = "fact_snapshots"
 _LOCK = threading.Lock()
 _MAX_RECENT_TRADE_DATES = 366
+_WINDOWS_STAT_CTIME = os.name == "nt"
 
 _TRADE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _ALLOWED_SESSIONS = frozenset({
@@ -591,6 +592,23 @@ class FactStoreBusyError(FactStoreError):
     """A stable checkpointed image is not available without modifying the store."""
 
 
+def _archive_stat_fingerprint(value):
+    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns,
+            value.st_ctime_ns, getattr(value, "st_birthtime_ns", None))
+
+
+def _archive_descriptor_matches_path(path_identity, descriptor_identity):
+    # CPython 3.12 Windows path stat keeps legacy ctime=birthtime, while fstat
+    # reports ChangeTime. Compare common identities across APIs, then track each
+    # API's complete fingerprint independently before/after and across both reads.
+    # Older runtimes without birthtime retain the original strict comparison.
+    if (_WINDOWS_STAT_CTIME and path_identity[5] is not None
+            and descriptor_identity[5] is not None):
+        return (descriptor_identity[:4] == path_identity[:4]
+                and descriptor_identity[5] == path_identity[5])
+    return descriptor_identity == path_identity
+
+
 def load_final_fact_records_readonly(
     trade_dates: tuple[str, ...], db_path: str | Path | None = None,
 ) -> Dict[str, Any]:
@@ -635,19 +653,28 @@ def load_final_fact_records_readonly(
                     raise FactStoreCorruptedError()
                 if sidecar.exists() and (not sidecar.is_file() or (suffix != "-shm" and sidecar.stat().st_size)):
                     raise FactStoreBusyError()
-            return (source.st_dev, source.st_ino, source.st_size, source.st_mtime_ns, source.st_ctime_ns)
+            return _archive_stat_fingerprint(source)
 
         before = fingerprint()
+        descriptor_baseline = None
         def read_bounded():
+            nonlocal descriptor_baseline
             if any(part.is_symlink() for part in (path, *path.parents)):
                 raise FactStoreCorruptedError()
             fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
             with os.fdopen(fd, "rb") as stream:
                 opened = os.fstat(stream.fileno())
-                identity = (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns)
-                if not stat.S_ISREG(opened.st_mode) or identity != before:
+                identity = _archive_stat_fingerprint(opened)
+                if not stat.S_ISREG(opened.st_mode) or not _archive_descriptor_matches_path(before, identity):
+                    raise FactStoreBusyError()
+                if descriptor_baseline is None:
+                    descriptor_baseline = identity
+                elif identity != descriptor_baseline:
                     raise FactStoreBusyError()
                 value = stream.read(64 * 1024 * 1024 + 1)
+                after_read = os.fstat(stream.fileno())
+                if not stat.S_ISREG(after_read.st_mode) or _archive_stat_fingerprint(after_read) != descriptor_baseline:
+                    raise FactStoreBusyError()
             if len(value) != before[2] or fingerprint() != before:
                 raise FactStoreBusyError()
             return value

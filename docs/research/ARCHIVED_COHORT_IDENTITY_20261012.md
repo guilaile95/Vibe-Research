@@ -79,3 +79,19 @@ check actual current/history JSX bindings and readback validation. Dedicated
 strict browser runtime belongs to the existing authorized CI lane; no local
 browser or provider is run. Real production evidence availability and full
 strong-stock return feedback remain separate, unimplemented requirements.
+
+
+## Windows stat identity portability
+
+CPython 3.12.10's Windows [path-stat compatibility wrapper](https://github.com/python/cpython/blob/v3.12.10/Modules/posixmodule.c#L2009-L2018)
+reports creation time through `st_ctime`, while its [descriptor conversion](https://github.com/python/cpython/blob/v3.12.10/Python/fileutils.c#L1026-L1041)
+reports file change time there. Equality of the entire cross-API tuple can thus
+reject a stable file. Windows cross-API checks keep device, inode, size,
+modification time and explicit birth time; each API's full fingerprint including
+ctime is still checked independently. Descriptor fingerprints are checked before
+and after each bounded read and across both opens; path fingerprints remain
+checked before, between and after reads and after the memory query. Other
+platforms, or runtimes lacking explicit birth time, retain strict tuple matching.
+No timestamps, file IDs, content checks, active-journal guards or write prohibitions
+are removed. Synthetic platform metadata regressions do not replace native
+Windows CI; the native stat pair is included in assertion failure diagnostics.
