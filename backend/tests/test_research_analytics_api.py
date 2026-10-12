@@ -143,7 +143,8 @@ def _assert_browser_fixture_result(mode, actual, expected):
     # 0.31522111033443095: exactly one binary64 ULP. This sole dimensionless
     # statistic is covariance(returns, benchmark) / variance(benchmark), whose
     # floating reduction may round differently across supported runtimes.
-    # Do not approximate cash, fees, returns, counts, currencies, or fingerprints.
+    # Do not approximate cash, fees, counts, currencies, or fingerprints.
+    # Derived returns remain exact except for the observed performance MWR leaf below.
     if mode == 'simulation':
         actual_beta = actual['metrics']['benchmark_beta']['value']
         expected_beta = expected['metrics']['benchmark_beta']['value']
@@ -155,6 +156,21 @@ def _assert_browser_fixture_result(mode, actual, expected):
         )
         actual = copy.deepcopy(actual)
         actual['metrics']['benchmark_beta']['value'] = expected_beta
+    elif mode == 'performance':
+        # Windows CPython 3.12: 0.2097667950891632 vs 0.20976679508916318,
+        # also exactly one ULP. xirr's bounded exp/fsum bisection ends with
+        # expm1(log_rate * span); this leaf is a dimensionless period return.
+        # The annual rate, root contract, valuations, and cash flows stay exact.
+        actual_return = actual['mwr']['period_return']
+        expected_return = expected['mwr']['period_return']
+        assert type(actual_return) is float and type(expected_return) is float
+        assert math.isfinite(actual_return) and math.isfinite(expected_return)
+        assert abs(actual_return - expected_return) <= math.ulp(expected_return), (
+            'performance.result.mwr.period_return differs by more than one ULP',
+            actual_return, expected_return,
+        )
+        actual = copy.deepcopy(actual)
+        actual['mwr']['period_return'] = expected_return
     assert actual == expected, _result_difference_paths(actual, expected, mode + '.result')
 
 
@@ -189,7 +205,7 @@ def test_browser_parity_allows_only_one_beta_ulp_without_mutating_results(toward
     assert actual == before
     # The same numeric path in any other mode has no exemption.
     with pytest.raises(AssertionError):
-        _assert_browser_fixture_result('performance', actual, expected)
+        _assert_browser_fixture_result('scenario', actual, expected)
 
 
 @pytest.mark.parametrize('change', ['two_ulps', 'basis_point', 'nan', 'infinity', 'boolean',
@@ -312,3 +328,41 @@ def test_browser_parity_diagnostics_identify_all_exact_mismatch_paths():
     ]
     with pytest.raises(AssertionError, match=r'cost-comparison.result.rows\[0\].cash'):
         _assert_browser_fixture_result('cost-comparison', actual, expected)
+
+
+@pytest.mark.parametrize('toward', [math.inf, -math.inf])
+def test_browser_parity_allows_only_one_mwr_ulp_without_mutation(toward):
+    expected = _browser_fixture()['performance']['result']
+    actual = copy.deepcopy(expected)
+    actual['mwr']['period_return'] = math.nextafter(expected['mwr']['period_return'], toward)
+    before = copy.deepcopy(actual)
+    _assert_browser_fixture_result('performance', actual, expected)
+    assert actual == before
+    # A ledger-derived response with this same path has no new exemption.
+    with pytest.raises(AssertionError):
+        _assert_browser_fixture_result('ledger-performance', actual, expected)
+
+
+@pytest.mark.parametrize('change', ['two_ulps', 'basis_point', 'nan', 'infinity', 'boolean',
+                                  'valuation_ulp', 'annual_rate_ulp', 'twr_ulp', 'root_contract',
+                                  'currency', 'fingerprint', 'status', 'date', 'curve_count'])
+def test_browser_parity_rejects_mwr_or_adjacent_contract_changes(change):
+    expected = _browser_fixture()['performance']['result']
+    actual = copy.deepcopy(expected)
+    mwr = actual['mwr']
+    if change == 'two_ulps': mwr['period_return'] = math.nextafter(math.nextafter(mwr['period_return'], math.inf), math.inf)
+    elif change == 'basis_point': mwr['period_return'] += 0.0001
+    elif change == 'nan': mwr['period_return'] = math.nan
+    elif change == 'infinity': mwr['period_return'] = math.inf
+    elif change == 'boolean': mwr['period_return'] = True
+    elif change == 'valuation_ulp': actual['curve'][0]['value'] = math.nextafter(actual['curve'][0]['value'], math.inf)
+    elif change == 'annual_rate_ulp': mwr['annual_rate'] = math.nextafter(mwr['annual_rate'], math.inf)
+    elif change == 'twr_ulp': actual['twr'] = math.nextafter(actual['twr'], math.inf)
+    elif change == 'root_contract': mwr['root_contract'] = 'MULTIPLE_ROOTS'
+    elif change == 'currency': actual['currency'] = 'USD'
+    elif change == 'fingerprint': actual['input_fingerprint'] = '0' * 64
+    elif change == 'status': mwr['status'] = 'UNDEFINED'
+    elif change == 'date': actual['curve'][0]['date'] = '2024-01-03'
+    elif change == 'curve_count': actual['curve'].pop()
+    with pytest.raises(AssertionError):
+        _assert_browser_fixture_result('performance', actual, expected)
