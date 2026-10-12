@@ -69,7 +69,7 @@ try {
       if (!url.pathname.startsWith('/api/')) return route.continue();
       if (request.method() !== 'GET') { errors.push(`Unexpected mutation: ${request.method()} ${url.pathname}`); return route.abort(); }
       if (url.pathname === '/api/watchlist') return route.fulfill({ json: { data: {
-        status: 'valid', data: { codes: ['600519', '000001'], updated_at: '2026-10-12 10:00:00' }, etag: 'synthetic-quotes',
+        status: 'valid', data: { codes: ['600519', '000001'], updated_at: '2026-10-12 10:00:00' }, etag: '1111111111111111',
       } } });
       if (url.pathname === '/api/watchlist/anomalies') return route.fulfill({ json: { data: { items: [], unavailable_codes: [] } } });
       if (url.pathname === '/api/native-intel/watchlist-context') return route.fulfill({ json: { data: {

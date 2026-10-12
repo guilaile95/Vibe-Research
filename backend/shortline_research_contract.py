@@ -32,7 +32,7 @@ def day(value):
 
 
 def instant(value):
-    if type(value) is not str:
+    if type(value) is not str or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,6})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)", value):
         raise ValueError("invalid timestamp")
     result = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if result.tzinfo is None or result.utcoffset() is None:

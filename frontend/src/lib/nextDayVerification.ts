@@ -1,14 +1,28 @@
 export type Direction = "up" | "down" | "flat";
-export type Metric = "limit_up_count" | "failed_board_rate";
+export const metricDefinitions = {
+  limit_up_count: { unit: "家", epsilon: 5 }, failed_board_rate: { unit: "0–1 比率", epsilon: 0.05 },
+  highest_board: { unit: "板", epsilon: 0.5 }, promotion_1to2: { unit: "0–1 比率", epsilon: 0.05 },
+  money_effect_median: { unit: "百分点", epsilon: 0.5 }, deep_loss_count: { unit: "家", epsilon: 5 },
+  theme_concentration: { unit: "0–1 比率", epsilon: 0.05 }, market_limit_down: { unit: "家", epsilon: 5 },
+} as const;
+export type Metric = keyof typeof metricDefinitions;
 export interface VerificationCondition { metric: Metric; direction: Direction; reason: string }
 export interface VerificationSummary {
   total: number; decided: number; hit: number; unknown: number; rate: number | null;
   coverage: number | null; baseline_covered: number; expected_rate: number | null; edge: number | null;
 }
-export interface VerificationEvidence {
-  values: Record<Metric, number | null>; source_ids: string[];
+export interface FinalVerificationEvidence {
+  values: Partial<Record<Metric, number | null>>; source_ids: string[];
   fetched_at: string; snapshot_at: string; stored_at: string;
 }
+export interface ResearchVerificationEvidence {
+  schema_version: "verification-research-observation.v1"; trade_date: string;
+  basis: "CURRENT_STORED_POSTHOC"; point_in_time_claim: "SERVER_READ_OBSERVATION_ONLY";
+  snapshot_observed_at: string; values: Partial<Record<Metric, number | null>>;
+  source_receipts: unknown[]; source_receipts_sha256: string; definitions: Record<string, string>;
+}
+export type VerificationEvidence = FinalVerificationEvidence | ResearchVerificationEvidence;
+export function isResearchEvidence(value: VerificationEvidence): value is ResearchVerificationEvidence { return "schema_version" in value; }
 export interface VerificationItem extends VerificationCondition {
   target_date: string | null; actual: Direction | null;
   prior_evidence: VerificationEvidence | null; current_evidence: VerificationEvidence | null;
@@ -18,7 +32,7 @@ export interface VerificationItem extends VerificationCondition {
     from: string; through: string; as_of: string; minimum_samples: number };
 }
 export interface VerificationView {
-  schema_version: "next-day-verification.v0.1"; research_only: true; generated_at: string;
+  schema_version: "next-day-verification.v0.1" | "next-day-verification.v0.2"; research_only: true; generated_at: string;
   trade_date: string; state: "OPEN" | "SEALED" | "CALENDAR_UNKNOWN" | "NOT_YET_OPEN";
   next_trade_date: string | null; seals_at: string | null; revision: number;
   items: VerificationItem[];
@@ -41,7 +55,7 @@ export function resultLabel(item: Pick<VerificationItem, "state" | "verified">):
   return "待核验：日历或事前时间不可确认";
 }
 export function formatMetric(metric: Metric, value: number | null): string {
-  return value === null ? "未知" : metric === "failed_board_rate" ? `${(value * 100).toFixed(1)}%` : `${value} 家`;
+  return value === null ? "未知" : metricDefinitions[metric].unit === "0–1 比率" ? `${(value * 100).toFixed(1)}%` : `${value} ${metricDefinitions[metric].unit}`;
 }
 export function percent(value: number | null): string {
   return value === null ? "—" : `${(value * 100).toFixed(1)}%`;
@@ -78,9 +92,9 @@ const instant = (value: unknown): value is string => typeof value === "string"
   && isoDay(value.slice(0, 10)) && value.slice(11, 13) < "24" && value.slice(14, 16) < "60" && value.slice(17, 19) < "60"
   && Number.isFinite(Date.parse(value));
 const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(x => typeof x === "string");
-const metricValue = (metric: Metric, value: unknown) => value === null || (metric === "limit_up_count" ? count(value) : ratio(value));
+const metricValue = (metric: Metric, value: unknown) => value === null || (metricDefinitions[metric].unit === "百分点" ? finite(value) && value >= -100 && value <= 10000 : metricDefinitions[metric].unit === "0–1 比率" ? ratio(value) : count(value));
 const direction = (value: unknown): value is Direction => value === "up" || value === "down" || value === "flat";
-const metric = (value: unknown): value is Metric => value === "limit_up_count" || value === "failed_board_rate";
+const metric = (value: unknown): value is Metric => typeof value === "string" && Object.prototype.hasOwnProperty.call(metricDefinitions, value);
 // Canonical UTC strings preserve the service's microseconds, unlike Date.parse.
 const stamp = (value: string) => {
   const [seconds, fraction = ""] = value.replace(/(?:Z|\+00:00)$/, "").split(".");
@@ -100,6 +114,13 @@ function validSummary(value: unknown): value is VerificationSummary {
 
 function validEvidence(value: unknown, day: string | null, asOf: string): value is VerificationEvidence | null {
   if (value === null) return true;
+  if (record(value) && value.schema_version === "verification-research-observation.v1") {
+    return value.trade_date === day && value.basis === "CURRENT_STORED_POSTHOC" && value.point_in_time_claim === "SERVER_READ_OBSERVATION_ONLY"
+      && instant(value.snapshot_observed_at) && stamp(value.snapshot_observed_at) <= stamp(asOf)
+      && record(value.values) && Object.keys(metricDefinitions).filter(k => k !== "limit_up_count" && k !== "failed_board_rate").every(k => metricValue(k as Metric, (value.values as Record<string, unknown>)[k]))
+      && Array.isArray(value.source_receipts) && value.source_receipts.length > 0
+      && typeof value.source_receipts_sha256 === "string" && /^[a-f0-9]{64}$/.test(value.source_receipts_sha256) && record(value.definitions);
+  }
   if (!day || !record(value) || !record(value.values) || !strings(value.source_ids)
     || !value.source_ids.length || value.source_ids.some(x => !x.trim())
     || !instant(value.fetched_at) || !instant(value.snapshot_at) || !instant(value.stored_at)) return false;
@@ -112,10 +133,10 @@ function validEvidence(value: unknown, day: string | null, asOf: string): value 
  * This checks readback consistency; it never derives a new result or changes authority.
  */
 export function isVerificationViewForDate(value: unknown, day: string): value is VerificationView {
-  if (!record(value) || !isoDay(day) || value.trade_date !== day || value.schema_version !== "next-day-verification.v0.1"
+  if (!record(value) || !isoDay(day) || value.trade_date !== day || !["next-day-verification.v0.1", "next-day-verification.v0.2"].includes(String(value.schema_version))
     || value.research_only !== true || !instant(value.generated_at) || !count(value.revision)
-    || !strings(value.limitations) || !Array.isArray(value.metrics) || value.metrics.length !== 2
-    || !Array.isArray(value.items) || value.items.length > 2 || !validSummary(value.summary)
+    || !strings(value.limitations) || !Array.isArray(value.metrics) || value.metrics.length !== (value.schema_version === "next-day-verification.v0.1" ? 2 : 8)
+    || !Array.isArray(value.items) || value.items.length > (value.schema_version === "next-day-verification.v0.1" ? 2 : 8) || !validSummary(value.summary)
     || !record(value.history) || value.history.through !== day || !validSummary(value.history.summary)
     || !(value.history.from === null || (isoDay(value.history.from) && value.history.from <= day))) return false;
   const known = value.state === "OPEN" || value.state === "SEALED" || value.state === "NOT_YET_OPEN";
@@ -128,7 +149,7 @@ export function isVerificationViewForDate(value: unknown, day: string): value is
   const metricKeys = new Set<unknown>();
   for (const m of value.metrics) {
     if (!record(m) || !metric(m.key) || metricKeys.has(m.key) || typeof m.label !== "string" || !m.label.trim()
-      || m.unit !== (m.key === "limit_up_count" ? "家" : "0–1 比率") || m.epsilon !== (m.key === "limit_up_count" ? 5 : 0.05)) return false;
+      || m.unit !== metricDefinitions[m.key].unit || m.epsilon !== metricDefinitions[m.key].epsilon) return false;
     metricKeys.add(m.key);
   }
   const seen = new Set<Metric>();
@@ -141,18 +162,24 @@ export function isVerificationViewForDate(value: unknown, day: string): value is
       || !validEvidence(item.current_evidence, value.next_trade_date as string | null, value.generated_at)) return false;
     if (item.prior_value !== (item.prior_evidence?.values[item.metric] ?? null)
       || item.current_value !== (item.current_evidence?.values[item.metric] ?? null)) return false;
+    const legacy = item.metric === "limit_up_count" || item.metric === "failed_board_rate";
+    for (const evidence of [item.prior_evidence, item.current_evidence]) {
+      if (evidence && isResearchEvidence(evidence) === legacy) return false;
+    }
+    if (item.prior_evidence && isResearchEvidence(item.prior_evidence) && stamp(item.prior_evidence.snapshot_observed_at) !== stamp(item.written_at)) return false;
     const b = item.baseline;
     if (!record(b) || !count(b.samples) || !count(b.possible_pairs) || b.samples > b.possible_pairs || b.possible_pairs > 60
       || b.minimum_samples !== 12 || !nullableRatio(b.rate) || (b.rate === null) !== (b.samples < 12)
       || !sameNumber(b.coverage, b.possible_pairs ? b.samples / b.possible_pairs : null)
       || !isoDay(b.from) || b.from > day || b.through !== day || !instant(b.as_of)
       || stamp(b.as_of) !== stamp(item.written_at)) return false;
+    if (!legacy && (b.samples !== 0 || b.possible_pairs !== 0)) return false;
     const priorValid = known && stamp(item.written_at) < stamp(value.seals_at as string);
     const mature = known && stamp(value.generated_at) >= closeAt(value.next_trade_date as string);
     const before = item.prior_value as number | null, after = item.current_value as number | null;
     const difference = before === null || after === null ? null : after - before;
     const expectedActual = !priorValid || !mature || difference === null ? null
-      : Math.abs(difference) <= (item.metric === "limit_up_count" ? 5 : 0.05) + 1e-9 ? "flat" : difference > 0 ? "up" : "down";
+      : Math.abs(difference) <= metricDefinitions[item.metric].epsilon + 1e-9 ? "flat" : difference > 0 ? "up" : "down";
     const expectedState = !known ? "CALENDAR_UNKNOWN" : !priorValid ? "INVALID_PRIOR_TIME" : !mature ? "PENDING_CLOSE" : expectedActual === null ? "NO_EVIDENCE" : "VERIFIED";
     if (item.state !== expectedState || item.actual !== expectedActual) return false;
     if (item.verified !== (expectedActual === null ? null : expectedActual === item.direction)) return false;

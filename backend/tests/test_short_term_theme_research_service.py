@@ -87,7 +87,7 @@ def test_real_archive_registered_api_golden_immutable(archive, http_get):
     assert tree(root) == before
     assert result['projection']['days'][0]['source']['themes'][0]['raw_payload_hash'].startswith('sha256:')
     assert result['projection']['days'][0]['source']['pool'][0]['observation_id']
-    expected = json.loads((Path(__file__).parent/'fixtures/theme-research-golden.json').read_text())
+    expected = json.loads((Path(__file__).parent/'fixtures/theme-research-golden.json').read_text(encoding="utf-8"))
     assert public_golden(result) == expected
 
 
@@ -136,8 +136,8 @@ def test_real_synthetic_outcome_mix_fails_closed(kind, monkeypatch, tmp_path):
 
 
 def test_full_page_unavailable_fixtures_match_actual_registered_api(http_get):
-    fixture = json.loads((Path(__file__).parents[2]/'frontend/tests/fixtures/theme-research-unavailable.json').read_text())
-    assert set(fixture) == {'2026-07-31', '2026-10-08'}
+    fixture = json.loads((Path(__file__).parents[2]/'frontend/tests/fixtures/theme-research-unavailable.json').read_text(encoding="utf-8"))
+    assert set(fixture) == {'2026-07-31', '2026-10-08', '2026-07-30', '2026-07-29'}
     for day, expected in fixture.items():
         response = http_get('/api/market/theme-research?trade_date='+day)
         assert response.status_code == 200
@@ -149,8 +149,8 @@ def test_sibling_shortline_full_page_fixtures_match_actual_router(http_get, monk
     from shortline_research_router import router
     isolated_app = FastAPI(); isolated_app.include_router(router)
     monkeypatch.setattr(app, 'app', isolated_app)
-    fixture = json.loads((Path(__file__).parents[2]/'frontend/tests/fixtures/shortline-research-unavailable.json').read_text())
-    assert set(fixture) == {'2026-07-31', '2026-10-08'}
+    fixture = json.loads((Path(__file__).parents[2]/'frontend/tests/fixtures/shortline-research-unavailable.json').read_text(encoding="utf-8"))
+    assert set(fixture) == {'2026-07-31', '2026-10-08', '2026-07-30', '2026-07-29'}
     for day, expected in fixture.items():
         response = http_get('/api/market/shortline-research?trade_date='+day)
         assert response.status_code == 200

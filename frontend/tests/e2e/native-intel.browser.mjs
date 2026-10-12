@@ -105,7 +105,7 @@ try {
     return json(route, {
       status: watchMode === "corrupted" ? "corrupted" : "valid",
       data: watchMode === "corrupted" ? null : { codes: watchMode === "empty" ? [] : ["000001", "000002"], updated_at: "2026-09-30T10:00:00Z" },
-      etag: watchMode === "corrupted" ? null : "synthetic-watchlist",
+      etag: watchMode === "corrupted" ? null : "1111111111111111",
     });
   });
   await page.route("**/api/quote?**", (route) => json(route, {}));

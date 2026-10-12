@@ -315,3 +315,15 @@ def test_price_bands_use_source_prices_not_stock_name_or_prefix(tmp_path):
     result = M.daily_observation(inputs)
     assert result["price_limit_bands"]["share_10"] is None
     assert result["price_limit_bands"]["counts"]["unknown"] == 1
+
+
+@pytest.mark.parametrize("stamp", ["2026-07-30T12:00:00+01:60", "2026-07-30T24:00:00Z", "2026-02-30T12:00:00Z", "2026-07-30T12:00:00+24:00", "2026-07-30T12:00:00", "0000-07-30T12:00:00Z"])
+def test_captured_timestamp_rejects_normalized_invalid_fields(stamp):
+    import shortline_research_contract as contract
+    with pytest.raises(ValueError):
+        contract.instant(stamp)
+
+
+def test_captured_timestamp_preserves_valid_offset_microseconds():
+    import shortline_research_contract as contract
+    assert contract.utc("2026-07-30T15:00:00.000001+08:00") == "2026-07-30T07:00:00.000001Z"

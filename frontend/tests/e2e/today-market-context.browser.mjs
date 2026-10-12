@@ -270,7 +270,7 @@ async function handleApi(route) {
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [], count: 0, limit: 20, offset: 0 }) });
   }
   if (pathName === "/api/watchlist") {
-    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: {status: "valid", data: {codes: scenario === "daily-populated" ? ["600519", "000001", "000002", "300750"] : [], updated_at: now}, etag: "today-e2e"} }) });
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: {status: "valid", data: {codes: scenario === "daily-populated" ? ["600519", "000001", "000002", "300750"] : [], updated_at: now}, etag: "1111111111111111"} }) });
   }
   if (pathName === "/api/quote") {
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: Object.fromEntries(["600519", "000001", "000002", "300750"].map((code) => [code, {code, name: `样本 ${code}`, price: 1456.78, change_pct: 1.25}])) }) });

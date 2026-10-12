@@ -757,7 +757,7 @@ try {
       return;
     }
     if (pathname === "/api/watchlist" && request.method() === "GET") {
-      await route.fulfill(ok({ status: "valid", data: { codes: ["600519"], updated_at: "2026-08-30T00:00:00Z" }, etag: "fixture" }));
+      await route.fulfill(ok({ status: "valid", data: { codes: ["600519"], updated_at: "2026-08-30T00:00:00Z" }, etag: "1111111111111111" }));
       return;
     }
     if (pathname === "/api/watchlist/anomalies" && request.method() === "GET") {

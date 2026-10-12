@@ -7,6 +7,7 @@ import socket
 import next_day_verification as journal
 import short_term_seal_quality_service as seal
 import evidence_readiness_service as readiness
+import observation_workflows as observations
 
 
 def test_fixed_ancillary_responses_match_empty_service_contracts(monkeypatch, tmp_path):
@@ -14,6 +15,7 @@ def test_fixed_ancillary_responses_match_empty_service_contracts(monkeypatch, tm
     monkeypatch.setenv("VR_DATA_DIR", str(tmp_path / "not-created"))
     monkeypatch.delenv("VR_FACT_LAKE_ROOT", raising=False)
     monkeypatch.setattr(journal, "_now", lambda: datetime(2026, 10, 8, 8, tzinfo=timezone.utc))
+    monkeypatch.setattr(observations, "_now", lambda: datetime(2026, 10, 8, 8, tzinfo=timezone.utc))
     # Explicitly unavailable synthetic calendar, not a statement about Oct 8.
     monkeypatch.setattr(journal.trade_calendar, "next_trade_date", lambda day: None)
     def forbidden(*args, **kwargs):
@@ -23,4 +25,5 @@ def test_fixed_ancillary_responses_match_empty_service_contracts(monkeypatch, tm
     assert journal.view("2026-10-08") == fixture["journal"]
     assert seal.query_seal_quality("2026-10-08") == fixture["seal"]
     assert readiness.query_evidence_readiness("2026-10-08") == fixture["readiness"]
+    assert observations.view("2026-10-08") == fixture["observations"]
     assert not (tmp_path / "not-created").exists()

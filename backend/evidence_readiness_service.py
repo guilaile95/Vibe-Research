@@ -36,14 +36,14 @@ def _journal_readiness(day, now):
     try:
         records = store.load_final_fact_records_readonly((day,))
         if day not in records:
-            return "missing", ["ARCHIVE_MISSING"], {key: False for key in journal.METRICS}
+            return "missing", ["ARCHIVE_MISSING"], {key: False for key in journal.LEGACY_METRICS}
         fact = journal._fact_record(records[day], day, now)
-        metrics = {key: journal._value(fact, key) is not None for key in journal.METRICS}
+        metrics = {key: journal._value(fact, key) is not None for key in journal.LEGACY_METRICS}
         return ("ready", [], metrics) if any(metrics.values()) else ("ineligible", ["NO_EVIDENCE"], metrics)
     except store.FactStoreBusyError:
-        return "busy", ["ARCHIVE_BUSY"], {key: False for key in journal.METRICS}
+        return "busy", ["ARCHIVE_BUSY"], {key: False for key in journal.LEGACY_METRICS}
     except (store.FactStoreError, ValueError, TypeError, KeyError, OverflowError, OSError):
-        return "ineligible", ["ARCHIVE_INELIGIBLE"], {key: False for key in journal.METRICS}
+        return "ineligible", ["ARCHIVE_INELIGIBLE"], {key: False for key in journal.LEGACY_METRICS}
 
 
 def query_evidence_readiness(trade_date):
@@ -57,7 +57,7 @@ def query_evidence_readiness(trade_date):
     if sessions is None or day not in sessions:
         reason = "CALENDAR_UNAVAILABLE" if sessions is None else "NON_TRADING_DATE"
         features = [_item(key, "ineligible", [reason], dates[key]) for key in _FEATURES]
-        metrics = {key: False for key in journal.METRICS}
+        metrics = {key: False for key in journal.LEGACY_METRICS}
     else:
         quality = seal.query_seal_quality(day)
         reasons = quality["reason_codes"]
@@ -72,7 +72,7 @@ def query_evidence_readiness(trade_date):
                   "missing" if "ARCHIVE_MISSING" in reasons else "ineligible")
         features.append(_item("cohort_identity", status, reasons, dates["cohort_identity"]))
         if boundary["state"] == "CALENDAR_UNKNOWN":
-            status, reasons, metrics = "ineligible", ["CALENDAR_UNKNOWN"], {key: False for key in journal.METRICS}
+            status, reasons, metrics = "ineligible", ["CALENDAR_UNKNOWN"], {key: False for key in journal.LEGACY_METRICS}
         else:
             status, reasons, metrics = _journal_readiness(day, now)
         features.append(_item("next_day_verification", status, reasons, dates["next_day_verification"]))

@@ -58,7 +58,7 @@ test("authoritative load exposes a rejected migration while retaining both sourc
   t.mock.method(globalThis, "fetch", async (url: unknown) => {
     requests.push(String(url));
     if (String(url) === "/api/watchlist") return new Response(JSON.stringify({ data: {
-      status: "valid", data: { codes: ["600000"], updated_at: "test" }, etag: "current",
+      status: "valid", data: { codes: ["600000"], updated_at: "test" }, etag: "0123456789abcdef",
     } }));
     assert.equal(String(url), "/api/watchlist/import-local");
     return new Response(JSON.stringify({ detail: "关注股超过上限 50（去重后 51 只）" }), { status: 400 });

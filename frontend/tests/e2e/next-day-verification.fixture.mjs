@@ -2,6 +2,8 @@
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 
+const observationPreview = JSON.parse(readFileSync(new URL("../fixtures/observation-workflows-preview.json", import.meta.url), "utf8"));
+const observations = JSON.parse(readFileSync(new URL("../fixtures/observation-workflows-empty.json", import.meta.url), "utf8"));
 export const golden = JSON.parse(readFileSync(new URL("../fixtures/next-day-verification.json", import.meta.url), "utf8"));
 const shortlineGolden = JSON.parse(readFileSync(new URL("../fixtures/shortline-research-unavailable.json", import.meta.url), "utf8"));
 const themeGolden = JSON.parse(readFileSync(new URL("../fixtures/theme-research-unavailable.json", import.meta.url), "utf8"));
@@ -10,6 +12,7 @@ export const aiBasisGolden = JSON.parse(readFileSync(new URL("../fixtures/daily-
 export const integratedGolden = JSON.parse(readFileSync(new URL("../fixtures/daily-review-integrated.json", import.meta.url), "utf8"));
 export const unavailableReadiness = JSON.parse(readFileSync(new URL("../fixtures/daily-review-readiness-unavailable.json", import.meta.url), "utf8"));
 export const HISTORY_DAYS = Object.freeze(["2026-07-30", "2026-07-29"]);
+const segmentedVersions = JSON.parse(readFileSync(new URL("../fixtures/shortline-review-empty-versions.json", import.meta.url), "utf8"));
 export const DAY = "2026-07-31";
 export const CLOCK = "2026-08-03T00:00:00Z";
 export const JOURNAL_VIEWPORTS = Object.freeze([
@@ -19,7 +22,7 @@ export const JOURNAL_VIEWPORTS = Object.freeze([
 export const json = (body, status = 200) => ({ kind: "json", status, body });
 const copy = (value) => structuredClone(value);
 
-export function createFixture(origin, { withSealQuality = false, fullReview = false, aiMode = fullReview ? "v2" : null } = {}) {
+export function createFixture(origin, { withSealQuality = false, fullReview = false, withObservationPreview = false, aiMode = fullReview ? "v2" : null } = {}) {
   const requests = [];
   const violations = [];
   const writes = [];
@@ -27,6 +30,7 @@ export function createFixture(origin, { withSealQuality = false, fullReview = fa
   const views = new Map([[DAY, "open_empty"], ["2026-08-03", "cold"], ["2026-07-30", "older"], ["2026-12-31", "calendar_unknown"]]);
   const getErrors = new Map();
   const malformedReads = new Map();
+  const malformedObservationReads = new Map();
   const malformedReadinessReads = new Map();
   const journalValue = (key) => fullReview && key === "open_saved" ? integratedGolden[DAY]["journal-saved"] : golden[key];
   const review = (day) => ({ schema_version: "daily-review-v0.1", status: "partial", trade_date: day,
@@ -38,6 +42,7 @@ export function createFixture(origin, { withSealQuality = false, fullReview = fa
     requests, violations, writes, expectedWrites,
     setView: (day, key) => views.set(day, key),
     failGet: (day) => getErrors.set(day, true),
+    malformedObservation: (day, value) => malformedObservationReads.set(day, copy(value)),
     malformedGet: (day, value) => malformedReads.set(day, copy(value)),
     malformedReadiness: (day, value) => malformedReadinessReads.set(day, copy(value)),
     expectSave: (body, responseKey, status = 200, responseOverride) => expectedWrites.push({ body, responseKey, status, responseOverride }),
@@ -57,12 +62,24 @@ export function createFixture(origin, { withSealQuality = false, fullReview = fa
           ? json({ data: copy(expected.responseOverride === undefined ? journalValue(expected.responseKey) : expected.responseOverride) })
           : json({ detail: expected.status === 409 ? "记录已改变，请重新读取后再保存" : "验证记录不可写入，未保存修改" }, expected.status);
       }
+      if (pathname === "/api/shortline-review/versions") {
+        const day = (fullReview ? [DAY, ...HISTORY_DAYS] : [DAY]).find(day => url.search === `?trade_date=${day}&mode=daily`);
+        if (!withSealQuality || !day) return deny("unexpected segmented-review versions request");
+        return json(copy(segmentedVersions[day]));
+      }
       if (pathname.startsWith("/api/next-day-verification/")) {
         const day = pathname.slice("/api/next-day-verification/".length);
         if (url.search || !views.has(day)) return deny(`unexpected journal GET ${day}${url.search}`);
         if (getErrors.get(day)) { getErrors.delete(day); return json({ detail: "验证记录不可读取，已停止操作" }, 503); }
         if (malformedReads.has(day)) { const value = malformedReads.get(day); malformedReads.delete(day); return json({ data: copy(value) }); }
         return json({ data: copy(journalValue(views.get(day))) });
+      }
+      if (pathname.startsWith("/api/observation-workflows/")) {
+        const day = pathname.slice("/api/observation-workflows/".length);
+        if (day === "preview" && withObservationPreview && !url.search) return json({ data: copy(observationPreview) });
+        if (url.search || !Object.prototype.hasOwnProperty.call(observations, day)) return deny("unexpected observation date or query");
+        if (malformedObservationReads.has(day)) { const value = malformedObservationReads.get(day); malformedObservationReads.delete(day); return json({ data: value }); }
+        return json({ data: copy(observations[day]) });
       }
       if (pathname === "/api/market/evidence-readiness") {
         const day = (fullReview ? [DAY, ...HISTORY_DAYS] : [DAY]).find(day => url.search === `?trade_date=${day}`);
@@ -84,12 +101,14 @@ export function createFixture(origin, { withSealQuality = false, fullReview = fa
         return json({ data: copy(snapshot) });
       }
       if (pathname === "/api/market/shortline-research") {
-        if (!withSealQuality || url.search !== `?trade_date=${DAY}`) return deny("unexpected shortline-research request");
-        return json({ data: copy(shortlineGolden[DAY]) });
+        const day = (fullReview ? [DAY, ...HISTORY_DAYS] : [DAY]).find(day => url.search === `?trade_date=${day}`);
+        if (!withSealQuality || !day) return deny("unexpected shortline-research request");
+        return json({ data: copy(shortlineGolden[day]) });
       }
       if (pathname === "/api/market/theme-research") {
-        if (!withSealQuality || url.search !== `?trade_date=${DAY}`) return deny("unexpected theme-research request");
-        return json({ data: copy(themeGolden[DAY]) });
+        const day = (fullReview ? [DAY, ...HISTORY_DAYS] : [DAY]).find(day => url.search === `?trade_date=${day}`);
+        if (!withSealQuality || !day) return deny("unexpected theme-research request");
+        return json({ data: copy(themeGolden[day]) });
       }
       if (pathname === "/api/market/cohort-identity") {
         if (!withSealQuality || url.search !== `?trade_date=${DAY}`) return deny("unexpected cohort-identity request");
@@ -119,7 +138,7 @@ export function createFixture(origin, { withSealQuality = false, fullReview = fa
         generated_at: CLOCK, data_cutoff: null, warnings: [], data_health: { components: {} },
       }, cache_meta: { source: "persisted", stale: false, refreshing: false } });
       if (pathname === "/api/daily-review/history") return json({ data: { items: fullReview ? snapshots.map(({ review, ...item }) => item) : [], count: fullReview ? snapshots.length : 0, limit: 20, offset: 0 } });
-      if (pathname === "/api/watchlist") return json({ data: { status: "valid", data: { codes: [], updated_at: CLOCK }, etag: "synthetic" } });
+      if (pathname === "/api/watchlist") return json({ data: { status: "valid", data: { codes: [], updated_at: CLOCK }, etag: "1111111111111111" } });
       if (pathname === "/api/ai-results/daily_review_ai" && fullReview && aiMode) {
         if (url.search !== `?trade_date=${DAY}`) return deny("unexpected saved AI basis date");
         const value = copy(aiBasisGolden[aiMode === "v1" ? "v1" : "v2"]);

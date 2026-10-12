@@ -1,0 +1,407 @@
+{
+  "2026-07-31": {
+    "schema_version": "observation-workflows.v1",
+    "trade_date": "2026-07-31",
+    "calendar_state": "TRADING_DAY",
+    "generated_at": "2026-08-03T00:00:00.000000+00:00",
+    "collector_enabled": false,
+    "scheduler_enabled": false,
+    "external_notifications_enabled": false,
+    "research_only": true,
+    "slots": [
+      {
+        "slot": "09:25",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-31T01:29:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "09:35",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-31T01:43:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "10:00",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-31T02:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "11:30",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-31T03:38:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "14:00",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-31T06:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "15:00",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-31T07:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      }
+    ],
+    "events": [],
+    "event_coverage": {
+      "total": 0,
+      "returned": 0,
+      "has_more": false
+    },
+    "tasks": [],
+    "due": [],
+    "due_coverage": {
+      "eligible_plans": 0,
+      "evaluated_plans": 0,
+      "has_more": false,
+      "order": "latest_set_date_first",
+      "maximum": 20
+    },
+    "schedule": {
+      "premarket": "09:05",
+      "close_digest": "15:40",
+      "watch_changes": "16:15",
+      "verification_due": "16:30"
+    }
+  },
+  "2026-07-30": {
+    "schema_version": "observation-workflows.v1",
+    "trade_date": "2026-07-30",
+    "calendar_state": "TRADING_DAY",
+    "generated_at": "2026-08-03T00:00:00.000000+00:00",
+    "collector_enabled": false,
+    "scheduler_enabled": false,
+    "external_notifications_enabled": false,
+    "research_only": true,
+    "slots": [
+      {
+        "slot": "09:25",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-30T01:29:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "09:35",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-30T01:43:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "10:00",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-30T02:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "11:30",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-30T03:38:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "14:00",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-30T06:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "15:00",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-30T07:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      }
+    ],
+    "events": [],
+    "event_coverage": {
+      "total": 0,
+      "returned": 0,
+      "has_more": false
+    },
+    "tasks": [],
+    "due": [],
+    "due_coverage": {
+      "eligible_plans": 0,
+      "evaluated_plans": 0,
+      "has_more": false,
+      "order": "latest_set_date_first",
+      "maximum": 20
+    },
+    "schedule": {
+      "premarket": "09:05",
+      "close_digest": "15:40",
+      "watch_changes": "16:15",
+      "verification_due": "16:30"
+    }
+  },
+  "2026-07-29": {
+    "schema_version": "observation-workflows.v1",
+    "trade_date": "2026-07-29",
+    "calendar_state": "TRADING_DAY",
+    "generated_at": "2026-08-03T00:00:00.000000+00:00",
+    "collector_enabled": false,
+    "scheduler_enabled": false,
+    "external_notifications_enabled": false,
+    "research_only": true,
+    "slots": [
+      {
+        "slot": "09:25",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-29T01:29:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "09:35",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-29T01:43:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "10:00",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-29T02:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "11:30",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-29T03:38:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "14:00",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-29T06:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "15:00",
+        "state": "MISSING",
+        "cutoff_at": "2026-07-29T07:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      }
+    ],
+    "events": [],
+    "event_coverage": {
+      "total": 0,
+      "returned": 0,
+      "has_more": false
+    },
+    "tasks": [],
+    "due": [],
+    "due_coverage": {
+      "eligible_plans": 0,
+      "evaluated_plans": 0,
+      "has_more": false,
+      "order": "latest_set_date_first",
+      "maximum": 20
+    },
+    "schedule": {
+      "premarket": "09:05",
+      "close_digest": "15:40",
+      "watch_changes": "16:15",
+      "verification_due": "16:30"
+    }
+  },
+  "2026-08-03": {
+    "schema_version": "observation-workflows.v1",
+    "trade_date": "2026-08-03",
+    "calendar_state": "TRADING_DAY",
+    "generated_at": "2026-08-03T00:00:00.000000+00:00",
+    "collector_enabled": false,
+    "scheduler_enabled": false,
+    "external_notifications_enabled": false,
+    "research_only": true,
+    "slots": [
+      {
+        "slot": "09:25",
+        "state": "UPCOMING",
+        "cutoff_at": "2026-08-03T01:29:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "09:35",
+        "state": "UPCOMING",
+        "cutoff_at": "2026-08-03T01:43:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "10:00",
+        "state": "UPCOMING",
+        "cutoff_at": "2026-08-03T02:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "11:30",
+        "state": "UPCOMING",
+        "cutoff_at": "2026-08-03T03:38:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "14:00",
+        "state": "UPCOMING",
+        "cutoff_at": "2026-08-03T06:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "15:00",
+        "state": "UPCOMING",
+        "cutoff_at": "2026-08-03T07:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      }
+    ],
+    "events": [],
+    "event_coverage": {
+      "total": 0,
+      "returned": 0,
+      "has_more": false
+    },
+    "tasks": [],
+    "due": [],
+    "due_coverage": {
+      "eligible_plans": 0,
+      "evaluated_plans": 0,
+      "has_more": false,
+      "order": "latest_set_date_first",
+      "maximum": 20
+    },
+    "schedule": {
+      "premarket": "09:05",
+      "close_digest": "15:40",
+      "watch_changes": "16:15",
+      "verification_due": "16:30"
+    }
+  },
+  "2026-12-31": {
+    "schema_version": "observation-workflows.v1",
+    "trade_date": "2026-12-31",
+    "calendar_state": "TRADING_DAY",
+    "generated_at": "2026-08-03T00:00:00.000000+00:00",
+    "collector_enabled": false,
+    "scheduler_enabled": false,
+    "external_notifications_enabled": false,
+    "research_only": true,
+    "slots": [
+      {
+        "slot": "09:25",
+        "state": "UPCOMING",
+        "cutoff_at": "2026-12-31T01:29:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "09:35",
+        "state": "UPCOMING",
+        "cutoff_at": "2026-12-31T01:43:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "10:00",
+        "state": "UPCOMING",
+        "cutoff_at": "2026-12-31T02:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "11:30",
+        "state": "UPCOMING",
+        "cutoff_at": "2026-12-31T03:38:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "14:00",
+        "state": "UPCOMING",
+        "cutoff_at": "2026-12-31T06:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "15:00",
+        "state": "UPCOMING",
+        "cutoff_at": "2026-12-31T07:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      }
+    ],
+    "events": [],
+    "event_coverage": {
+      "total": 0,
+      "returned": 0,
+      "has_more": false
+    },
+    "tasks": [],
+    "due": [],
+    "due_coverage": {
+      "eligible_plans": 0,
+      "evaluated_plans": 0,
+      "has_more": false,
+      "order": "latest_set_date_first",
+      "maximum": 20
+    },
+    "schedule": {
+      "premarket": "09:05",
+      "close_digest": "15:40",
+      "watch_changes": "16:15",
+      "verification_due": "16:30"
+    }
+  }
+}

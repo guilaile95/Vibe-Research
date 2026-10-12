@@ -103,7 +103,7 @@ def replay_capture(lake, stored):
         raise ValueError("receipt identity mismatch")
     if not C.instant(observation.fetched_at) <= C.instant(envelope.get("locally_received_at")) <= datetime.now(timezone.utc):
         raise ValueError("receipt timestamp mismatch")
-    raw = lake.read_payload(observation.observation_id)
+    raw = lake.read_payload(observation.observation_id, max_payload_bytes=C.MAX_BYTES)
     if raw is None or payload_sha256(raw) != observation.source_payload_hash:
         raise ValueError("raw receipt mismatch")
     if envelope.get("normalization_failed") is True:

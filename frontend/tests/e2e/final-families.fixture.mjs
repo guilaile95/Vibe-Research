@@ -6,6 +6,7 @@ const ancillaryGolden = JSON.parse(readFileSync(new URL("../fixtures/final-famil
 const shortlineGolden = JSON.parse(readFileSync(new URL("../fixtures/shortline-research-unavailable.json", import.meta.url), "utf8"));
 const themeGolden = JSON.parse(readFileSync(new URL("../fixtures/theme-research-unavailable.json", import.meta.url), "utf8"));
 const cohortGolden = JSON.parse(readFileSync(new URL("../fixtures/cohort-identity-unavailable.json", import.meta.url), "utf8"));
+const segmentedVersions = JSON.parse(readFileSync(new URL("../fixtures/shortline-review-empty-versions.json", import.meta.url), "utf8"));
 export const ANCILLARY_TRADE_DATE = "2026-10-08";
 export const ANCILLARY_CLOCK = ancillaryGolden.clock;
 
@@ -21,6 +22,8 @@ export function debateEvents(rounds, mode = "complete") {
 }
 export function ancillaryReply(method, path, search = "") {
   if (method !== "GET") return null;
+  if (path === `/api/observation-workflows/${ANCILLARY_TRADE_DATE}` && search === "") return { data: structuredClone(ancillaryGolden.observations) };
+  if (path === "/api/shortline-review/versions" && search === `?trade_date=${ANCILLARY_TRADE_DATE}&mode=daily`) return structuredClone(segmentedVersions[ANCILLARY_TRADE_DATE]);
   if (path === `/api/next-day-verification/${ANCILLARY_TRADE_DATE}` && search === "") return { data: structuredClone(ancillaryGolden.journal) };
   if (path === "/api/market/shortline-research" && search === `?trade_date=${ANCILLARY_TRADE_DATE}`) return { data: structuredClone(shortlineGolden[ANCILLARY_TRADE_DATE]) };
   if (path === "/api/market/theme-research" && search === `?trade_date=${ANCILLARY_TRADE_DATE}`) return { data: structuredClone(themeGolden[ANCILLARY_TRADE_DATE]) };
@@ -30,7 +33,7 @@ export function ancillaryReply(method, path, search = "") {
   const common = {
     "/api/daily-review": { data: { schema_version: "daily-review-v0.1", trade_date: "2026-10-08", generated_at: "2026-10-08 16:00:00", status: "normal", warnings: [], data_health: { components: {} }, market_environment: { indices: { status: "normal", data: [] }, global_indices: { status: "normal", data: [] }, breadth: { status: "unavailable", data: {} } }, sector_rotation: { industry: { status: "normal", list: [] }, concept: { status: "normal", list: [] }, region: { status: "normal", list: [] }, highlights: {} }, short_term_emotion: { status: "unavailable", data: {} }, capital_activity: { amount_top: [], high_turnover: [], turnover_top: [] } }, cache_meta: { stale: false, refreshing: false } },
     "/api/market/northbound": { status: "unavailable", data: null, limitations: [], warnings: [] },
-    "/api/watchlist": { data: { status: "valid", data: { codes: [], updated_at: "synthetic" }, etag: "synthetic" } },
+    "/api/watchlist": { data: { status: "valid", data: { codes: [], updated_at: "synthetic" }, etag: "1111111111111111" } },
     "/api/native-intel/status": { status: "normal", sources: [], store: { item_count: 0 } },
     "/api/radar": { data: { industries: [], stats: { total_sources: 0 }, generated_at: null } },
     "/api/decision-inbox": { data: { schema_version: "decision_inbox_runtime.v0.1", as_of: "2026-10-08T00:00:00Z", evaluation_status: "EVALUATED", canonical: true, reason_codes: [], holding_setup_items: [], campaign_items: [], total_holdings: 0, total_campaign_items: 0 } },

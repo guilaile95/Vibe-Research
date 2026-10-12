@@ -22,6 +22,7 @@ import {
 import { useLiveQuotes, isTradingHours } from "@/hooks/useLiveQuotes";
 import { formatQuoteTime, quoteSnapshotLabel } from "@/lib/quoteSnapshot";
 import { cn } from "@/lib/utils";
+import { WatchlistImport } from "@/components/watchlist/WatchlistImport";
 import { NativeIntelWatchlistContext } from "@/components/native-intel/NativeIntelWatchlistContext";
 
 // A 股红涨绿跌（与整个看板一致）。
@@ -57,6 +58,8 @@ export function Watchlist() {
   const [saving, setSaving] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const [watchlistLoading, setWatchlistLoading] = useState(true);
+  const [watchlistReady, setWatchlistReady] = useState(false);
+  const saveInFlight = useRef(false);
   const [watchlistError, setWatchlistError] = useState<string | null>(null);
   const [migrationError, setMigrationError] = useState<string | null>(null);
   const [anomalies, setAnomalies] = useState<WatchlistAnomalies | null>(null);
@@ -82,12 +85,14 @@ export function Watchlist() {
 
   const load = useCallback(async () => {
     setWatchlistLoading(true);
+    setWatchlistReady(false);
     setWatchlistError(null);
     setMigrationError(null);
     try {
       const r = await loadWatchAuthoritative();
       setCodes(r.codes);
       setEtag(r.etag);
+      setWatchlistReady(r.status === "valid" || r.status === "not_configured");
       setMigrationError(r.migrationError ?? null);
       if (r.migrated) {
         setHint(`已从本地草稿迁移至后端权威自选（共 ${r.codes.length} 只）`);
@@ -130,20 +135,25 @@ export function Watchlist() {
     void loadAnomalies();
   }, [loadAnomalies]);
 
-  const persist = async (next: string[], msg?: string) => {
+  const persist = async (next: string[], msg?: string): Promise<boolean> => {
+    if (saveInFlight.current) return false;
+    saveInFlight.current = true;
     setSaving(true);
     setHint(null);
     try {
-      const r = await saveWatchAuthoritative(next, etag);
+      const r = await saveWatchAuthoritative(next, etag ?? "NOT_CONFIGURED");
       setCodes(r.codes);
       setEtag(r.etag);
       setWatchlistError(null);
       setMigrationError(null);
       if (msg) setHint(msg);
+      return true;
     } catch (e) {
       setHint(e instanceof Error ? e.message : "保存失败（可能版本冲突，请刷新）");
       await load();
+      return false;
     } finally {
+      saveInFlight.current = false;
       setSaving(false);
     }
   };
@@ -312,6 +322,7 @@ export function Watchlist() {
             </div>
           </div>
         )}
+        <WatchlistImport codes={codes} etag={etag} disabled={saving || watchlistLoading || !watchlistReady || !!watchlistError} onApply={next => persist(next, "表格导入已保存（后端权威）")} />
       </GlassCard>
 
       <GlassCard glow>

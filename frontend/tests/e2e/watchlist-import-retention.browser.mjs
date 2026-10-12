@@ -37,7 +37,7 @@ async function staticServer() {
 async function runScenario(browser, baseURL, width, evidenceDir) {
   const evidence = { width, status: "RUNNING", imports: [], saves: [], requests: [], unexpected: [], external: [], errors: [], checkpoints: [] };
   let context, page;
-  let codes = [...originalCodes], etag = "synthetic-original";
+  let codes = [...originalCodes], etag = "1111111111111111";
   try {
     context = await browser.newContext({ baseURL, viewport: { width, height: 900 }, serviceWorkers: "block" });
     await context.routeWebSocket("**/*", socket => { evidence.external.push(`WebSocket ${socket.url()}`); socket.close(); });
@@ -57,7 +57,7 @@ async function runScenario(browser, baseURL, width, evidenceDir) {
         if (body.expected_etag !== etag) return route.fulfill({ status: 409, json: { detail: "synthetic conflict" } });
         const next = [...new Set(body.codes)];
         if (next.length > 50) return route.fulfill({ status: 400, json: { detail: "关注股超过上限 50" } });
-        codes = next; etag = "synthetic-saved";
+        codes = next; etag = "2222222222222222";
         return route.fulfill({ json: { data: { codes, etag, updated_at: "synthetic" } } });
       }
       if (path === "/api/watchlist/import-local" && method === "POST" && !url.search) {
@@ -72,7 +72,7 @@ async function runScenario(browser, baseURL, width, evidenceDir) {
           return route.fulfill({ status, json: { detail: status === 400 ? `关注股超过上限 50（去重后 ${merged.length} 只），请删减后再保存` : "synthetic conflict" } });
         }
         const added = incoming.filter(code => !codes.includes(code));
-        codes = merged; etag = "synthetic-imported"; row.authorityAfter = [...codes];
+        codes = merged; etag = "3333333333333333"; row.authorityAfter = [...codes];
         return route.fulfill({ json: { data: { codes, added, etag, updated_at: "synthetic" } } });
       }
       if (path === "/api/watchlist/anomalies" && method === "GET" && !url.search) {
@@ -102,7 +102,7 @@ async function runScenario(browser, baseURL, width, evidenceDir) {
     assert.deepEqual(codes, originalCodes);
     assert.equal(evidence.imports.length, 1);
     assert.equal(evidence.imports[0].status, 400);
-    assert.deepEqual(evidence.imports[0].body, { codes: oversizedDraft, expected_etag: "synthetic-original" });
+    assert.deepEqual(evidence.imports[0].body, { codes: oversizedDraft, expected_etag: "1111111111111111" });
     assert.deepEqual(evidence.imports[0].authorityAfter, originalCodes);
     assert.equal(await page.getByText(/已从本地草稿迁移至后端权威自选/).count(), 0);
     const alert = page.getByRole("alert").filter({ hasText: "本地草稿未导入" });
@@ -120,7 +120,7 @@ async function runScenario(browser, baseURL, width, evidenceDir) {
     assert.deepEqual(evidence.imports[1].body, evidence.imports[0].body);
     assert.equal(await page.evaluate(() => localStorage.getItem("vr-watchlist")), originalDraftBytes);
     await alert.getByRole("button", { name: "编辑本地草稿", exact: true }).click();
-    const editor = page.getByRole("textbox");
+    const editor = page.getByRole("textbox").first();
     assert.equal(await editor.inputValue(), oversizedDraft.join(" "));
     await editor.fill(reducedDraft.join(" "));
     await page.getByRole("button", { name: "添加", exact: true }).click();
@@ -130,7 +130,7 @@ async function runScenario(browser, baseURL, width, evidenceDir) {
     assert.equal(await page.evaluate(() => localStorage.getItem("vr-watchlist")), null);
     assert.deepEqual(codes, reducedDraft);
     assert.equal(evidence.imports.length, 2);
-    assert.deepEqual(evidence.saves, [{ codes: reducedDraft, expected_etag: "synthetic-original" }]);
+    assert.deepEqual(evidence.saves, [{ codes: reducedDraft, expected_etag: "1111111111111111" }]);
     assert.equal(await alert.count(), 0);
     evidence.checkpoints.push({ stage: "edited-draft-save", userVisibleEditor: true, draftRemovedAfterSuccess: true, authority: [...codes] });
     await page.screenshot({ path: join(evidenceDir, `watchlist-import-${width}-recovered.png`), fullPage: true });
@@ -138,6 +138,26 @@ async function runScenario(browser, baseURL, width, evidenceDir) {
     await page.locator('[data-watchlist-code="600002"]').waitFor();
     assert.equal(evidence.imports.length, 2, "successful migration must not repeat after reload");
     assert.equal(await page.locator("[data-watchlist-code]").count(), 3);
+    // Real table component: invalid rows block any write, preview is read-only,
+    // duplicates remain visible, then explicit confirmation uses existing ETag.
+    await page.getByText("从表格导入（本机预览）", { exact: true }).click();
+    const tableEditor = page.getByRole("textbox", { name: "自选导入表格文本", exact: true });
+    const beforeTableSaves = evidence.saves.length;
+    await tableEditor.fill("code,market,name\n600519,SH,Fixture\n000858,SH,Wrong exchange");
+    await page.getByRole("button", { name: "预览导入", exact: true }).click();
+    assert.equal(await page.getByRole("button", { name: /确认添加/ }).isDisabled(), true);
+    assert.equal(evidence.saves.length, beforeTableSaves);
+    await tableEditor.fill("code,market,name\n600519,SH,Fixture\n600519,SH,Duplicate\n000858,SZ,Fixture");
+    await page.getByRole("button", { name: "预览导入", exact: true }).click();
+    assert.match(await page.getByRole("list", { name: "导入逐行预览" }).innerText(), /本表重复/);
+    assert.equal(evidence.saves.length, beforeTableSaves);
+    await page.getByRole("button", { name: "确认添加 2 只", exact: true }).click();
+    await page.getByText("已添加 2 只自选", { exact: true }).waitFor();
+    assert.deepEqual(codes, [...reducedDraft, "600519", "000858"]);
+    assert.equal(evidence.saves.length, beforeTableSaves + 1);
+    assert.equal(await tableEditor.inputValue(), "");
+    evidence.checkpoints.push({ stage: "table-preview-apply", invalidRowsBlocked: true, previewReadOnly: true, duplicatesVisible: true, authority: [...codes] });
+    await page.screenshot({ path: join(evidenceDir, `watchlist-table-${width}.png`), fullPage: true });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no page horizontal overflow");
     assert.equal(await page.locator("vite-error-overlay").count(), 0);
     assert.deepEqual(evidence.unexpected, []);
@@ -158,7 +178,7 @@ async function main() {
   const evidenceDir = process.env.WATCHLIST_IMPORT_EVIDENCE_DIR || mkdtempSync(join(tmpdir(), "vr-watchlist-import-"));
   mkdirSync(evidenceDir, { recursive: true });
   const git = arg => execFileSync("git", ["rev-parse", arg], { cwd: frontend, encoding: "utf8" }).trim();
-  const result = { checkoutHead: git("HEAD"), checkoutTree: git("HEAD^{tree}"), frontendSourceTree: git("HEAD:frontend/src"), pullRequestHead: process.env.WATCHLIST_IMPORT_PR_HEAD || null, coverage: "Synthetic HTTP full-app desktop/mobile; rejected-draft retention, visible actionable error, explicit rejected retry, existing editor subset save and reload without duplicate migration.", results: [] };
+  const result = { checkoutHead: git("HEAD"), checkoutTree: git("HEAD^{tree}"), frontendSourceTree: git("HEAD:frontend/src"), pullRequestHead: process.env.WATCHLIST_IMPORT_PR_HEAD || null, coverage: "Synthetic HTTP full-app desktop/mobile; rejected-draft retention, visible actionable error, explicit rejected retry, existing editor subset save and reload without duplicate migration; table invalid-row blocking, dedup/read-only preview and explicit conditional apply.", results: [] };
   let browser, server;
   try {
     assert.ok(existsSync(join(dist, "index.html")), "Run npm run build first");

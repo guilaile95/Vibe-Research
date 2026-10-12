@@ -22,6 +22,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import count
+from typing import Literal
 
 import anyio
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -36,6 +37,9 @@ import account_profile
 import ai_answer_quality
 import ai_result_service
 import daily_review_basis
+import shortline_review_service
+import shortline_review_sources
+import shortline_review_store
 import astock
 import chat as chat_layer
 import agent_runtime
@@ -68,6 +72,7 @@ import evidence_temporal_authority_router
 import data_health_router
 import runtime_info_router
 import trade_ledger_router
+import personal_review_router
 import trade_attribution_router
 import decision_feedback_router
 import decision_evidence_router
@@ -409,6 +414,7 @@ app.include_router(data_health_router.router)
 app.include_router(runtime_info_router.create_router(__version__))
 # 交易流水：独立存储与 API
 app.include_router(trade_ledger_router.router)
+app.include_router(personal_review_router.router)
 # P0-TAR1: explicit Frozen Decision attribution / explicit UNPLANNED origin.
 app.include_router(trade_attribution_router.router)
 # 决策反馈：独立存储与 API
@@ -465,6 +471,8 @@ app.include_router(research_data_plane_router.router)
 app.include_router(historical_signal_validation_router.router)
 import next_day_verification_router
 app.include_router(next_day_verification_router.router)
+import observation_workflows_router
+app.include_router(observation_workflows_router.router)
 # Cross-Sectional Factor Validation: read-only RDP research computation; no formal writes.
 app.include_router(factor_validation_router.router)
 # PLANNING-PARITY-EVENT-CALENDAR1: bounded read-only aggregation over existing
@@ -3237,3 +3245,75 @@ def _download_pdf(url: str, max_bytes: int = 25 * 1024 * 1024) -> bytes:
     if not bytes(buf[:4]).startswith(b"%PDF"):
         raise mr.ReportError("响应非 PDF 内容（可能为反爬拦截页），已拒绝")
     return bytes(buf)
+
+
+# Manual segmented market reviews. These endpoints never fetch market providers.
+class ShortlineReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    trade_date: str
+    mode: Literal["daily", "weekly"]
+    bundle_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    generation_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    llm: LLMConfig
+
+
+@app.get("/api/shortline-review/preview")
+def shortline_review_preview(request: Request, trade_date: str, mode: str = "daily"):
+    if set(request.query_params)-{"trade_date","mode"} or len(request.query_params.multi_items())!=len(request.query_params):raise HTTPException(400,"不支持额外查询参数")
+    try:return {"data":shortline_review_sources.preview(trade_date,mode)}
+    except Exception:raise HTTPException(422,"复盘日期、交易日历或归档暂不可用；未调用模型") from None
+
+
+@app.get("/api/shortline-review/versions")
+def shortline_review_versions(request: Request, trade_date: str, mode: str = "daily"):
+    if set(request.query_params)-{"trade_date","mode"} or len(request.query_params.multi_items())!=len(request.query_params):raise HTTPException(400,"不支持额外查询参数")
+    try:return {"data":shortline_review_store.list_versions(trade_date,mode)}
+    except Exception:raise HTTPException(422,"复盘版本暂不可读取") from None
+
+
+@app.get("/api/shortline-review/version/{generation_id}")
+def shortline_review_version(request: Request, generation_id: str):
+    if request.query_params:raise HTTPException(400,"不支持查询参数")
+    try:result=shortline_review_store.get_version(generation_id)
+    except Exception:raise HTTPException(422,"复盘版本身份或完整性无法核对") from None
+    if result is None:raise HTTPException(404,"复盘版本不存在")
+    return {"data":result}
+
+
+class _ShortlineReviewResponse(_LeadAnalysisStreamingResponse):
+    def __init__(self,*args,generation_id,**kwargs):
+        super().__init__(*args,**kwargs);self.generation_id=generation_id
+    async def __call__(self,scope,receive,send):
+        try:await super().__call__(scope,receive,send)
+        finally:shortline_review_service.release(self.generation_id)
+
+
+@app.post("/api/shortline-review/generate")
+async def shortline_review_generate(req: ShortlineReviewRequest):
+    _require_llm_ready(req.llm)
+    try:shortline_review_service.acquire(req.generation_id)
+    except Exception:raise HTTPException(409,"该复盘正在运行或当前任务已满") from None
+    try:
+        bundle,existing=await run_in_threadpool(shortline_review_service.prepare,req.trade_date,req.mode,req.bundle_id,req.generation_id)
+    except BaseException as exc:
+        shortline_review_service.release(req.generation_id)
+        if not isinstance(exc, Exception):raise
+        raise HTTPException(409,"预览输入已变化、材料不足或版本身份不匹配，请重新查看材料；未调用模型") from None
+    cancel=threading.Event()
+    async def gen():
+        source=None
+        try:
+            if existing is not None:
+                yield json.dumps({"type":"done","generation_id":existing["generation_id"],"bundle_id":existing["bundle"]["bundle_id"],"status":existing["status"],"model_calls":0})+"\n"
+                return
+            source=shortline_review_service.generate(bundle,req.generation_id,req.llm.model_dump(),cancel)
+            async for event in iterate_in_threadpool(source):
+                if cancel.is_set():return
+                yield json.dumps(event,ensure_ascii=False)+"\n"
+        except Exception:
+            if not cancel.is_set():yield json.dumps({"type":"error","message":"复盘生成或保存失败，未确认新版本"},ensure_ascii=False)+"\n"
+        finally:
+            cancel.set()
+            if source is not None:source.close()
+            shortline_review_service.release(req.generation_id)
+    return _ShortlineReviewResponse(gen(),media_type="application/x-ndjson",disconnect_event=cancel,generation_id=req.generation_id)

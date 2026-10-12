@@ -148,7 +148,7 @@ try {
       await page.getByRole('button', { name: 'AI 梳理行业表现', exact: true }).click();
       await verify('lead-analysis', page.getByTestId('lead-analysis-dialog'));
       await page.getByRole('button', { name: '关闭线索分析', exact: true }).click();
-      await page.getByTestId('today-ai-review').locator('summary').click();
+      await page.getByTestId('today-ai-review').locator(':scope > summary').click();
       await verify('daily-saved', page.getByTestId('today-ai-review'));
       await page.getByRole('button', { name: '重新复盘', exact: true }).click();
       await verify('daily-stream', page.getByTestId('today-ai-review'));

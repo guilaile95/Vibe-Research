@@ -18,26 +18,35 @@ from pydantic import BaseModel, ConfigDict, Field
 
 import short_term_fact_store as facts_store
 import trade_calendar
+import verification_research_observation as research_observation
 
-SCHEMA_VERSION = "next-day-verification.v0.1"
+SCHEMA_VERSION = "next-day-verification.v0.2"
+LEGACY_METRICS = {"limit_up_count", "failed_board_rate"}
 SHANGHAI = timezone(timedelta(hours=8))
 MIN_SAMPLES = 12
 BASELINE_SESSIONS = 60
 METRICS = {
     "limit_up_count": {"label": "涨停家数", "unit": "家", "epsilon": 5},
     "failed_board_rate": {"label": "炸板率", "unit": "0–1 比率", "epsilon": 0.05},
+    "highest_board": {"label": "最高连板高度（源口径）", "unit": "板", "epsilon": 0.5},
+    "promotion_1to2": {"label": "1进2晋级率（研究观察）", "unit": "0–1 比率", "epsilon": 0.05},
+    "money_effect_median": {"label": "昨日涨停队列收益中位数", "unit": "百分点", "epsilon": 0.5},
+    "deep_loss_count": {"label": "昨日涨停队列跌幅≥5%家数", "unit": "家", "epsilon": 5},
+    "theme_concentration": {"label": "头部题材集中度（供应商标签）", "unit": "0–1 比率", "epsilon": 0.05},
+    "market_limit_down": {"label": "全市场跌停家数", "unit": "家", "epsilon": 5},
 }
 LIMITATIONS = [
     "仅记录您事前写下的市场读数条件，不提供个股建议，不自动交易。",
     "只读取本地已存的合格收盘事实；未启用自动采集，缺少事实时保留待核验，不算失败。",
     "基准为保存时已知的历史发生频率，不代表投资胜率或未来概率。",
     "对账使用当前已存的收盘观察，源数据更正可能改变结果；事前值和基准已冻结。",
+    "新增六项仅冻结保存时读取的当前归档研究观察，不宣称历史收盘时已知；历史基准保持未知。",
 ]
 
 
 class Condition(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    metric: Literal["limit_up_count", "failed_board_rate"]
+    metric: Literal["limit_up_count", "failed_board_rate", "highest_board", "promotion_1to2", "money_effect_median", "deep_loss_count", "theme_concentration", "market_limit_down"]
     direction: Literal["up", "down", "flat"]
     reason: str = Field(default="", max_length=200)
 
@@ -45,7 +54,7 @@ class Condition(BaseModel):
 class SavePlan(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     revision: int = Field(ge=0)
-    items: list[Condition] = Field(max_length=2)
+    items: list[Condition] = Field(max_length=8)
 
 
 class VerificationError(ValueError):
@@ -114,13 +123,20 @@ def _validate_plan(day: str, revision: int, payload: object) -> dict:
                 or (item["prior_value"] is not None and _value({"values": {item["metric"]: item["prior_value"]}}, item["metric"]) is None)
                 or (item["prior_evidence"] is not None and not isinstance(item["prior_evidence"], dict))):
             raise ValueError("invalid journal")
+        if item["metric"] not in LEGACY_METRICS and (baseline["samples"] != 0 or baseline["possible_pairs"] != 0):
+            raise ValueError("research baseline cannot claim historical PIT")
         evidence = item["prior_evidence"]
         if evidence is None:
             if item["prior_value"] is not None:
                 raise ValueError("invalid journal")
+        elif item["metric"] not in LEGACY_METRICS:
+            if not research_observation.validate(evidence, day, item["written_at"], _value) or _value(evidence, item["metric"]) != item["prior_value"]:
+                raise ValueError("invalid observation-at-save evidence")
+            if baseline["samples"] != 0 or baseline["possible_pairs"] != 0:
+                raise ValueError("research baseline cannot claim historical PIT")
         else:
             if (set(evidence) != {"values", "source_ids", "fetched_at", "snapshot_at", "stored_at"}
-                    or not isinstance(evidence["values"], dict) or set(evidence["values"]) != set(METRICS)
+                    or not isinstance(evidence["values"], dict) or set(evidence["values"]) != LEGACY_METRICS
                     or not isinstance(evidence["source_ids"], list) or not evidence["source_ids"]
                     or any(not isinstance(v, str) or not v.strip() for v in evidence["source_ids"])
                     or any(v is not None and _value(evidence, k) is None for k, v in evidence["values"].items())
@@ -187,7 +203,7 @@ def _fact_record(record: dict | None, day: str, as_of: datetime) -> dict | None:
     values = section.get("facts")
     if not isinstance(values, dict):
         return None
-    return {"values": {metric: _value({"values": values}, metric) for metric in METRICS}, "source_ids": section["source_ids"],
+    return {"values": {metric: _value({"values": values}, metric) for metric in LEGACY_METRICS}, "source_ids": section["source_ids"],
             "fetched_at": section["fetched_at"], "snapshot_at": section["snapshot_at"], "stored_at": record["stored_at"]}
 
 
@@ -195,8 +211,10 @@ def _value(fact: dict | None, metric: str) -> float | int | None:
     value = fact["values"].get(metric) if fact else None
     if isinstance(value, bool) or not isinstance(value, (int, float)) or abs(value) > 2 ** 53 - 1 or not math.isfinite(value):
         return None
-    if metric == "limit_up_count":
+    if METRICS[metric]["unit"] in ("家", "板"):
         return value if isinstance(value, int) and value >= 0 else None
+    if METRICS[metric]["unit"] == "百分点":
+        return value if -100 <= value <= 10000 else None
     return value if 0 <= value <= 1 else None
 
 
@@ -221,7 +239,17 @@ def _capture(day: str, items: list[Condition], now: datetime) -> list[dict]:
     days = _history_days(day)
     facts = [_fact(d, now) for d in days]
     result = []
+    current_research = research_observation.read_current(day, lambda: _stamp(_now())) if any(i.metric not in LEGACY_METRICS for i in items) else None
     for item in items:
+        if item.metric not in LEGACY_METRICS:
+            observed = current_research["snapshot_observed_at"] if current_research else _stamp(now)
+            if _instant(observed) < now:
+                raise VerificationError("读取时钟回退，未保存")
+            result.append({**item.model_dump(), "written_at": observed,
+                "prior_value": _value(current_research, item.metric), "prior_evidence": current_research,
+                "baseline": {"rate": None, "samples": 0, "possible_pairs": 0, "coverage": None,
+                             "from": day, "through": day, "as_of": observed, "minimum_samples": MIN_SAMPLES}})
+            continue
         counts = dict.fromkeys(("up", "down", "flat"), 0)
         values = [_value(f, item.metric) for f in facts]
         for before, after in zip(values, values[1:]):
@@ -287,16 +315,18 @@ def _results(day: str, plan: dict, now: datetime) -> list[dict]:
     completed = trade_calendar.completed_trade_date_at(_stamp(now))
     mature = target is not None and completed is not None and completed >= target
     fact = _fact(target, now) if mature else None
+    research_fact = research_observation.read_current(target, lambda: _stamp(_now())) if mature and any(i["metric"] not in LEGACY_METRICS for i in plan["items"]) else None
     results = []
     for item in plan["items"]:
         written = _instant(item["written_at"])
         seal = _instant(boundary["seals_at"])
         prior_valid = written is not None and seal is not None and written < seal
-        value = _value(fact, item["metric"])
+        current_fact = fact if item["metric"] in LEGACY_METRICS else research_fact
+        value = _value(current_fact, item["metric"])
         actual = _direction(item["prior_value"], value, item["metric"]) if prior_valid and mature else None
         state = "CALENDAR_UNKNOWN" if target is None else "INVALID_PRIOR_TIME" if not prior_valid else "PENDING_CLOSE" if not mature else "NO_EVIDENCE" if actual is None else "VERIFIED"
         results.append({**item, "target_date": target, "state": state,
-                        "current_value": value, "current_evidence": fact,
+                        "current_value": value, "current_evidence": current_fact,
                         "actual": actual, "verified": None if actual is None else actual == item["direction"]})
     return results
 
@@ -331,4 +361,4 @@ def view(day: str) -> dict:
             "metrics": [{"key": key, **value} for key, value in METRICS.items()],
             "summary": _summary(results), "history": {"from": window[0] if window else None,
                 "through": day, "summary": _summary(history)},
-            "generated_at": _stamp(now), "limitations": LIMITATIONS}
+            "generated_at": _stamp(_now()), "limitations": LIMITATIONS}

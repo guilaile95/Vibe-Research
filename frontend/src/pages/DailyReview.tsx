@@ -1,3 +1,4 @@
+import { ShortlineReviewCard } from "@/components/dailyReview/ShortlineReviewCard";
 import { DailyReviewAiBasis } from "@/components/dailyReview/DailyReviewAiBasis";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -24,6 +25,7 @@ import {
 import { NorthboundCapitalFlowCard } from "@/components/market/NorthboundCapitalFlowCard";
 import { MarketCloud } from "@/components/market/MarketCloud";
 import MarketIntelPanel from "@/components/market/MarketIntelPanel";
+import { ObservationWorkflowCard } from "@/components/dailyReview/ObservationWorkflowCard";
 import { NextDayVerificationCard } from "@/components/dailyReview/NextDayVerificationCard";
 import { ShortTermHistoryCard } from "@/components/dailyReview/ShortTermHistoryCard";
 import { EvidenceReadinessCard } from "@/components/dailyReview/EvidenceReadinessCard";
@@ -1192,6 +1194,7 @@ export function DailyReview() {
       <ThemeResearchCard tradeDate={dr?.trade_date ?? null} />
       <CohortIdentityCard tradeDate={dr?.trade_date ?? null} />
       <ShortlineResearchCard tradeDate={dr?.trade_date ?? null} />
+      <ShortlineReviewCard tradeDate={dr?.trade_date ?? null} />
       </section>) },
 
       /* 3. 市场广度 */
@@ -1797,6 +1800,7 @@ export function DailyReview() {
             )}
 
       <NextDayVerificationCard initialDate={dr?.trade_date} />
+      <ObservationWorkflowCard initialDate={dr?.trade_date} />
 
       {/* 10. 历史复盘（显式保存；只读浏览；不替换当前实时数据） */}
       {todayView === "history" && (
@@ -2071,6 +2075,7 @@ export function DailyReview() {
                   <ThemeResearchCard tradeDate={snap.trade_date ?? null} />
                   <CohortIdentityCard tradeDate={snap.trade_date ?? null} />
                   <ShortlineResearchCard tradeDate={snap.trade_date ?? null} />
+                  <ShortlineReviewCard tradeDate={snap.trade_date ?? null} />
 
                   {warnList.length > 0 && (
                     <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-warning">

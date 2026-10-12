@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { PersonalReviewPanel } from "@/components/personal-review/PersonalReviewPanel";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError, type TradeAttributionCandidate, type TradeAttributionCandidateScan, type TradeRecord, type TradeReconciliationResult } from "@/lib/api";
@@ -533,6 +534,8 @@ export function Trades() {
           </button>
         }
       />
+
+      <details><summary className="cursor-pointer text-sm font-medium">个人复查 / 风险 / 模式卡</summary><PersonalReviewPanel refreshKey={successMsg ?? ""} /></details>
 
       {/* 消息提示 */}
       {successMsg && (
@@ -1532,6 +1535,8 @@ export function Trades() {
                     </p>
                   </div>
                 )}
+
+                <PersonalReviewPanel key={detailTrade.trade_id} trade={detailTrade} />
 
                 {detailTrade.note && (
                   <div className="border border-border/40 rounded-lg p-3 bg-muted/10 space-y-1">

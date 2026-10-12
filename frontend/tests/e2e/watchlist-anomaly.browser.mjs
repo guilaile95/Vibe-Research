@@ -74,7 +74,7 @@ try {
   const externalRequests = [];
   const saveRequests = [];
   let watchCodes = ["600519", "000001", "837023"];
-  let watchEtag = "e2e";
+  let watchEtag = "1111111111111111";
   let failSave = false;
   let anomalyMode = "normal";
   let releaseAnomalies;
@@ -142,7 +142,7 @@ try {
         assert.equal(body.expected_etag, watchEtag, "save must use the authoritative ETag");
         if (failSave) return route.fulfill({ status: 409, json: { detail: "synthetic version conflict" } });
         watchCodes = body.codes;
-        watchEtag = "e2e-saved";
+        watchEtag = "2222222222222222";
         return route.fulfill({ json: { data: { codes: watchCodes, etag: watchEtag } } });
       }
       return route.fulfill({ json: { data: {

@@ -72,7 +72,14 @@ def _themes(lake, sessions):
             m = r.observation.payload
             if m.get('page_index') != i or m.get('page_count') != count or m.get('page_hashes') != hashes or r.observation.source_payload_hash != hashes[i] or m.get('fixture') != meta.get('fixture'):
                 raise ValueError('THEME_BATCH_IDENTITY_INVALID')
-        raws = [lake.read_payload(r.observation.observation_id) for r in rs]
+        raws = []
+        batch_bytes = 0
+        for r in rs:
+            remaining = min(16 * 1024 * 1024, 32 * 1024 * 1024 - batch_bytes, 128 * 1024 * 1024 - window_bytes - batch_bytes)
+            if remaining <= 0:
+                raise ValueError('THEME_BATCH_BYTES_OVERSIZED')
+            raw = lake.read_payload(r.observation.observation_id, max_payload_bytes=remaining)
+            raws.append(raw); batch_bytes += len(raw)
         window_bytes += sum(len(raw) for raw in raws)
         if sum(len(raw) for raw in raws) > 32 * 1024 * 1024 or window_bytes > 128 * 1024 * 1024:
             raise ValueError('THEME_BATCH_BYTES_OVERSIZED')
@@ -99,13 +106,18 @@ def _prices(lake, day):
         if _postclose(r):
             by.setdefault(o.provider_symbol, []).append(r)
     result = {}
+    replay_bytes = 0
     for code, rs in by.items():
         newest = max(r.observation.fetched_at for r in rs)
         choices = [r for r in rs if r.observation.fetched_at == newest]
         if len(choices) != 1:
             raise ValueError('PRICE_REVISION_AMBIGUOUS')
         r = choices[0]
-        raw = lake.read_payload(r.observation.observation_id)
+        remaining = min(1024 * 1024, 64 * 1024 * 1024 - replay_bytes)
+        if remaining <= 0:
+            raise ValueError('PRICE_REPLAY_BYTES_OVERSIZED')
+        raw = lake.read_payload(r.observation.observation_id, max_payload_bytes=remaining)
+        replay_bytes += len(raw)
         verify_capture_receipt(r, raw)
         parsed = normalize_tencent_forward_capture(raw, stock_code=code)
         if any(row['date'] > day for row in parsed['rows']):

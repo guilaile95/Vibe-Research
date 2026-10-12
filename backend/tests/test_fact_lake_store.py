@@ -819,3 +819,15 @@ def test_only_explicit_tmp_root_is_touched(tmp_path: Path, monkeypatch) -> None:
 
 def test_schema_version_constant_is_current_v2() -> None:
     assert SCHEMA_VERSION == "fact_lake_control_v3"
+
+
+def test_bounded_payload_read_never_uses_unbounded_path_read(tmp_path, monkeypatch):
+    lake=initialize_fact_lake(tmp_path/'archive');raw=b'{"bounded":true}'
+    lake.store_observation(_observation(raw),raw,'application/json')
+    def forbidden(*args,**kwargs):raise AssertionError('unbounded read_bytes used')
+    monkeypatch.setattr(Path,'read_bytes',forbidden)
+    assert lake.read_payload('obs-001',max_payload_bytes=len(raw))==raw
+    with pytest.raises(FactLakeCorruptedError):lake.read_payload('obs-001',max_payload_bytes=len(raw)-1)
+    for invalid in (0,-1,True,128*1024*1024+1):
+        with pytest.raises(ValueError):lake.read_payload('obs-001',max_payload_bytes=invalid)
+    assert lake.read_payload('absent',max_payload_bytes=1)is None

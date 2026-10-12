@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { runObservationWorkflows } from "./observation-workflows.scenarios.mjs";
 import { observeIntegratedReads, runIntegratedReview, runSavedAiBasis } from "./daily-review-integrated.scenarios.mjs";
 import { createFixture, golden, DAY, CLOCK, JOURNAL_VIEWPORTS } from "./next-day-verification.fixture.mjs";
 
@@ -339,6 +340,15 @@ try {
       await runSavedAiBasis({ page, viewport, evidenceDir, results, captures, mode: aiMode });
       assert.equal(fixture.writes.length, 0, "restoring saved AI never writes or invokes models");
     }
+  }
+  if (withSealQuality) {
+    await page.close();
+    resetFixture("observation-workflow-acceptance", { fullReview: true, withObservationPreview: true });
+    page = await context.newPage();
+    page.on("pageerror", error => pageErrors.push(error.message));
+    await page.clock.setFixedTime(new Date(CLOCK));
+    await page.goto(`${origin}/daily-review`, { waitUntil: "domcontentloaded" });
+    await runObservationWorkflows({ page, fixture, viewport, evidenceDir, results, captures });
   }
   await context.close();
   context = undefined;

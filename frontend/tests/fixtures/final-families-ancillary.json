@@ -2,7 +2,7 @@
   "fixture_context": "Synthetic empty journal with intentionally unavailable calendar; not a claim about the actual 2026-10-08 calendar.",
   "clock": "2026-10-08T08:00:00Z",
   "journal": {
-    "schema_version": "next-day-verification.v0.1",
+    "schema_version": "next-day-verification.v0.2",
     "research_only": true,
     "trade_date": "2026-10-08",
     "state": "CALENDAR_UNKNOWN",
@@ -22,6 +22,42 @@
         "label": "炸板率",
         "unit": "0–1 比率",
         "epsilon": 0.05
+      },
+      {
+        "key": "highest_board",
+        "label": "最高连板高度（源口径）",
+        "unit": "板",
+        "epsilon": 0.5
+      },
+      {
+        "key": "promotion_1to2",
+        "label": "1进2晋级率（研究观察）",
+        "unit": "0–1 比率",
+        "epsilon": 0.05
+      },
+      {
+        "key": "money_effect_median",
+        "label": "昨日涨停队列收益中位数",
+        "unit": "百分点",
+        "epsilon": 0.5
+      },
+      {
+        "key": "deep_loss_count",
+        "label": "昨日涨停队列跌幅≥5%家数",
+        "unit": "家",
+        "epsilon": 5
+      },
+      {
+        "key": "theme_concentration",
+        "label": "头部题材集中度（供应商标签）",
+        "unit": "0–1 比率",
+        "epsilon": 0.05
+      },
+      {
+        "key": "market_limit_down",
+        "label": "全市场跌停家数",
+        "unit": "家",
+        "epsilon": 5
       }
     ],
     "summary": {
@@ -55,7 +91,8 @@
       "仅记录您事前写下的市场读数条件，不提供个股建议，不自动交易。",
       "只读取本地已存的合格收盘事实；未启用自动采集，缺少事实时保留待核验，不算失败。",
       "基准为保存时已知的历史发生频率，不代表投资胜率或未来概率。",
-      "对账使用当前已存的收盘观察，源数据更正可能改变结果；事前值和基准已冻结。"
+      "对账使用当前已存的收盘观察，源数据更正可能改变结果；事前值和基准已冻结。",
+      "新增六项仅冻结保存时读取的当前归档研究观察，不宣称历史收盘时已知；历史基准保持未知。"
     ]
   },
   "seal": {
@@ -122,8 +159,8 @@
       "next_trade_date": null,
       "seals_at": null,
       "prior_metric_available": {
-        "limit_up_count": false,
-        "failed_board_rate": false
+        "failed_board_rate": false,
+        "limit_up_count": false
       },
       "verification_claim": "NONE"
     },
@@ -133,5 +170,86 @@
       "可读取仅指现有合同检查通过；不证明上游真实性、历史当时已知或真实使用验收。",
       "明日验证的可读取状态仅指所选日事前事实；不是预测已保存、次日已验证或有统计优势。"
     ]
+  },
+  "observations": {
+    "schema_version": "observation-workflows.v1",
+    "trade_date": "2026-10-08",
+    "calendar_state": "TRADING_DAY",
+    "generated_at": "2026-10-08T08:00:00.000000+00:00",
+    "collector_enabled": false,
+    "scheduler_enabled": false,
+    "external_notifications_enabled": false,
+    "research_only": true,
+    "slots": [
+      {
+        "slot": "09:25",
+        "state": "MISSING",
+        "cutoff_at": "2026-10-08T01:29:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "09:35",
+        "state": "MISSING",
+        "cutoff_at": "2026-10-08T01:43:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "10:00",
+        "state": "MISSING",
+        "cutoff_at": "2026-10-08T02:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "11:30",
+        "state": "MISSING",
+        "cutoff_at": "2026-10-08T03:38:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "14:00",
+        "state": "MISSING",
+        "cutoff_at": "2026-10-08T06:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      },
+      {
+        "slot": "15:00",
+        "state": "MISSING",
+        "cutoff_at": "2026-10-08T07:08:00.000000+00:00",
+        "observation": null,
+        "attempts": [],
+        "reason": "NOT_COLLECTED"
+      }
+    ],
+    "events": [],
+    "event_coverage": {
+      "total": 0,
+      "returned": 0,
+      "has_more": false
+    },
+    "tasks": [],
+    "due": [],
+    "due_coverage": {
+      "eligible_plans": 0,
+      "evaluated_plans": 0,
+      "has_more": false,
+      "order": "latest_set_date_first",
+      "maximum": 20
+    },
+    "schedule": {
+      "premarket": "09:05",
+      "close_digest": "15:40",
+      "watch_changes": "16:15",
+      "verification_due": "16:30"
+    }
   }
 }

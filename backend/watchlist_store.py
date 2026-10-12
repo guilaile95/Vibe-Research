@@ -188,8 +188,14 @@ def save_watchlist(codes: Any, *, expected_etag: str | None = None) -> dict:
         if expected_etag is not None:
             current = _read_status_unlocked()
             cur_etag = current.get("etag")
-            if cur_etag is not None and cur_etag != expected_etag:
-                raise WatchlistVersionConflictError(cur_etag)
+            # Conditional saves compare the entire observed authority state, including
+            # first creation and deletion/corruption since preview. Legacy callers
+            # without expected_etag retain their existing contract.
+            observed = cur_etag if current["status"] == "valid" else (
+                "NOT_CONFIGURED" if current["status"] == "not_configured" else "CORRUPTED"
+            )
+            if observed != expected_etag or current["status"] == "corrupted":
+                raise WatchlistVersionConflictError(observed)
 
         payload = {
             "schema_version": SCHEMA_VERSION,

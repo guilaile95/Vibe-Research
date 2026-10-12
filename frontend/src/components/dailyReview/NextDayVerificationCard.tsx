@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { request } from "@/lib/api";
 import {
-  boundaryLabels, conditionDraft, directionLabels, formatMetric, percent, resultLabel, verificationDate, ownsVerificationDate, isVerificationViewForDate,
+  isResearchEvidence, boundaryLabels, conditionDraft, directionLabels, formatMetric, percent, resultLabel, verificationDate, ownsVerificationDate, isVerificationViewForDate,
   type Direction, type Metric, type VerificationCondition, type VerificationView,
 } from "@/lib/nextDayVerification";
 
@@ -88,7 +88,7 @@ export function NextDayVerificationCard({ initialDate }: { initialDate?: string 
               <select aria-label={`${metric.label}方向`} value={item?.direction ?? ""} onChange={(event) => change(metric.key, event.target.value as Direction | "")} className="rounded border border-border bg-background px-2 py-1">
                 <option value="">不设条件</option>{Object.entries(directionLabels).map(([key, text]) => <option value={key} key={key}>{text}</option>)}
               </select>
-              <span className="text-xs text-muted-foreground">持平阈值：变化不超过 {metric.key === "failed_board_rate" ? "5 个百分点" : "5 家"}</span>
+              <span className="text-xs text-muted-foreground">持平阈值：变化不超过 {metric.unit === "0–1 比率" ? `${metric.epsilon * 100} 个百分点` : `${metric.epsilon} ${metric.unit}`}</span>
             </label>
             {item && <input aria-label={`${metric.label}理由`} maxLength={200} value={item.reason} onChange={(event) => change(metric.key, item.direction, event.target.value)} placeholder="事前理由（可选，最多 200 字）" className="mt-2 w-full rounded border border-border bg-background px-2 py-1 text-sm" />}
           </div>;
@@ -111,7 +111,12 @@ export function NextDayVerificationCard({ initialDate }: { initialDate?: string 
             { label: "当前存档收盘观察", date: item.target_date, evidence: item.current_evidence },
           ]).map(({ label, date, evidence }) => <div key={label} className="mt-2 break-words">
             <p className="font-medium">{label} · 对应交易日 {date ?? "未知"}</p>
-            {evidence ? <>
+            {evidence && isResearchEvidence(evidence) ? <>
+              <p>{label === "已冻结事前证据" ? "保存时读取的当前归档研究观察" : "当前读取的目标日归档研究观察"}；不是历史收盘时已知证据</p>
+              <p>服务端读取时间（UTC）：{evidence.snapshot_observed_at}</p>
+              <p className="break-all">回执摘要：{evidence.source_receipts_sha256}</p>
+              <p>历史基准未知；当前目标值可能随归档更正而改变</p>
+            </> : evidence ? <>
               <p>来源：<span className="break-all">{evidence.source_ids.join("、")}</span></p>
               <p>抓取时间（UTC）：{evidence.fetched_at}</p>
               <p>快照时间（UTC）：{evidence.snapshot_at}</p>

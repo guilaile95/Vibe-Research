@@ -1394,12 +1394,39 @@ class FactLake:
             result.append(stored)
         return tuple(result)
 
-    def read_payload(self, observation_id: str) -> bytes | None:
-        stored = self.get_observation(observation_id)
+    def read_payload(self, observation_id: str, *, max_payload_bytes: int | None = None) -> bytes | None:
+        """Read verified raw bytes; an optional cap applies before any blob read.
+
+        Bounded callers bypass get_observation's eager hash read and perform one
+        capped read instead. The default preserves the existing API semantics.
+        """
+        if max_payload_bytes is None:
+            stored = self.get_observation(observation_id)
+        else:
+            if type(max_payload_bytes) is not int or not 1 <= max_payload_bytes <= 128 * 1024 * 1024:
+                raise ValueError("invalid raw payload byte bound")
+            if type(observation_id) is not str or not observation_id:
+                raise ValueError("observation_id must be non-empty")
+            conn = self._connect(readonly=True)
+            try:
+                row = self._select_observation_row(conn, observation_id, committed_only=True)
+                stored = None if row is None else self._row_to_stored(row, verify_blob=False)
+            finally:
+                conn.close()
         if stored is None:
             return None
         blob_path = self._blob_path(stored.blob_relpath, stored.observation)
-        payload = blob_path.read_bytes()
+        if max_payload_bytes is None:
+            payload = blob_path.read_bytes()
+        else:
+            with os.fdopen(os.open(blob_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)), "rb") as stream:
+                before = os.fstat(stream.fileno())
+                if not stat.S_ISREG(before.st_mode) or before.st_size > max_payload_bytes:
+                    raise FactLakeCorruptedError("raw payload byte bound exceeded")
+                payload = stream.read(max_payload_bytes + 1)
+                after = os.fstat(stream.fileno())
+                if len(payload) > max_payload_bytes or (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+                    raise FactLakeCorruptedError("raw payload byte bound exceeded or changed")
         if payload_sha256(payload).lower() != stored.blob_hash.lower():
             raise FactLakeCorruptedError("committed observation blob is corrupted")
         return payload

@@ -710,6 +710,21 @@ jobs:
           path: ${{ runner.temp }}/shortline-research-evidence
           if-no-files-found: warn
 
+      - name: Run personal review component acceptance
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          PERSONAL_REVIEW_BROWSER_OUTPUT_DIR: ${{ runner.temp }}/personal-review-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/personal-review.browser.mjs
+
+      - name: Preserve personal review component evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: personal-review-evidence
+          path: ${{ runner.temp }}/personal-review-evidence
+          if-no-files-found: warn
+
       - name: Run archived cohort member component acceptance
         working-directory: frontend
         timeout-minutes: 5

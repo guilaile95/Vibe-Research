@@ -11,7 +11,7 @@ test("new ancillary cards accept only exact fixed-date GETs with truthful unavai
   const journalPath = `/api/next-day-verification/${day}`;
   const sealPath = "/api/market/seal-quality", sealSearch = `?trade_date=${day}`;
   const journal = ancillaryReply("GET", journalPath).data;
-  assert.equal(journal.schema_version, "next-day-verification.v0.1");
+  assert.equal(journal.schema_version, "next-day-verification.v0.2");
   assert.equal(journal.trade_date, day); assert.equal(journal.state, "CALENDAR_UNKNOWN");
   assert.equal(journal.research_only, true); assert.equal(journal.revision, 0);
   assert.deepEqual(journal.items, []); assert.equal(journal.next_trade_date, null); assert.equal(journal.seals_at, null);
@@ -151,4 +151,19 @@ test("shared Markdown/history readiness startup uses only exact fixed-date reado
   }
   value.features.length = 0;
   assert.equal(ancillaryReply("GET", path, search).data.features.length, 3);
+});
+
+
+test("observation ancillary read is exact-date GET only and never activates producers", () => {
+  const path = `/api/observation-workflows/${ANCILLARY_TRADE_DATE}`;
+  const value = ancillaryReply("GET", path).data;
+  assert.equal(value.trade_date, ANCILLARY_TRADE_DATE);
+  assert.equal(value.generated_at, "2026-10-08T08:00:00.000000+00:00");
+  for (const key of ["collector_enabled", "scheduler_enabled", "external_notifications_enabled"]) assert.equal(value[key], false);
+  assert.deepEqual(value.events, []); assert.deepEqual(value.tasks, []); assert.deepEqual(value.due, []);
+  for (const method of ["POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]) assert.equal(ancillaryReply(method, path), null);
+  for (const query of ["?", "?trade_date=2026-10-08", "?refresh=1", "?as_of=x"]) assert.equal(ancillaryReply("GET", path, query), null);
+  for (const other of ["/api/observation-workflows/2026-10-09", "/api/observation-workflows/preview", `${path}/`, `${path}/tasks/premarket/run`]) assert.equal(ancillaryReply("GET", other), null);
+  assert.equal(realRouteAllowed("GET", path, "history-late-success"), false);
+  value.events.push({ mutated: true }); assert.deepEqual(ancillaryReply("GET", path).data.events, []);
 });

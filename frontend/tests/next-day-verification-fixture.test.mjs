@@ -196,3 +196,33 @@ test("saved AI basis fixtures are dated readonly restores, with explicitly separ
     assert.equal(f.writes.length, 0);
   }
 });
+
+test("full review admits only exact new research card history dates", () => {
+ for (const route of ["shortline-research", "theme-research"]) {
+  for (const day of ["2026-07-31", "2026-07-30", "2026-07-29"]) {
+   const f = createFixture("http://fixture.test", { withSealQuality: true, fullReview: true });
+   const reply = f.handle(`http://fixture.test/api/market/${route}?trade_date=${day}`);
+   assert.equal(reply.body.data.trade_date, day); assert.equal(reply.body.data.status, "unavailable");
+   assert.deepEqual(f.violations, []);
+  }
+  for (const suffix of ["?trade_date=2026-07-28", "?trade_date=2026-07-30&extra=1", "?trade_date=2026-07-30&trade_date=2026-07-31", ""]) {
+   const f = createFixture("http://fixture.test", { withSealQuality: true, fullReview: true });
+   assert.equal(f.handle(`http://fixture.test/api/market/${route}${suffix}`).kind, "deny");
+  }
+  for (const method of ["POST", "PUT", "DELETE"]) {
+   const f = createFixture("http://fixture.test", { withSealQuality: true, fullReview: true });
+   assert.equal(f.handle(`http://fixture.test/api/market/${route}?trade_date=2026-07-30`, method).kind, "deny");
+  }
+  const f = createFixture("http://fixture.test", { withSealQuality: true });
+  assert.equal(f.handle(`http://fixture.test/api/market/${route}?trade_date=2026-07-30`).kind, "deny");
+ }
+});
+test("observation fixture admits only exact owned dates and explicit preview opt-in", () => {
+  const f = createFixture(origin);
+  assert.equal(f.handle(`${origin}/api/observation-workflows/${DAY}`).body.data.trade_date, DAY);
+  assert.equal(f.handle(`${origin}/api/observation-workflows/preview`).kind, "deny");
+  assert.equal(f.handle(`${origin}/api/observation-workflows/${DAY}?observed_at=fake`).kind, "deny");
+  assert.equal(f.handle(`${origin}/api/observation-workflows/${DAY}/tasks/premarket/run`, "POST", {}).kind, "deny");
+  const demo = createFixture(origin, { withObservationPreview: true });
+  assert.equal(demo.handle(`${origin}/api/observation-workflows/preview`).body.data.synthetic, true);
+});

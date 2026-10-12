@@ -19,6 +19,7 @@ const journal = load("../src/lib/nextDayVerification.ts");
 const shortline = load("../src/lib/shortlineResearch.ts");
 const shortlineGolden = JSON.parse(readFileSync(new URL("./fixtures/shortline-research.golden.json", import.meta.url), "utf8"));
 const seal = load("../src/lib/sealQuality.ts");
+const observation = load("../src/lib/observationWorkflows.ts");
 const copy = x => structuredClone(x);
 
 test("all existing real-service journal goldens still satisfy readback contract", () => {
@@ -74,7 +75,7 @@ function harness(component, initial) {
   };
   const request = (...args) => new Promise((resolve, reject) => calls.push({ args, resolve, reject }));
   const modules = { react, "react/jsx-runtime": { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }), Fragment: "fragment" },
-    "@/lib/api": { request, api: { sealQuality: request } }, "@/components/dailyReview/RegimeAnnotationForm": { RegimeAnnotationForm: "form" }, "@/lib/shortlineResearch": shortline, "@/lib/nextDayVerification": journal, "@/lib/sealQuality": seal,
+    "@/lib/api": { request, api: { sealQuality: request } }, "@/components/dailyReview/RegimeAnnotationForm": { RegimeAnnotationForm: "form" }, "@/lib/shortlineResearch": shortline, "@/lib/nextDayVerification": journal, "@/lib/sealQuality": seal, "@/lib/observationWorkflows": observation,
     "@/components/ui/GlassCard": { GlassCard: "section" } };
   const exports = load(`../src/components/dailyReview/${component}.tsx`, modules);
   return { calls, get tree() { return tree; }, update(next) { props = next; dirty = true; },
@@ -168,4 +169,58 @@ for (const mutate of [
   button(h, label).props.onClick(); await h.flush(); assert.doesNotMatch(text(h.tree), /读取或合同核验失败/);
  }
  h.unmount();
+});
+
+const observationGolden = JSON.parse(readFileSync(new URL("./fixtures/observation-workflows-preview.json", import.meta.url), "utf8"));
+const observationEmpty = JSON.parse(readFileSync(new URL("./fixtures/observation-workflows-empty.json", import.meta.url), "utf8"));
+test("production observation rejects malformed result, recovers and stale date reply cannot replace current", async () => {
+  const h = harness("ObservationWorkflowCard", { initialDate: "2026-07-31" });
+  await h.flush();
+  h.calls[0].resolve({ ...copy(observationEmpty["2026-07-31"]), slots: null }); await h.flush();
+  assert.match(text(h.tree), /校验失败/);
+  button(h, "重新读取").props.onClick(); await h.flush();
+  h.update({ initialDate: "2026-07-30" }); await h.flush();
+  const newest = h.calls.at(-1);
+  newest.resolve(copy(observationEmpty["2026-07-30"])); await h.flush();
+  h.calls[1].resolve(copy(observationEmpty["2026-07-31"])); await h.flush();
+  assert.equal(nodes(h.tree).find(n => n.type === "input").props.value, "2026-07-30");
+  assert.doesNotMatch(text(h.tree), /校验失败/);
+  h.unmount();
+});
+test("production observation preview is isolated and task double-click has one explicit POST", async () => {
+  const h = harness("ObservationWorkflowCard", { initialDate: "2026-07-31" });
+  await h.flush(); h.calls[0].resolve(copy(observationEmpty["2026-07-31"])); await h.flush();
+  const run = button(h, "仅运行本地任务");
+  run.props.onClick(); run.props.onClick(); await h.flush();
+  assert.equal(h.calls.filter(c => c.args[1] === "POST").length, 1);
+  h.calls.at(-1).reject(new Error("任务窗口已关闭")); await h.flush();
+  assert.match(text(h.tree), /任务窗口已关闭/);
+  button(h, "查看离线合成演示").props.onClick(); await h.flush();
+  h.calls.at(-1).resolve(copy(observationGolden)); await h.flush();
+  assert.match(text(h.tree), /纯合成离线演示/);
+  assert.equal(button(h, "仅运行本地任务"), undefined);
+  button(h, "返回真实归档").props.onClick(); await h.flush();
+  h.calls.at(-1).resolve(copy(observationEmpty["2026-07-31"])); await h.flush();
+  assert.doesNotMatch(text(h.tree), /纯合成离线演示/);
+  h.unmount();
+});
+
+test("embedded observations wait for owning date and malformed task reply locks mutation until reread", async () => {
+  const h = harness("ObservationWorkflowCard", {});
+  await h.flush();
+  assert.equal(h.calls.length, 0);
+  assert.match(text(h.tree), /等待复盘交易日/);
+  h.update({ initialDate: "2026-07-31" }); await h.flush();
+  h.calls[0].resolve(copy(observationEmpty["2026-07-31"])); await h.flush();
+  button(h, "仅运行本地任务").props.onClick(); await h.flush();
+  h.calls.at(-1).resolve({ status: "COMPLETE", kind: "premarket" }); await h.flush();
+  assert.match(text(h.tree), /执行结果尚未确认/);
+  assert.equal(button(h, "仅运行本地任务").props.disabled, true);
+  const count = h.calls.length;
+  button(h, "仅运行本地任务").props.onClick(); await h.flush();
+  assert.equal(h.calls.length, count);
+  button(h, "重新读取").props.onClick(); await h.flush();
+  h.calls.at(-1).resolve(copy(observationEmpty["2026-07-31"])); await h.flush();
+  assert.equal(button(h, "仅运行本地任务").props.disabled, false);
+  h.unmount();
 });
