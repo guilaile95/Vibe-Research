@@ -1,0 +1,4 @@
+# Evidence hashes cover exact bytes; Git must not rewrite checkout line endings.
+/backend/tests/fixtures/public_research/* -text
+/docs/third-party/vibe-astock-LICENSE -text
+/docs/third-party/vibe-astock-NOTICE -text

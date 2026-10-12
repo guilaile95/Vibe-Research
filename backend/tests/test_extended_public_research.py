@@ -202,7 +202,7 @@ def test_exact_registered_api_golden(tmp_path,monkeypatch):
         for b in value['blocks']:b['evidence']['observation_id']=mapping[b['evidence']['observation_id']]
         if 'turnover' in value:value['turnover']['evidence_ids']=[mapping[x] for x in value['turnover']['evidence_ids']]
     golden=Path(__file__).resolve().parents[2]/'frontend/tests/fixtures/extended-public-research.golden.json'
-    assert actual==json.loads(golden.read_text())
+    assert actual==json.loads(golden.read_text(encoding="utf-8"))
 
 
 def test_cn_quote_reuses_parser_with_raw_identity_and_clock():
@@ -243,5 +243,5 @@ def test_actual_source_failure_api_golden(tmp_path,monkeypatch):
     data=request('/api/public-research/market-context?as_of='+CUTOFF).json()['data']
     for b in data['blocks']:b['evidence']['observation_id']='synthetic-'+b['source_id']+'-'+b['subject']
     expected=Path(__file__).resolve().parents[2]/'frontend/tests/fixtures/extended-public-failure.golden.json'
-    assert data==json.loads(expected.read_text())
+    assert data==json.loads(expected.read_text(encoding="utf-8"))
     assert data['blocks'][0]['status']=='unavailable' and len(data['turnover']['rows'])==60

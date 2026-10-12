@@ -143,6 +143,6 @@ def golden_archives(monkeypatch, tmp_path):
 
 def test_committed_frontend_goldens_match_actual_api(golden_archives, http_get):
     path = Path(__file__).parents[2] / 'frontend/tests/fixtures/evidence-readiness-golden.json'
-    goldens = json.loads(path.read_text())
+    goldens = json.loads(path.read_text(encoding="utf-8"))
     for day, expected in goldens.items():
         assert result(http_get, day) == expected

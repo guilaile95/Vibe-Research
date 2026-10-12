@@ -40,7 +40,20 @@ def assert_public(value):
 
 
 @pytest.fixture
-def private_stores(tmp_path, monkeypatch):
+def privacy_event_loop():
+    # Windows creates the stdlib wakeup socketpair during loop construction.
+    # Construct it before private_stores installs deny-all network guards.
+    loop = asyncio.new_event_loop()
+    try:
+        yield loop
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.run_until_complete(loop.shutdown_default_executor())
+        loop.close()
+
+
+@pytest.fixture
+def private_stores(tmp_path, monkeypatch, privacy_event_loop):
     monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("VIBE_RESEARCH_TRADE_LEDGER_DB", str(tmp_path / "trade_ledger.sqlite3"))
     monkeypatch.setenv("VIBE_RESEARCH_TRADE_ATTRIBUTION_DB", str(tmp_path / "formal.sqlite3"))
@@ -54,6 +67,10 @@ def private_stores(tmp_path, monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", deny)
     monkeypatch.setattr(socket.socket, "connect_ex", deny)
     monkeypatch.setattr(socket, "create_connection", deny)
+    def deny_late_loop():
+        raise AssertionError("late event loop forbidden in privacy acceptance")
+    monkeypatch.setattr(asyncio, "new_event_loop", deny_late_loop)
+    monkeypatch.setattr(asyncio.events, "new_event_loop", deny_late_loop)
     trade = ledger.create_trade({"code": "600000", "name": CANARIES["trade"], "operation": "buy",
         "execution_status": "full", "actual_price": 10.0, "actual_quantity": 100,
         "executed_at": "2026-07-21T10:00:00+08:00", "fee": 1.0, "other_cost": 0.0})
@@ -170,7 +187,7 @@ def test_segmented_actual_sources_and_all_model_sinks_exclude_private_state(priv
 
 
 @pytest.mark.parametrize("market,symbol", [("A", "600519"), ("HK", "00700"), ("US", "AAPL")])
-def test_sixstage_actual_public_adapter_plan_has_no_private_reads(private_stores, monkeypatch, market, symbol):
+def test_sixstage_actual_public_adapter_plan_has_no_private_reads(private_stores, privacy_event_loop, monkeypatch, market, symbol):
     forbid_private_reads(monkeypatch)
     for name in ("individual_info", "financials", "full_valuation", "announcements", "lockup_expiry"):
         monkeypatch.setattr(company_research.astock, name, lambda *args, **kwargs: {"code": "600519", "date": DAY, "value": 10})
@@ -186,8 +203,14 @@ def test_sixstage_actual_public_adapter_plan_has_no_private_reads(private_stores
         yield {"type": "done"}
     async def run():
         return [e async for e in company_research.generate(bundle, {"provider": "api", "model": "synthetic"}, threading.Event(), stream=model)]
-    events = asyncio.run(run())
+    events = privacy_event_loop.run_until_complete(run())
     assert events[-1]["type"] == "done"
     assert len(captured) == 6
     assert_public(bundle)
     assert_public(captured)
+
+
+def test_private_pipeline_cannot_create_an_unguarded_second_loop(private_stores):
+    for factory in (asyncio.new_event_loop, asyncio.events.new_event_loop):
+        with pytest.raises(AssertionError, match="late event loop forbidden"):
+            factory()

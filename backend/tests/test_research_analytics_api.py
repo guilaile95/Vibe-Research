@@ -2,6 +2,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import math
 import sqlite3
 
 import httpx
@@ -122,15 +123,97 @@ def test_catalog_actual_inventory_not_invented_43():
     assert all(row.get('value') is None for row in result['supplemental_inventory'] if row['status'] == 'UNSUPPORTED')
 
 
-def test_browser_fixture_exact_current_source_parity():
+def _result_difference_paths(actual, expected, path='result'):
+    """Diagnostic only: never decides which differences the comparator accepts."""
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        paths = [f'{path}.{key} (missing/extra)' for key in sorted(actual.keys() ^ expected.keys())]
+        for key in sorted(actual.keys() & expected.keys()):
+            paths.extend(_result_difference_paths(actual[key], expected[key], f'{path}.{key}'))
+        return paths
+    if isinstance(actual, list) and isinstance(expected, list):
+        paths = [f'{path}.length'] if len(actual) != len(expected) else []
+        for index, (a, e) in enumerate(zip(actual, expected)):
+            paths.extend(_result_difference_paths(a, e, f'{path}[{index}]'))
+        return paths
+    return [] if actual == expected else [path]
+
+
+def _assert_browser_fixture_result(mode, actual, expected):
+    # Windows CPython 3.12 produced 0.315221110334431 rather than the stored
+    # 0.31522111033443095: exactly one binary64 ULP. This sole dimensionless
+    # statistic is covariance(returns, benchmark) / variance(benchmark), whose
+    # floating reduction may round differently across supported runtimes.
+    # Do not approximate cash, fees, returns, counts, currencies, or fingerprints.
+    if mode == 'simulation':
+        actual_beta = actual['metrics']['benchmark_beta']['value']
+        expected_beta = expected['metrics']['benchmark_beta']['value']
+        assert type(actual_beta) is float and type(expected_beta) is float
+        assert math.isfinite(actual_beta) and math.isfinite(expected_beta)
+        assert abs(actual_beta - expected_beta) <= math.ulp(expected_beta), (
+            'simulation.metrics.benchmark_beta.value differs by more than one ULP',
+            actual_beta, expected_beta,
+        )
+        actual = copy.deepcopy(actual)
+        actual['metrics']['benchmark_beta']['value'] = expected_beta
+    assert actual == expected, _result_difference_paths(actual, expected, mode + '.result')
+
+
+def _browser_fixture():
     from pathlib import Path
+    return json.loads((Path(__file__).parents[2] / 'frontend/tests/e2e/research-analytics.fixture.json').read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize('mode', ['simulation', 'scenario', 'performance', 'ledger-performance', 'cost-comparison'])
+def test_browser_fixture_exact_current_source_parity(mode):
     from research_analytics_contract import SimulationRequest, ScenarioRequest, PerformanceRequest
     from research_analytics import performance, scenario
     from research_analytics_simulation import simulate
     from research_cost_comparison import CostComparisonRequest, compare_costs
-    fixture = json.loads((Path(__file__).parents[2] / 'frontend/tests/e2e/research-analytics.fixture.json').read_text(encoding="utf-8"))
-    for mode, model, fn in [('simulation', SimulationRequest, simulate), ('scenario', ScenarioRequest, scenario), ('performance', PerformanceRequest, performance), ('ledger-performance', LedgerPerformanceRequest, ledger_performance), ('cost-comparison', CostComparisonRequest, compare_costs)]:
-        assert fn(model.model_validate(fixture[mode]['input'])) == fixture[mode]['result']
+    fixture = _browser_fixture()
+    model, fn = {
+        'simulation': (SimulationRequest, simulate), 'scenario': (ScenarioRequest, scenario),
+        'performance': (PerformanceRequest, performance),
+        'ledger-performance': (LedgerPerformanceRequest, ledger_performance),
+        'cost-comparison': (CostComparisonRequest, compare_costs),
+    }[mode]
+    _assert_browser_fixture_result(mode, fn(model.model_validate(fixture[mode]['input'])), fixture[mode]['result'])
+
+
+@pytest.mark.parametrize('toward', [math.inf, -math.inf])
+def test_browser_parity_allows_only_one_beta_ulp_without_mutating_results(toward):
+    expected = _browser_fixture()['simulation']['result']
+    actual = copy.deepcopy(expected)
+    actual['metrics']['benchmark_beta']['value'] = math.nextafter(expected['metrics']['benchmark_beta']['value'], toward)
+    before = copy.deepcopy(actual)
+    _assert_browser_fixture_result('simulation', actual, expected)
+    assert actual == before
+    # The same numeric path in any other mode has no exemption.
+    with pytest.raises(AssertionError):
+        _assert_browser_fixture_result('performance', actual, expected)
+
+
+@pytest.mark.parametrize('change', ['two_ulps', 'basis_point', 'nan', 'infinity', 'boolean',
+                                  'cash_ulp', 'fees_ulp', 'trade_count', 'currency',
+                                  'fingerprint', 'status', 'missing_key', 'extra_key'])
+def test_browser_parity_rejects_substantive_or_unrelated_changes(change):
+    expected = _browser_fixture()['simulation']['result']
+    actual = copy.deepcopy(expected)
+    beta = actual['metrics']['benchmark_beta']
+    if change == 'two_ulps': beta['value'] = math.nextafter(math.nextafter(beta['value'], math.inf), math.inf)
+    elif change == 'basis_point': beta['value'] += 0.0001
+    elif change == 'nan': beta['value'] = math.nan
+    elif change == 'infinity': beta['value'] = math.inf
+    elif change == 'boolean': beta['value'] = True
+    elif change == 'cash_ulp': actual['metrics']['final_value']['value'] = math.nextafter(actual['metrics']['final_value']['value'], math.inf)
+    elif change == 'fees_ulp': actual['total_fees'] = math.nextafter(actual['total_fees'], math.inf)
+    elif change == 'trade_count': actual['metrics']['trade_count']['value'] += 1
+    elif change == 'currency': actual['currency'] = 'USD'
+    elif change == 'fingerprint': actual['input_fingerprint'] = '0' * 64
+    elif change == 'status': beta['status'] = 'UNSUPPORTED'
+    elif change == 'missing_key': del actual['currency']
+    elif change == 'extra_key': actual['unknown'] = None
+    with pytest.raises(AssertionError):
+        _assert_browser_fixture_result('simulation', actual, expected)
 
 
 def test_rdp_snapshot_is_pinned_across_pages_and_codes(monkeypatch):
@@ -217,3 +300,15 @@ def test_simulation_plan_is_separate_validation_only(monkeypatch):
     assert result.json()['status'] == 'READY_TO_CALCULATE'
     assert result.json()['maximum_runs'] == 12
     assert result.json()['formal_writes'] == 0
+
+
+def test_browser_parity_diagnostics_identify_all_exact_mismatch_paths():
+    expected = {'currency': 'CNY', 'rows': [{'cash': 1.0, 'count': 2}], 'identity': 'original'}
+    actual = {'currency': 'USD', 'rows': [{'cash': 1.01, 'count': 3}], 'extra': True}
+    assert _result_difference_paths(actual, expected, 'cost-comparison.result') == [
+        'cost-comparison.result.extra (missing/extra)', 'cost-comparison.result.identity (missing/extra)',
+        'cost-comparison.result.currency', 'cost-comparison.result.rows[0].cash',
+        'cost-comparison.result.rows[0].count',
+    ]
+    with pytest.raises(AssertionError, match=r'cost-comparison.result.rows\[0\].cash'):
+        _assert_browser_fixture_result('cost-comparison', actual, expected)

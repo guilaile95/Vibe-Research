@@ -170,7 +170,8 @@ def test_command_adapter_fixed_arguments_timeout_group_cleanup(tmp_path, monkeyp
     monkeypatch.setattr(ocr, "_binary", lambda name: "/usr/bin/tesseract")
     monkeypatch.setattr(ocr, "_resource_supported", lambda: True)
     monkeypatch.setattr(ocr.subprocess, "Popen", launch)
-    monkeypatch.setattr(ocr.os, "killpg", lambda pid, sig: killed.append(pid), raising=False)
+    monkeypatch.setattr(ocr.signal, "SIGKILL", 9, raising=False)  # Simulated POSIX branch on every host.
+    monkeypatch.setattr(ocr.os, "killpg", lambda pid, sig: killed.append((pid, sig)), raising=False)
     ticks = iter([0, 2])
     monkeypatch.setattr(ocr.time, "monotonic", lambda: next(ticks))
     with pytest.raises(ocr.OcrError, match="TIMEOUT"):
@@ -179,7 +180,7 @@ def test_command_adapter_fixed_arguments_timeout_group_cleanup(tmp_path, monkeyp
     assert calls[0][0][4] == "/usr/bin/tesseract"
     assert calls[0][1]["shell"] is False and calls[0][1]["start_new_session"] is True
     assert "HTTP_PROXY" not in calls[0][1]["env"]
-    assert killed == [123456]
+    assert killed == [(123456, 9)]
 
 
 def test_source_change_during_extraction_keeps_index(tmp_path, monkeypatch):
@@ -328,10 +329,11 @@ def test_running_cancel_kills_group_and_reaps(tmp_path, monkeypatch):
     monkeypatch.setattr(ocr, '_resource_supported', lambda: True)
     monkeypatch.setattr(ocr, '_binary', lambda name: '/usr/bin/tesseract')
     monkeypatch.setattr(ocr.subprocess, 'Popen', launch)
-    monkeypatch.setattr(ocr.os, 'killpg', lambda pid, sig: killed.append(pid), raising=False)
+    monkeypatch.setattr(ocr.signal, 'SIGKILL', 9, raising=False)  # Simulated POSIX branch on every host.
+    monkeypatch.setattr(ocr.os, 'killpg', lambda pid, sig: killed.append((pid, sig)), raising=False)
     with pytest.raises(ocr.OcrError, match='CANCELLED'):
         ocr._run('tesseract', ['synthetic.png', 'stdout'], tmp_path, cancelled, ocr.time.monotonic() + 5)
-    assert killed == [123456] and reaped == [5]
+    assert killed == [(123456, 9)] and reaped == [5]
 
 
 def test_late_page_excerpt_keeps_server_verified_ocr_uncertainty(tmp_path, monkeypatch):
