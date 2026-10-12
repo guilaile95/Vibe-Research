@@ -30,6 +30,7 @@ __all__ = [
     "completed_trade_date_at",
     "observation_trade_date_at",
     "previous_trade_date",
+    "next_trade_date",
 ]
 
 CALENDAR_AUTHORITY_REF = "trade_calendar:completed_trade_date:v0.1"
@@ -335,3 +336,23 @@ def observation_trade_date_at(observed_at: str) -> Optional[str]:
     :func:`completed_trade_date_at`.
     """
     return _session_date_at(observed_at, (9, 30, 0, 0))
+
+
+def next_trade_date(current_trade_date: str) -> Optional[str]:
+    """Return the next *confirmed* session, including supported future sessions.
+
+    Unlike historical lookups, this is a scheduling boundary, not evidence that
+    a session has occurred. Unknown dates and the end of calendar coverage fail
+    closed; never guess a weekday across a holiday or an unsupported year.
+    """
+    if not isinstance(current_trade_date, str):
+        return None
+    if _parse_strict_date(current_trade_date) is None:
+        return None
+    sessions = _load_calendar()
+    if sessions is None:
+        return None
+    idx = bisect.bisect_left(sessions, current_trade_date)
+    if idx >= len(sessions) - 1 or sessions[idx] != current_trade_date:
+        return None
+    return sessions[idx + 1]

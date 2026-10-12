@@ -79,6 +79,7 @@ import performance_attribution_router
 import performance_attribution_store
 import technical_indicators_router
 import bk11_history_router
+import short_term_seal_quality_router
 import intel_digest_router
 import native_intel_router
 import position_reality_router
@@ -421,6 +422,7 @@ app.include_router(performance_attribution_router.router)
 app.include_router(technical_indicators_router.router)
 # BK-11 短线市场历史只读查询
 app.include_router(bk11_history_router.router)
+app.include_router(short_term_seal_quality_router.router)
 # Intel Daily Digest
 app.include_router(intel_digest_router.router)
 # NATIVE-INTEL1：Vibe 自有资讯能力（MIT 原生，无 TrendRadar sidecar/runtime）
@@ -452,6 +454,8 @@ app.include_router(formal_decision_outcome_router.router)
 app.include_router(research_data_plane_router.router)
 # Historical Signal Validation: read-only research computation; no formal writes.
 app.include_router(historical_signal_validation_router.router)
+import next_day_verification_router
+app.include_router(next_day_verification_router.router)
 # Cross-Sectional Factor Validation: read-only RDP research computation; no formal writes.
 app.include_router(factor_validation_router.router)
 # PLANNING-PARITY-EVENT-CALENDAR1: bounded read-only aggregation over existing

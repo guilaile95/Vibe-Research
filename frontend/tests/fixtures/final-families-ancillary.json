@@ -1,0 +1,75 @@
+{
+  "fixture_context": "Synthetic empty journal with intentionally unavailable calendar; not a claim about the actual 2026-10-08 calendar.",
+  "clock": "2026-10-08T08:00:00Z",
+  "journal": {
+    "schema_version": "next-day-verification.v0.1",
+    "research_only": true,
+    "trade_date": "2026-10-08",
+    "state": "CALENDAR_UNKNOWN",
+    "next_trade_date": null,
+    "seals_at": null,
+    "revision": 0,
+    "items": [],
+    "metrics": [
+      {
+        "key": "limit_up_count",
+        "label": "涨停家数",
+        "unit": "家",
+        "epsilon": 5
+      },
+      {
+        "key": "failed_board_rate",
+        "label": "炸板率",
+        "unit": "0–1 比率",
+        "epsilon": 0.05
+      }
+    ],
+    "summary": {
+      "total": 0,
+      "decided": 0,
+      "hit": 0,
+      "unknown": 0,
+      "rate": null,
+      "coverage": null,
+      "baseline_covered": 0,
+      "expected_rate": null,
+      "edge": null
+    },
+    "history": {
+      "from": null,
+      "through": "2026-10-08",
+      "summary": {
+        "total": 0,
+        "decided": 0,
+        "hit": 0,
+        "unknown": 0,
+        "rate": null,
+        "coverage": null,
+        "baseline_covered": 0,
+        "expected_rate": null,
+        "edge": null
+      }
+    },
+    "generated_at": "2026-10-08T08:00:00.000000+00:00",
+    "limitations": [
+      "仅记录您事前写下的市场读数条件，不提供个股建议，不自动交易。",
+      "只读取本地已存的合格收盘事实；未启用自动采集，缺少事实时保留待核验，不算失败。",
+      "基准为保存时已知的历史发生频率，不代表投资胜率或未来概率。",
+      "对账使用当前已存的收盘观察，源数据更正可能改变结果；事前值和基准已冻结。"
+    ]
+  },
+  "seal": {
+    "schema_version": "short-term-seal-quality-archive-v0.1",
+    "trade_date": "2026-10-08",
+    "status": "unavailable",
+    "reason_codes": [
+      "ARCHIVE_NOT_CONNECTED"
+    ],
+    "message": "封板质量归档证据未连接；不会自动启用采集或请求行情。",
+    "selection": null,
+    "archive_identity": null,
+    "projection": null,
+    "archive_only": true,
+    "ingestion_enabled": false
+  }
+}

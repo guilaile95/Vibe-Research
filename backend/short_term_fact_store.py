@@ -569,3 +569,30 @@ def list_recent_snapshots(
             conn.close()
     except sqlite3.DatabaseError as exc:
         raise FactStoreCorruptedError() from exc
+
+
+def load_final_fact_record(
+    trade_date: str, db_path: str | Path | None = None,
+) -> Optional[Dict[str, Any]]:
+    """Read envelope and persistence time from one row, without creating a DB.
+
+    Research as-of consumers need ``stored_at`` as well as source timestamps:
+    a later backfill cannot become evidence known at an earlier observation.
+    This additive reader never collects, promotes, or repairs facts.
+    """
+    path = resolve_db_path(db_path)
+    if not path.is_file():
+        return None
+    try:
+        with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+            row = conn.execute(
+                "SELECT envelope_json, stored_at FROM fact_snapshots WHERE trade_date=? AND session='final'",
+                (trade_date,),
+            ).fetchone()
+        if row is None:
+            return None
+        envelope = json.loads(row[0])
+        _validate_envelope(envelope)
+        return {"envelope": envelope, "stored_at": row[1]}
+    except (sqlite3.Error, ValueError, TypeError, FactStoreInvalidEnvelopeError) as exc:
+        raise FactStoreCorruptedError() from exc

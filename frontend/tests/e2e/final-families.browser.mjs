@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { syntheticLlm, plan, encode, debateEvents, ancillaryReply, realRouteAllowed, observeHistoryReads } from "./final-families.fixture.mjs";
+import { ANCILLARY_CLOCK, syntheticLlm, plan, encode, debateEvents, ancillaryReply, realRouteAllowed, observeHistoryReads } from "./final-families.fixture.mjs";
 const frontend = fileURLToPath(new URL("../../", import.meta.url)), dist = join(frontend, "dist");
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { resolve, promise }; };
 async function bounded(promise, label) {
@@ -116,6 +116,7 @@ async function runScenario(browser, baseURL, backend, width, scenario, evidenceD
       return route.fulfill({ status: 503, json: { detail: "UNEXPECTED_SYNTHETIC_REQUEST" } });
     });
     page = await context.newPage(); page.setDefaultTimeout(10000);
+    if (scenario.startsWith("history-")) await page.clock.setFixedTime(new Date(ANCILLARY_CLOCK));
     page.on("pageerror", error => errors.push(error.message)); page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
     const notes = () => page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes") || "[]"));
     if (scenario === "debate" || scenario === "notes-mobile") {

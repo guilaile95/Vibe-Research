@@ -2,8 +2,49 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import vm from "node:vm";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import { stopBackend } from "./e2e/final-families.browser.mjs";
-import { ancillaryReply, realRouteAllowed, debateEvents, plan, encode, observeHistoryReads } from "./e2e/final-families.fixture.mjs";
+import { ANCILLARY_CLOCK, ANCILLARY_TRADE_DATE, ancillaryReply, realRouteAllowed, debateEvents, plan, encode, observeHistoryReads } from "./e2e/final-families.fixture.mjs";
+
+test("new ancillary cards accept only exact fixed-date GETs with truthful unavailable readback", () => {
+  const day = ANCILLARY_TRADE_DATE;
+  const journalPath = `/api/next-day-verification/${day}`;
+  const sealPath = "/api/market/seal-quality", sealSearch = `?trade_date=${day}`;
+  const journal = ancillaryReply("GET", journalPath).data;
+  assert.equal(journal.schema_version, "next-day-verification.v0.1");
+  assert.equal(journal.trade_date, day); assert.equal(journal.state, "CALENDAR_UNKNOWN");
+  assert.equal(journal.research_only, true); assert.equal(journal.revision, 0);
+  assert.deepEqual(journal.items, []); assert.equal(journal.next_trade_date, null); assert.equal(journal.seals_at, null);
+  for (const summary of [journal.summary, journal.history.summary]) {
+    for (const key of ["total", "decided", "hit", "unknown", "baseline_covered"]) assert.equal(summary[key], 0);
+    for (const key of ["rate", "coverage", "expected_rate", "edge"]) assert.equal(summary[key], null);
+  }
+  const seal = ancillaryReply("GET", sealPath, sealSearch).data;
+  assert.equal(seal.schema_version, "short-term-seal-quality-archive-v0.1");
+  assert.equal(seal.trade_date, day); assert.deepEqual(seal.reason_codes, ["ARCHIVE_NOT_CONNECTED"]);
+  assert.equal(seal.projection, null); assert.equal(seal.archive_identity, null); assert.equal(seal.ingestion_enabled, false);
+  for (const method of ["POST", "PUT", "PATCH", "DELETE", "HEAD"]) {
+    assert.equal(ancillaryReply(method, journalPath), null);
+    assert.equal(ancillaryReply(method, sealPath, sealSearch), null);
+  }
+  for (const search of ["?", "?as_of=x", "?observed_at=x", "?refresh=true", `?trade_date=${day}`, "?path=/tmp"]) assert.equal(ancillaryReply("GET", journalPath, search), null);
+  for (const search of ["", "?trade_date=2026-10-12", "?trade_date=2026-09-05", "?date=2026-10-08", `${sealSearch}&trade_date=${day}`, `${sealSearch}&as_of=x`, `${sealSearch}&root=/tmp`, "?trade_date=2026%2D10%2D08"]) assert.equal(ancillaryReply("GET", sealPath, search), null);
+  for (const path of ["/api/next-day-verification/2026-10-12", "/api/next-day-verification/2026-09-05", `${journalPath}/`, "/api/next-day-verification/2026%2D10%2D08", `${sealPath}/`]) assert.equal(ancillaryReply("GET", path, path.includes("seal-quality") ? sealSearch : ""), null);
+  // New cards stay fixtures, never part of the real backend route allowance.
+  assert.equal(realRouteAllowed("GET", journalPath, "history-late-success"), false);
+  assert.equal(realRouteAllowed("GET", sealPath, "history-late-error"), false);
+  journal.items.push({ synthetic: true });
+  assert.deepEqual(ancillaryReply("GET", journalPath).data.items, []);
+});
+
+test("clock is fixed before any inherited DailyReview navigation, without widening accepted dates", () => {
+  assert.equal(ANCILLARY_CLOCK, "2026-10-08T08:00:00Z");
+  assert.equal(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ANCILLARY_CLOCK)), ANCILLARY_TRADE_DATE);
+  for (const filename of ["final-families.browser.mjs", "markdown-images.browser.mjs"]) {
+    const source = readFileSync(new URL(`./e2e/${filename}`, import.meta.url), "utf8");
+    assert.ok(source.indexOf("page.clock.setFixedTime(new Date(ANCILLARY_CLOCK))") < source.indexOf("await page.goto("));
+  }
+});
 
 test("Debate fixtures distinguish original bull-only EOF, missing terminal and complete three/five stages", () => {
   for (const rounds of [1, 2]) {
