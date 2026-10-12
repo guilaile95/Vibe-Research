@@ -5,6 +5,7 @@ from research_analytics import METRIC_KEYS, VERSION, performance, scenario
 from research_analytics_contract import SimulationRequest, ScenarioRequest, PerformanceRequest, LedgerPerformanceRequest, RdpRequest
 from research_analytics_simulation import simulate, simulation_plan
 from research_analytics_adapters import ledger_performance, rdp_inputs
+from research_cost_comparison import CostComparisonRequest, compare_costs
 
 router = APIRouter(prefix='/api/research-analytics', tags=['research-analytics'])
 
@@ -28,6 +29,7 @@ def catalog():
                                   'source': 'backtest/metrics.py:calc_metrics'} for key in METRIC_KEYS],
             'inventory_correction': 'Fixed source returns 20 core metrics; prior 43-metric count withdrawn as unsupported.',
             'supplemental_inventory': [
+                {'name': 'same-input FIFO / moving-average currency-separated comparison', 'status': 'SUPPORTED', 'source': 'orchestrator/src/finance/holdings.ts;pages/Portfolio.tsx'},
                 {'name': 'benchmark matched calendar', 'status': 'SUPPORTED', 'source': 'backtest/benchmark.py'},
                 {'name': 'zero-cost and double-cost comparison', 'status': 'SUPPORTED', 'source': 'backtest/cost_compare.py'},
                 {'name': 'bounded 3×3 SMA parameter grid', 'status': 'SUPPORTED', 'source': 'backtest/sensitivity.py'},
@@ -44,7 +46,7 @@ def catalog():
 def example(kind: str, response: Response):
     from research_analytics_examples import example_input
     response.headers['Cache-Control'] = 'no-store'
-    if kind not in {'simulation', 'scenario', 'performance', 'ledger-performance'}:
+    if kind not in {'simulation', 'scenario', 'performance', 'ledger-performance', 'cost-comparison'}:
         raise HTTPException(status_code=404, detail='unknown example')
     return {'synthetic': True, 'input': example_input(kind)}
 
@@ -77,3 +79,8 @@ def ledger_endpoint(response: Response, body: dict = Body(...)):
 @router.post('/rdp-inputs')
 def rdp_endpoint(response: Response, body: dict = Body(...)):
     return _calculate(body, RdpRequest, rdp_inputs, response)
+
+
+@router.post('/cost-comparison')
+def cost_comparison_endpoint(response: Response, body: dict = Body(...)):
+    return _calculate(body, CostComparisonRequest, compare_costs, response)

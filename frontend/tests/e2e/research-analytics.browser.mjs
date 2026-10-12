@@ -43,9 +43,9 @@ try {
       if (url.origin !== origin) { audit.external.push(url.origin); return route.abort(); }
       if (!url.pathname.startsWith('/api/')) return route.continue();
       audit.requests.push(req.method() + ' ' + url.pathname);
-      const example = url.pathname.match(/^\/api\/research-analytics\/example\/(simulation|scenario|performance|ledger-performance)$/);
+      const example = url.pathname.match(/^\/api\/research-analytics\/example\/(simulation|scenario|performance|ledger-performance|cost-comparison)$/);
       if (example && req.method() === 'GET') return route.fulfill({ json: { synthetic: true, input: fixture[example[1]].input } });
-      const result = url.pathname.match(/^\/api\/research-analytics\/(simulation|scenario|performance|ledger-performance)$/);
+      const result = url.pathname.match(/^\/api\/research-analytics\/(simulation|scenario|performance|ledger-performance|cost-comparison)$/);
       if (result && req.method() === 'POST') {
         assert.deepEqual(req.postDataJSON(), fixture[result[1]].input);
         if (behavior.startsWith('malformed:')) {
@@ -71,7 +71,7 @@ try {
     await page.getByRole('img', { name: '只读研究净值路径' }).waitFor();
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 2));
     await page.screenshot({ path: join(output, `simulation-${width}.png`), fullPage: true });
-    for (const [label, text] of [['风险与历史情景', '历史 VaR'], ['估值与资金收益', 'TWR'], ['正式账本只读投影', 'MISSING_INPUTS']]) {
+    for (const [label, text] of [['风险与历史情景', '历史 VaR'], ['估值与资金收益', 'TWR'], ['正式账本只读投影', 'MISSING_INPUTS'], ['FIFO / 均价比较', '分币种成本比较']]) {
       await page.getByRole('tab', { name: label, exact: true }).click();
       assert.equal(await page.getByTestId('research-analytics-result').count(), 0);
       await page.getByRole('button', { name: '载入合成示例' }).click();

@@ -127,8 +127,9 @@ def test_browser_fixture_exact_current_source_parity():
     from research_analytics_contract import SimulationRequest, ScenarioRequest, PerformanceRequest
     from research_analytics import performance, scenario
     from research_analytics_simulation import simulate
+    from research_cost_comparison import CostComparisonRequest, compare_costs
     fixture = json.loads((Path(__file__).parents[2] / 'frontend/tests/e2e/research-analytics.fixture.json').read_text(encoding="utf-8"))
-    for mode, model, fn in [('simulation', SimulationRequest, simulate), ('scenario', ScenarioRequest, scenario), ('performance', PerformanceRequest, performance), ('ledger-performance', LedgerPerformanceRequest, ledger_performance)]:
+    for mode, model, fn in [('simulation', SimulationRequest, simulate), ('scenario', ScenarioRequest, scenario), ('performance', PerformanceRequest, performance), ('ledger-performance', LedgerPerformanceRequest, ledger_performance), ('cost-comparison', CostComparisonRequest, compare_costs)]:
         assert fn(model.model_validate(fixture[mode]['input'])) == fixture[mode]['result']
 
 

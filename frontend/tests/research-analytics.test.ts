@@ -13,7 +13,7 @@ test("input adapter accepts object only with bounded size", () => {
   for (const text of ["null", "[]", "123", "invalid", "x".repeat(4_000_001)]) assert.throws(() => parseAnalyticsInput(text));
 });
 test("all modes and verified twenty core metrics", () => {
-  assert.equal(analyticsModes.length, 4);
+  assert.equal(analyticsModes.length, 5);
   assert.equal(Object.keys(metricNames).length, 20);
 });
 test("page declares privacy, missingness, stale-response guards and no local persistence", () => {
@@ -46,5 +46,22 @@ test("curve requires real ascending unique dates and mode-specific numeric value
   const report = fixture.simulation.result;
   for (const curve of [[{ date: "2026-02-30", nav: 100 }], [{ date: "2025-01-03", nav: 100 }, { date: "2025-01-02", nav: 100 }], [{ date: "2025-01-02", nav: 100 }, { date: "2025-01-02", nav: 101 }], [{ date: "2025-01-02", twr_index: 1 }, { date: "2025-01-03", twr_index: 2 }]]) {
     assert.throws(() => parseAnalyticsReport({ ...report, curve }, "simulation"));
+  }
+});
+
+test("cost comparison parser rejects malformed groups, source authority and fake cross-currency total", () => {
+  const value = fixture["cost-comparison"].result;
+  for (const patch of [{ cross_currency_total: 100 }, { canonical_cost_method_unchanged: false }, { authority: "CANONICAL_FIFO" }, { groups: [null] }, { groups: [{ currency: "CNY", status: "COMPLETE", fifo: null, moving_average: {} }] }, { status: "MISSING_INPUTS", missing: ["bad"], groups: [{}] }]) {
+    assert.throws(() => parseAnalyticsReport({ ...value, ...patch }, "cost-comparison"));
+  }
+  assert.equal(parseAnalyticsReport(value, "cost-comparison").groups?.length, 2);
+});
+
+
+test("cost-only result fields cannot enter other mode renderers", () => {
+  for (const mode of analyticsModes.filter(m => m.id !== "cost-comparison")) {
+    for (const patch of [{ groups: [null] }, { securities: [null] }, { groups: [] }, { securities: [] }, { whole_account_total: null }, { cross_currency_total: null }, { canonical_cost_method_unchanged: true }, { rounding_policy: "fake" }, { ordering: "fake" }]) {
+      assert.throws(() => parseAnalyticsReport({ ...fixture[mode.id].result, ...patch }, mode.id));
+    }
   }
 });

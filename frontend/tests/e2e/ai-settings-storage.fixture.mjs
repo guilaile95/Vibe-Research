@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
+const platformStartup = JSON.parse(readFileSync(new URL("../fixtures/platform-settings-startup.json", import.meta.url), "utf8"));
 // Synthetic-only contracts shared by offline checks and browser harness.
 export const config = { provider: "openai-compatible", baseURL: "https://synthetic.invalid/v1", apiKey: "SYNTHETIC_MODEL_KEY", model: "SYNTHETIC_MODEL" };
 export const chatKey = `vr-askai-chat:/my-reports#reports:synthetic-report@${config.provider}:${config.model}:${config.baseURL}`;
-export const readPaths = ["/api/myreports", "/api/health", "/api/runtime-info", "/api/ai/credential-status", "/api/native-intel/filter/profile", "/api/native-intel/sources", "/api/native-intel/config"];
+export const readPaths = ["/api/settings/platform", "/api/myreports", "/api/health", "/api/runtime-info", "/api/ai/credential-status", "/api/native-intel/filter/profile", "/api/native-intel/sources", "/api/native-intel/config"];
 export function readReply(method, path, search = "") {
   if (method !== "GET") return null;
+  if (path === "/api/settings/platform" && !search) return structuredClone(platformStartup);
   if (path === "/api/myreports" && !search) return [
     { id: "synthetic-report", title: "Synthetic report" },
     { id: "synthetic-report-b", title: "Synthetic report B" },

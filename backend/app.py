@@ -71,6 +71,7 @@ import evidence_thesis_router
 import evidence_temporal_authority_router
 import data_health_router
 import runtime_info_router
+import platform_settings
 import trade_ledger_router
 import personal_review_router
 import trade_attribution_router
@@ -413,6 +414,7 @@ app.include_router(evidence_temporal_authority_router.router)
 app.include_router(data_health_router.router)
 # 本机运行信息沿用私有 API 边界，不加入匿名 health 白名单。
 app.include_router(runtime_info_router.create_router(__version__))
+app.include_router(platform_settings.router)
 # 交易流水：独立存储与 API
 app.include_router(trade_ledger_router.router)
 app.include_router(personal_review_router.router)

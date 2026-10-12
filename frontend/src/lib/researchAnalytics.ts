@@ -1,9 +1,10 @@
-export type AnalyticsMode = "simulation" | "scenario" | "performance" | "ledger-performance";
+export type AnalyticsMode = "simulation" | "scenario" | "performance" | "ledger-performance" | "cost-comparison";
 export const analyticsModes: { id: AnalyticsMode; label: string }[] = [
   { id: "simulation", label: "假设策略模拟" },
   { id: "scenario", label: "风险与历史情景" },
   { id: "performance", label: "估值与资金收益" },
   { id: "ledger-performance", label: "正式账本只读投影" },
+  { id: "cost-comparison", label: "FIFO / 均价比较" },
 ];
 export type ResearchMetric = { status: string; value: number | null; reason?: string | null };
 export function formatResearchNumber(value: unknown, percent = false): string {
@@ -32,6 +33,7 @@ export type AnalyticsReport = {
   metrics?: Record<string, ResearchMetric>; curve?: AnalyticsRow[]; fills?: AnalyticsRow[]; rejections?: AnalyticsRow[];
   open_positions?: AnalyticsRow[]; robustness?: AnalyticsRow[]; correlation?: AnalyticsRow[]; event_study?: AnalyticsRow[];
   twr?: number | null; mwr?: { status: string; reason?: string; annual_rate: number | null; period_return: number | null };
+  groups?: AnalyticsRow[]; securities?: AnalyticsRow[]; authority?: string;
   risk_metrics?: Record<string, ResearchMetric>;
   total_return?: number | null; coverage?: AnalyticsRow; validation?: AnalyticsRow; scope?: string;
   historical_var_95?: ResearchMetric; max_drawdown?: ResearchMetric;
@@ -71,12 +73,15 @@ export function parseAnalyticsReport(value: unknown, mode: AnalyticsMode): Analy
       typeof value.input_fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(value.input_fingerprint) ||
       typeof value.status !== "string" || !["CALCULATED", "MISSING_INPUTS", "UNDEFINED", "PARTIAL_COVERAGE"].includes(value.status) ||
       !Array.isArray(value.limitations) || value.limitations.length > 20 || !value.limitations.every(v => typeof v === "string")) fail();
-  const scopes: Record<AnalyticsMode, string[]> = { simulation: ["HYPOTHETICAL_LONG_ONLY_CASH_ACCOUNT"], scenario: ["HYPOTHETICAL_INITIAL_WEIGHT_BUY_HOLD_REPLAY"], performance: ["WHOLE_ACCOUNT", "STOCK_BASKET"], "ledger-performance": ["STOCK_BASKET"] };
+  const scopes: Record<AnalyticsMode, string[]> = { simulation: ["HYPOTHETICAL_LONG_ONLY_CASH_ACCOUNT"], scenario: ["HYPOTHETICAL_INITIAL_WEIGHT_BUY_HOLD_REPLAY"], performance: ["WHOLE_ACCOUNT", "STOCK_BASKET"], "ledger-performance": ["STOCK_BASKET"], "cost-comparison": ["CURRENCY_SEPARATED_STOCK_BASKET_COST_COMPARISON"] };
+  if (value.authority !== undefined && typeof value.authority !== "string") fail();
   if (value.scope !== undefined && (typeof value.scope !== "string" || !scopes[mode].includes(value.scope))) fail();
   if (value.currency !== undefined && !["CNY", "USD", "HKD"].includes(String(value.currency))) fail();
   if (["MISSING_INPUTS", "UNDEFINED"].includes(value.status) && (!Array.isArray(value.missing) || !value.missing.length)) fail();
-  const allowed = new Set(["schema_version", "research_only", "formal_writes", "historical_availability", "source_authentication", "input_fingerprint", "limitations", "status", "missing", "metrics", "curve", "fills", "rejections", "open_positions", "completed_trades", "realized_pnl", "unrealized_pnl", "dividend_entitlements", "total_fees", "slippage_cost", "benchmark_missing", "benchmark_semantics", "pnl_reconciliation_error", "strategy_version", "robustness", "validation", "scope", "currency", "gross_target_weight", "residual_cash_target", "execution_contract", "metric_inventory", "twr", "mwr", "coverage", "flow_convention", "authority", "selected_trade_ids", "opening_snapshot_incorporates_trade_ids", "basket_codes", "whole_account_performance", "opening_convention", "gross_weight", "net_weight", "cash_weight", "leverage", "total_return", "covered_contribution", "correlation", "covariance", "risk_metrics", "factor_method", "historical_var_95", "max_drawdown", "event_study", "event_summary", "sample_returns", "methods", "risk_contribution", "risk_matrix_diagnostics"]);
+  const allowed = new Set(["schema_version", "research_only", "formal_writes", "historical_availability", "source_authentication", "input_fingerprint", "limitations", "status", "missing", "metrics", "curve", "fills", "rejections", "open_positions", "completed_trades", "realized_pnl", "unrealized_pnl", "dividend_entitlements", "total_fees", "slippage_cost", "benchmark_missing", "benchmark_semantics", "pnl_reconciliation_error", "strategy_version", "robustness", "validation", "scope", "currency", "gross_target_weight", "residual_cash_target", "execution_contract", "metric_inventory", "twr", "mwr", "coverage", "flow_convention", "authority", "selected_trade_ids", "opening_snapshot_incorporates_trade_ids", "basket_codes", "whole_account_performance", "opening_convention", "gross_weight", "net_weight", "cash_weight", "leverage", "total_return", "covered_contribution", "correlation", "covariance", "risk_metrics", "factor_method", "historical_var_95", "max_drawdown", "event_study", "event_summary", "sample_returns", "methods", "risk_contribution", "risk_matrix_diagnostics", "groups", "securities", "whole_account_total", "cross_currency_total", "canonical_cost_method_unchanged", "rounding_policy", "ordering"]);
   if (Object.keys(value).some(k => !allowed.has(k))) fail();
+  const costOnly = ["groups", "securities", "whole_account_total", "cross_currency_total", "canonical_cost_method_unchanged", "rounding_policy", "ordering"];
+  if (mode !== "cost-comparison" && costOnly.some(key => key in value)) fail();
   if (value.missing !== undefined && (!Array.isArray(value.missing) || !value.missing.every(v => typeof v === "string" || object(v)))) fail();
   for (const key of ["curve", "fills", "rejections", "open_positions", "completed_trades", "robustness", "correlation", "covariance", "event_study"]) {
     if (value[key] !== undefined && (!Array.isArray(value[key]) || !(value[key] as unknown[]).every(object))) fail();
@@ -103,19 +108,47 @@ export function parseAnalyticsReport(value: unknown, mode: AnalyticsMode): Analy
         value.mwr.reason !== undefined && value.mwr.reason !== null && typeof value.mwr.reason !== "string") fail();
   }
   if (value.status === "CALCULATED") {
-    if (!Array.isArray(value.curve) || value.curve.length < 2 || value.curve.length > 2000 || !["CNY", "USD", "HKD"].includes(String(value.currency))) fail();
+    if (mode !== "cost-comparison" && (!Array.isArray(value.curve) || value.curve.length < 2 || value.curve.length > 2000 || !["CNY", "USD", "HKD"].includes(String(value.currency)))) fail();
     if (mode === "simulation" && (value.scope !== "HYPOTHETICAL_LONG_ONLY_CASH_ACCOUNT" || !object(value.metrics) || !Array.isArray(value.fills) || !Array.isArray(value.rejections))) fail();
     if (mode === "scenario" && (value.scope !== "HYPOTHETICAL_INITIAL_WEIGHT_BUY_HOLD_REPLAY" || !object(value.coverage) || !Array.isArray(value.correlation))) fail();
     if (mode === "performance" && (!["WHOLE_ACCOUNT", "STOCK_BASKET"].includes(String(value.scope)) || value.authority !== "EXPLICIT_UNVERIFIED_VALUATION_ADAPTER" || typeof value.twr !== "number" || !object(value.mwr))) fail();
     if (mode === "ledger-performance" && (value.scope !== "STOCK_BASKET" || value.whole_account_performance !== false || value.authority !== "TRADE_LEDGER_READ_ONLY_PLUS_UNVERIFIED_PRICE_ACTION_OPENING_ADAPTER" || !Array.isArray(value.selected_trade_ids) || typeof value.twr !== "number" || !object(value.mwr))) fail();
   }
-  if (value.status === "PARTIAL_COVERAGE" && mode !== "scenario") fail();
+  if (mode === "cost-comparison") {
+    if (!Array.isArray(value.groups) || value.groups.length > 3 || !value.groups.every(object) || !Array.isArray(value.securities) || value.securities.length > 20 || !value.securities.every(object)) fail();
+    if (value.status === "MISSING_INPUTS" && (value.groups.length || value.securities.length)) fail();
+    if (new Set(value.groups.map(g => g.currency)).size !== value.groups.length) fail();
+    const moneyKeys = ["remaining_cost", "realized_pnl", "unrealized_pnl", "market_value", "economic_pnl", "paid_dividends", "dividend_receivable", "fees"];
+    for (const security of value.securities) {
+      if (typeof security.code !== "string" || ![null, "CNY", "USD", "HKD"].includes(security.currency as string | null) || !["CALCULATED", "PARTIAL_VALUATION", "MISSING_INPUTS", "UNDEFINED"].includes(String(security.status)) || !Array.isArray(security.missing) || !security.missing.every(v => typeof v === "string")) fail();
+      for (const method of ["fifo", "moving_average"]) {
+        const data = security[method];
+        if (["MISSING_INPUTS", "UNDEFINED"].includes(String(security.status))) { if (data !== null) fail(); continue; }
+        if (!object(data) || ![...moneyKeys, "quantity", "unit_cost", "cost_reconciliation_error"].every(k => k in data && finiteOrNull(data[k]))) fail();
+        checkMetric(data.unrealized_return);
+        if (typeof data.quantity !== "number" || data.quantity < 0 || (security.status === "CALCULATED" && moneyKeys.some(k => data[k] === null))) fail();
+      }
+    }
+    if (value.status !== "MISSING_INPUTS") {
+      if (!["CALLER_QUALIFIED_RESEARCH_NOT_LEDGER", "FROZEN_LEDGER_TRADES_WITH_CALLER_QUALIFIED_CURRENCY_LOTS_ACTIONS"].includes(String(value.authority)) || value.cross_currency_total !== null || value.whole_account_total !== null || value.canonical_cost_method_unchanged !== true) fail();
+      for (const group of value.groups) {
+        if (!["CNY", "USD", "HKD"].includes(String(group.currency)) || !["COMPLETE", "INCOMPLETE"].includes(String(group.status))) fail();
+        for (const method of ["fifo", "moving_average"]) {
+          if (!object(group[method]) || Object.keys(group[method] as AnalyticsRow).length !== 8 || !moneyKeys.every(k => k in (group[method] as AnalyticsRow)) || !Object.values(group[method] as AnalyticsRow).every(finiteOrNull)) fail();
+          if (group.status === "COMPLETE" && Object.values(group[method] as AnalyticsRow).some(v => v === null)) fail();
+        }
+      }
+    }
+  }
+  if (value.status === "PARTIAL_COVERAGE" && !["scenario", "cost-comparison"].includes(mode)) fail();
   return value as AnalyticsReport;
 }
 export function parseAnalyticsExample(value: unknown, mode: AnalyticsMode): AnalyticsRow {
   boundedJson(value);
   if (!object(value) || value.synthetic !== true || !object(value.input) || typeof value.input.source_label !== "string" || !value.input.source_label.startsWith("SYNTHETIC_")) fail();
-  if (mode === "performance") {
+  if (mode === "cost-comparison") {
+    if (value.input.mode !== "QUALIFIED_RESEARCH" || !Array.isArray(value.input.securities) || value.input.securities.length < 1 || value.input.securities.length > 20 || !value.input.securities.every(object) || !Array.isArray(value.input.trades) || value.input.trades.length > 10000 || !value.input.trades.every(object)) fail();
+  } else if (mode === "performance") {
     if (!Array.isArray(value.input.valuations) || value.input.valuations.length < 2 || value.input.valuations.length > 2000 || !value.input.valuations.every(v => object(v) && validResearchDay(v.date) && typeof v.value === "number")) fail();
   } else {
     if (!Array.isArray(value.input.sessions) || value.input.sessions.length < 2 || value.input.sessions.length > 2000 || !value.input.sessions.every(v => validResearchDay(v)) || !Array.isArray(value.input.instruments) || value.input.instruments.length < 1 || value.input.instruments.length > 20 || !value.input.instruments.every(v => object(v) && typeof v.code === "string" && Array.isArray(v.bars) && v.bars.length <= 2000 && v.bars.every(object))) fail();

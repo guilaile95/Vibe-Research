@@ -1,4 +1,6 @@
 // CI-only browser execution: actual production Intel page, strict raw→FactLake→API golden.
+import { captureBrowserFailure } from './browser-failure-evidence.mjs';
+import { publicResearchPaths, publicResearchStaticAllowed, publicResearchSource, PUBLIC_RESEARCH_CLOCK } from './public-research.fixture.mjs';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFileSync, createReadStream, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -9,24 +11,28 @@ import { build } from 'vite';
 import react from '@vitejs/plugin-react';
 import { chromium } from 'playwright';
 const frontend = fileURLToPath(new URL('../../', import.meta.url));
-const output = process.env.PUBLIC_RESEARCH_BROWSER_OUTPUT_DIR || mkdtempSync(join(tmpdir(), 'public-research-dom-'));
+const { output, dist } = publicResearchPaths(frontend, process.env.PUBLIC_RESEARCH_BROWSER_OUTPUT_DIR || mkdtempSync(join(tmpdir(), 'public-research-dom-')));
 mkdirSync(output, { recursive: true });
-const dist = join(output, 'page-dist');
 const golden = JSON.parse(readFileSync(new URL('../fixtures/public-research.golden.json', import.meta.url)));
 process.chdir(frontend);
-await build({ configFile: false, mode: 'production', root: join(frontend, 'tests/e2e/public-research-adapter'),
+try { await build({ configFile: false, mode: 'production', root: join(frontend, 'tests/e2e/public-research-adapter'),
   plugins: [react()], resolve: { alias: { '@': join(frontend, 'src') } }, css: { postcss: frontend }, build: { outDir: dist, emptyOutDir: true } });
+  assert.ok(existsSync(join(dist, 'index.html')), 'Vite output must exist at the exact static-server path');
+} catch (error) {
+  writeFileSync(join(output, 'result.json'), JSON.stringify({ status: 'FAIL', phase: 'build', error: String(error), output, dist }, null, 2));
+  throw error;
+}
 if (process.argv.includes('--build-only')) { console.log('Actual Intel page built; browser NOT_RUN'); process.exit(0); }
 if (!process.env.CI) throw new Error('Browser execution is CI-only; no local browser authorization');
 const audit = { external: [], unexpected: [], errors: [], reads: [] };
-let origin, browser;
-const staticAllowed = url => ['/', '/index.html', '/favicon.ico'].includes(url.pathname) || /^\/assets\/[\w.-]+\.(js|css)$/.test(url.pathname);
+let origin, browser, activePage, activeWidth, phase = 'startup';const releases = [];
+
 const server = createServer((req, res) => {
   const url = new URL(req.url, origin);
-  if (req.method !== 'GET' || !staticAllowed(url)) { audit.unexpected.push(req.url); res.writeHead(403).end(); return; }
+  if (req.headers.host !== new URL(origin).host || !publicResearchStaticAllowed(req.method, url.pathname, url.search)) { audit.unexpected.push(req.url); res.writeHead(403).end(); return; }
   if (url.pathname === '/favicon.ico') { res.writeHead(204).end(); return; }
   const target = url.pathname === '/' ? join(dist, 'index.html') : resolve(dist, '.' + url.pathname);
-  if (!target.startsWith(resolve(dist) + sep) || !existsSync(target)) { res.writeHead(404).end(); return; }
+  if (!target.startsWith(resolve(dist) + sep) || !existsSync(target)) { audit.unexpected.push(`missing static ${url.pathname}`); res.writeHead(404).end(); return; }
   res.setHeader('Content-Type', { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' }[extname(target)] || 'text/plain');
   createReadStream(target).pipe(res);
 });
@@ -36,6 +42,7 @@ const cases = [];
 try {
   browser = await chromium.launch({ headless: true });
   for (const width of [1440, 390]) {
+    activeWidth = width; phase = 'initial event archive';
     const context = await browser.newContext({ viewport: { width, height: 960 }, serviceWorkers: 'block' });
     let mode = 'normal', held, release;
     await context.routeWebSocket('**/*', socket => { audit.external.push(socket.url()); socket.close(); });
@@ -43,17 +50,16 @@ try {
       const req = route.request(), url = new URL(req.url());
       if (url.origin !== origin) { audit.external.push(url.href); return route.abort(); }
       if (!url.pathname.startsWith('/api/')) {
-        if (req.method() !== 'GET' || !staticAllowed(url)) { audit.unexpected.push(req.url()); return route.abort(); }
+        if (!publicResearchStaticAllowed(req.method(), url.pathname, url.search)) { audit.unexpected.push(req.url()); return route.abort(); }
         return route.continue();
       }
-      const source = url.searchParams.get('source_id');
-      if (req.method() !== 'GET' || url.pathname !== '/api/public-research' || !golden[source]
-        || [...url.searchParams.keys()].join(',') !== 'source_id') {
+      const source = publicResearchSource(req.method(), url.pathname, url.search);
+      audit.reads.push({ method: req.method(), path: url.pathname, search: url.search, source, mode });
+      if (!source || !golden[source]) {
         audit.unexpected.push(`${req.method()} ${url.href}`); return route.fulfill({ status: 500, json: { detail: 'unexpected fixture request' } });
       }
-      audit.reads.push(source);
       const selected = mode;
-      if (selected === 'hold') { held?.(); await new Promise(done => { release = done; }); }
+      if (selected === 'hold') { held?.(); await new Promise(done => { release = done; releases.push(done); }); }
       const data = structuredClone(golden[source]);
       if (selected === 'wrong') data.source_id = 'private';
       if (selected === 'malformed') data.blocks[0].rows[0].listings = [null];
@@ -61,9 +67,9 @@ try {
       if (selected === 'missing') { data.blocks = []; data.missing_subjects = golden[source].blocks.map(b => b.subject); data.status = 'missing'; data.message = '合成缺失归档'; }
       return route.fulfill({ json: { data } });
     });
-    const page = await context.newPage(); page.setDefaultTimeout(10000);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(10000);
     page.on('pageerror', e => audit.errors.push(e.message));
-    await page.clock.setFixedTime(new Date('2026-10-12T23:00:00Z'));
+    await page.clock.setFixedTime(new Date(PUBLIC_RESEARCH_CLOCK));
     await page.goto(origin + '/?tab=events');
     const events = page.getByRole('region', { name: '事件定价归档' });
     await events.getByText('合成案例：仅离线软件验证，非真实市场数据', { exact: true }).waitFor();
@@ -73,6 +79,7 @@ try {
     await events.getByRole('button', { name: 'Kalshi 事件定价', exact: true }).click();
     await events.getByText('yes_bid_ask_midpoint_dollars', { exact: true }).waitFor();
     assert.match(await events.innerText(), /0\.42 USD/);
+    phase = 'industry archive';
     await page.getByRole('button', { name: '产业公开数据', exact: true }).click();
     const industry = page.getByRole('region', { name: '产业公开数据归档' });
     await industry.getByText('2026-08', { exact: true }).first().waitFor();
@@ -90,28 +97,36 @@ try {
     await industry.getByText(/synthetic-job-1 · Synthetic hardware engineer/).first().waitFor();
     const retry = industry.getByRole('button', { name: '重读归档', exact: true });
     for (const bad of ['wrong', 'malformed', 'failure']) {
-      mode = bad; await retry.click(); await industry.getByRole('alert').waitFor();
+      phase = `invalid ${bad} retry`; mode = bad; await retry.click(); await industry.getByRole('alert').waitFor();
       assert.equal(await industry.locator('article').count(), 0);
       mode = 'normal'; await retry.click(); await industry.locator('article').first().waitFor();
       cases.push({ width, case: bad + '-retry' });
     }
-    mode = 'missing'; await retry.click(); await industry.getByText(/合成缺失归档/).waitFor();
+    phase = 'missing archive recovery'; mode = 'missing'; await retry.click(); await industry.getByText(/合成缺失归档/).waitFor();
     assert.equal(await industry.locator('article').count(), 0);
     mode = 'normal'; await retry.click(); await industry.locator('article').first().waitFor();
-    mode = 'hold'; const started = new Promise(done => { held = done; }); await retry.click(); await started;
+    phase = 'held source switch'; mode = 'hold'; const started = new Promise(done => { held = done; }); await retry.click(); await started;
     mode = 'normal'; await industry.getByRole('button', { name: '台湾月营收', exact: true }).click();
     await industry.getByText('2026-08', { exact: true }).first().waitFor(); release();
     await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
     assert.doesNotMatch(await industry.innerText(), /synthetic-job-1/);
-    await page.goBack(); await events.getByText('synthetic-yes-token', { exact: true }).waitFor();
+    phase = 'back forward reload'; await page.goBack(); await events.getByText('synthetic-yes-token', { exact: true }).waitFor();
     await page.goForward(); await industry.getByText('2026-08', { exact: true }).first().waitFor();
     await page.reload(); await industry.getByText('2026-08', { exact: true }).first().waitFor();
     const dimensions = await page.evaluate(() => ({ width: innerWidth, document: document.documentElement.scrollWidth }));
     assert.ok(dimensions.document <= dimensions.width + 1);
     await page.screenshot({ path: join(output, `${width}-public-research.png`), fullPage: true });
     cases.push({ width, case: 'actual-Intel-page-six-providers-identity-units-caveats-missing-race-history-reload-layout' });
-    await context.close();
+    await context.close(); activePage = undefined;
   }
   assert.deepEqual(audit.external, []); assert.deepEqual(audit.unexpected, []); assert.deepEqual(audit.errors, []);
-  writeFileSync(join(output, 'result.json'), JSON.stringify({ status: 'PASS', cases, audit }, null, 2));
-} finally { await browser?.close(); await new Promise(done => server.close(done)); }
+} catch (error) {
+  process.exitCode = 1;
+  audit.errors.push(String(error));
+  await captureBrowserFailure({ page: activePage, output, prefix: String(activeWidth || 'startup'), selector: 'section[aria-label="事件定价归档"], section[aria-label="产业公开数据归档"]', error, audit: { phase, ...audit } });
+  console.error(error);
+} finally {
+  writeFileSync(join(output, 'result.json'), JSON.stringify({ status: process.exitCode ? 'FAIL' : 'PASS', phase, cases, audit }, null, 2));
+  for (const release of releases) release();
+  await browser?.close(); await new Promise(done => server.close(done));
+}

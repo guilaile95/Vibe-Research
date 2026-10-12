@@ -160,7 +160,8 @@ jobs:
           name: public-research-evidence
           path: |
             frontend/public-research-evidence/*.png
-            frontend/public-research-evidence/result.json
+            frontend/public-research-evidence/*.html
+            frontend/public-research-evidence/*.json
           if-no-files-found: error
 
       - name: Run research analytics production page acceptance

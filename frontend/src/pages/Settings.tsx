@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal, Loader2, RefreshCw, Rss, Plus, SlidersHorizontal, Tag, Globe, Layers, ArrowUp, ArrowDown } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { PlatformSettingsCard } from "@/components/settings/PlatformSettingsCard";
 import { BackendRuntimeCard } from "@/components/settings/BackendRuntimeCard";
 import { FirstResearchStatusCard } from "@/components/settings/FirstResearchStatusCard";
 import { toast } from "sonner";
@@ -223,6 +224,7 @@ export function Settings() {
       <PageHeader title="接入 AI" subtitle="配置一次，全站所有 AI 功能统一使用 Codex Subscription 或 API Compatible" />
 
       <BackendRuntimeCard />
+      <PlatformSettingsCard />
       <FirstResearchStatusCard mirror={scheduledStatus} />
       {mode === "subscription" && <p className="mb-4 text-xs text-muted-foreground">Codex / 旧版 CLI 暂不支持此限额连接测试；登录成功不等于模型调用验证成功。</p>}
 

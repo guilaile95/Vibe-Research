@@ -66,3 +66,14 @@ test("mounted draft scenario has distinct selectable reports without broadening 
   assert.match(browser, /for \(const width of \[1440, 390\]\)/);
   assert.match(browser, /assert\.equal\(result\.results\.length, 20\)/);
 });
+
+test("platform startup is read-only and rejects update/contact subroutes", () => {
+  const value = readReply("GET", "/api/settings/platform");
+  assert.equal(value.data.sec_contact.configured, false);
+  assert.equal(value.data.update.status, "not_checked");
+  assert.equal(value.data.sec_provider, "not_connected");
+  for (const path of ["/api/settings/platform/sec-contact", "/api/settings/platform/check-update", "/api/settings/platform/"])
+    for (const method of ["GET", "PUT", "POST", "DELETE"]) assert.equal(readReply(method, path), null);
+  value.data.sec_contact.configured = true;
+  assert.equal(readReply("GET", "/api/settings/platform").data.sec_contact.configured, false);
+});

@@ -3416,5 +3416,373 @@
       "twr": null,
       "mwr": null
     }
+  },
+  "cost-comparison": {
+    "input": {
+      "mode": "QUALIFIED_RESEARCH",
+      "source_label": "SYNTHETIC_COST_METHOD_COMPARISON",
+      "date_from": "2025-01-02",
+      "date_to": "2025-01-31",
+      "securities": [
+        {
+          "code": "SYNTH_CN",
+          "currency": "CNY",
+          "timezone": "Asia/Shanghai",
+          "opening_quantity": 0.0,
+          "opening_lots_complete": true,
+          "opening_lots": [],
+          "fees_confirmed": true,
+          "corporate_actions_complete": true,
+          "actions": [],
+          "terminal_price": 18.0,
+          "terminal_price_date": "2025-01-31"
+        },
+        {
+          "code": "SYNTH_US",
+          "currency": "USD",
+          "timezone": "America/New_York",
+          "opening_quantity": 0.0,
+          "opening_lots_complete": true,
+          "opening_lots": [],
+          "fees_confirmed": true,
+          "corporate_actions_complete": true,
+          "actions": [],
+          "terminal_price": 18.0,
+          "terminal_price_date": "2025-01-31"
+        }
+      ],
+      "trades": [
+        {
+          "trade_id": "SYNTH_CN_1",
+          "code": "SYNTH_CN",
+          "executed_at": "2025-01-03T15:00:00Z",
+          "sequence": 0,
+          "operation": "buy",
+          "quantity": 100.0,
+          "price": 10.0,
+          "fee": 1.0,
+          "other_cost": 0.0
+        },
+        {
+          "trade_id": "SYNTH_CN_2",
+          "code": "SYNTH_CN",
+          "executed_at": "2025-01-06T15:00:00Z",
+          "sequence": 0,
+          "operation": "buy",
+          "quantity": 100.0,
+          "price": 20.0,
+          "fee": 1.0,
+          "other_cost": 0.0
+        },
+        {
+          "trade_id": "SYNTH_CN_3",
+          "code": "SYNTH_CN",
+          "executed_at": "2025-01-07T15:00:00Z",
+          "sequence": 0,
+          "operation": "sell",
+          "quantity": 100.0,
+          "price": 20.0,
+          "fee": 1.0,
+          "other_cost": 0.0
+        },
+        {
+          "trade_id": "SYNTH_US_1",
+          "code": "SYNTH_US",
+          "executed_at": "2025-01-03T15:00:00Z",
+          "sequence": 0,
+          "operation": "buy",
+          "quantity": 100.0,
+          "price": 10.0,
+          "fee": 1.0,
+          "other_cost": 0.0
+        },
+        {
+          "trade_id": "SYNTH_US_2",
+          "code": "SYNTH_US",
+          "executed_at": "2025-01-06T15:00:00Z",
+          "sequence": 0,
+          "operation": "buy",
+          "quantity": 100.0,
+          "price": 20.0,
+          "fee": 1.0,
+          "other_cost": 0.0
+        },
+        {
+          "trade_id": "SYNTH_US_3",
+          "code": "SYNTH_US",
+          "executed_at": "2025-01-07T15:00:00Z",
+          "sequence": 0,
+          "operation": "sell",
+          "quantity": 100.0,
+          "price": 20.0,
+          "fee": 1.0,
+          "other_cost": 0.0
+        }
+      ]
+    },
+    "result": {
+      "schema_version": "research-analytics.v1",
+      "research_only": true,
+      "historical_availability": "NOT_PROVEN",
+      "source_authentication": "NOT_PROVEN",
+      "formal_writes": 0,
+      "input_fingerprint": "be081f71041c4a8b487d844a4dbbbffc1786af11b9fce5c9a82c4b6381c5d5e9",
+      "limitations": [
+        "仅为只读研究计算，不改变正式交易、持仓、决策或硬风险权威。",
+        "输入来源、日历、费用及公司行为声明未经本计算认证；历史可得性 NOT_PROVEN。",
+        "历史统计及假设成交不是可实现收益或投资建议；不代表样本外有效。"
+      ],
+      "status": "CALCULATED",
+      "groups": [
+        {
+          "currency": "CNY",
+          "codes": [
+            "SYNTH_CN"
+          ],
+          "unassigned_currency_codes": [],
+          "status": "COMPLETE",
+          "coverage": {
+            "requested": 1,
+            "accounting_defined": 1,
+            "valuation_complete": 1
+          },
+          "fifo": {
+            "remaining_cost": 2001.0,
+            "realized_pnl": 998.0,
+            "unrealized_pnl": -201.0,
+            "market_value": 1800.0,
+            "economic_pnl": 797.0,
+            "paid_dividends": 0.0,
+            "dividend_receivable": 0.0,
+            "fees": 3.0
+          },
+          "moving_average": {
+            "remaining_cost": 1501.0,
+            "realized_pnl": 498.0,
+            "unrealized_pnl": 299.0,
+            "market_value": 1800.0,
+            "economic_pnl": 797.0,
+            "paid_dividends": 0.0,
+            "dividend_receivable": 0.0,
+            "fees": 3.0
+          }
+        },
+        {
+          "currency": "USD",
+          "codes": [
+            "SYNTH_US"
+          ],
+          "unassigned_currency_codes": [],
+          "status": "COMPLETE",
+          "coverage": {
+            "requested": 1,
+            "accounting_defined": 1,
+            "valuation_complete": 1
+          },
+          "fifo": {
+            "remaining_cost": 2001.0,
+            "realized_pnl": 998.0,
+            "unrealized_pnl": -201.0,
+            "market_value": 1800.0,
+            "economic_pnl": 797.0,
+            "paid_dividends": 0.0,
+            "dividend_receivable": 0.0,
+            "fees": 3.0
+          },
+          "moving_average": {
+            "remaining_cost": 1501.0,
+            "realized_pnl": 498.0,
+            "unrealized_pnl": 299.0,
+            "market_value": 1800.0,
+            "economic_pnl": 797.0,
+            "paid_dividends": 0.0,
+            "dividend_receivable": 0.0,
+            "fees": 3.0
+          }
+        }
+      ],
+      "securities": [
+        {
+          "code": "SYNTH_CN",
+          "currency": "CNY",
+          "status": "CALCULATED",
+          "missing": [],
+          "trade_ids": [
+            "SYNTH_CN_1",
+            "SYNTH_CN_2",
+            "SYNTH_CN_3"
+          ],
+          "fifo": {
+            "quantity": 100.0,
+            "remaining_cost": 2001.0,
+            "unit_cost": 20.01,
+            "realized_pnl": 998.0,
+            "unrealized_pnl": -201.0,
+            "market_value": 1800.0,
+            "paid_dividends": 0.0,
+            "dividend_receivable": 0.0,
+            "fees": 3.0,
+            "economic_pnl": 797.0,
+            "unrealized_return": {
+              "status": "SUPPORTED",
+              "value": -0.10044977511244378,
+              "reason": null
+            },
+            "cost_reconciliation_error": 0.0
+          },
+          "moving_average": {
+            "quantity": 100.0,
+            "remaining_cost": 1501.0,
+            "unit_cost": 15.01,
+            "realized_pnl": 498.0,
+            "unrealized_pnl": 299.0,
+            "market_value": 1800.0,
+            "paid_dividends": 0.0,
+            "dividend_receivable": 0.0,
+            "fees": 3.0,
+            "economic_pnl": 797.0,
+            "unrealized_return": {
+              "status": "SUPPORTED",
+              "value": 0.19920053297801465,
+              "reason": null
+            },
+            "cost_reconciliation_error": 0.0
+          },
+          "method_difference": {
+            "realized_pnl": 500.0,
+            "remaining_cost": 500.0,
+            "economic_pnl": 0.0
+          },
+          "closed_trades": [
+            {
+              "trade_id": "SYNTH_CN_3",
+              "date": "2025-01-07",
+              "quantity": 100.0,
+              "net_proceeds": 1999.0,
+              "fifo_cost": 1001.0,
+              "average_cost": 1501.0,
+              "fifo_pnl": 998.0,
+              "average_pnl": 498.0,
+              "fifo_lots_consumed": [
+                {
+                  "lot_id": "SYNTH_CN_1",
+                  "quantity": 100.0,
+                  "cost": 1001.0
+                }
+              ]
+            }
+          ],
+          "remaining_fifo_lots": [
+            {
+              "lot_id": "SYNTH_CN_2",
+              "date": "2025-01-06",
+              "quantity": 100.0,
+              "cost": 2001.0,
+              "unit_cost": 20.01
+            }
+          ]
+        },
+        {
+          "code": "SYNTH_US",
+          "currency": "USD",
+          "status": "CALCULATED",
+          "missing": [],
+          "trade_ids": [
+            "SYNTH_US_1",
+            "SYNTH_US_2",
+            "SYNTH_US_3"
+          ],
+          "fifo": {
+            "quantity": 100.0,
+            "remaining_cost": 2001.0,
+            "unit_cost": 20.01,
+            "realized_pnl": 998.0,
+            "unrealized_pnl": -201.0,
+            "market_value": 1800.0,
+            "paid_dividends": 0.0,
+            "dividend_receivable": 0.0,
+            "fees": 3.0,
+            "economic_pnl": 797.0,
+            "unrealized_return": {
+              "status": "SUPPORTED",
+              "value": -0.10044977511244378,
+              "reason": null
+            },
+            "cost_reconciliation_error": 0.0
+          },
+          "moving_average": {
+            "quantity": 100.0,
+            "remaining_cost": 1501.0,
+            "unit_cost": 15.01,
+            "realized_pnl": 498.0,
+            "unrealized_pnl": 299.0,
+            "market_value": 1800.0,
+            "paid_dividends": 0.0,
+            "dividend_receivable": 0.0,
+            "fees": 3.0,
+            "economic_pnl": 797.0,
+            "unrealized_return": {
+              "status": "SUPPORTED",
+              "value": 0.19920053297801465,
+              "reason": null
+            },
+            "cost_reconciliation_error": 0.0
+          },
+          "method_difference": {
+            "realized_pnl": 500.0,
+            "remaining_cost": 500.0,
+            "economic_pnl": 0.0
+          },
+          "closed_trades": [
+            {
+              "trade_id": "SYNTH_US_3",
+              "date": "2025-01-07",
+              "quantity": 100.0,
+              "net_proceeds": 1999.0,
+              "fifo_cost": 1001.0,
+              "average_cost": 1501.0,
+              "fifo_pnl": 998.0,
+              "average_pnl": 498.0,
+              "fifo_lots_consumed": [
+                {
+                  "lot_id": "SYNTH_US_1",
+                  "quantity": 100.0,
+                  "cost": 1001.0
+                }
+              ]
+            }
+          ],
+          "remaining_fifo_lots": [
+            {
+              "lot_id": "SYNTH_US_2",
+              "date": "2025-01-06",
+              "quantity": 100.0,
+              "cost": 2001.0,
+              "unit_cost": 20.01
+            }
+          ]
+        }
+      ],
+      "missing": [],
+      "authority": "CALLER_QUALIFIED_RESEARCH_NOT_LEDGER",
+      "scope": "CURRENCY_SEPARATED_STOCK_BASKET_COST_COMPARISON",
+      "selected_trade_ids": [
+        "SYNTH_CN_1",
+        "SYNTH_CN_2",
+        "SYNTH_CN_3",
+        "SYNTH_US_1",
+        "SYNTH_US_2",
+        "SYNTH_US_3"
+      ],
+      "whole_account_total": null,
+      "cross_currency_total": null,
+      "canonical_cost_method_unchanged": true,
+      "methods": {
+        "fifo": "Oldest qualified acquisition lot first; buy costs included, sale costs deducted",
+        "moving_average": "Research moving weighted-average on exactly the same sequence; does not replace canonical PA1"
+      },
+      "rounding_policy": "DECIMAL50_INTERNAL_NO_INTERMEDIATE_MONEY_ROUNDING; strict quantities; JSON numeric display rounding; reconciliation limit1e-18",
+      "ordering": "split/ex-dividend entitlement before same-day trades; instant then explicit/recorded sequence; ambiguous ties blocked"
+    }
   }
 }

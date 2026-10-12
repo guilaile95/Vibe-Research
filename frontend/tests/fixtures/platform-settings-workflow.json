@@ -1,0 +1,20 @@
+{
+  "saved": {
+    "source": "saved",
+    "configured": true,
+    "revision": "00000000000000000000000000000001",
+    "editable": true
+  },
+  "update": {
+    "repository": "guilaile95/Vibe-Research",
+    "current": "0.1.3",
+    "mode": "manual_only",
+    "status": "update_available",
+    "checked_at": "2026-10-12T12:00:00Z",
+    "latest": {
+      "version": "0.1.4",
+      "url": "https://github.com/guilaile95/Vibe-Research/releases/tag/v0.1.4",
+      "published_at": "2026-10-11T12:00:00Z"
+    }
+  }
+}

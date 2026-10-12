@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { platformScenario } from './platform-settings.scenario.mjs';
 import { readReply } from './ai-settings-storage.fixture.mjs';
 const frontend = fileURLToPath(new URL('../../', import.meta.url));
 const dist = join(frontend, 'dist');
@@ -68,7 +69,7 @@ async function scenario(browser, baseURL, spec, width, evidenceDir) {
         }
       }
       // Status is inert metadata, not a credential read. No credential/probe/runtime APIs allowed.
-      const allowed = ['/api/health', '/api/runtime-info', '/api/ai/credential-status', '/api/native-intel/sources', '/api/native-intel/config', '/api/native-intel/filter/profile'];
+      const allowed = ['/api/settings/platform', '/api/health', '/api/runtime-info', '/api/ai/credential-status', '/api/native-intel/sources', '/api/native-intel/config', '/api/native-intel/filter/profile'];
       const reply = allowed.includes(url.pathname) ? readReply(method, url.pathname, url.search) : null;
       if (reply) return route.fulfill({ json: reply });
       unexpected.push(key); return route.fulfill({ status: 503, json: { detail: 'UNEXPECTED_SYNTHETIC_REQUEST' } });
@@ -156,7 +157,7 @@ async function runtimeScenario(browser, baseURL, width, evidenceDir) {
       if (method === 'GET' && url.pathname === '/api/agent-runtime/status' && !url.search) {
         statusReads++; return route.fulfill({ json: active.payload });
       }
-      const allowed = ['/api/health', '/api/runtime-info', '/api/ai/credential-status', '/api/native-intel/sources', '/api/native-intel/config', '/api/native-intel/filter/profile'];
+      const allowed = ['/api/settings/platform', '/api/health', '/api/runtime-info', '/api/ai/credential-status', '/api/native-intel/sources', '/api/native-intel/config', '/api/native-intel/filter/profile'];
       const reply = allowed.includes(url.pathname) ? readReply(method, url.pathname, url.search) : null;
       if (reply) return route.fulfill({ json: reply });
       unexpected.push(key); return route.fulfill({ status: 503, json: { detail: 'UNEXPECTED_SYNTHETIC_REQUEST' } });
@@ -219,7 +220,8 @@ async function main() {
       const row = await runtimeScenario(browser, baseURL, width, evidenceDir); result.results.push(row);
       console.log(`[SETTINGS-RECOVERY] runtime-classification ${width}px ${row.status}${row.error ? `: ${row.error}` : ''}`);
     }
-    assert.deepEqual(serverUnexpected, []); assert.equal(result.results.length, 6);
+    for (const width of [1440, 390]) result.results.push(await platformScenario(browser, baseURL, width, evidenceDir));
+    assert.deepEqual(serverUnexpected, []); assert.equal(result.results.length, 8);
     assert.equal(result.results.filter(row => row.status !== 'PASS').length, 0, 'all settings recovery cases must pass');
   } catch (error) { result.error = error.message; throw error; }
   finally {
