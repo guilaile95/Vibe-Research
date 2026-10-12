@@ -198,6 +198,11 @@ try {
     await seal.getByText("封板质量归档证据未连接；不会自动启用采集或请求行情。", { exact: true }).waitFor();
     assert.equal(await seal.getByTestId("seal-never_broken_ratio").count(), 0);
     results.push(`${currentViewport.label}-integrated-seal-archive-unconnected-smoke`);
+    const cohort = page.getByTestId("cohort-identity-card");
+    await cohort.getByText("缺少完整的两日名单归档，无法进行对照", { exact: true }).waitFor();
+    assert.equal(await cohort.getByTestId("cohort-members-table").count(), 0);
+    results.push(`${currentViewport.label}-integrated-cohort-archive-missing-smoke`);
+
   }
   await shot("01-cold-canonical-and-loaded-date", "可记录，下一交易日");
 

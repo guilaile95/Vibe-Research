@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 // Actual service-generated empty responses under an intentionally unavailable
 // synthetic calendar. Freeze the page clock before mounting ancillary cards.
 const ancillaryGolden = JSON.parse(readFileSync(new URL("../fixtures/final-families-ancillary.json", import.meta.url), "utf8"));
+const cohortGolden = JSON.parse(readFileSync(new URL("../fixtures/cohort-identity-unavailable.json", import.meta.url), "utf8"));
 export const ANCILLARY_TRADE_DATE = "2026-10-08";
 export const ANCILLARY_CLOCK = ancillaryGolden.clock;
 
@@ -19,6 +20,7 @@ export function debateEvents(rounds, mode = "complete") {
 export function ancillaryReply(method, path, search = "") {
   if (method !== "GET") return null;
   if (path === `/api/next-day-verification/${ANCILLARY_TRADE_DATE}` && search === "") return { data: structuredClone(ancillaryGolden.journal) };
+  if (path === "/api/market/cohort-identity" && search === `?trade_date=${ANCILLARY_TRADE_DATE}`) return { data: structuredClone(cohortGolden[ANCILLARY_TRADE_DATE]) };
   if (path === "/api/market/seal-quality" && search === `?trade_date=${ANCILLARY_TRADE_DATE}`) return { data: structuredClone(ancillaryGolden.seal) };
   const common = {
     "/api/daily-review": { data: { schema_version: "daily-review-v0.1", trade_date: "2026-10-08", generated_at: "2026-10-08 16:00:00", status: "normal", warnings: [], data_health: { components: {} }, market_environment: { indices: { status: "normal", data: [] }, global_indices: { status: "normal", data: [] }, breadth: { status: "unavailable", data: {} } }, sector_rotation: { industry: { status: "normal", list: [] }, concept: { status: "normal", list: [] }, region: { status: "normal", list: [] }, highlights: {} }, short_term_emotion: { status: "unavailable", data: {} }, capital_activity: { amount_top: [], high_turnover: [], turnover_top: [] } }, cache_meta: { stale: false, refreshing: false } },

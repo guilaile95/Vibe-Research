@@ -80,3 +80,30 @@ test("both real viewport suites run every flow and capture state-ready cropped e
   assert.match(source, /shot\("04-sealed-missing-is-not-failure", "已封存，不能修改或删除"\)/);
   assert.match(source, /shot\("07a-read-error", "验证记录不可读取，已停止操作"\)/);
 });
+
+test("integrated cohort ancillary read keeps exact opt-in date and unknown membership", () => {
+  const path = "/api/market/cohort-identity", search = `?trade_date=${DAY}`;
+  const url = `${origin}${path}${search}`;
+  assert.equal(createFixture(origin).handle(url).kind, "deny");
+  const f = createFixture(origin, { withSealQuality: true });
+  const result = f.handle(url).body.data;
+  assert.equal(result.schema_version, "archived-cohort-identity.v0.1");
+  assert.equal(result.trade_date, DAY); assert.equal(result.previous_trade_date, "2026-07-30");
+  assert.equal(result.status, "unavailable"); assert.deepEqual(result.reason_codes, ["ARCHIVE_MISSING"]);
+  assert.equal(result.projection, null); assert.equal(result.evidence, null);
+  assert.equal(result.selection_mode, "CURRENT_STORED_POSTHOC");
+  assert.equal(result.point_in_time_claim, "NONE"); assert.equal(result.research_only, true);
+  for (const method of ["POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]) {
+    assert.equal(f.handle(url, method).kind, "deny", method);
+  }
+  for (const query of ["", "?trade_date=2026-08-03", "?trade_date=2026-07-30", "?trade_date=2026-10-08", "?trade_date=2026-10-12",
+    "?trade_date=2026%2D07%2D31", `?date=${DAY}`, `${search}&trade_date=${DAY}`, `${search}&as_of=x`,
+    `${search}&observed_at=x`, `${search}&root=/tmp`, `${search}&refresh=1`]) {
+    assert.equal(f.handle(`${origin}${path}${query}`).kind, "deny", query);
+  }
+  for (const target of [`${origin}${path}/${search}`, `http://127.0.0.1:18762${path}${search}`]) {
+    assert.equal(f.handle(target).kind, "deny", target);
+  }
+  result.reason_codes.push("MUTATED");
+  assert.deepEqual(f.handle(url).body.data.reason_codes, ["ARCHIVE_MISSING"]);
+});

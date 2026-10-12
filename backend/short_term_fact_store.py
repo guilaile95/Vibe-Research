@@ -580,19 +580,127 @@ def load_final_fact_record(
     a later backfill cannot become evidence known at an earlier observation.
     This additive reader never collects, promotes, or repairs facts.
     """
-    path = resolve_db_path(db_path)
-    if not path.is_file():
+    record = load_final_fact_records_readonly((trade_date,), db_path).get(trade_date)
+    if record is None:
         return None
+    # Preserve the existing public return shape.
+    return {"envelope": record["envelope"], "stored_at": record["stored_at"]}
+
+
+class FactStoreBusyError(FactStoreError):
+    """A stable checkpointed image is not available without modifying the store."""
+
+
+def load_final_fact_records_readonly(
+    trade_dates: tuple[str, ...], db_path: str | Path | None = None,
+) -> Dict[str, Any]:
+    """Read a bounded pair from one frozen DB image without SQLite source access.
+
+    SQLite mode=ro may create WAL/SHM files. Instead read stable source bytes,
+    refuse pending WAL/rollback journals, and deserialize into private memory.
+    A fully checkpointed WAL-mode image retains header read/write versions 2;
+    only the private copy changes these two bytes to 1 to disable journal lookup.
+    This is not a checkpoint, migration, or source edit. The source DB SHA remains
+    the hash of the unmodified on-disk bytes, distinct from envelope SHA.
+    """
+    import hashlib
+    import stat
+
+    if not 1 <= len(trade_dates) <= 2 or len(set(trade_dates)) != len(trade_dates):
+        raise FactStoreInvalidEnvelopeError()
+    for day in trade_dates:
+        if type(day) is not str or _TRADE_DATE_RE.fullmatch(day) is None:
+            raise FactStoreInvalidEnvelopeError()
+        try:
+            date.fromisoformat(day)
+        except ValueError:
+            raise FactStoreInvalidEnvelopeError() from None
+    path = resolve_db_path(db_path)
     try:
-        with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
-            row = conn.execute(
-                "SELECT envelope_json, stored_at FROM fact_snapshots WHERE trade_date=? AND session='final'",
-                (trade_date,),
-            ).fetchone()
-        if row is None:
-            return None
-        envelope = json.loads(row[0])
-        _validate_envelope(envelope)
-        return {"envelope": envelope, "stored_at": row[1]}
-    except (sqlite3.Error, ValueError, TypeError, FactStoreInvalidEnvelopeError) as exc:
+        # Reject symlinked roots as well as the DB and sidecars.
+        if any(part.is_symlink() for part in (path, *path.parents)):
+            raise FactStoreCorruptedError()
+        if not path.exists():
+            return {}
+
+        def fingerprint():
+            if any(part.is_symlink() for part in (path, *path.parents)):
+                raise FactStoreCorruptedError()
+            source = path.stat()
+            if not stat.S_ISREG(source.st_mode) or not 100 <= source.st_size <= 64 * 1024 * 1024:
+                raise FactStoreCorruptedError()
+            for suffix in ("-wal", "-journal", "-shm"):
+                sidecar = Path(str(path) + suffix)
+                if sidecar.is_symlink():
+                    raise FactStoreCorruptedError()
+                if sidecar.exists() and (not sidecar.is_file() or (suffix != "-shm" and sidecar.stat().st_size)):
+                    raise FactStoreBusyError()
+            return (source.st_dev, source.st_ino, source.st_size, source.st_mtime_ns, source.st_ctime_ns)
+
+        before = fingerprint()
+        def read_bounded():
+            if any(part.is_symlink() for part in (path, *path.parents)):
+                raise FactStoreCorruptedError()
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(fd, "rb") as stream:
+                opened = os.fstat(stream.fileno())
+                identity = (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns)
+                if not stat.S_ISREG(opened.st_mode) or identity != before:
+                    raise FactStoreBusyError()
+                value = stream.read(64 * 1024 * 1024 + 1)
+            if len(value) != before[2] or fingerprint() != before:
+                raise FactStoreBusyError()
+            return value
+        blob = read_bounded()
+        # Both reads have the same size and no-follow defenses.
+        if read_bounded() != blob or fingerprint() != before:
+            raise FactStoreBusyError()
+        if blob[:16] != b"SQLite format 3\x00" or blob[18:20] not in (b"\x01\x01", b"\x02\x02"):
+            raise FactStoreCorruptedError()
+        page_size = int.from_bytes(blob[16:18], "big")
+        page_size = 65536 if page_size == 1 else page_size
+        pages = int.from_bytes(blob[28:32], "big")
+        if (page_size < 512 or page_size > 65536 or page_size & (page_size - 1)
+                or len(blob) % page_size or pages < 1 or pages > len(blob) // page_size):
+            raise FactStoreCorruptedError()
+        original_sha = hashlib.sha256(blob).hexdigest()
+        image = blob[:18] + b"\x01\x01" + blob[20:]
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.deserialize(image)
+            conn.execute("PRAGMA query_only=ON")
+            conn.execute("PRAGMA trusted_schema=OFF")
+            if conn.execute("SELECT type FROM sqlite_schema WHERE name='fact_snapshots'").fetchall() != [("table",)]:
+                raise FactStoreCorruptedError()
+            if conn.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                raise FactStoreCorruptedError()
+            placeholders = ",".join("?" for _ in trade_dates)
+            rows = conn.execute(
+                f"SELECT trade_date,envelope_json,stored_at FROM fact_snapshots WHERE session='final' AND trade_date IN ({placeholders})",
+                trade_dates,
+            ).fetchall()
+        finally:
+            conn.close()
+        result = {}
+        def strict_object(pairs):
+            obj = {}
+            for key, value in pairs:
+                if key in obj:
+                    raise ValueError("duplicate JSON key")
+                obj[key] = value
+            return obj
+        for day, raw, stored_at in rows:
+            if day in result:
+                raise FactStoreCorruptedError()
+            envelope = json.loads(raw, object_pairs_hook=strict_object)
+            _validate_envelope(envelope)
+            if envelope["trade_date"] != day or envelope["session"] != "final":
+                raise FactStoreCorruptedError()
+            result[day] = {"envelope": envelope, "stored_at": stored_at, "database_sha256": original_sha}
+        if fingerprint() != before:
+            raise FactStoreBusyError()
+        return result
+    except FactStoreError:
+        raise
+    except (OSError, sqlite3.Error, ValueError, TypeError, AttributeError, RecursionError) as exc:
         raise FactStoreCorruptedError() from exc
