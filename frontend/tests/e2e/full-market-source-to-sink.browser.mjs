@@ -7,6 +7,7 @@
  * API fixture hook to delay/fail requests without changing business authority.
  */
 import { chromium } from "playwright";
+import { waitForScreenerMode, waitForFullMarketLoading } from "./screener-readiness.mjs";
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
@@ -371,7 +372,7 @@ async function assertOfflineAudit() {
 }
 
 async function assertVisible(locator, label) {
-  if (!(await locator.isVisible().catch(() => false))) throw new Error(`missing visible ${label}`);
+  await locator.waitFor({ state: "visible", timeout: 10000 }).catch(() => { throw new Error(`missing visible ${label}`); });
 }
 
 async function captureScenarioFailure(page, label, error) {
@@ -408,6 +409,7 @@ async function runNormalScenario(browser, fixture) {
     await page.screenshot({ path: path.join(screenshotDir, "normal-01-screener.png"), fullPage: true });
 
     await page.getByTestId("full-market-tab").click();
+    await waitForScreenerMode(page, "full-market");
     await assertVisible(page.getByTestId("full-market-form"), "Full Market query form");
     if (await page.getByTestId("full-market-tab").getAttribute("aria-selected") !== "true") {
       throw new Error("Full Market tab did not become selected");
@@ -533,6 +535,7 @@ async function runFailureClearsScenario(browser, fixture) {
     await page.goto(`${baseUrl}/screener?mode=candidate`, { waitUntil: "domcontentloaded" });
     await page.getByTestId("full-market-tab").waitFor({ state: "visible" });
     await page.getByTestId("full-market-tab").click();
+    await waitForScreenerMode(page, "full-market");
 
     const firstResponsePromise = page.waitForResponse((response) => {
       try {
@@ -599,29 +602,32 @@ async function runModeSwitchScenario(browser, fixture) {
     await page.goto(`${baseUrl}/screener?mode=candidate`, { waitUntil: "domcontentloaded" });
     await page.getByTestId("full-market-tab").waitFor({ state: "visible" });
     await page.getByTestId("full-market-tab").click();
+    await waitForScreenerMode(page, "full-market");
+    const requestStarted = page.waitForRequest(request => new URL(request.url()).pathname === "/api/screener/full-market", { timeout: 10000 });
     await page.getByTestId("run-full-market").click();
+    const ownedRequest = await requestStarted;
+    const requestCancelled = page.waitForEvent("requestfailed", {
+      predicate: request => request === ownedRequest, timeout: 10000,
+    });
+    // Register before changing the mode; cancellation must belong to this held request.
+    requestCancelled.catch(() => {});
     await timing.started;
-    const fullMarketButton = page.getByTestId("run-full-market");
-    if (!(await fullMarketButton.isDisabled()) || (await fullMarketButton.innerText()) !== "查询中…") {
-      throw new Error("Full Market loading state was not visible while the request was pending");
-    }
+    await waitForFullMarketLoading(page, true);
 
     await page.getByTestId("candidate-pool-tab").click();
-    if (await page.getByTestId("candidate-pool-tab").getAttribute("aria-selected") !== "true") {
-      throw new Error("Candidate Pool did not become selected during pending Full Market request");
-    }
-    await page.getByRole("button", { name: "运行筛选" }).waitFor({ state: "visible" });
+    await waitForScreenerMode(page, "candidate");
+    await requestCancelled;
     await page.getByTestId("full-market-tab").click();
-    if (await page.getByTestId("run-full-market").isDisabled()) {
-      throw new Error("Full Market loading did not reset after switching to Candidate Pool");
-    }
+    await waitForScreenerMode(page, "full-market");
+    await waitForFullMarketLoading(page, false);
     if (await page.getByTestId("full-market-summary").count() || await page.getByTestId("full-market-results").count()) {
       throw new Error("switching back to Full Market retained stale results");
     }
 
     timing.release();
     await timing.returned;
-    await page.waitForTimeout(100);
+    // The owned browser request already terminated on cancellation. Once the held
+    // server response arrives, no response from it may repopulate the committed mode.
     if (await page.getByTestId("full-market-summary").count() || await page.getByTestId("full-market-results").count()) {
       throw new Error("late Full Market response repopulated Full Market after mode switch");
     }
@@ -653,6 +659,7 @@ async function runUnavailableScenario(browser, rdpRoot, tempDir, kind, expectedR
     await page.getByTestId("full-market-tab").waitFor({ state: "visible" });
     await page.screenshot({ path: path.join(screenshotDir, `${prefix}-01-screener.png`), fullPage: true });
     await page.getByTestId("full-market-tab").click();
+    await waitForScreenerMode(page, "full-market");
     await page.screenshot({ path: path.join(screenshotDir, `${prefix}-02-full-market-form.png`), fullPage: true });
     const responsePromise = page.waitForResponse((response) => {
       try {
