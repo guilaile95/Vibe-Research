@@ -101,3 +101,29 @@ test("backend teardown waits for graceful and escalated exits, including signal-
     await stopBackend(child, 0); assert.equal(order.at(-1), "returned");
   }
 });
+
+test("cohort ancillary read is exact dated service evidence and never backend fanout", () => {
+  const path = "/api/market/cohort-identity", search = `?trade_date=${ANCILLARY_TRADE_DATE}`;
+  const result = ancillaryReply("GET", path, search).data;
+  assert.equal(result.schema_version, "archived-cohort-identity.v0.1");
+  assert.equal(result.trade_date, ANCILLARY_TRADE_DATE);
+  assert.equal(result.previous_trade_date, "2026-09-30", "actual holiday-aware predecessor is preserved");
+  assert.equal(result.status, "unavailable"); assert.deepEqual(result.reason_codes, ["ARCHIVE_MISSING"]);
+  assert.equal(result.projection, null); assert.equal(result.evidence, null);
+  assert.equal(result.selection_mode, "CURRENT_STORED_POSTHOC");
+  assert.equal(result.point_in_time_claim, "NONE"); assert.equal(result.research_only, true);
+  for (const method of ["POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]) {
+    assert.equal(ancillaryReply(method, path, search), null, method);
+  }
+  for (const query of ["", "?", "?trade_date=2026-10-12", "?trade_date=2026-09-30", "?trade_date=2026-07-31",
+    "?trade_date=2026%2D10%2D08", "?date=2026-10-08", `${search}&trade_date=${ANCILLARY_TRADE_DATE}`,
+    `${search}&as_of=x`, `${search}&observed_at=x`, `${search}&root=/tmp`, `${search}&refresh=1`]) {
+    assert.equal(ancillaryReply("GET", path, query), null, query);
+  }
+  assert.equal(ancillaryReply("GET", `${path}/`, search), null);
+  for (const scenario of ["history-late-success", "history-late-error", "report-upload", "calendar-422"]) {
+    assert.equal(realRouteAllowed("GET", path, scenario), false);
+  }
+  result.reason_codes.push("MUTATED");
+  assert.deepEqual(ancillaryReply("GET", path, search).data.reason_codes, ["ARCHIVE_MISSING"]);
+});

@@ -681,6 +681,21 @@ jobs:
           path: ${{ runner.temp }}/seal-quality-evidence
           if-no-files-found: warn
 
+      - name: Run archived cohort member component acceptance
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          COHORT_IDENTITY_BROWSER_OUTPUT_DIR: ${{ runner.temp }}/cohort-identity-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/cohort-identity.browser.mjs
+
+      - name: Preserve archived cohort member component evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cohort-identity-evidence
+          path: ${{ runner.temp }}/cohort-identity-evidence
+          if-no-files-found: warn
+
       - name: Run next-session condition journal UI acceptance
         working-directory: frontend
         timeout-minutes: 5

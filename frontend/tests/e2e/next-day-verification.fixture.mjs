@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 
 export const golden = JSON.parse(readFileSync(new URL("../fixtures/next-day-verification.json", import.meta.url), "utf8"));
+const cohortGolden = JSON.parse(readFileSync(new URL("../fixtures/cohort-identity-unavailable.json", import.meta.url), "utf8"));
 export const DAY = "2026-07-31";
 export const CLOCK = "2026-08-03T00:00:00Z";
 export const JOURNAL_VIEWPORTS = Object.freeze([
@@ -46,6 +47,11 @@ export function createFixture(origin, { withSealQuality = false } = {}) {
         if (url.search || !views.has(day)) return deny(`unexpected journal GET ${day}${url.search}`);
         if (getErrors.get(day)) { getErrors.delete(day); return json({ detail: "验证记录不可读取，已停止操作" }, 503); }
         return json({ data: copy(golden[views.get(day)]) });
+      }
+      if (pathname === "/api/market/cohort-identity") {
+        if (!withSealQuality || url.search !== `?trade_date=${DAY}`) return deny("unexpected cohort-identity request");
+        // Exact missing-archive service response, bounded to the page's fixture date.
+        return json({ data: copy(cohortGolden[DAY]) });
       }
       if (pathname === "/api/market/seal-quality") {
         if (!withSealQuality || url.search !== `?trade_date=${DAY}`) return deny("unexpected seal-quality request");

@@ -80,6 +80,7 @@ import performance_attribution_store
 import technical_indicators_router
 import bk11_history_router
 import short_term_seal_quality_router
+import cohort_identity_router
 import intel_digest_router
 import native_intel_router
 import position_reality_router
@@ -423,6 +424,7 @@ app.include_router(technical_indicators_router.router)
 # BK-11 短线市场历史只读查询
 app.include_router(bk11_history_router.router)
 app.include_router(short_term_seal_quality_router.router)
+app.include_router(cohort_identity_router.router)
 # Intel Daily Digest
 app.include_router(intel_digest_router.router)
 # NATIVE-INTEL1：Vibe 自有资讯能力（MIT 原生，无 TrendRadar sidecar/runtime）

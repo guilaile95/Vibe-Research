@@ -25,6 +25,7 @@ import { MarketCloud } from "@/components/market/MarketCloud";
 import MarketIntelPanel from "@/components/market/MarketIntelPanel";
 import { NextDayVerificationCard } from "@/components/dailyReview/NextDayVerificationCard";
 import { ShortTermHistoryCard } from "@/components/dailyReview/ShortTermHistoryCard";
+import { CohortIdentityCard } from "@/components/dailyReview/CohortIdentityCard";
 import { SealQualityCard } from "@/components/dailyReview/SealQualityCard";
 import { northboundErrorMessage } from "@/lib/northboundView";
 import { loadLlm } from "@/lib/llm";
@@ -1182,6 +1183,7 @@ export function DailyReview() {
 	      { order: 11, node: (<section key="bk11-history" className="order-[11]">
       <ShortTermHistoryCard env={bk11Env} loading={bk11Loading} error={bk11Error} />
       <SealQualityCard tradeDate={dr?.trade_date ?? null} />
+      <CohortIdentityCard tradeDate={dr?.trade_date ?? null} />
       </section>) },
 
       /* 3. 市场广度 */
@@ -2057,6 +2059,7 @@ export function DailyReview() {
                   </div>
 
                   <SealQualityCard tradeDate={snap.trade_date ?? null} />
+                  <CohortIdentityCard tradeDate={snap.trade_date ?? null} />
 
                   {warnList.length > 0 && (
                     <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-warning">
