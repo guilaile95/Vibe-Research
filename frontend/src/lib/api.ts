@@ -6,6 +6,7 @@ export type * from "./api/types.ts";
 import { storageSetChecked, storageRemoveChecked } from "./storage.ts";
 
 import type { MarketCloudEnvelope } from "./marketCloud.ts";
+import type { SealQualityArchive } from "./sealQuality.ts";
 import { parseReportChatCoverage } from "./reportChatCoverage.ts";
 import { parseReportListResult } from "./reportSourceCoverage.ts";
 import { parseLeadAnalysisContext } from "./leadAnalysisContext.ts";
@@ -660,6 +661,12 @@ export const api = {
   bk11History: (days = 5, signal?: AbortSignal) =>
     get<Bk11HistoryEnvelope>(
       `/market/bk11-history?days=${days}`,
+      signal ? { signal } : undefined,
+    ),
+  /** 只读已连接归档；不创建归档、不启动采集、不请求供应商。 */
+  sealQuality: (tradeDate: string, signal?: AbortSignal) =>
+    get<SealQualityArchive>(
+      `/market/seal-quality?trade_date=${encodeURIComponent(tradeDate)}`,
       signal ? { signal } : undefined,
     ),
   /** 顶部风险分析（影子模式，第一版）：按股票代码分析，signal 恒 unknown、不参与最终结论。 */

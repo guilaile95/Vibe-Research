@@ -23,7 +23,9 @@ import {
 import { NorthboundCapitalFlowCard } from "@/components/market/NorthboundCapitalFlowCard";
 import { MarketCloud } from "@/components/market/MarketCloud";
 import MarketIntelPanel from "@/components/market/MarketIntelPanel";
+import { NextDayVerificationCard } from "@/components/dailyReview/NextDayVerificationCard";
 import { ShortTermHistoryCard } from "@/components/dailyReview/ShortTermHistoryCard";
+import { SealQualityCard } from "@/components/dailyReview/SealQualityCard";
 import { northboundErrorMessage } from "@/lib/northboundView";
 import { loadLlm } from "@/lib/llm";
 import { useDailyReviewAiTaskStore } from "@/stores/dailyReviewAiTaskStore";
@@ -1179,6 +1181,7 @@ export function DailyReview() {
 	      /* 11. BK-11 短线市场历史（独立只读请求；不随复盘轮询） */
 	      { order: 11, node: (<section key="bk11-history" className="order-[11]">
       <ShortTermHistoryCard env={bk11Env} loading={bk11Loading} error={bk11Error} />
+      <SealQualityCard tradeDate={dr?.trade_date ?? null} />
       </section>) },
 
       /* 3. 市场广度 */
@@ -1783,6 +1786,8 @@ export function DailyReview() {
             </>
             )}
 
+      <NextDayVerificationCard initialDate={dr?.trade_date} />
+
       {/* 10. 历史复盘（显式保存；只读浏览；不替换当前实时数据） */}
       {todayView === "history" && (
       <>
@@ -2050,6 +2055,8 @@ export function DailyReview() {
                       <span className={cn("rounded-full px-2 py-0.5 text-[10px]", snapBadge.cls)}>{snapBadge.text}</span>
                     )}
                   </div>
+
+                  <SealQualityCard tradeDate={snap.trade_date ?? null} />
 
                   {warnList.length > 0 && (
                     <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-warning">
