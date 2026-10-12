@@ -105,6 +105,7 @@ import decision_commit_router
 import decision_challenge_router
 import formal_decision_outcome_router
 import research_data_plane_router
+import research_analytics_router
 import historical_signal_validation_router
 import factor_validation_router
 import research_event_calendar_router
@@ -467,8 +468,11 @@ app.include_router(decision_challenge_router.router)
 app.include_router(formal_decision_outcome_router.router)
 # Local bulk research read model; never a Canonical Fact or decision authority.
 app.include_router(research_data_plane_router.router)
+import public_research_router
+app.include_router(public_research_router.router)
 # Historical Signal Validation: read-only research computation; no formal writes.
 app.include_router(historical_signal_validation_router.router)
+app.include_router(research_analytics_router.router)
 import next_day_verification_router
 app.include_router(next_day_verification_router.router)
 import observation_workflows_router

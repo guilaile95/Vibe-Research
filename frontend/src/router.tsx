@@ -37,6 +37,7 @@ const DecisionPerformance = lazy(() => import("@/pages/DecisionPerformance").the
 const PerformanceAttribution = lazy(() => import("@/pages/PerformanceAttribution").then((m) => ({ default: m.default })));
 const DecisionInbox = lazy(() => import("@/pages/DecisionInbox").then((m) => ({ default: m.default })));
 const DecisionProposalReview = lazy(() => import("@/pages/DecisionProposalReview").then((m) => ({ default: m.default })));
+const ResearchAnalytics = lazy(() => import("@/pages/ResearchAnalytics").then((m) => ({ default: m.ResearchAnalytics })));
 const Signals = lazy(() => import("@/pages/Signals").then((m) => ({ default: m.Signals })));
 const Debate = lazy(() => import("@/pages/Debate").then((m) => ({ default: m.Debate })));
 
@@ -94,6 +95,7 @@ export const router = createBrowserRouter([
       { path: "/signal-ledger", element: withSuspense(<SignalLedger />) },
       { path: "/account-policy", element: withSuspense(<AccountPolicy />) },
       { path: "/decision-performance", element: withSuspense(<DecisionPerformance />) },
+      { path: "/research-analytics", element: withSuspense(<ResearchAnalytics />) },
       { path: "/performance-attribution", element: withSuspense(<PerformanceAttribution />) },
       { path: "/cockpit", element: withSuspense(<DecisionCockpit />) },
       { path: "/decision-inbox", element: withSuspense(<DecisionInbox />) },

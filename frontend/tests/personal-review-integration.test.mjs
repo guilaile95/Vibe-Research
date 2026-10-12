@@ -44,7 +44,7 @@ test("actual editor JSX recovers malformed GET and locks uncertain PUT without w
       api.onLoad({filter:/PersonalReviewPanel\.tsx$/},async(args)=>({contents:readFileSync(args.path,"utf8").replace('from "react"','from "review-test-hooks"'),loader:"tsx",resolveDir:fileURLToPath(new URL("../src/components/personal-review",import.meta.url))}));
       api.onResolve({filter:/^review-test-hooks$/},()=>({path:"hooks",namespace:"review-test"}));
       api.onResolve({filter:/^@\/lib\/api$/},()=>({path:"api",namespace:"review-test"}));
-      api.onLoad({filter:/.*/,namespace:"review-test"},(args)=>({contents:args.path==="hooks"?`const s=globalThis.__personalReviewTestHooks; export function useState(init){const i=s.cursor++; if(!(i in s.values))s.values[i]=typeof init==='function'?init():init; return [s.values[i],v=>{s.values[i]=typeof v==='function'?v(s.values[i]):v;}];} export const useRef=v=>useState(()=>({current:v}))[0]; export const useEffect=f=>{s.effects.push(f);};`:`export async function request(path,method){const s=globalThis.__personalReviewTestHooks;if(method==='PUT')s.writes++;if(!s.queue.length)throw new Error('unplanned request');return s.queue.shift();}`,loader:"js"}));
+      api.onLoad({filter:/.*/,namespace:"review-test"},(args)=>({contents:args.path==="hooks"?`const s=globalThis.__personalReviewTestHooks; export function useState(init){const i=s.cursor++; if(!(i in s.values))s.values[i]=typeof init==='function'?init():init; return [s.values[i],v=>{s.values[i]=typeof v==='function'?v(s.values[i]):v;}];} export const useRef=v=>useState(()=>({current:v}))[0]; export const useId=()=>"synthetic-review-form"; export const useEffect=f=>{s.effects.push(f);};`:`export async function request(path,method){const s=globalThis.__personalReviewTestHooks;if(method==='PUT')s.writes++;if(!s.queue.length)throw new Error('unplanned request');return s.queue.shift();}`,loader:"js"}));
     }
   }]});
   const temporary=new URL("./.personal-review-controlled-temporary.mjs",import.meta.url);
@@ -66,6 +66,11 @@ test("actual editor JSX recovers malformed GET and locks uncertain PUT without w
     element=tree();const note=nodes(element).find(n=>n.type==="textarea"&&n.props.maxLength===2000);note.props.onChange({target:{value:"Synthetic private draft retained"}});
     element=tree();state.queue.push({});nodes(element).find(n=>n.type==="form").props.onSubmit({preventDefault(){}});await drain();
     element=tree();const html=renderToStaticMarkup(element);assert.match(html,/写入结果待核验/);assert.match(html,/Synthetic private draft retained/);
+    const noteLabel=html.match(/<label[^>]*>复查笔记([\s\S]*?)<\/label>/)?.[0];
+    assert.ok(noteLabel);assert.equal(noteLabel.replace(/<[^>]*>/g, ""), "复查笔记", "exact label text must not absorb controlled textarea draft");
+    const associations=[...html.matchAll(/<label for="([^"]+)"[^>]*>([^<]*)<\/label>/g)];
+    assert.equal(associations.length,8);assert.equal(new Set(associations.map(m=>m[1])).size,8);
+    for(const [,id]of associations)assert.ok(html.includes(`id="${id}"`));
     assert.equal(nodes(element).find(n=>n.type==="button"&&n.props.children==="保存自评修订").props.disabled,true);
     nodes(element).find(n=>n.type==="form").props.onSubmit({preventDefault(){}});await drain();assert.equal(state.writes,1);
     props={};state.values=[];

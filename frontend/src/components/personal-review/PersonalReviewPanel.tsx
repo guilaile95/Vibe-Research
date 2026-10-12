@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { PriceBasisImport } from "./PriceBasisImport";
 import { Link } from "react-router-dom";
 import { parsePersonalReview, parseSavedAssessment, parseSavedPattern, parseExcursion, ReviewResponseError } from "@/lib/personalReviewValidation";
@@ -20,6 +20,7 @@ const reasonLabels: Record<string, string> = {
 
 /** No AI context registration or model action: local ledger companion only. */
 export function PersonalReviewPanel({ trade, refreshKey = "" }: { trade?: { trade_id: string; executed_at: string | null; voided_at?: string | null; execution_status: string }; refreshKey?: string }) {
+  const formId = useId();
   const [data, setData] = useState<PersonalReview | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -77,16 +78,16 @@ export function PersonalReviewPanel({ trade, refreshKey = "" }: { trade?: { trad
     {!data && !error && <p role="status">正在读取本地复查…</p>}
     {data && trade && <>
       {trade.voided_at || trade.execution_status === "not_executed" ? <p>已作废或未成交记录不能新增个人复查</p> : <form className="space-y-3" onSubmit={e => { e.preventDefault(); void save(`/personal-review/assessments/${trade.trade_id}`, { ...draft, revision }); }}>
-        <label className="block text-sm">环境描述（事后自评）<textarea className={input} maxLength={500} value={draft.environment} onChange={e => setDraft({ ...draft, environment: e.target.value })} /></label>
+        <div className="block text-sm"><label htmlFor={`${formId}-environment`}>环境描述（事后自评）</label><textarea id={`${formId}-environment`} className={input} maxLength={500} value={draft.environment} onChange={e => setDraft({ ...draft, environment: e.target.value })} /></div>
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="text-sm">收盘板位（事后标签）<input className={input} type="number" min={1} max={100} value={draft.closing_board_rank ?? ""} onChange={e => setDraft({ ...draft, closing_board_rank: e.target.value ? Number(e.target.value) : null })} /></label>
-          <label className="text-sm">止损价情景（非正式计划）<input className={input} type="number" step="any" min="0.0001" value={draft.stop_price ?? ""} onChange={e => setDraft({ ...draft, stop_price: e.target.value ? Number(e.target.value) : null })} /></label>
-          <label className="text-sm">判断自评<select className={input} value={draft.judgment} onChange={e => setDraft({ ...draft, judgment: e.target.value as AssessmentContent["judgment"] })}><option value="unknown">未知 / 未评价</option><option value="correct">判断正确（自评）</option><option value="incorrect">判断错误（自评）</option></select></label>
-          <label className="text-sm">执行自评<select className={input} value={draft.execution} onChange={e => setDraft({ ...draft, execution: e.target.value as AssessmentContent["execution"] })}><option value="unknown">未知 / 未评价</option><option value="followed">按计划（自评）</option><option value="deviated">偏离计划（自评）</option></select></label>
+          <div className="text-sm"><label htmlFor={`${formId}-board`}>收盘板位（事后标签）</label><input id={`${formId}-board`} className={input} type="number" min={1} max={100} value={draft.closing_board_rank ?? ""} onChange={e => setDraft({ ...draft, closing_board_rank: e.target.value ? Number(e.target.value) : null })} /></div>
+          <div className="text-sm"><label htmlFor={`${formId}-stop`}>止损价情景（非正式计划）</label><input id={`${formId}-stop`} className={input} type="number" step="any" min="0.0001" value={draft.stop_price ?? ""} onChange={e => setDraft({ ...draft, stop_price: e.target.value ? Number(e.target.value) : null })} /></div>
+          <div className="text-sm"><label htmlFor={`${formId}-judgment`}>判断自评</label><select id={`${formId}-judgment`} className={input} value={draft.judgment} onChange={e => setDraft({ ...draft, judgment: e.target.value as AssessmentContent["judgment"] })}><option value="unknown">未知 / 未评价</option><option value="correct">判断正确（自评）</option><option value="incorrect">判断错误（自评）</option></select></div>
+          <div className="text-sm"><label htmlFor={`${formId}-execution`}>执行自评</label><select id={`${formId}-execution`} className={input} value={draft.execution} onChange={e => setDraft({ ...draft, execution: e.target.value as AssessmentContent["execution"] })}><option value="unknown">未知 / 未评价</option><option value="followed">按计划（自评）</option><option value="deviated">偏离计划（自评）</option></select></div>
         </div>
-        <label className="block text-sm">打法版本（仅成交当日生效版本）<select className={input} value={draft.pattern_id ? `${draft.pattern_id}:${draft.pattern_revision}` : ""} onChange={e => { const [id, rev] = e.target.value.split(":"); setDraft({ ...draft, pattern_id: id || null, pattern_revision: rev ? Number(rev) : null }); }}><option value="">未归类</option>{applicable.map(p => <option key={`${p.pattern_id}:${p.revision}`} value={`${p.pattern_id}:${p.revision}`}>{p.content.name} · v{p.revision}</option>)}</select></label>
-        <label className="block text-sm">违反条目（自报，一行一条，最多10条）<textarea className={input} value={draft.violations.join("\n")} onChange={e => setDraft({ ...draft, violations: e.target.value.split("\n").filter(Boolean) })} /></label>
-        <label className="block text-sm">复查笔记<textarea className={input} maxLength={2000} value={draft.note} onChange={e => setDraft({ ...draft, note: e.target.value })} /></label>
+        <div className="block text-sm"><label htmlFor={`${formId}-pattern`}>打法版本（仅成交当日生效版本）</label><select id={`${formId}-pattern`} className={input} value={draft.pattern_id ? `${draft.pattern_id}:${draft.pattern_revision}` : ""} onChange={e => { const [id, rev] = e.target.value.split(":"); setDraft({ ...draft, pattern_id: id || null, pattern_revision: rev ? Number(rev) : null }); }}><option value="">未归类</option>{applicable.map(p => <option key={`${p.pattern_id}:${p.revision}`} value={`${p.pattern_id}:${p.revision}`}>{p.content.name} · v{p.revision}</option>)}</select></div>
+        <div className="block text-sm"><label htmlFor={`${formId}-violations`}>违反条目（自报，一行一条，最多10条）</label><textarea id={`${formId}-violations`} className={input} value={draft.violations.join("\n")} onChange={e => setDraft({ ...draft, violations: e.target.value.split("\n").filter(Boolean) })} /></div>
+        <div className="block text-sm"><label htmlFor={`${formId}-note`}>复查笔记</label><textarea id={`${formId}-note`} className={input} maxLength={2000} value={draft.note} onChange={e => setDraft({ ...draft, note: e.target.value })} /></div>
         <button type="submit" className={button} disabled={busy || uncertainWrite}>保存自评修订</button>
       </form>}
       <AssessmentHistory items={data.assessment_history[trade.trade_id] ?? []} />
@@ -115,9 +116,9 @@ export function PersonalReviewPanel({ trade, refreshKey = "" }: { trade?: { trad
       </div></details>
       <PriceBasisImport onSaved={() => setReload(n => n + 1)} />
       <details><summary className="cursor-pointer">模式卡 · 版本历史与复用</summary><div className="space-y-3 py-3">
-        <label className="block text-sm">编辑已有模式或新建<select className={input} value={patternId} onChange={e => { const p = latestPatterns.find(v => v.pattern_id === e.target.value); setPatternId(p?.pattern_id ?? ""); setPatternRevision(p?.revision ?? 0); setPattern(p?.content ?? emptyPattern()); }}><option value="">新建模式</option>{latestPatterns.map(p => <option key={p.pattern_id} value={p.pattern_id}>{p.content.name} v{p.revision}</option>)}</select></label>
+        <div className="block text-sm"><label htmlFor={`${formId}-pattern-choice`}>编辑已有模式或新建</label><select id={`${formId}-pattern-choice`} className={input} value={patternId} onChange={e => { const p = latestPatterns.find(v => v.pattern_id === e.target.value); setPatternId(p?.pattern_id ?? ""); setPatternRevision(p?.revision ?? 0); setPattern(p?.content ?? emptyPattern()); }}><option value="">新建模式</option>{latestPatterns.map(p => <option key={p.pattern_id} value={p.pattern_id}>{p.content.name} v{p.revision}</option>)}</select></div>
         <form className="space-y-2" onSubmit={e => { e.preventDefault(); const id = patternId || crypto.randomUUID(); setPatternId(id); void save(`/personal-review/patterns/${id}`, { ...pattern, revision: patternRevision }); }}>
-          {([ ["name", "名称"], ["setup", "适用环境"], ["entry_rule", "入场规则"], ["exit_rule", "退出规则"], ["invalidation", "失效条件"] ] as const).map(([field, title]) => <label className="block text-sm" key={field}>{title}<textarea required className={input} maxLength={field === "name" ? 80 : 1000} value={pattern[field]} onChange={e => setPattern({ ...pattern, [field]: e.target.value })} /></label>)}
+          {([ ["name", "名称"], ["setup", "适用环境"], ["entry_rule", "入场规则"], ["exit_rule", "退出规则"], ["invalidation", "失效条件"] ] as const).map(([field, title]) => <div className="block text-sm" key={field}><label htmlFor={`${formId}-${field}`}>{title}</label><textarea id={`${formId}-${field}`} required className={input} maxLength={field === "name" ? 80 : 1000} value={pattern[field]} onChange={e => setPattern({ ...pattern, [field]: e.target.value })} /></div>)}
           <p className="text-xs text-muted-foreground">保存为新版本，上海下一自然日生效（不是下一交易日）；不可倒填。AI 不会修改规则。</p><button className={button} disabled={busy || uncertainWrite}>发布新版本到本地</button>
         </form>
         {data.patterns.map(p => <article className="rounded border border-border p-3 text-sm" key={`${p.pattern_id}:${p.revision}`}><h3>{p.content.name} v{p.revision}</h3><p>生效 {p.effective_from} 至 {p.effective_until ?? "后续版本发布"}（右端不含）</p><p>环境：{p.content.setup}</p><p>入场：{p.content.entry_rule}</p><p>退出：{p.content.exit_rule}</p><p>失效：{p.content.invalidation}</p><p>关联自评轮次 {p.statistics.closed_count} · 金额覆盖 {p.statistics.money_scored} · 净收益 {reviewNumber(p.statistics.net_pnl)} 元</p><button className={button} onClick={() => { setPatternId(""); setPatternRevision(0); setPattern({ ...p.content, name: `${p.content.name}（副本）`.slice(0, 80) }); }}>复制为新模式草稿</button></article>)}

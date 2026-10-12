@@ -100,6 +100,7 @@ export const ROUTE_OWNERS: readonly RouteOwner[] = [
 
   // 账户与复盘 / 交易记录
   { pattern: "/trades", owner: "trades", name: "交易记录" },
+  { pattern: "/research-analytics", owner: "trades", name: "研究计算" },
   { pattern: "/performance-attribution", owner: "trades", name: "收益归因" },
 
   // 账户与复盘 / 决策复盘
@@ -221,6 +222,7 @@ export const SECTION_NAVS: Record<string, SectionNavGroup[]> = {
       items: [
         { to: "/trades", label: "交易记录" },
         { to: "/performance-attribution", label: "收益归因" },
+        { to: "/research-analytics", label: "研究计算" },
       ],
     },
   ],

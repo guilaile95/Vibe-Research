@@ -68,3 +68,27 @@ test('production JSX rejects malformed preview and list then recovers to valid p
  reply=result();reply.created_at={};nodes(tree).find(x=>x.type==='select'&&x.props['aria-label']==='选择复盘版本').props.onChange({target:{value:id}});await new Promise(r=>setTimeout(r,0));tree=render();assert.match(renderToStaticMarkup(tree),/版本身份或内容无法核对/);
  reply=result();nodes(tree).find(x=>x.type==='select'&&x.props['aria-label']==='选择复盘版本').props.onChange({target:{value:id}});await new Promise(r=>setTimeout(r,0));tree=render();assert.match(renderToStaticMarkup(tree),/事实核验未执行/);assert.doesNotMatch(renderToStaticMarkup(tree),/版本身份或内容无法核对/);
 });
+
+for(const lateError of [false,true])test(`clearing selected version invalidates late ${lateError?'error':'success'} from production card`,async()=>{
+ let state=[],cursor=0,effect,resolve,reject;
+ const hooks={...react,useState:initial=>{const i=cursor++;if(!(i in state))state[i]=initial;return[state[i],v=>{state[i]=v}]},useRef:initial=>{const i=cursor++;if(!(i in state))state[i]={current:initial};return state[i]},useEffect:fn=>{effect=fn}};
+ const {ShortlineReviewCard}=load('../src/components/dailyReview/ShortlineReviewCard.tsx',{'react':hooks,'react/jsx-runtime':jsx,'@/components/ui/GlassCard':{GlassCard:({children,...p})=>react.createElement('div',p,children)},'@/lib/api':{request:url=>url.includes('/versions?')?Promise.resolve([]):new Promise((a,b)=>{resolve=a;reject=b;})},'@/lib/llm':{loadLlm:()=>null},'@/lib/shortlineReview':contract,'@/stores/shortlineReviewTaskStore':{useShortlineReviewTaskStore:()=>({key:null,running:false,result:null,error:''})}});
+ const render=()=>{cursor=0;return ShortlineReviewCard({tradeDate:day})};
+ const nodes=x=>!x||typeof x!=='object'?[]:[x,...react.Children.toArray(x.props?.children).flatMap(nodes)];
+ render();effect();await new Promise(r=>setTimeout(r,0));let tree=render();
+ const select=()=>nodes(tree).find(x=>x.type==='select'&&x.props['aria-label']==='选择复盘版本');
+ select().props.onChange({target:{value:id}});tree=render();select().props.onChange({target:{value:''}});
+ if(lateError)reject(Error('late old request'));else resolve(result());
+ await new Promise(r=>setTimeout(r,0));tree=render();
+ assert.equal(select().props.value,'');assert.doesNotMatch(renderToStaticMarkup(tree),/事实核验未执行|版本身份或内容无法核对/);
+});
+
+for(const value of ['',id])test(`version ${value?'selection':'clear'} releases superseded preview loading`,async()=>{
+ let state=[],cursor=0,effect,release;
+ const hooks={...react,useState:initial=>{const i=cursor++;if(!(i in state))state[i]=initial;return[state[i],v=>{state[i]=v}]},useRef:initial=>{const i=cursor++;if(!(i in state))state[i]={current:initial};return state[i]},useEffect:fn=>{effect=fn}};
+ const {ShortlineReviewCard}=load('../src/components/dailyReview/ShortlineReviewCard.tsx',{'react':hooks,'react/jsx-runtime':jsx,'@/components/ui/GlassCard':{GlassCard:({children,...p})=>react.createElement('div',p,children)},'@/lib/api':{request:url=>url.includes('/preview?')?new Promise(r=>release=r):Promise.resolve(url.includes('/versions?')?[]:result())},'@/lib/llm':{loadLlm:()=>null},'@/lib/shortlineReview':contract,'@/stores/shortlineReviewTaskStore':{useShortlineReviewTaskStore:()=>({key:null,running:false,result:null,error:''})}});
+ const render=()=>{cursor=0;return ShortlineReviewCard({tradeDate:day})};const nodes=x=>!x||typeof x!=='object'?[]:[x,...react.Children.toArray(x.props?.children).flatMap(nodes)];
+ render();effect();await new Promise(r=>setTimeout(r,0));let tree=render();nodes(tree).find(x=>x.type==='button'&&x.props.children==='查看生成材料').props.onClick();tree=render();assert.ok(nodes(tree).find(x=>x.type==='button'&&x.props.children==='读取材料…').props.disabled);
+ nodes(tree).find(x=>x.type==='select'&&x.props['aria-label']==='选择复盘版本').props.onChange({target:{value}});release(preview);await new Promise(r=>setTimeout(r,0));tree=render();
+ assert.equal(nodes(tree).find(x=>x.type==='button'&&x.props.children==='查看生成材料')?.props.disabled,false);
+});

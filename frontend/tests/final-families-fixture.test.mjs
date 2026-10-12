@@ -39,6 +39,8 @@ test("new ancillary cards accept only exact fixed-date GETs with truthful unavai
 
 test("clock is fixed before any inherited DailyReview navigation, without widening accepted dates", () => {
   assert.equal(ANCILLARY_CLOCK, "2026-10-08T08:00:00Z");
+  const inherited = readFileSync(new URL("./e2e/final-families.browser.mjs", import.meta.url), "utf8");
+  assert.match(inherited, /if \(scenario\.startsWith\("history-"\) \|\| scenario === "calendar-422"\) await page\.clock\.setFixedTime/);
   assert.equal(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ANCILLARY_CLOCK)), ANCILLARY_TRADE_DATE);
   for (const filename of ["final-families.browser.mjs", "markdown-images.browser.mjs"]) {
     const source = readFileSync(new URL(`./e2e/${filename}`, import.meta.url), "utf8");

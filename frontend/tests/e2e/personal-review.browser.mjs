@@ -26,10 +26,12 @@ const server = createServer((req, res) => {
   res.end(req.url === "/app.js" ? js : req.url === "/app.css" ? css : '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><link rel="stylesheet" href="/app.css"></head><body><div id="root"></div><script type="module" src="/app.js"></script></body></html>');
 });
 await new Promise(resolve => server.listen(0,"127.0.0.1",resolve)); origin = `http://127.0.0.1:${server.address().port}`;
-let browser;
+let browser, activePage, activeWidth;
+let status="FAIL";
 try {
   browser = await chromium.launch({ headless:true, args:["--disable-background-networking", "--disable-component-update", "--disable-sync"] });
   for (const viewport of [{width:1365,height:900},{width:390,height:844}]) {
+    activeWidth=viewport.width;
     let fixture = blank(), writes = [], fail = true, malformedRead = true, assessmentWrites = 0;
     const context = await browser.newContext({ viewport, serviceWorkers:"block" });
     await context.route("**/*", async route => {
@@ -51,7 +53,7 @@ try {
       }
       forbidden.push(`api ${req.method()} ${url.pathname}`); return route.abort("blockedbyclient");
     });
-    const page = await context.newPage(); page.on("pageerror",e=>errors.push(e.message));
+    const page = await context.newPage(); activePage=page; page.on("pageerror",e=>errors.push(e.message));
     await page.goto(origin);
     const panels=page.getByTestId("personal-review-panel"), overview=panels.nth(0), editor=panels.nth(1);
     await overview.getByRole("alert").waitFor();
@@ -86,9 +88,22 @@ try {
     assert.equal(overflow,false,"review controls fit desktop/mobile viewport");
     await page.screenshot({path:path.join(temporary,`${viewport.width}-review.png`),fullPage:true});
     results.push({viewport,writes:writes.length,unknownBoundary:true,retry:true,history:true,versionReuse:true,malformedReadRecovery:true,malformedWriteDraftRetained:true});
-    await context.close();
+    await context.close(); activePage=null;
   }
   assert.deepEqual(forbidden,[]); assert.deepEqual(errors,[]);
-  writeFileSync(path.join(temporary,"results.json"),JSON.stringify({results,forbidden,errors},null,2));
+  status="PASS";
   console.log(JSON.stringify({status:"passed",results,evidence:temporary}));
-} finally { await browser?.close(); await new Promise(resolve=>server.close(resolve)); }
+} catch(error) {
+  if(activePage){
+    await activePage.screenshot({path:path.join(temporary,`${activeWidth}-failure.png`),fullPage:false}).catch(()=>{});
+    await activePage.getByTestId("personal-review-panel").nth(1).screenshot({path:path.join(temporary,`${activeWidth}-failure-editor.png`)}).catch(()=>{});
+    writeFileSync(path.join(temporary,`${activeWidth}-failure.html`),await activePage.content().catch(()=>""));
+    const labels=await activePage.locator("label").evaluateAll(nodes=>nodes.map(label=>({text:label.textContent,htmlFor:label.htmlFor,controls:[...label.querySelectorAll("input,textarea,select")].map(x=>({tag:x.tagName,value:x.value,id:x.id}))}))).catch(()=>[]);
+    const aria=await activePage.getByTestId("personal-review-panel").nth(1).ariaSnapshot().catch(()=>"");
+    writeFileSync(path.join(temporary,`${activeWidth}-failure-labels.json`),JSON.stringify({error:String(error),labels,aria},null,2));
+  }
+  throw error;
+} finally {
+  writeFileSync(path.join(temporary,"results.json"),JSON.stringify({status,results,forbidden,errors},null,2));
+  await browser?.close(); await new Promise(resolve=>server.close(resolve));
+}

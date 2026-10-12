@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Activity, AlertCircle, ExternalLink, FileText, Flame, Loader2, Newspaper, RefreshCw, Star, TrendingUp } from "lucide-react";
+import { PublicResearchPanel } from "@/components/native-intel/PublicResearchPanel";
 import MarketIntelPanel from "@/components/market/MarketIntelPanel";
 import { HotlistPanel } from "@/components/native-intel/HotlistPanel";
 import { IntelReportPanel, IntelAnalyticsPanel } from "@/components/native-intel/IntelReports";
@@ -16,7 +17,8 @@ const TABS = [
   { key: "analytics", label: "趋势分析", icon: TrendingUp, desc: "可解释的非 AI 统计分析" },
   { key: "hotlist", label: "实时热榜", icon: Flame, desc: "财联社热门、华尔街见闻等权威热榜与位次轨迹" },
   { key: "market-intel", label: "市场情报", icon: Activity, desc: "关注趋势、赛道要点与去重后的最新公开资讯" },
-  { key: "events", label: "事件概率", icon: TrendingUp, desc: "全球宏观预期概率（公开数据、免登录只读），后续接入" },
+  { key: "events", label: "事件定价", icon: TrendingUp, desc: "只读公开预测市场归档，不是客观概率" },
+  { key: "industry", label: "产业公开数据", icon: Activity, desc: "台系营收、存储现货、大宗与公开招聘归档" },
   { key: "filings", label: "A股公告", icon: FileText, desc: "汇总关注列表里各个股的近期公告（东财公开披露）" },
   { key: "news", label: "公开新闻", icon: Newspaper, desc: "汇总关注列表里各个股的近期新闻（公开源）" },
 ];
@@ -193,7 +195,9 @@ export function WatchlistFeed({ kind }: { kind: FeedKind }) {
 }
 
 export function Intel() {
-  const [tab, setTab] = useState("market-intel");
+  const [params, setParams] = useSearchParams();
+  const tab = TABS.some(item => item.key === params.get("tab")) ? params.get("tab")! : "market-intel";
+  const setTab = (key: string) => setParams(previous => { const next = new URLSearchParams(previous); next.set("tab", key); return next; });
   const current = TABS.find((item) => item.key === tab)!;
 
   return (
@@ -222,6 +226,8 @@ export function Intel() {
             <WatchlistFeed kind="filings" />
           ) : current.key === "news" ? (
             <WatchlistFeed kind="news" />
+          ) : current.key === "events" || current.key === "industry" ? (
+            <PublicResearchPanel key={current.key} kind={current.key} />
           ) : (
             <>
               <p className="text-sm text-muted-foreground">{current.desc}</p>

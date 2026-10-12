@@ -116,7 +116,7 @@ async function runScenario(browser, baseURL, backend, width, scenario, evidenceD
       return route.fulfill({ status: 503, json: { detail: "UNEXPECTED_SYNTHETIC_REQUEST" } });
     });
     page = await context.newPage(); page.setDefaultTimeout(10000);
-    if (scenario.startsWith("history-")) await page.clock.setFixedTime(new Date(ANCILLARY_CLOCK));
+    if (scenario.startsWith("history-") || scenario === "calendar-422") await page.clock.setFixedTime(new Date(ANCILLARY_CLOCK));
     page.on("pageerror", error => errors.push(error.message)); page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
     const notes = () => page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes") || "[]"));
     if (scenario === "debate" || scenario === "notes-mobile") {

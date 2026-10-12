@@ -18,7 +18,7 @@ const routerSource = readFileSync(new URL("../src/router.tsx", import.meta.url),
 const declaredRoutes = [...routerSource.matchAll(/path:\s*"([^"]+)"/g)].map((match) => match[1]);
 
 test("router declarations are fully and uniquely owned", () => {
-  assert.equal(declaredRoutes.length, 37, `router.tsx 应声明 37 条路由，实际 ${declaredRoutes.length}`);
+  assert.equal(declaredRoutes.length, 38, `router.tsx 应声明 38 条路由，实际 ${declaredRoutes.length}`);
 
   const patterns = ROUTE_OWNERS.map((item) => item.pattern);
   assert.equal(new Set(patterns).size, patterns.length, "归属表存在重复 pattern");

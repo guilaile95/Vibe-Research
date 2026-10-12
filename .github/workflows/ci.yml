@@ -146,6 +146,39 @@ jobs:
           path: frontend/kline-research-evidence/kline-research-synthetic-*.png
           if-no-files-found: error
 
+      - name: Run public-source research Intel page acceptance
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          PUBLIC_RESEARCH_BROWSER_OUTPUT_DIR: public-research-evidence
+        run: npm run test:e2e:public-research
+
+      - name: Save public-source synthetic viewport evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: public-research-evidence
+          path: |
+            frontend/public-research-evidence/*.png
+            frontend/public-research-evidence/result.json
+          if-no-files-found: error
+
+      - name: Run research analytics production page acceptance
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          RESEARCH_ANALYTICS_BROWSER_OUTPUT_DIR: ${{ runner.temp }}/research-analytics-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/research-analytics.browser.mjs
+
+      - name: Preserve research analytics synthetic evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: research-analytics-evidence
+          path: ${{ runner.temp }}/research-analytics-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Run core navigation smoke E2E
         working-directory: frontend
         run: npm run test:e2e:core-navigation
@@ -709,6 +742,22 @@ jobs:
           name: shortline-research-evidence
           path: ${{ runner.temp }}/shortline-research-evidence
           if-no-files-found: warn
+
+      - name: Run segmented daily and weekly review page acceptance
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          SHORTLINE_REVIEW_BROWSER_OUTPUT_DIR: ${{ runner.temp }}/shortline-review-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/shortline-review.browser.mjs
+
+      - name: Preserve segmented review page evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: shortline-review-evidence
+          path: ${{ runner.temp }}/shortline-review-evidence
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Run personal review component acceptance
         working-directory: frontend
