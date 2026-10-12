@@ -87,12 +87,18 @@ def rows(value):
 
 
 def identity(source, subject):
+    from public_research_extended_contract import SPECS, source_spec
+    if source in SPECS:
+        return source_spec(source, subject)
     if source not in SOURCES or subject not in SOURCES[source]['subjects']:
         raise ValueError('unsupported public source identity')
     return SOURCES[source]
 
 
 def request_spec(source, subject):
+    from public_research_extended_contract import SPECS, request_spec as extended_request
+    if source in SPECS:
+        return extended_request(source, subject)
     identity(source, subject)
     if source == 'public_polymarket':
         return 'https://gamma-api.polymarket.com/markets?limit=100&active=true&closed=false&order=volume24hr&ascending=false'
@@ -106,3 +112,8 @@ def request_spec(source, subject):
         return f'https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20_V21052021_4_12=/InnerFuturesNewService.getDailyKLine?symbol={subject}&type=2021_04_12'
     ats, board = subject.split(':')
     return (f'https://boards-api.greenhouse.io/v1/boards/{board}/jobs' if ats == 'greenhouse' else f'https://api.ashbyhq.com/posting-api/job-board/{board}')
+
+
+def dataset_id(source, subject):
+    from public_research_extended_contract import SPECS, dataset
+    return dataset(source, subject) if source in SPECS else 'research_' + source + '_v1'

@@ -1,8 +1,9 @@
 /** Full production page, strict synthetic API/NDJSON; actual router/store parity is tested separately. */
+import {observedBrowserAction} from './observed-browser-action.mjs';
 import {captureBrowserFailure} from './browser-failure-evidence.mjs';
 import assert from 'node:assert/strict';import {createServer} from 'node:http';
 import {readFileSync,writeFileSync,mkdirSync,existsSync} from 'node:fs';import path from 'node:path';import {fileURLToPath} from 'node:url';import {chromium} from 'playwright';
-import {createFixture,CLOCK} from './next-day-verification.fixture.mjs';import {createShortlineFixture,DAY} from './shortline-review.fixture.mjs';
+import {createFixture,CLOCK} from './next-day-verification.fixture.mjs';import {createShortlineFixture,DAY,golden} from './shortline-review.fixture.mjs';
 if(process.env.CI!=='true')throw Error('Browser execution is CI-only');
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..'),dist=path.join(root,'dist'),output=process.env.SHORTLINE_REVIEW_BROWSER_OUTPUT_DIR;
 assert.ok(output);mkdirSync(output,{recursive:true});let origin,browser,page,currentWidth;const violations=[],errors=[],results=[],releases=[],runs=[];let phase="startup";
@@ -39,12 +40,19 @@ try{
   await page.locator('#market-detail-short-history > summary').click();
   await card.waitFor();await card.getByText('暂无已保存版本',{exact:true}).waitFor({state:'attached'});
   const shot=async name=>{await card.evaluate(el=>el.scrollIntoView({block:'start',behavior:'instant'}));await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));const geometry=await card.evaluate(el=>({width:el.clientWidth,scroll:el.scrollWidth,text:el.innerText}));assert.ok(geometry.scroll<=geometry.width+1);await page.screenshot({path:path.join(output,`${width}-${name}.png`),fullPage:false});results.push({width,name,geometry});};
-  const generateComplete=async()=>{const response=page.waitForResponse(r=>r.request().method()==='POST'&&r.url()===origin+'/api/shortline-review/generate');await generate().click();const r=await response;assert.equal(r.status(),200);const id=r.request().postDataJSON().generation_id;await card.getByText('版本'+id.slice(0,8),{exact:false}).waitFor();return id;};
+  const generateComplete=async()=>{const r=await observedBrowserAction(()=>page.waitForResponse(r=>r.request().method()==='POST'&&r.url()===origin+'/api/shortline-review/generate'),()=>generate().click());assert.equal(r.status(),200);const id=r.request().postDataJSON().generation_id;await card.getByText('版本'+id.slice(0,8),{exact:false}).waitFor();return id;};
   phase='empty preview';f.setScenario('empty');await inspect.click();await card.getByText('本次材料范围',{exact:false}).waitFor();assert.equal(await generate().isDisabled(),true);assert.equal(f.calls.filter(x=>x.method==='POST').length,0);await shot('empty-no-model');
   phase='partial generation';f.setScenario('partial');await inspect.click();await card.getByText('DRAGON_TIGER:MISSING:2026-07-31',{exact:false}).first().waitFor();await generateComplete();await card.getByText('材料不足，未生成',{exact:false}).waitFor();await card.getByText('事实核验未执行',{exact:false}).waitFor();assert.equal(f.saved.size,1);await shot('partial-unverified');
   phase='daily generation and cancellation';f.setScenario('daily');await inspect.click();await card.getByText('本次材料范围',{exact:false}).waitFor();
   const h={entered:gate(),release:gate(),cancelled:true};holdGeneration=h;await generate().click();await waitGate(h.entered.promise);
   await card.getByRole('button',{name:'取消当前分段任务',exact:true}).click();await card.getByRole('alert').getByText('已请求取消',{exact:false}).waitFor();h.release.resolve();assert.equal(f.saved.size,1);await shot('cancel-no-confirmed-version');
+  phase='cancelled task requires explicit material reread';
+  assert.equal(await generate().isDisabled(),true,'cancelled replacement has no owned preview');
+  assert.equal(await card.getByText('本次材料范围',{exact:false}).count(),0,'cleared preview must not be reused silently');
+  assert.equal(f.calls.filter(x=>x.method==='POST').length,2,'partial and cancelled attempts only before manual reread');
+  await inspect.click();await card.getByText('材料身份：'+golden.daily.preview.bundle_id,{exact:true}).waitFor();
+  assert.equal(await generate().isDisabled(),false,'explicit current material read permits a new attempt');
+  assert.equal(f.calls.filter(x=>x.method==='POST').length,2,'reread never generates');
   await generateComplete();await card.getByText('事实核验未执行',{exact:false}).waitFor();assert.equal(f.saved.size,2);assert.equal(await card.locator('section').count(),6);await shot('daily-five-and-summary');
   const daily=[...f.saved.values()].find(v=>v.mode==='daily'&&v.stages.every(s=>s.status!=='skipped'));assert.ok(daily);
   phase='malformed saved version';f.malformedNext();await card.getByLabel('选择复盘版本').selectOption(daily.generation_id);await card.getByRole('alert').getByText('版本身份或内容无法核对',{exact:false}).waitFor();await shot('malformed-history-rejected');
@@ -52,7 +60,7 @@ try{
   await card.getByLabel('选择复盘版本').selectOption('');const cleared={entered:gate(),release:gate()};holdVersion=cleared;
   await card.getByLabel('选择复盘版本').selectOption(daily.generation_id);await waitGate(cleared.entered.promise);
   await card.getByLabel('选择复盘版本').selectOption('');
-  const clearResponse=page.waitForResponse(r=>r.url()===origin+'/api/shortline-review/version/'+daily.generation_id);cleared.release.resolve();await clearResponse;
+  await observedBrowserAction(()=>page.waitForResponse(r=>r.url()===origin+'/api/shortline-review/version/'+daily.generation_id),()=>cleared.release.resolve());
   await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
   assert.equal(await card.getByLabel('选择复盘版本').inputValue(),'','cleared version must not be reselected by late detail');await shot('clear-history-owns-selection');
   await card.getByLabel('选择复盘版本').selectOption('');const hv={entered:gate(),release:gate()};holdVersion=hv;await card.getByLabel('选择复盘版本').selectOption(daily.generation_id);await waitGate(hv.entered.promise);

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { loadLlm } from "@/lib/llm";
+import { CampaignAIDraftButton } from "@/components/campaign/CampaignAIDraftButton";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AlertCircle, ArrowLeft, CheckCircle2, Loader2, LockKeyhole } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -523,24 +523,6 @@ export function DecisionProposalReview() {
     setConfirmed(false);
   };
 
-  const handleGenerateAIDraft = async () => {
-    setError("");
-    const llm = loadLlm();
-    if (!campaignId || !llm) {
-      setError("请先在「接入 AI」配置模型，并确保投资计划上下文可用。");
-      return;
-    }
-    setAiBusy(true);
-    try {
-      const result = await api.generateCampaignAIDraft(campaignId, llm);
-      setAiDraft(result);
-      applyAIDraft(result);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "AI 草稿生成失败。");
-    } finally {
-      setAiBusy(false);
-    }
-  };
 
   const handlePreview = async () => {
     setError("");
@@ -1114,9 +1096,9 @@ export function DecisionProposalReview() {
       {error && <div role="alert" className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-600"><AlertCircle className="h-4 w-4 shrink-0" />{error}</div>}
 
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" onClick={() => void handleGenerateAIDraft()} disabled={busy !== null || aiBusy || contextState !== "ready"} className="inline-flex items-center gap-1.5 rounded-md border border-primary/50 px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-50" data-testid="generate-ai-draft">
-          {aiBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />} 生成 AI 草稿
-        </button>
+        <CampaignAIDraftButton campaignId={campaignId} contextIdentity={JSON.stringify([currentThesis, binding])}
+          disabled={busy !== null || contextState !== "ready"} onBusyChange={setAiBusy} onError={setError}
+          onResult={(result) => { setAiDraft(result); applyAIDraft(result); }} />
         <button type="button" onClick={() => void handlePreview()} disabled={busy !== null || aiBusy} className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-50">
           {busy === "preview" && <Loader2 className="h-3.5 w-3.5 animate-spin" />} 预览决策草案
         </button>

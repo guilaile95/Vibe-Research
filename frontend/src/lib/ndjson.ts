@@ -2,7 +2,7 @@
 // 抽出来是因为多 agent 流程的事件类型比对话多（阶段、进度、分角色增量），
 // 各页面只关心事件本身，不该各写一遍拆行/解码逻辑。
 
-import { ApiError, authHeaders } from "@/lib/api";
+import { ApiError, authHeaders } from "./api.ts";
 
 export type NdjsonEvent = Record<string, any>;
 
@@ -16,6 +16,7 @@ export async function streamNdjson(
   body: unknown,
   onEvent: (ev: NdjsonEvent) => void,
   signal?: AbortSignal,
+  options?: { strict?: boolean; maxBytes?: number },
 ): Promise<void> {
   let resp: Response;
   try {
@@ -41,18 +42,30 @@ export async function streamNdjson(
   if (!resp.body) throw new ApiError("后端无响应流", 502);
 
   const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const lines = buf.split("\n");
-    buf = lines.pop() ?? "";   // 末尾可能是半行，留到下一块
-    for (const line of lines) {
-      const t = line.trim();
-      if (!t) continue;
-      try { onEvent(JSON.parse(t)); } catch { /* 半截行或脏行，跳过 */ }
+  const decoder = new TextDecoder("utf-8", { fatal: options?.strict === true });
+  let buf = "", total = 0;
+  try {
+    for (;;) {
+      signal?.throwIfAborted();
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > (options?.maxBytes ?? Number.POSITIVE_INFINITY)) throw new ApiError("响应流超出限制", 502);
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t) continue;
+        try { onEvent(JSON.parse(t)); }
+        catch (error) { if (options?.strict) throw error; }
+      }
     }
+    buf += decoder.decode();
+    signal?.throwIfAborted();
+    if (options?.strict && buf.trim()) throw new ApiError("响应流末行不完整", 502);
+  } finally {
+    try { await reader.cancel(); } catch { /* preserve protocol or transport failure */ }
+    reader.releaseLock();
   }
 }

@@ -1,15 +1,18 @@
+import { CompanyResearchPanel } from "@/components/research/CompanyResearchPanel";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Search, FileText, Newspaper, Loader2, AlertCircle, LineChart, BarChart3, Megaphone,
   Wallet, Trophy, CalendarClock, Boxes, MessageSquare,
 } from "lucide-react";
+import { CompanyArchiveCard } from "@/components/research/ExtendedResearchCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SectionNav } from "@/components/layout/SectionNav";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
 import { OptionalDataPanel } from "@/components/ui/OptionalDataPanel";
+import { ResearchShareCard } from "@/components/stock/ResearchShareCard";
 import { StockThesisPanel } from "@/components/stock/StockThesisPanel";
 import { StockRelativeContextCard } from "@/components/stock/StockRelativeContextCard";
 import { StockValuationContextCard } from "@/components/stock/StockValuationContextCard";
@@ -628,6 +631,12 @@ export function StockData() {
         </div>
       )}
 
+      {(val || (gstock && (gstock.market === "HK" || gstock.market === "US"))) && (
+        <CompanyResearchPanel key={gstock ? `${gstock.market}:${gstock.code}` : `A:${val!.code}`} subject={gstock ? { market: gstock.market as "HK" | "US", symbol: gstock.code } : { market: "A", symbol: val!.code }} />
+      )}
+      {activeCode && ((gstock && gstock.code === activeCode && ["US", "HK"].includes(gstock.market)) || (val && val.code === activeCode)) &&
+        <CompanyArchiveCard key={activeCode} market={gstock?.code === activeCode && ["US", "HK"].includes(gstock.market) ? gstock.market : "A"} symbol={activeCode} />}
+
       {/* 常驻概览带（美股 / 港股）：证券身份 + 报价指标 + 来源说明；切页签始终可见 */}
       {gstock && (
         <GlassCard glow className="mb-4">
@@ -688,6 +697,7 @@ export function StockData() {
               总市值来源 Eastmoney f20；缺失不显示为 0。
             </p>
           </div>
+          <ResearchShareCard key={val.code} valuation={val} />
           {val.forecast_note && (
             <p className="mt-3 text-xs text-warning">{val.forecast_note}</p>
           )}

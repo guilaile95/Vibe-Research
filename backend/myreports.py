@@ -1232,7 +1232,8 @@ def build_chat_page_context(selection: dict, *, report_ids: list[str]) -> tuple[
                   "requested_range": [selection["page_from"], selection["page_to"]],
                   "page_coverage": result["coverage"], "partial": partial,
                   "truncated_pages": [item["page"] for item in pages if item["truncated"]],
-                  "provided_chars": result["returned_chars"], "full_report_read": False}
+                  "provided_chars": result["returned_chars"], "full_report_read": False,
+                  "extraction_kind": "LOCAL_OCR_UNVERIFIED" if result.get("extraction") else "DOCUMENT_TEXT"}
     context = "\n".join([
         "【用户明确选择的指定页上下文】",
         "本次仅使用下面这份报告的指定页索引正文；先说明纳入、遗漏、不可读页与截断。未请求页从未纳入；不得宣称全文已读或结论已经验证。",
@@ -1296,7 +1297,9 @@ def build_chat_report_context(
     for hit in current_hits:
         page = hit.get("page") if hit.get("page") is not None else "页码不可用"
         citation = f"[{hit.get('title')} | report_id={hit.get('report_id')} | page={page}]"
-        block = f"\n{citation}\n{str(hit.get('snippet') or '')}"
+        ocr_warning = ("\nLOCAL_OCR_UNVERIFIED：本段来自本机 OCR，可能错字、错行或遗漏，引用前需核对原页；识别不是事实核验。"
+                       if statuses.get(hit["report_id"], {}).get("extraction_kind") == "LOCAL_OCR_UNVERIFIED" else "")
+        block = f"\n{citation}{ocr_warning}\n{str(hit.get('snippet') or '')}"
         if used_chars + len(block) > CHAT_REPORT_EXCERPT_MAX_CHARS:
             break
         blocks.append(block)
@@ -1379,3 +1382,55 @@ def build_chat_report_context(
         *blocks,
     ]
     return "\n".join(context_lines), sources, coverage
+
+
+def ocr_report_identity(report_id: str) -> dict:
+    """Read-only identity for legacy archives whose metadata has no digest yet."""
+    import local_ocr
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", report_id):
+        raise local_ocr.OcrError("OCR_REPORT_NOT_FOUND")
+    with _LOCK:
+        report = next((entry for entry in _load_index() if entry.get("id") == report_id), None)
+        if report is None or report.get("ext") not in {".pdf", ".png", ".jpg", ".jpeg"}:
+            raise local_ocr.OcrError("OCR_REPORT_NOT_FOUND")
+        source = REPORTS_DIR / f"{report_id}{report['ext']}"
+        try:
+            snapshot = local_ocr.OcrSource(source)
+        except OSError as exc:
+            raise local_ocr.OcrError("OCR_SOURCE_UNAVAILABLE") from exc
+        digest = snapshot.sha256
+        if report.get("file_sha256") and report["file_sha256"] != digest:
+            raise local_ocr.OcrError("OCR_SOURCE_CHANGED")
+        return {"report_id": report_id, "file_sha256": digest, "extension": report["ext"], "writes": 0}
+
+
+def ocr_report_text(report_id: str, expected_file_sha256: str, language: str, cancel) -> dict:
+    import local_ocr
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", report_id):
+        raise local_ocr.OcrError("OCR_REPORT_NOT_FOUND")
+    with _LOCK:
+        report = next((entry for entry in _load_index() if entry.get("id") == report_id), None)
+        if report is None:
+            raise local_ocr.OcrError("OCR_REPORT_NOT_FOUND")
+        ext = report.get("ext")
+        if ext not in {".pdf", ".png", ".jpg", ".jpeg"}:
+            raise local_ocr.OcrError("OCR_UNSUPPORTED_TYPE")
+        source = REPORTS_DIR / f"{report_id}{ext}"
+        try:
+            snapshot = local_ocr.OcrSource(source)
+            data = snapshot.data
+        except OSError as exc:
+            raise local_ocr.OcrError("OCR_SOURCE_UNAVAILABLE") from exc
+        if hashlib.sha256(data).hexdigest() != expected_file_sha256 or (report.get("file_sha256") and report["file_sha256"] != expected_file_sha256):
+            raise local_ocr.OcrError("OCR_SOURCE_CHANGED")
+    extraction = local_ocr.extract(data, ext, language, cancel)
+    with _LOCK:
+        items = _load_index()
+        current = next((entry for entry in items if entry.get("id") == report_id), None)
+        if current is None or (current.get("file_sha256") and current["file_sha256"] != expected_file_sha256):
+            raise local_ocr.OcrError("OCR_SOURCE_CHANGED")
+        result = fulltext.index_ocr(REPORTS_DIR, current, source, extraction, cancel, source_snapshot=snapshot)
+        if not current.get("file_sha256"):
+            current["file_sha256"] = expected_file_sha256
+            _save_index(items)
+        return result

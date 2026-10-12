@@ -147,7 +147,7 @@ def test_campaign_ai_draft_generate_route_is_strict_and_ephemeral(monkeypatch):
         SimpleNamespace(
             LLMConfig=SimpleNamespace(
                 model_validate=lambda value: SimpleNamespace(
-                    model_dump=lambda: value,
+                    **value, model_dump=lambda: value,
                 )
             ),
             _require_llm_ready=lambda _llm: False,
@@ -156,19 +156,48 @@ def test_campaign_ai_draft_generate_route_is_strict_and_ephemeral(monkeypatch):
     monkeypatch.setattr(
         campaign_ai_draft_router.service,
         "generate_ai_draft",
-        lambda _cfg, campaign_id: generated,
+        lambda _cfg, campaign_id, **kwargs: generated,
     )
     client = TestClient(_app(campaign_ai_draft_router))
     response = client.post(
         f"/api/campaigns/{CAMPAIGN_ID}/ai-draft/generate",
-        json={"llm": {"model": "test", "apiKey": "secret", "baseURL": "http://example.test"}},
+        json={"llm": {"model": "test", "apiKey": "secret", "baseURL": "http://example.test"}, "confirm_private_context": True, "expected_context_fingerprint": "a" * 64},
     )
     assert response.status_code == 200
     assert response.json() == {"data": generated}
 
     invalid = client.post(
         f"/api/campaigns/{CAMPAIGN_ID}/ai-draft/generate",
-        json={"llm": {"model": "test", "apiKey": "secret", "baseURL": "http://example.test", "extra": True}},
+        json={"llm": {"model": "test", "apiKey": "secret", "baseURL": "http://example.test", "extra": True}, "confirm_private_context": True, "expected_context_fingerprint": "a" * 64},
     )
     assert invalid.status_code == 422
     assert "secret" not in invalid.text
+
+
+@pytest.mark.parametrize("confirm", [None, False, 1, "true"])
+def test_private_context_confirmation_required_before_any_model(monkeypatch, confirm):
+    monkeypatch.setattr(draft_service, "generate_ai_draft", lambda *args, **kwargs: pytest.fail("model reached"))
+    body = {"llm": {"model": "synthetic"}, "expected_context_fingerprint": "a" * 64}
+    if confirm is not None:
+        body["confirm_private_context"] = confirm
+    response = TestClient(_app(campaign_ai_draft_router)).post(f"/api/campaigns/{CAMPAIGN_ID}/ai-draft/generate", json=body)
+    assert response.status_code == 422
+
+
+def test_real_app_missing_confirmation_sanitizes_credential_input(monkeypatch):
+    import app
+    monkeypatch.setattr(draft_service, "generate_ai_draft", lambda *args, **kwargs: pytest.fail("model reached"))
+    response = TestClient(app.app).post(f"/api/campaigns/{CAMPAIGN_ID}/ai-draft/generate", json={"llm": {"model": "synthetic", "apiKey": "synthetic-secret"}})
+    assert response.status_code == 422
+    assert "synthetic-secret" not in response.text
+
+@pytest.mark.parametrize("base_url", ["https://user:secret@example.test/v1", "https://example.test/v1?key=secret", "https://example.test/v1#hidden"])
+def test_ambiguous_destination_rejected_before_readiness_or_model(monkeypatch, base_url):
+    import app
+    monkeypatch.setattr(app, "_require_llm_ready", lambda *args: pytest.fail("readiness reached"))
+    monkeypatch.setattr(draft_service, "generate_ai_draft", lambda *args, **kwargs: pytest.fail("model reached"))
+    response = TestClient(app.app).post(f"/api/campaigns/{CAMPAIGN_ID}/ai-draft/generate", json={
+        "llm": {"model": "synthetic", "apiKey": "synthetic-secret", "baseURL": base_url},
+        "confirm_private_context": True, "expected_context_fingerprint": "a" * 64})
+    assert response.status_code == 400
+    assert "secret" not in response.text

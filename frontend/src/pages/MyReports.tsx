@@ -1,3 +1,4 @@
+import { LocalReportOcr } from "@/components/reports/LocalReportOcr";
 import { ReportPageReader } from "@/components/reports/ReportPageReader";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
@@ -368,7 +369,7 @@ export function MyReports() {
             </p>
             <div className="mt-1 flex flex-wrap items-center gap-1">
               <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                {r.text_index_status === "SEARCHABLE" ? "正文可检索"
+                {r.text_index_status === "SEARCHABLE" ? (r.text_index_error === "LOCAL_OCR_UNVERIFIED" ? "OCR 可检索 · 未核验" : "正文可检索")
                   : r.text_index_status === "OCR_REQUIRED" ? "扫描件：需要 OCR"
                     : r.text_index_status === "ARCHIVED_NOT_SEARCHABLE" ? "仅归档"
                       : r.text_index_status === "INDEX_ERROR" ? "索引失败"
@@ -401,6 +402,7 @@ export function MyReports() {
                 </a>
               )}
             </div>
+            <LocalReportOcr report={r} onIndexed={refreshAll} />
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {(r.text_index_status === "NOT_INDEXED" || r.text_index_status === "INDEX_ERROR") && (
@@ -708,6 +710,7 @@ export function MyReports() {
                     <p className="text-[11px] text-muted-foreground">
                       report_id={hit.report_id}{hit.page ? ` · 第 ${hit.page} 页` : " · 页码不可用"}
                     </p>
+                    {hit.extraction_kind === "LOCAL_OCR_UNVERIFIED" && <p className="mt-1 text-xs text-warning">本机 OCR 摘录 · 未核验，引用前核对原页</p>}
                     <p className="mt-1 text-sm text-muted-foreground">{hit.snippet}</p>
                   </div>
                 ))}

@@ -16,7 +16,7 @@ test("all modes and verified twenty core metrics", () => {
   assert.equal(analyticsModes.length, 5);
   assert.equal(Object.keys(metricNames).length, 20);
 });
-test("page declares privacy, missingness, stale-response guards and no local persistence", () => {
+test("page declares privacy, missingness, stale-response guards and no automatic persistence", () => {
   const source = readFileSync(new URL("../src/pages/ResearchAnalytics.tsx", import.meta.url), "utf8");
   assert.match(source, /NOT_PROVEN/);
   assert.match(source, /合成示例/);

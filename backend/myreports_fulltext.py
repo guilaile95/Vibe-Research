@@ -8,6 +8,7 @@ Read helpers open the index read-only and never create it.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sqlite3
@@ -81,6 +82,8 @@ def _assert_schema(conn: sqlite3.Connection) -> None:
         }
         if version != SCHEMA_VERSION:
             raise ReportTextIndexCorruptedError()
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='report_text_ocr'").fetchone():
+            expected["report_text_ocr"] = ["report_id", "payload"]
         for table, columns in expected.items():
             actual = [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
             if actual != columns:
@@ -89,24 +92,44 @@ def _assert_schema(conn: sqlite3.Connection) -> None:
         raise ReportTextIndexCorruptedError() from exc
 
 
+class _ReadSnapshotConnection:
+    """Existing connection-shaped callers, but source bytes never reach SQLite."""
+    def __init__(self, snapshot, conn):
+        self.snapshot, self.conn, self.closed = snapshot, conn, False
+
+    def execute(self, *args, **kwargs):
+        return self.conn.execute(*args, **kwargs)
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            self.snapshot.assert_unchanged()
+        except Exception as exc:
+            raise ReportTextIndexCorruptedError() from exc
+        finally:
+            self.conn.close()
+
+
 def _connect_readonly(reports_dir: Path) -> sqlite3.Connection | None:
+    # Reuse the accepted foundation's no-source-SQLite private image contract.
+    # Active WAL/journals fail closed; never open a source URI or create SHM.
+    from fact_lake_store import _ControlSnapshot, _is_link_or_reparse
     index = _path(reports_dir)
     if not index.exists():
+        if any(_is_link_or_reparse(part) for part in (index, *index.parents)) or any(
+                Path(str(index) + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
+            raise ReportTextIndexCorruptedError()
         return None
-    if not index.is_file():
-        raise ReportTextIndexCorruptedError()
     conn = None
     try:
-        conn = sqlite3.connect(f"{index.resolve().as_uri()}?mode=ro", uri=True, timeout=5)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA query_only=ON")
+        snapshot = _ControlSnapshot(index)
+        conn = snapshot.connect()
         _assert_schema(conn)
-        return conn
-    except ReportTextIndexCorruptedError:
-        if conn is not None:
-            conn.close()
-        raise
-    except sqlite3.Error as exc:
+        snapshot.assert_unchanged()
+        return _ReadSnapshotConnection(snapshot, conn)
+    except Exception as exc:
         if conn is not None:
             conn.close()
         raise ReportTextIndexCorruptedError() from exc
@@ -143,6 +166,7 @@ def _connect_write(reports_dir: Path) -> sqlite3.Connection:
                 COMMIT;
                 """
             )
+        conn.execute("CREATE TABLE IF NOT EXISTS report_text_ocr (report_id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
     except ReportTextIndexCorruptedError:
@@ -238,6 +262,7 @@ def index_report(reports_dir: Path, report: dict[str, Any], source_path: Path) -
         conn = _connect_write(reports_dir)
         try:
             conn.execute("BEGIN IMMEDIATE")
+            conn.execute("DELETE FROM report_text_ocr WHERE report_id=?", (report_id,))
             conn.execute("DELETE FROM report_text_chunks WHERE report_id=?", (report_id,))
             conn.execute(
                 """INSERT INTO report_text_index
@@ -282,6 +307,7 @@ def remove_report(reports_dir: Path, report_id: str) -> None:
         conn = _connect_write(reports_dir)
         try:
             conn.execute("BEGIN IMMEDIATE")
+            conn.execute("DELETE FROM report_text_ocr WHERE report_id=?", (report_id,))
             conn.execute("DELETE FROM report_text_chunks WHERE report_id=?", (report_id,))
             conn.execute("DELETE FROM report_text_index WHERE report_id=?", (report_id,))
             conn.execute("COMMIT")
@@ -346,6 +372,7 @@ def status_map(
             "indexed_at": row["indexed_at"],
             "page_count": row["page_count"],
             "text_index_sha256": indexed_sha,
+            "extraction_kind": "LOCAL_OCR_UNVERIFIED" if row["error_code"] == "LOCAL_OCR_UNVERIFIED" else "DOCUMENT_TEXT",
         }
     return result
 
@@ -483,11 +510,18 @@ def search(
     text_filters = " AND ".join("instr(lower(c.text), lower(?)) > 0" for _ in terms)
     try:
         rows = conn.execute(
-            f"""SELECT c.report_id, c.page, c.text, i.file_sha256
+            f"""SELECT c.report_id, c.page, c.text, i.file_sha256, i.error_code
                 FROM report_text_chunks c JOIN report_text_index i USING(report_id)
                 WHERE i.status=? AND c.report_id IN ({placeholders}) AND {text_filters}""",
             [STATUS_SEARCHABLE, *candidates, *terms],
         ).fetchall()
+        ocr_metadata = {}
+        for row in rows:
+            if row["error_code"] == "LOCAL_OCR_UNVERIFIED":
+                if row["report_id"] not in ocr_metadata:
+                    ocr_metadata[row["report_id"]] = _ocr_metadata(conn, row["report_id"])
+                if ocr_metadata[row["report_id"]] is None:
+                    raise ReportTextIndexCorruptedError()
     except sqlite3.Error as exc:
         raise ReportTextIndexCorruptedError() from exc
     finally:
@@ -511,6 +545,8 @@ def search(
             "excerpt_truncated": excerpt_truncated,
             "file_sha256": row["file_sha256"],
             "chunk_sha256": _chunk_sha256(row["text"]),
+            "extraction_kind": "LOCAL_OCR_UNVERIFIED" if row["error_code"] == "LOCAL_OCR_UNVERIFIED" else "DOCUMENT_TEXT",
+            "ocr_provenance": next((page for page in (ocr_metadata.get(row["report_id"]) or {}).get("pages", []) if page["page_number"] == row["page"]), None),
             "score": score,
             "publish_date": report.get("publish_date") or "",
             "institution": report.get("institution") or "",
@@ -583,12 +619,15 @@ def read_pages(reports_dir: Path, report: dict | None, *, report_id: str,
             return fail("error", "INDEX_SOURCE_MISMATCH")
         if meta["status"] == STATUS_ERROR:
             return fail("error", "INDEX_EXTRACTION_FAILED")
-        if ext != ".pdf" or meta["page_count"] is None:
+        if ext not in {".pdf", ".png", ".jpg", ".jpeg"} or meta["page_count"] is None:
             return fail("unreadable", "PAGE_NUMBERS_UNAVAILABLE")
         page_count = meta["page_count"]
         if type(page_count) is not int or page_count < 0:
             return fail("error", "INDEX_METADATA_INVALID")
         result["page_count"] = page_count
+        result["extraction"] = _ocr_metadata(conn, report_id)
+        if meta["error_code"] == "LOCAL_OCR_UNVERIFIED" and result["extraction"] is None:
+            return fail("error", "INDEX_READ_FAILED")
         items = []
         used_chars = used_pages = 0
         placeholders = {"n/a", "[no text]", "[image]", "ocr_required", "pdf_no_extractable_text", "暂无正文"}
@@ -627,3 +666,86 @@ def read_pages(reports_dir: Path, report: dict | None, *, report_id: str,
     finally:
         if conn is not None:
             conn.close()
+
+
+def _ocr_metadata(conn: sqlite3.Connection, report_id: str) -> dict | None:
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='report_text_ocr'").fetchone():
+        return None
+    row = conn.execute("SELECT substr(payload,1,100001) FROM report_text_ocr WHERE report_id=?", (report_id,)).fetchone()
+    if row is None:
+        return None
+    try:
+        if len(row[0]) > 100_000:
+            raise ValueError()
+        payload = json.loads(row[0])
+        if (not isinstance(payload, dict) or set(payload) != {"schema_version", "status", "source_sha256", "engine", "language", "source_truth_verified", "limitations", "pages"}
+                or not isinstance(payload.get("limitations"), list) or not 1 <= len(payload["limitations"]) <= 10
+                or any(not isinstance(value, str) or not value or len(value) > 500 for value in payload["limitations"])
+                or payload.get("schema_version") != "local_ocr_preview.v1" or payload.get("status") != "OCR_UNVERIFIED"
+                or payload.get("engine") != "local-tesseract" or payload.get("language") not in {"eng", "chi_sim+eng"}
+                or payload.get("source_truth_verified") is not False or not isinstance(payload.get("pages"), list)
+                or not 1 <= len(payload["pages"]) <= 12):
+            raise ValueError()
+        source = conn.execute("SELECT file_sha256, page_count FROM report_text_index WHERE report_id=?", (report_id,)).fetchone()
+        if source is None or source[0] != payload.get("source_sha256") or source[1] != len(payload["pages"]):
+            raise ValueError()
+        for number, page in enumerate(payload["pages"], 1):
+            if (not isinstance(page, dict) or set(page) != {"page_number", "source_sha256", "image_sha256", "text_sha256", "mean_word_confidence"} or type(page.get("page_number")) is not int or page["page_number"] != number
+                    or page.get("source_sha256") != source[0]
+                    or any(not isinstance(page.get(key), str) or not re.fullmatch(r"[0-9a-f]{64}", page[key])
+                           for key in ("image_sha256", "text_sha256"))):
+                raise ValueError()
+            confidence = page.get("mean_word_confidence")
+            if confidence is not None and (type(confidence) not in {int, float} or not 0 <= confidence <= 100):
+                raise ValueError()
+            chunk = conn.execute("SELECT substr(text,1,100100), length(text) FROM report_text_chunks WHERE report_id=? AND page=?", (report_id, number)).fetchone()
+            if chunk and chunk[1] > 100100:
+                raise ValueError()
+            text = chunk[0].removeprefix("[LOCAL OCR UNVERIFIED: may contain recognition errors; check original page]\n") if chunk else ""
+            if _chunk_sha256(text) != page["text_sha256"]:
+                raise ValueError()
+        return payload
+    except (ValueError, TypeError) as exc:
+        raise ReportTextIndexCorruptedError() from exc
+
+
+def index_ocr(reports_dir: Path, report: dict, source_path: Path, extraction: dict, cancel, *, source_snapshot) -> dict:
+    """One explicit OCR replacement of the existing derived index, never the original."""
+    from local_ocr import OcrError
+    source_sha = extraction["source_sha256"]
+    if extraction["status"] != "OCR_UNVERIFIED":
+        raise OcrError("OCR_NO_TEXT")
+    metadata = {key: value for key, value in extraction.items() if key != "pages"}
+    metadata["pages"] = [{key: value for key, value in page.items() if key != "text"} for page in extraction["pages"]]
+    indexed_at = datetime.now(timezone.utc).isoformat()
+    with _LOCK:
+        if cancel.is_set():
+            raise OcrError("OCR_CANCELLED")
+        source_snapshot.assert_unchanged()
+        if source_snapshot.sha256 != source_sha:
+            raise OcrError("OCR_SOURCE_CHANGED")
+        conn = _connect_write(reports_dir)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("DELETE FROM report_text_chunks WHERE report_id=?", (report["id"],))
+            conn.execute("""INSERT INTO report_text_index VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(report_id) DO UPDATE SET file_sha256=excluded.file_sha256,
+                status=excluded.status, indexed_at=excluded.indexed_at,
+                page_count=excluded.page_count, error_code=excluded.error_code""",
+                (report["id"], source_sha, STATUS_SEARCHABLE, indexed_at, len(extraction["pages"]), "LOCAL_OCR_UNVERIFIED"))
+            # Keep an uncertainty marker in text so every existing retrieval / AI
+            # path retains it even if it does not yet render structured metadata.
+            conn.executemany("INSERT INTO report_text_chunks VALUES (?, ?, ?)", [
+                (report["id"], page["page_number"], "[LOCAL OCR UNVERIFIED: may contain recognition errors; check original page]\n" + page["text"])
+                for page in extraction["pages"] if page["text"]])
+            conn.execute("INSERT OR REPLACE INTO report_text_ocr VALUES (?, ?)", (report["id"], json.dumps(metadata)))
+            if cancel.is_set():
+                raise OcrError("OCR_CANCELLED")
+            source_snapshot.assert_unchanged()
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.close()
+    return {"schema_version": "local_ocr_report_receipt.v1", "report_id": report["id"], "file_sha256": source_sha, "status": "SEARCHABLE", "extraction": metadata, "indexed_at": indexed_at}

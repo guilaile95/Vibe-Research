@@ -59,6 +59,7 @@ import portfolio as pf
 import portfolio_advice_service
 import market
 import myreports as mr
+import local_ocr_router
 import review_compare
 import review_history
 import sector_research_data as srd
@@ -72,6 +73,7 @@ import evidence_temporal_authority_router
 import data_health_router
 import runtime_info_router
 import platform_settings
+import company_research_router
 import trade_ledger_router
 import personal_review_router
 import trade_attribution_router
@@ -408,6 +410,7 @@ app = FastAPI(title="Vibe-Research API", version=__version__, lifespan=lifespan)
 # The resulting middleware order is documented below next to the wiring.
 
 # 投资逻辑与证据账本：独立路由模块最小接入
+app.include_router(local_ocr_router.router)
 app.include_router(evidence_thesis_router.router)
 app.include_router(evidence_temporal_authority_router.router)
 # 数据健康中心：只读聚合 API
@@ -416,6 +419,7 @@ app.include_router(data_health_router.router)
 app.include_router(runtime_info_router.create_router(__version__))
 app.include_router(platform_settings.router)
 # 交易流水：独立存储与 API
+app.include_router(company_research_router.router)
 app.include_router(trade_ledger_router.router)
 app.include_router(personal_review_router.router)
 # P0-TAR1: explicit Frozen Decision attribution / explicit UNPLANNED origin.

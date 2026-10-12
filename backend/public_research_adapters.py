@@ -232,6 +232,10 @@ def _hiring(data, subject, captured):
 
 
 def normalize(raw, source, subject, captured, *, now=None):
+    from public_research_extended_contract import SPECS
+    if source in SPECS:
+        from public_research_extended_adapters import normalize_extended
+        return normalize_extended(raw, source, subject, captured, now=now)
     spec = C.identity(source, subject)
     captured = C.utc(captured)
     now = now or datetime.now(timezone.utc)

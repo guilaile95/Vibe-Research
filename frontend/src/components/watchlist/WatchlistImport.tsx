@@ -1,3 +1,4 @@
+import { WatchlistOcr } from "./WatchlistOcr";
 import { useEffect, useRef, useState } from "react";
 import { importPreviewCurrent, MAX_IMPORT_BYTES, previewWatchlistImport, type ImportPreview } from "@/lib/watchlistImport";
 
@@ -24,7 +25,7 @@ export function WatchlistImport({ codes, etag, disabled, onApply }: {
   };
   return <details className="mt-4 rounded-lg border border-border p-3" data-testid="watchlist-import">
     <summary className="cursor-pointer text-sm font-medium">从表格导入（本机预览）</summary>
-    <p className="my-2 text-xs text-muted-foreground">仅支持 A 股代码。CSV/TSV 多列表格须含“代码 / code / symbol”表头，可附“市场 / market / exchange”列；无表头时每行一个代码。最多 64 KiB、500 行，合并自选最多 50 只。其他列不会保存或发送到模型。截图/OCR 暂不支持，不会自动上传图片。</p>
+    <p className="my-2 text-xs text-muted-foreground">仅支持 A 股代码。CSV/TSV 多列表格须含“代码 / code / symbol”表头，可附“市场 / market / exchange”列；无表头时每行一个代码。最多 64 KiB、500 行，合并自选最多 50 只。其他列不会保存或发送到模型。截图请使用下方独立的本地 OCR 步骤，不会自动上传图片。</p>
     <input type="file" accept=".csv,.tsv,.txt" aria-label="选择本机自选表格" disabled={disabled || applying} onChange={async e => {
       const file = e.target.files?.[0]; e.target.value = ""; invalidate(); setText("");
       if (!file) return;
@@ -48,5 +49,6 @@ export function WatchlistImport({ codes, etag, disabled, onApply }: {
       <ul className="my-2 max-h-64 overflow-auto text-xs" aria-label="导入逐行预览">{preview.rows.map(row => <li key={row.row}>第 {row.row} 行：{row.market ?? "—"} {row.code ?? "无效身份"} · {row.reason}</li>)}</ul>
       <button type="button" onClick={() => void apply()} disabled={disabled || applying || !current || !!preview.errors.length || !preview.additions.length} className="min-h-11 rounded bg-primary/15 px-3 text-primary disabled:opacity-50">{applying ? "保存中…" : `确认添加 ${preview.additions.length} 只`}</button>
     </div>}
+    <WatchlistOcr disabled={disabled || applying || reading} onText={value => { invalidate(); setText(value); setMessage("OCR 文字已放入编辑框；请继续核对并点击预览，尚未添加自选。"); }} />
   </details>;
 }

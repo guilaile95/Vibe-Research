@@ -1,6 +1,7 @@
 // Full production app, synthetic HTTP/storage only. No backend or provider runs.
 // Recovery uses the production migration alert, retry, and existing batch editor.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { createReadStream, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -74,6 +75,13 @@ async function runScenario(browser, baseURL, width, evidenceDir) {
         const added = incoming.filter(code => !codes.includes(code));
         codes = merged; etag = "3333333333333333"; row.authorityAfter = [...codes];
         return route.fulfill({ json: { data: { codes, added, etag, updated_at: "synthetic" } } });
+      }
+      if (path === "/api/local-ocr/preview" && method === "POST") {
+        const body = request.postDataJSON();
+        assert.equal(body.confirm_local_processing, true);
+        assert.equal(body.extension, ".png");
+        const hash = createHash("sha256").update(Buffer.from(body.content_b64, "base64")).digest("hex");
+        return route.fulfill({ json: { data: { schema_version: "local_ocr_preview.v1", status: "OCR_UNVERIFIED", source_truth_verified: false, source_sha256: hash, engine: "local-tesseract", language: "eng", limitations: ["Synthetic transport fixture; OCR engine not run"], pages: [{ page_number: 1, text: "300750", source_sha256: hash, image_sha256: hash, text_sha256: createHash("sha256").update("300750").digest("hex") }] } } });
       }
       if (path === "/api/watchlist/anomalies" && method === "GET" && !url.search) {
         return route.fulfill({ json: { data: { provider_id: "hithink_financial_api", provider_contract: "hithink-watchlist-anomalies-v0.1", as_of_ms: null, unavailable_codes: [], items: [] } } });
@@ -158,6 +166,22 @@ async function runScenario(browser, baseURL, width, evidenceDir) {
     assert.equal(await tableEditor.inputValue(), "");
     evidence.checkpoints.push({ stage: "table-preview-apply", invalidRowsBlocked: true, previewReadOnly: true, duplicatesVisible: true, authority: [...codes] });
     await page.screenshot({ path: join(evidenceDir, `watchlist-table-${width}.png`), fullPage: true });
+    const beforeOcrWrites = evidence.saves.length;
+    const beforeOcrRequests = evidence.requests.filter(value => value.includes("local-ocr")).length;
+    await page.getByLabel("选择待识别自选截图", { exact: true }).setInputFiles({ name: "synthetic.png", mimeType: "image/png", buffer: Buffer.from("synthetic transport bytes") });
+    assert.equal(evidence.requests.filter(value => value.includes("local-ocr")).length, beforeOcrRequests);
+    await page.getByRole("button", { name: "本地 OCR 识别", exact: true }).click();
+    await page.getByRole("textbox", { name: "核对并编辑截图识别文字", exact: true }).waitFor();
+    assert.equal(evidence.saves.length, beforeOcrWrites);
+    await page.getByRole("textbox", { name: "核对并编辑截图识别文字", exact: true }).fill("300750");
+    await page.getByRole("button", { name: "使用核对后的文字替换上方导入编辑框", exact: true }).click();
+    assert.equal(await tableEditor.inputValue(), "300750");
+    assert.equal(evidence.saves.length, beforeOcrWrites);
+    await page.getByRole("button", { name: "预览导入", exact: true }).click();
+    await page.getByRole("button", { name: "确认添加 1 只", exact: true }).click();
+    await page.getByText("已添加 1 只自选", { exact: true }).waitFor();
+    assert.equal(evidence.saves.length, beforeOcrWrites + 1);
+    evidence.checkpoints.push({ stage: "explicit-ocr-edit-preview-apply", noRequestOnSelection: true, noWriteBeforeReview: true, authority: [...codes] });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no page horizontal overflow");
     assert.equal(await page.locator("vite-error-overlay").count(), 0);
     assert.deepEqual(evidence.unexpected, []);

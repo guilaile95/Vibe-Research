@@ -10,7 +10,7 @@ function harness(onApply = async () => true) {
     useState(initial) { const i=cursor++; if(!(i in slots)) slots[i]=initial; return [slots[i],v=>{slots[i]=typeof v==='function'?v(slots[i]):v;}]; },
     useRef(initial) { const i=cursor++; return slots[i]??={current:initial}; }, useEffect() {},
   };
-  const modules={react:React,'react/jsx-runtime':{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})},'@/lib/watchlistImport':parser};
+  const modules={react:React,'react/jsx-runtime':{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})},'@/lib/watchlistImport':parser,'./WatchlistOcr':{WatchlistOcr:()=>null}};
   const exports={};
   const source=ts.transpileModule(readFileSync(new URL('../src/components/watchlist/WatchlistImport.tsx',import.meta.url),'utf8'),{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
   vm.runInNewContext(source,{exports,require:n=>modules[n]});

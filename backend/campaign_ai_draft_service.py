@@ -378,15 +378,30 @@ def _load_witness(draft_id: str) -> dict[str, Any]:
         return copy.deepcopy(witness)
 
 
+def preview_ai_draft_consent(campaign_id: str) -> dict[str, Any]:
+    """Model-free identity receipt; never returns private snapshots.
+
+    Existing context acquisition may read public capabilities and record diagnostics;
+    this is not a guarantee of network-free or side-effect-free preparation.
+    """
+    campaign, thesis = _read_campaign_and_thesis(campaign_id)
+    context = _read_context(campaign, thesis, as_of=utc_now_iso())
+    return {"campaign_id": campaign_id, "context_fingerprint": context_fingerprint(context),
+            "scope": "FULL_HOLDINGS_ACCOUNT_CAMPAIGN_THESIS_CRITICAL_DATA"}
+
+
 def generate_ai_draft(
     cfg: Any,
     campaign_id: str,
     *,
     model_runner: Callable[[Any, list[dict[str, str]]], str] | None = None,
+    expected_context_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     campaign, thesis = _read_campaign_and_thesis(campaign_id)
     as_of = utc_now_iso()
     context = _read_context(campaign, thesis, as_of=as_of)
+    if expected_context_fingerprint is not None and expected_context_fingerprint != context_fingerprint(context):
+        raise CampaignAIDraftWitnessStaleError("确认后的私人上下文已改变，请重新核对并确认")
     runner = model_runner or _default_model_runner
     raw = runner(cfg, _build_messages(context))
     if not isinstance(raw, str) or not raw.strip():

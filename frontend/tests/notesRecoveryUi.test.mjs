@@ -185,3 +185,13 @@ test("Notes refreshes relevant storage events and removes listeners on unmount",
   h.storageChanged(null);
   assert.equal(button(h.render(), "从备份替换损坏记录"), undefined, "unmounted subscriptions cannot update state");
 });
+
+test("production Notes filters saved research, debate and backtest text without storage writes",()=>{
+ const records=[{id:'research',kind:'公司研究',title:'公司',content:'毛利cash',ts:1},{id:'debate',kind:'多空辩论',title:'对照',content:'毛利风险',ts:2},{id:'backtest',kind:'回测研究',title:'模拟',content:'成交限制',ts:3}];
+ storage.set('vr-notes',JSON.stringify(records));const original=storage.get('vr-notes');const h=createHarness();let tree=h.render();
+ const query=()=>nodes(tree).find(n=>n.props?.['aria-label']==='研究记录全文搜索');
+ query().props.onChange({target:{value:'毛利'}});tree=h.render();assert.match(label(tree),/当前显示 2 \/ 3/);
+ nodes(tree).find(n=>n.props?.['aria-label']==='研究记录类型').props.onChange({target:{value:'多空辩论'}});tree=h.render();assert.match(label(tree),/当前显示 1 \/ 3/);
+ query().props.onChange({target:{value:'<script>'}});tree=h.render();assert.match(label(tree),/没有匹配/);
+ button(tree,'清除类型和文字筛选').props.onClick();tree=h.render();assert.match(label(tree),/当前显示 3 \/ 3/);assert.equal(storage.get('vr-notes'),original);h.unmount();
+});

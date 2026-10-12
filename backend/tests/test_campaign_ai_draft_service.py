@@ -160,3 +160,47 @@ def test_context_fingerprint_ignores_retrieval_time_authority_refs_but_not_facts
         "critical_data": {**second["critical_data"], "critical_data_state": "UNKNOWN"},
     }
     assert service.context_fingerprint(first) != service.context_fingerprint(changed_fact)
+
+
+def test_consent_preview_is_model_free_and_context_drift_blocks_transmission(monkeypatch):
+    _install_context(monkeypatch)
+    monkeypatch.setattr(service, "_default_model_runner", lambda *args: pytest.fail("model reached"))
+    receipt = service.preview_ai_draft_consent(CAMPAIGN_ID)
+    assert set(receipt) == {"campaign_id", "context_fingerprint", "scope"}
+    assert receipt["context_fingerprint"] == service.context_fingerprint(_context())
+    changed = _context()
+    changed["account"] = {"status": "AVAILABLE", "snapshot": {"cash": 98765}}
+    monkeypatch.setattr(service, "_read_context", lambda *args, **kwargs: changed)
+    with pytest.raises(service.CampaignAIDraftWitnessStaleError):
+        service.generate_ai_draft({}, CAMPAIGN_ID, expected_context_fingerprint=receipt["context_fingerprint"])
+
+
+def test_matching_consent_preserves_intended_private_analysis(monkeypatch):
+    _install_context(monkeypatch)
+    receipt = service.preview_ai_draft_consent(CAMPAIGN_ID)
+    seen = []
+    def model(cfg, messages):
+        seen.append(messages)
+        return json.dumps(_fields())
+    result = service.generate_ai_draft({}, CAMPAIGN_ID, expected_context_fingerprint=receipt["context_fingerprint"], model_runner=model)
+    assert len(seen) == 1
+    assert result["context_fingerprint"] == receipt["context_fingerprint"]
+
+
+def test_consent_preview_can_read_public_capabilities_but_never_transmits_private_context(monkeypatch):
+    monkeypatch.setattr(service, "_read_campaign_and_thesis", lambda _: (
+        {"campaign_id": CAMPAIGN_ID, "security_code": "600519", "strategy": "SWING"},
+        {"thesis_id": THESIS_ID, "original": {"revision": 3}}))
+    monkeypatch.setattr(service.position_reality_service, "read_current_holdings_snapshot", lambda: {"private": "synthetic-private-holding"})
+    monkeypatch.setattr(service.account_reality_service, "get_account_reality", lambda: {"private": "synthetic-private-account"})
+    public_reads = []
+    def capability(**kwargs):
+        public_reads.append(kwargs)
+        return {"critical_data_state": "UNKNOWN", "reason_codes": ["SYNTHETIC_PUBLIC_CAPABILITY"]}
+    monkeypatch.setattr(service.campaign_critical_data_runtime, "project_campaign_critical_data", capability)
+    monkeypatch.setattr(service, "_default_model_runner", lambda *args: pytest.fail("model transmission before consent"))
+    receipt = service.preview_ai_draft_consent(CAMPAIGN_ID)
+    assert len(public_reads) == 1
+    assert public_reads[0]["campaign"]["campaign_id"] == CAMPAIGN_ID
+    assert set(receipt) == {"campaign_id", "context_fingerprint", "scope"}
+    assert "synthetic-private" not in json.dumps(receipt)

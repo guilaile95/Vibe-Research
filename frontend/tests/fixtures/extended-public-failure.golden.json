@@ -1,0 +1,709 @@
+{
+  "archive_window_days": 366,
+  "blocks": [
+    {
+      "archive_age_seconds": 950400.0,
+      "archive_stale": true,
+      "captured_at": "2026-10-01T12:00:00.000000Z",
+      "counters": {},
+      "coverage": "source failure; no normalized economic rows",
+      "evidence": {
+        "locally_received_at": "2026-10-12T12:00:00.000000Z",
+        "normalizer_version": "public-research-adapter.v1",
+        "observation_id": "synthetic-index_valuation-000300@2026-09-30",
+        "point_in_time_claim": "NONE",
+        "provider_revision": null,
+        "raw_payload_hash": "sha256:ce8875c26151a2885cf91dedb210124791eacef1f7b338970d127e8bab7fda7e"
+      },
+      "fixture": true,
+      "guard": "官方近期文件，市盈率总股本与计算股本口径分列；股息率为百分数，不含PB，不代表估值建议。",
+      "label": "沪深300官方估值",
+      "license_status": "PROVIDER_TERMS_NOT_VERIFIED",
+      "market": "CN",
+      "normalizer_version": "public-research-adapter.v1",
+      "point_in_time_claim": "NONE",
+      "raw_bytes": 9,
+      "reason_codes": [
+        "HTTP_OR_NORMALIZATION_FAILED"
+      ],
+      "requested_as_of": "2026-09-30",
+      "rows": [],
+      "schema_version": "public-research.v1",
+      "selection_mode": "CURRENT_ARCHIVED_POSTHOC",
+      "source_id": "index_valuation",
+      "source_publication_time": null,
+      "source_revision": null,
+      "source_url": "https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/file/autofile/indicator/000300indicator.xls",
+      "status": "unavailable",
+      "subject": "000300@2026-09-30",
+      "symbol": "000300"
+    }
+  ],
+  "fixture": true,
+  "ingestion_enabled": false,
+  "kind": "market",
+  "market": "CN",
+  "message": "合成案例，仅验证软件，非真实市场验收",
+  "missing_sources": [
+    {
+      "source_id": "em_market_trend",
+      "subject": "sh000001@2026-09-30"
+    },
+    {
+      "source_id": "em_market_trend",
+      "subject": "sz399001@2026-09-30"
+    },
+    {
+      "source_id": "em_market_trend",
+      "subject": "sz399006@2026-09-30"
+    },
+    {
+      "source_id": "em_market_trend",
+      "subject": "sh000300@2026-09-30"
+    },
+    {
+      "source_id": "em_market_trend",
+      "subject": "sh000905@2026-09-30"
+    },
+    {
+      "source_id": "em_market_trend",
+      "subject": "sh000852@2026-09-30"
+    },
+    {
+      "source_id": "em_market_trend",
+      "subject": "sh000688@2026-09-30"
+    },
+    {
+      "source_id": "em_market_trend",
+      "subject": "bj899050@2026-09-30"
+    },
+    {
+      "source_id": "em_market_trend",
+      "subject": "sz399106@2026-09-30"
+    },
+    {
+      "source_id": "chinabond_yield_curve",
+      "subject": "treasury@2026-09-30"
+    }
+  ],
+  "point_in_time_claim": "NONE",
+  "reason_codes": [],
+  "requested_as_of": "2026-09-30",
+  "schedule_enabled": false,
+  "schema_version": "extended-public-research.v1",
+  "selection_mode": "CURRENT_ARCHIVED_POSTHOC",
+  "status": "partial",
+  "symbol": null,
+  "turnover": {
+    "basis": "SH composite amount + SZ composite amount; exact common exchange sessions",
+    "evidence_ids": [],
+    "expected_dates": [
+      "2026-07-08",
+      "2026-07-09",
+      "2026-07-10",
+      "2026-07-13",
+      "2026-07-14",
+      "2026-07-15",
+      "2026-07-16",
+      "2026-07-17",
+      "2026-07-20",
+      "2026-07-21",
+      "2026-07-22",
+      "2026-07-23",
+      "2026-07-24",
+      "2026-07-27",
+      "2026-07-28",
+      "2026-07-29",
+      "2026-07-30",
+      "2026-07-31",
+      "2026-08-03",
+      "2026-08-04",
+      "2026-08-05",
+      "2026-08-06",
+      "2026-08-07",
+      "2026-08-10",
+      "2026-08-11",
+      "2026-08-12",
+      "2026-08-13",
+      "2026-08-14",
+      "2026-08-17",
+      "2026-08-18",
+      "2026-08-19",
+      "2026-08-20",
+      "2026-08-21",
+      "2026-08-24",
+      "2026-08-25",
+      "2026-08-26",
+      "2026-08-27",
+      "2026-08-28",
+      "2026-08-31",
+      "2026-09-01",
+      "2026-09-02",
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-07",
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-11",
+      "2026-09-14",
+      "2026-09-15",
+      "2026-09-16",
+      "2026-09-17",
+      "2026-09-18",
+      "2026-09-21",
+      "2026-09-22",
+      "2026-09-23",
+      "2026-09-24",
+      "2026-09-28",
+      "2026-09-29",
+      "2026-09-30"
+    ],
+    "ma20": null,
+    "ma60": null,
+    "missing_dates": [
+      "2026-07-08",
+      "2026-07-09",
+      "2026-07-10",
+      "2026-07-13",
+      "2026-07-14",
+      "2026-07-15",
+      "2026-07-16",
+      "2026-07-17",
+      "2026-07-20",
+      "2026-07-21",
+      "2026-07-22",
+      "2026-07-23",
+      "2026-07-24",
+      "2026-07-27",
+      "2026-07-28",
+      "2026-07-29",
+      "2026-07-30",
+      "2026-07-31",
+      "2026-08-03",
+      "2026-08-04",
+      "2026-08-05",
+      "2026-08-06",
+      "2026-08-07",
+      "2026-08-10",
+      "2026-08-11",
+      "2026-08-12",
+      "2026-08-13",
+      "2026-08-14",
+      "2026-08-17",
+      "2026-08-18",
+      "2026-08-19",
+      "2026-08-20",
+      "2026-08-21",
+      "2026-08-24",
+      "2026-08-25",
+      "2026-08-26",
+      "2026-08-27",
+      "2026-08-28",
+      "2026-08-31",
+      "2026-09-01",
+      "2026-09-02",
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-07",
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-11",
+      "2026-09-14",
+      "2026-09-15",
+      "2026-09-16",
+      "2026-09-17",
+      "2026-09-18",
+      "2026-09-21",
+      "2026-09-22",
+      "2026-09-23",
+      "2026-09-24",
+      "2026-09-28",
+      "2026-09-29",
+      "2026-09-30"
+    ],
+    "rows": [
+      {
+        "currency": "CNY",
+        "date": "2026-07-08",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-09",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-10",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-13",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-14",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-15",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-16",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-17",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-20",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-21",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-22",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-23",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-24",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-27",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-28",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-29",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-30",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-07-31",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-03",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-04",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-05",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-06",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-07",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-10",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-11",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-12",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-13",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-14",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-17",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-18",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-19",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-20",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-21",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-24",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-25",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-26",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-27",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-28",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-08-31",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-01",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-02",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-03",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-04",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-07",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-08",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-09",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-10",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-11",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-14",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-15",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-16",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-17",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-18",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-21",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-22",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-23",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-24",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-28",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-29",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      },
+      {
+        "currency": "CNY",
+        "date": "2026-09-30",
+        "sh": null,
+        "sz_composite": null,
+        "total": null,
+        "unit": "CNY"
+      }
+    ]
+  }
+}

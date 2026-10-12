@@ -211,3 +211,20 @@ export function clearNotes() {
   storageRemoveChecked(KEY);
   if (typeof window !== "undefined") window.dispatchEvent(new Event(NOTES_CHANGED_EVENT));
 }
+
+/** Browser-local, read-only search; never sends query or content to a server/model. */
+export function filterResearchNotes(notes: readonly Note[], kind: string, query: string, securityCode = ""): { notes: Note[]; error: string } {
+  if (query.length > 120) return { notes: [], error: "搜索词超过120字符，未执行搜索" };
+  const candidates = notes.filter(note => (!kind || note.kind === kind) && (!securityCode || note.research?.securityCode === securityCode));
+  const term = query.trim().toLocaleLowerCase();
+  if (!term) return { notes: candidates, error: "" };
+  let scanned = 0;
+  const result: Note[] = [];
+  for (const note of candidates) {
+    const fields = [note.title, note.kind, note.content, note.research?.securityCode ?? "", note.research?.question ?? "", note.research?.tentativeView ?? "", note.research?.contraryEvidence ?? "", note.research?.nextQuestion ?? ""];
+    scanned += fields.reduce((total, field) => total + field.length, 0);
+    if (scanned > 4_000_000) return { notes: [], error: "所选记录超过400万字符搜索上限，未展示截断结果；请先缩小类型或证券范围" };
+    if (fields.some(field => field.toLocaleLowerCase().includes(term))) result.push(note);
+  }
+  return { notes: result, error: "" };
+}

@@ -29,6 +29,7 @@ import { ObservationWorkflowCard } from "@/components/dailyReview/ObservationWor
 import { NextDayVerificationCard } from "@/components/dailyReview/NextDayVerificationCard";
 import { ShortTermHistoryCard } from "@/components/dailyReview/ShortTermHistoryCard";
 import { EvidenceReadinessCard } from "@/components/dailyReview/EvidenceReadinessCard";
+import { ExtendedResearchCard } from "@/components/research/ExtendedResearchCard";
 import { ShortlineResearchCard } from "@/components/dailyReview/ShortlineResearchCard";
 import { CohortIdentityCard } from "@/components/dailyReview/CohortIdentityCard";
 import { ThemeResearchCard } from "@/components/dailyReview/ThemeResearchCard";
@@ -1195,6 +1196,7 @@ export function DailyReview() {
       <CohortIdentityCard tradeDate={dr?.trade_date ?? null} />
       <ShortlineResearchCard tradeDate={dr?.trade_date ?? null} />
       <ShortlineReviewCard tradeDate={dr?.trade_date ?? null} />
+      <ExtendedResearchCard kind="market" tradeDate={dr?.trade_date ?? null} />
       </section>) },
 
       /* 3. 市场广度 */
@@ -2076,6 +2078,7 @@ export function DailyReview() {
                   <CohortIdentityCard tradeDate={snap.trade_date ?? null} />
                   <ShortlineResearchCard tradeDate={snap.trade_date ?? null} />
                   <ShortlineReviewCard tradeDate={snap.trade_date ?? null} />
+                  <ExtendedResearchCard kind="market" tradeDate={snap.trade_date ?? null} />
 
                   {warnList.length > 0 && (
                     <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-warning">

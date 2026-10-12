@@ -34,7 +34,7 @@ def persist_capture(lake, raw, source, subject, captured_at, *, fixture, http_st
     metadata = {'source_id': source, 'subject': subject, 'fixture': fixture, 'http_status': http_status,
                 'captured_at': captured_at, 'locally_received_at': received.isoformat(timespec='microseconds').replace('+00:00', 'Z')}
     observation = ProviderObservation(
-        observation_id='public-research-' + uuid.uuid4().hex, dataset_id='research_' + source + '_v1',
+        observation_id='public-research-' + uuid.uuid4().hex, dataset_id=C.dataset_id(source, subject),
         provider_id=spec['provider'], provider_endpoint=spec['endpoint'], provider_symbol=subject,
         request_fingerprint=C.digest({'source_id': source, 'subject': subject}),
         source_payload_hash=payload_sha256(raw), normalizer_version=NORMALIZER,
@@ -73,7 +73,7 @@ def replay(lake, stored, *, now=None, max_bytes=C.MAX_BYTES):
     spec = C.identity(m['source_id'], m['subject'])
     if (type(m['fixture']) is not bool or type(m['http_status']) is not int or not 100 <= m['http_status'] <= 599
         or type(env['normalization_failed']) is not bool
-        or ob.dataset_id != 'research_' + m['source_id'] + '_v1' or ob.provider_id != spec['provider']
+        or ob.dataset_id != C.dataset_id(m['source_id'], m['subject']) or ob.provider_id != spec['provider']
         or ob.provider_endpoint != spec['endpoint'] or ob.provider_symbol != m['subject']
         or ob.request_fingerprint != C.digest({'source_id': m['source_id'], 'subject': m['subject']})
         or ob.fetched_at != C.utc(m['captured_at']) or ob.trade_date != C.utc(m['captured_at'])[:10]
@@ -89,6 +89,14 @@ def replay(lake, stored, *, now=None, max_bytes=C.MAX_BYTES):
                   'status': 'unavailable', 'rows': [], 'reason_codes': ['HTTP_OR_NORMALIZATION_FAILED'], 'guard': spec['guard'],
                   'captured_at': m['captured_at'], 'source_url': C.request_spec(m['source_id'], m['subject']),
                   'license_status': 'PROVIDER_TERMS_NOT_VERIFIED'}
+        from public_research_extended_contract import SPECS, parse_subject
+        if m['source_id'] in SPECS:
+            _,cutoff,market,symbol=parse_subject(m['source_id'],m['subject'])
+            age=(now-C.stamp(m['captured_at'])).total_seconds()
+            result.update({'normalizer_version':NORMALIZER,'selection_mode':'CURRENT_ARCHIVED_POSTHOC','point_in_time_claim':'NONE',
+                           'requested_as_of':cutoff,'market':market,'symbol':symbol,'source_revision':None,'source_publication_time':None,
+                           'archive_age_seconds':age,'archive_stale':age>(300 if m['source_id'] in ('global_quote_ref','cn_quote_ref') else 86400),
+                           'counters':{},'coverage':'source failure; no normalized economic rows'})
     else:
         result = normalize(raw, m['source_id'], m['subject'], m['captured_at'], now=now)
     return {**result, 'fixture': m['fixture'], 'raw_bytes': len(raw), 'evidence': {

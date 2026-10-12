@@ -130,16 +130,19 @@ jobs:
         run: npm run build
 
       - name: Install Playwright Chromium
+        id: browser_prerequisites
         uses: ./.github/actions/setup-playwright
         timeout-minutes: 15
 
       - name: Run stock-data panel smoke E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           E2E_KLINE_RESEARCH_SCREENSHOT_DIR: kline-research-evidence
         run: npm run test:e2e:smoke
 
       - name: Save synthetic K-line research viewport evidence
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: kline-research-evidence
@@ -147,6 +150,7 @@ jobs:
           if-no-files-found: error
 
       - name: Run public-source research Intel page acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -164,7 +168,25 @@ jobs:
             frontend/public-research-evidence/*.json
           if-no-files-found: error
 
+      - name: Run extended archive research mounted-page acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          EXTENDED_PUBLIC_BROWSER_OUTPUT_DIR: ${{ runner.temp }}/extended-public-research-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/extended-public-research.browser.mjs
+
+      - name: Preserve extended archive research page evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: extended-public-research-evidence
+          path: ${{ runner.temp }}/extended-public-research-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Run research analytics production page acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -181,18 +203,22 @@ jobs:
           retention-days: 7
 
       - name: Run core navigation smoke E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         run: npm run test:e2e:core-navigation
 
       - name: Run top-risk real E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         run: npm run test:e2e:top-risk
 
       - name: Run Candidate Research E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         run: npm run test:e2e:candidate-campaign
 
       - name: Run Dragon-Tiger Market Discovery E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         run: npm run test:e2e:dragon-tiger-discovery
 
@@ -206,20 +232,24 @@ jobs:
           retention-days: 7
 
       - name: Run Pattern Discovery E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         run: npm run test:e2e:patterns
 
       - name: Run Factor Validation E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:factor-validation
 
       - name: Run Full-Market Discovery E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         run: npm run test:e2e:discovery
 
       - name: Run full-market source and screener coverage E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -269,16 +299,19 @@ jobs:
         run: npm run build
 
       - name: Install Playwright Chromium
+        id: browser_prerequisites
         uses: ./.github/actions/setup-playwright
         timeout-minutes: 15
 
       - name: Run local API browser security E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           VR_TEST_PYTHON: python
         run: npm run test:e2e:local-api-security
 
       - name: Run evidence-thesis real E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
@@ -288,18 +321,21 @@ jobs:
         run: npm run test:e2e:thesis
 
       - name: Run Current Thesis activation E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:current-thesis
 
       - name: Run ET1 evidence effective-time E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:evidence-effective-time
 
       - name: Run evidence library query and navigation E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 3
         env:
@@ -316,6 +352,7 @@ jobs:
           retention-days: 7
 
       - name: Run manual browser-local research notes E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 3
         env:
@@ -332,6 +369,7 @@ jobs:
           retention-days: 7
 
       - name: Run evidence edit conflict E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 3
         env:
@@ -348,6 +386,7 @@ jobs:
           retention-days: 7
 
       - name: Run thesis list query and lifecycle E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 3
         env:
@@ -364,6 +403,7 @@ jobs:
           retention-days: 7
 
       - name: Run research continuity component DOM regression
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -380,6 +420,7 @@ jobs:
           retention-days: 7
 
       - name: Run report edit interruption E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -396,6 +437,7 @@ jobs:
           retention-days: 7
 
       - name: Run settings read recovery E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -412,6 +454,7 @@ jobs:
           retention-days: 7
 
       - name: Run watchlist import recovery E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -428,6 +471,7 @@ jobs:
           retention-days: 7
 
       - name: Run Markdown image guard E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -444,6 +488,7 @@ jobs:
           retention-days: 7
 
       - name: Run live quote timer ownership E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -493,10 +538,12 @@ jobs:
         run: npm run build
 
       - name: Install Playwright Chromium
+        id: browser_prerequisites
         uses: ./.github/actions/setup-playwright
         timeout-minutes: 15
 
       - name: Run data health real E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
@@ -507,6 +554,7 @@ jobs:
         run: npm run test:e2e:data-health
 
       - name: Run bounded Intel and health recovery E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -524,6 +572,7 @@ jobs:
           retention-days: 7
 
       - name: Run bounded navigation storage E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -541,6 +590,7 @@ jobs:
           retention-days: 7
 
       - name: Run bounded AI and settings storage E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -558,6 +608,7 @@ jobs:
           retention-days: 7
 
       - name: Run MARKET-02 overseas empty-state regression
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 3
         env:
@@ -575,6 +626,7 @@ jobs:
           retention-days: 7
 
       - name: Run bounded market and ledger recovery E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -592,6 +644,7 @@ jobs:
           retention-days: 7
 
       - name: Run final original-family acceptance E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -643,10 +696,12 @@ jobs:
         run: npm run build
 
       - name: Install Playwright Chromium
+        id: browser_prerequisites
         uses: ./.github/actions/setup-playwright
         timeout-minutes: 15
 
       - name: Run Intel digest real E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
@@ -655,52 +710,61 @@ jobs:
         run: npm run test:e2e:intel-digest
 
       - name: Run Native Intel render E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:native-intel
 
       - name: Run Native Intel GitHub/HF E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:native-intel-gh-hf
 
       - name: Run Hotlist parity E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:hotlist-parity
 
       - name: Run Interest filter E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:interest-filter
 
       - name: Run Wave 3 Display Controls E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:wave3-display-controls
 
       - name: Run Wave 4 Reports and Analytics E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:wave4-report-analytics
 
       - name: Run Wave 5 AI Agent Tools E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:wave5-ai-agent
 
       - name: Run Today market context E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         run: npm run test:e2e:today-market-context
 
       - name: Run captured seal-quality component acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -716,6 +780,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run captured theme research component acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           THEME_RESEARCH_BROWSER_OUTPUT_DIR: ${{ runner.temp }}/theme-research-evidence
@@ -730,6 +795,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Run shortline research component acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -745,6 +811,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run segmented daily and weekly review page acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -761,6 +828,7 @@ jobs:
           retention-days: 7
 
       - name: Run personal review component acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -775,7 +843,24 @@ jobs:
           path: ${{ runner.temp }}/personal-review-evidence
           if-no-files-found: warn
 
+      - name: Run campaign AI consent component acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          CAMPAIGN_AI_CONSENT_EVIDENCE_DIR: ${{ runner.temp }}/campaign-ai-consent-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/campaign-ai-consent.browser.mjs
+
+      - name: Preserve synthetic campaign consent evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: campaign-ai-consent-evidence
+          path: ${{ runner.temp }}/campaign-ai-consent-evidence
+          if-no-files-found: warn
+
       - name: Run archived cohort member component acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -791,6 +876,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run next-session condition journal UI acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -806,6 +892,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run legacy market pool provenance E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         timeout-minutes: 5
         env:
@@ -822,12 +909,30 @@ jobs:
           if-no-files-found: warn
 
       - name: Run Sector industry context E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:sector-industry-context
 
+      - name: Run local OCR and public research share component acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          LOCAL_OCR_SHARE_EVIDENCE_DIR: ${{ runner.temp }}/local-ocr-share-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/local-ocr-share.browser.mjs
+
+      - name: Preserve synthetic OCR and share viewport evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: local-ocr-share-evidence
+          path: ${{ runner.temp }}/local-ocr-share-evidence
+          if-no-files-found: warn
+
       - name: Run research notes backup E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           E2E_ATTRIBUTION_SCREENSHOT_DIR: attribution-evidence
@@ -835,6 +940,7 @@ jobs:
         run: npm run test:e2e:notes-backup
 
       - name: Save synthetic attribution viewport evidence
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: attribution-evidence
@@ -842,6 +948,7 @@ jobs:
           if-no-files-found: error
 
       - name: Save synthetic explicit-page AI viewport evidence
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: page-ai-evidence
@@ -884,44 +991,52 @@ jobs:
         run: npm run build
 
       - name: Install Playwright Chromium
+        id: browser_prerequisites
         uses: ./.github/actions/setup-playwright
         timeout-minutes: 15
 
       - name: Run decision inbox real E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:decision-inbox
       - name: Run Research Event Calendar real E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:research-event-calendar
       - name: Run DCR1 Decision Commit valid readback E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
           DCR1_READBACK_VARIANT: valid
         run: npm run test:e2e:decision-commit
       - name: Run DCR1 Decision Commit malformed readback E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
           DCR1_READBACK_VARIANT: malformed
         run: npm run test:e2e:decision-commit
       - name: Run DCR1 Decision Commit decision mismatch E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
           DCR1_READBACK_VARIANT: decision-mismatch
         run: npm run test:e2e:decision-commit
       - name: Run DCR1 Decision Commit campaign mismatch E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
           DCR1_READBACK_VARIANT: campaign-mismatch
         run: npm run test:e2e:decision-commit
       - name: Run Research Brief terminal layout E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
@@ -929,6 +1044,7 @@ jobs:
           BRIEF_LAYOUT_ONLY: "1"
         run: npm run test:e2e:decision-commit
       - name: Run Research Brief unavailable layout E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
@@ -936,21 +1052,25 @@ jobs:
           BRIEF_LAYOUT_ONLY: "1"
         run: npm run test:e2e:decision-commit
       - name: Run HR1 production vertical E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:hr1-vertical
       - name: Run TAR1 trade attribution reconciliation E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:trade-attribution-reconciliation
       - name: Run OL1 formal decision outcome E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:formal-outcome
       - name: Run DCH1 pre-freeze decision challenge E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
@@ -999,34 +1119,40 @@ jobs:
         run: npm run build
 
       - name: Install Playwright Chromium
+        id: browser_prerequisites
         uses: ./.github/actions/setup-playwright
         timeout-minutes: 15
 
       - name: Run account bootstrap real E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:account-bootstrap
 
       - name: Run Portfolio Risk Context real E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:portfolio-risk-context
 
       - name: Run account execution policy real E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:account-execution-policy
 
       - name: Run portfolio advice error observability E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python
         run: npm run test:e2e:portfolio-advice-error
 
       - name: Run signals GPU rent E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           PYTHON: python

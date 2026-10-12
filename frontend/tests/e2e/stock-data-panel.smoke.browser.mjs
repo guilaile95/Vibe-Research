@@ -7,6 +7,7 @@
  * - Covers query binding, deferred K-line expand, cache, retry, and race guards
  */
 import { chromium } from "playwright";
+import { runCompanyResearch } from "./company-research.fixture.mjs";
 import { runKlineResearchEvents } from "./kline-research-events.fixture.mjs";
 import { createReadStream, existsSync } from "node:fs";
 import { createServer } from "node:http";
@@ -2009,6 +2010,14 @@ async function main() {
       researchPage.on("console", (message) => { if (message.type() === "error") errors.push(`research console.error: ${message.text()}`); });
       await runKlineResearchEvents({ page: researchPage, mock: researchMock, baseUrl: `http://127.0.0.1:${frontendPort}`, openTab, expandKline, fillCode, clickQuery, waitForStockHeader });
     } finally { await researchContext.close(); }
+    const companyContext = await browser.newContext();
+    try {
+      const companyPage = await companyContext.newPage();
+      const companyMock = createApiMockController();
+      await companyPage.route("**/api/**", route => companyMock.handle(route));
+      companyPage.on("pageerror", error => errors.push(`company research pageerror: ${error.message}`));
+      await runCompanyResearch({ page: companyPage, baseUrl: `http://127.0.0.1:${frontendPort}`, fillCode, clickQuery, waitForStockHeader });
+    } finally { await companyContext.close(); }
     await page.setViewportSize({ width: 390, height: 844 });
     try {
       // 相对表现 / 当前行业估值在「概览」页签（上一个步骤停在行情与技术）。

@@ -34,6 +34,7 @@ export type MyReportTextIndexStatus =
   | "INDEX_ERROR";
 
 export interface MyReportTextHit {
+  extraction_kind?: "LOCAL_OCR_UNVERIFIED" | "DOCUMENT_TEXT";
   report_id: string;
   title: string;
   name: string;
@@ -4133,6 +4134,7 @@ export interface ReportPageReadRequest {
 }
 export type ReportPageReadStatus = "readable" | "omitted" | "invalid" | "unreadable" | "error";
 export interface ReportPageReadResult {
+  extraction?: { status: string; engine: string; language: string; source_sha256: string; pages: { page_number: number; image_sha256: string; text_sha256: string; mean_word_confidence: number | null }[] } | null;
   report_id: string; file_sha256: string; scope: "INDEXED_PAGE_TEXT_ONLY"; full_report_read: false;
   requested: number[]; returned_chars: number; complete_requested_text: boolean;
   coverage: Record<ReportPageReadStatus, number[]>;

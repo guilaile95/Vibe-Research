@@ -20,6 +20,7 @@ import { ManualResearchNote } from "@/components/notes/ManualResearchNote";
 import { Disclaimer } from "@/components/ui/Disclaimer";
 import {
   addNote,
+  filterResearchNotes,
   NOTES_CHANGED_EVENT,
   clearNotes,
   createNotesBackupJson,
@@ -71,7 +72,11 @@ export function Notes() {
     return () => { window.removeEventListener(NOTES_CHANGED_EVENT, refresh); window.removeEventListener("storage", onStorage); };
   }, []);
   const [openId, setOpenId] = useState<string | null>(() => focusedNoteId);
-  const filteredNotes = securityCode ? notes.filter((note) => note.research?.securityCode === securityCode) : notes;
+  const [kindFilter, setKindFilter] = useState("");
+  const [textQuery, setTextQuery] = useState("");
+  const noteKinds = [...new Set(notes.map(note => note.kind))].sort();
+  const searchResult = filterResearchNotes(notes, kindFilter, textQuery, securityCode);
+  const filteredNotes = searchResult.notes;
   useEffect(() => { setOpenId(focusedNoteId); }, [focusedNoteId]);
   // 反思：对某条记录做推理审计。只保留「当前这条」的结果，避免一堆长文同时挂在页面上。
   const [reflectId, setReflectId] = useState<string | null>(null);
@@ -314,7 +319,10 @@ export function Notes() {
         });
       }} />
 
-      <div className="mb-4 flex flex-wrap items-end gap-3 text-xs">
+      <div className="mb-4 flex flex-wrap items-end gap-3 text-xs" data-testid="notes-local-search">
+        <label>记录类型 <select aria-label="研究记录类型" value={kindFilter} onChange={event => setKindFilter(event.target.value)} className="ml-2 rounded border bg-background px-2 py-1.5"><option value="">全部类型</option>{noteKinds.map(kind => <option key={kind} value={kind}>{kind || "未标类型"}</option>)}</select></label>
+        <label>全文搜索 <input aria-label="研究记录全文搜索" value={textQuery} maxLength={120} placeholder="标题、正文或研究问题" onChange={event => setTextQuery(event.target.value)} className="ml-2 w-56 max-w-full rounded border bg-background px-2 py-1.5" /></label>
+        {(kindFilter || textQuery) && <button type="button" onClick={() => { setKindFilter(""); setTextQuery(""); }} className="text-primary">清除类型和文字筛选</button>}
         <label>按股票代码查看
           <input value={requestedCode} placeholder="全部记录" inputMode="numeric" maxLength={6} onChange={(event) => {
             const code = event.target.value.replace(/\D/g, "");
@@ -325,11 +333,13 @@ export function Notes() {
         {securityCode && <button type="button" className="text-muted-foreground hover:underline" onClick={() => setSearchParams({})}>显示全部记录</button>}
       </div>
 
-      {notesState.error ? null : filteredNotes.length === 0 ? (
+      <p className="mb-3 text-xs text-muted-foreground">当前显示 {filteredNotes.length} / {notes.length} 条已保存记录。搜索只在此浏览器进行，不查询未保存任务、不发送给模型。</p>
+      {searchResult.error && <p role="alert" className="mb-3 text-sm text-destructive">{searchResult.error}</p>}
+      {notesState.error || searchResult.error ? null : filteredNotes.length === 0 ? (
         <GlassCard>
           <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
             <NotebookPen className="h-8 w-8 text-muted-foreground/40" />
-            {securityCode ? `${securityCode} 暂无关联的研究记录。旧记录没有证券标签时仍在“全部记录”中。` : <>还没有记录。点击「新建研究记录」写下自己的看法，或在「每日复盘」「资讯雷达」或「问 AI」里点 <b className="text-foreground">「存入沉淀」</b> 保存分析结果，或从已有 JSON 备份导入。</>}
+            {kindFilter || textQuery ? "没有匹配当前类型和文字的已保存记录，可清除筛选查看全部。" : securityCode ? `${securityCode} 暂无关联的研究记录。旧记录没有证券标签时仍在“全部记录”中。` : <>还没有记录。点击「新建研究记录」写下自己的看法，或在「每日复盘」「资讯雷达」或「问 AI」里点 <b className="text-foreground">「存入沉淀」</b> 保存分析结果，或从已有 JSON 备份导入。</>}
           </div>
         </GlassCard>
       ) : (

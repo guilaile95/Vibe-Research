@@ -963,6 +963,10 @@ export const api = {
     const query = params.toString();
     return get<MyReportTextIndexPreview>(`/myreports/text-index/preview${query ? `?${query}` : ""}`);
   },
+  localOcrCapability: (signal?: AbortSignal) => get<unknown>("/local-ocr/capability", { signal }),
+  ocrReportIdentity: (id: string, signal?: AbortSignal) => get<unknown>(`/local-ocr/reports/${encodeURIComponent(id)}/identity`, { signal }),
+  ocrMyReport: (id: string, expected_file_sha256: string, language: "eng" | "chi_sim+eng", signal?: AbortSignal) =>
+    request<unknown>(`/local-ocr/reports/${encodeURIComponent(id)}`, "POST", { expected_file_sha256, language, confirm_local_processing: true }, { signal }),
   indexMyReportText: (id: string) =>
     request<MyReport>(`/myreports/${id}/text-index`, "POST", {}),
   batchIndexMyReportText: (reportIds: string[]) =>
@@ -1315,8 +1319,10 @@ export const api = {
   getResearchContinuity: (campaignId: string) => getResearchContinuity(campaignId),
   getResearchContinuityBatch: (campaignIds: string[]) => getResearchContinuityBatch(campaignIds),
   getResearchEventCalendar: (params?: ResearchEventCalendarQuery) => getResearchEventCalendar(params),
-  generateCampaignAIDraft: (campaignId: string, llm: StreamLlmConfig) =>
-    generateCampaignAIDraft(campaignId, llm),
+  previewCampaignAIDraftConsent: (campaignId: string, signal?: AbortSignal) =>
+    request<{ campaign_id: string; context_fingerprint: string; scope: string }>(`/campaigns/${encodeURIComponent(campaignId)}/ai-draft/consent-preview`, "POST", undefined, { signal }),
+  generateCampaignAIDraft: (campaignId: string, llm: StreamLlmConfig, fingerprint: string, signal?: AbortSignal) =>
+    generateCampaignAIDraft(campaignId, llm, fingerprint, signal),
   previewDecisionProposal: (campaignId: string, body: DecisionProposalDraftInput) =>
     previewDecisionProposal(campaignId, body),
   commitDecisionProposal: (
@@ -1707,11 +1713,14 @@ export async function getResearchEventCalendar(
 export async function generateCampaignAIDraft(
   campaignId: string,
   llm: StreamLlmConfig,
+  fingerprint: string,
+  signal?: AbortSignal,
 ): Promise<CampaignAIDraftGenerateResult> {
   return request<CampaignAIDraftGenerateResult>(
     `/campaigns/${encodeURIComponent(campaignId)}/ai-draft/generate`,
     "POST",
-    { llm },
+    { llm, confirm_private_context: true, expected_context_fingerprint: fingerprint },
+    { signal },
   );
 }
 

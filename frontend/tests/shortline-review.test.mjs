@@ -92,3 +92,32 @@ for(const value of ['',id])test(`version ${value?'selection':'clear'} releases s
  nodes(tree).find(x=>x.type==='select'&&x.props['aria-label']==='选择复盘版本').props.onChange({target:{value}});release(preview);await new Promise(r=>setTimeout(r,0));tree=render();
  assert.equal(nodes(tree).find(x=>x.type==='button'&&x.props.children==='查看生成材料')?.props.disabled,false);
 });
+
+test('production cancelled replacement clears preview and requires explicit reread without model retry',async()=>{
+ let state=[],cursor=0,pendingEffects=[],dependencies=[],cleanups=[],requests=0,release;
+ const store=task(async()=>{requests++;await new Promise(resolve=>release=resolve);});
+ store.setState({key:`daily:${day}`,result:result()});
+ const hooks={...react,
+  useState:initial=>{const i=cursor++;if(!(i in state))state[i]=initial;return[state[i],v=>{state[i]=typeof v==='function'?v(state[i]):v}]},
+  useRef:initial=>{const i=cursor++;if(!(i in state))state[i]={current:initial};return state[i]},
+  useEffect:(fn,deps)=>{const i=cursor++;if(!dependencies[i]||deps.some((v,j)=>v!==dependencies[i][j])){dependencies[i]=deps;pendingEffects.push(()=>{cleanups[i]?.();cleanups[i]=fn();});}},
+ };
+ const {ShortlineReviewCard}=load('../src/components/dailyReview/ShortlineReviewCard.tsx',{'react':hooks,'react/jsx-runtime':jsx,'@/components/ui/GlassCard':{GlassCard:({children,...p})=>react.createElement('div',p,children)},'@/lib/api':{request:async url=>url.includes('/preview?')?structuredClone(preview):[]},'@/lib/llm':{loadLlm:()=>({model:'fixture'})},'@/lib/shortlineReview':contract,'@/stores/shortlineReviewTaskStore':{useShortlineReviewTaskStore:()=>store.getState()}});
+ const render=()=>{cursor=0;return ShortlineReviewCard({tradeDate:day})};
+ const commit=async()=>{let tree=render();for(const effect of pendingEffects.splice(0))effect();await new Promise(setImmediate);return render();};
+ const nodes=x=>!x||typeof x!=='object'?[]:[x,...react.Children.toArray(x.props?.children).flatMap(nodes)];
+ const button=(tree,text)=>nodes(tree).find(x=>x.type==='button'&&react.Children.toArray(x.props.children).join('')===text);
+ let tree=await commit();
+ button(tree,'查看生成材料').props.onClick();tree=await commit();
+ assert.equal(button(tree,'手动生成（最多6次）').props.disabled,false,renderToStaticMarkup(tree));
+ button(tree,'手动生成（最多6次）').props.onClick();tree=await commit();
+ assert.equal(requests,1);assert.equal(store.getState().result,null);
+ button(tree,'取消当前分段任务').props.onClick();release();tree=await commit();
+ assert.equal(store.getState().running,false);
+ assert.equal(button(tree,'手动生成（最多6次）').props.disabled,true);
+ assert.doesNotMatch(renderToStaticMarkup(tree),/本次材料范围/);
+ assert.equal(button(tree,'查看生成材料').props.disabled,false);
+ button(tree,'查看生成材料').props.onClick();tree=await commit();
+ assert.equal(button(tree,'手动生成（最多6次）').props.disabled,false);
+ assert.equal(requests,1,'explicit material reread never implicitly invokes another model');
+});

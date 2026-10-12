@@ -1,3 +1,4 @@
+import { validateReportPageOcrResponse } from "@/lib/localReportOcr";
 import { reportPageReasons as reasons } from "@/lib/reportPageLabels";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { useEffect, useRef, useState } from "react";
@@ -33,6 +34,7 @@ export function ReportPageReader({ reports }: { reports: MyReport[] }) {
     try {
       const result = await api.readReportPages({ report_id: report.id, selected_report_ids: reports.map(r => r.id),
         expected_file_sha256: report.file_sha256!, page_from: start, page_to: end }, controller.signal);
+      validateReportPageOcrResponse(result, report.id, report.file_sha256!, start, end);
       if (generation.current === id) setState({ key, result });
     } catch {
       if (generation.current === id) setState({ key, error: "读取失败，请检查页码范围或重试。" });
@@ -55,6 +57,10 @@ export function ReportPageReader({ reports }: { reports: MyReport[] }) {
     {current?.error && <p role="alert">{current.error}</p>}
     {current?.result && <section aria-label="指定页读取结果" className="space-y-3 text-xs">
       <p className="break-all">源 SHA256：{current.result.file_sha256} · 返回 {current.result.returned_chars} 个 Unicode 字符</p>
+      {current.result.extraction && <div className="space-y-1 break-all rounded border border-warning/50 p-2" data-testid="report-ocr-provenance">
+        <p>本机 OCR · 未核验 · {current.result.extraction.engine} / {current.result.extraction.language}；识别分数不等于事实可信度，请核对原页。</p>
+        {current.result.extraction.pages.map(page => <p key={page.page_number}>第 {page.page_number} 页 · 平均词识别分数 {page.mean_word_confidence ?? "未知"} · 图像 SHA256 {page.image_sha256} · OCR 文本 SHA256 {page.text_sha256}</p>)}
+      </div>}
       <p>{Object.entries(current.result.coverage).map(([status, pages]) => `${labels[status as ReportPageReadStatus]} ${pages.length} 页`).join(" · ")}</p>
       {current.result.coverage.readable.length > 0 && current.result.coverage.error.length === 0 && <div className="rounded border border-border/50 p-2">
         <p className="mb-2">可选择只用当前这份报告第 {start}–{end} 页问 AI；其他已选报告不会自动加入。沿用现有模型配置，可能消耗其额度。</p>
