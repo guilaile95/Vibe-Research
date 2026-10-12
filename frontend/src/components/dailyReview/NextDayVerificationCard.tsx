@@ -79,11 +79,11 @@ export function NextDayVerificationCard({ initialDate }: { initialDate?: string 
     {ownsVerificationDate(view, day) && <>
       <p className="text-sm font-medium">{boundaryLabels[view.state]}</p>
       <p className="mb-3 text-xs text-muted-foreground">下一交易日：{view.next_trade_date ?? "未知"} · 条件版本：{view.revision}</p>
-      <fieldset disabled={!editable} className="space-y-3 disabled:opacity-70">
+      <fieldset disabled={!editable} className="space-y-2 sm:space-y-3 disabled:opacity-70">
         <legend className="sr-only">编辑市场条件</legend>
         {view.metrics.map((metric) => {
           const item = draft.find((entry) => entry.metric === metric.key);
-          return <div key={metric.key} className="rounded border border-border p-3">
+          return <div key={metric.key} className="rounded border border-border p-2 sm:p-3">
             <label className="flex flex-wrap items-center gap-2 text-sm">{metric.label}
               <select aria-label={`${metric.label}方向`} value={item?.direction ?? ""} onChange={(event) => change(metric.key, event.target.value as Direction | "")} className="rounded border border-border bg-background px-2 py-1">
                 <option value="">不设条件</option>{Object.entries(directionLabels).map(([key, text]) => <option value={key} key={key}>{text}</option>)}

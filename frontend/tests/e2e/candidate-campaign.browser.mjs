@@ -1187,7 +1187,7 @@ try {
   const sectorReturnTo = "/sectors/pcb/overview?view=dynamic#company-002463";
   await page.goto(`http://127.0.0.1:${port}/stock-data?code=600519&return_to=${encodeURIComponent(sectorReturnTo)}`, { waitUntil: "networkidle" });
   await page.locator('[data-active-code="600519"]').waitFor();
-  await page.locator('input').first().fill("600520");
+  await page.getByPlaceholder("A 股 6 位代码，或美股/港股/韩股（AAPL / 00700 / 005930.KS）", { exact: true }).fill("600520");
   await page.getByRole("button", { name: "查询" }).click();
   await page.locator('[data-active-code="600520"]').waitFor();
   const switchedHref = await page.getByTestId("stock-data-candidate-entry").getAttribute("href");

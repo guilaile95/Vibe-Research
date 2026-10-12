@@ -22,6 +22,7 @@ const violations = [];
 const pageErrors = [];
 const results = [];
 const captures = [];
+const regionMeasurements = [];
 let currentViewport;
 let browser, context, page, origin;
 let fixture;
@@ -101,12 +102,13 @@ async function shot(name, requiredText) {
     if (!await locator.count()) return;
     await locator.scrollIntoViewIfNeeded();
     const box = await locator.boundingBox();
-    assert.ok(box && box.height <= currentViewport.height - 100, `${label} must fit in the scrollport`);
     const region = await locator.evaluate((element) => {
       const box = element.getBoundingClientRect();
       const main = element.closest("main")?.getBoundingClientRect() || { top: 0, bottom: innerHeight };
       return { top: box.top, bottom: box.bottom, clipTop: Math.max(0, main.top), clipBottom: Math.min(innerHeight, main.bottom) };
     });
+    regionMeasurements.push({ name: prefix, label, viewport: currentViewport, box, region, maxHeight: currentViewport.height - 100 });
+    assert.ok(box && box.height <= currentViewport.height - 100, `${label} must fit in the scrollport`);
     assert.ok(region.top >= region.clipTop - 1 && region.bottom <= region.clipBottom + 1, `${label} must be fully visible before capture`);
     const filename = `${prefix}-${label}.png`;
     await locator.screenshot({ path: path.join(evidenceDir, filename), animations: "disabled", caret: "hide" });
@@ -369,7 +371,7 @@ try {
 } finally {
   for (const gate of pendingGates) gate.resolve();
   mkdirSync(evidenceDir, { recursive: true });
-  writeFileSync(path.join(evidenceDir, "results.json"), JSON.stringify({ scenarios: results, viewports: JOURNAL_VIEWPORTS, captures, fixtureRuns: fixtureRuns.map(({ label, fixture: f }) => ({ label, requests: f.requests, writes: f.writes })), violations: [...violations, ...fixtureRuns.flatMap(({ fixture: f }) => f.violations)], pageErrors, passed: !process.exitCode }, null, 2));
+  writeFileSync(path.join(evidenceDir, "results.json"), JSON.stringify({ scenarios: results, viewports: JOURNAL_VIEWPORTS, captures, regionMeasurements, fixtureRuns: fixtureRuns.map(({ label, fixture: f }) => ({ label, requests: f.requests, writes: f.writes })), violations: [...violations, ...fixtureRuns.flatMap(({ fixture: f }) => f.violations)], pageErrors, passed: !process.exitCode }, null, 2));
   await context?.close();
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));

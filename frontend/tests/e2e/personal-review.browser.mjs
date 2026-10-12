@@ -74,8 +74,14 @@ try {
     await editor.getByText("写入结果待核验",{exact:false}).waitFor();
     assert.equal(await editor.getByRole("button",{name:"保存自评修订"}).isDisabled(),true);
     assert.equal(await editor.getByLabel("复查笔记",{exact:true}).inputValue(),"Synthetic uncertain saved note");
-    await editor.getByRole("button",{name:"重新加载",exact:true}).click();
+    const writesBeforeReload = writes.length;
+    await Promise.all([
+      page.waitForResponse(response => response.url() === `${origin}/api/personal-review` && response.request().method() === "GET" && response.status() === 200),
+      editor.getByRole("button",{name:"重新加载",exact:true}).click(),
+    ]);
+    await editor.getByRole("button",{name:"保存自评修订"}).and(editor.locator("button:enabled")).waitFor({state:"visible",timeout:10000});
     await editor.getByText("自评修订历史（1）",{exact:false}).waitFor();
+    assert.equal(writes.length,writesBeforeReload,"explicit readback must not repeat an uncertain write");
     assert.equal(await editor.getByRole("button",{name:"保存自评修订"}).isDisabled(),false);
     assert.equal(await editor.getByLabel("复查笔记",{exact:true}).inputValue(),"Synthetic uncertain saved note");
     await overview.getByText("模式卡 · 版本历史与复用",{exact:true}).click();

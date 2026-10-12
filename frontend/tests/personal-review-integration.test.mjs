@@ -73,6 +73,16 @@ test("actual editor JSX recovers malformed GET and locks uncertain PUT without w
     for(const [,id]of associations)assert.ok(html.includes(`id="${id}"`));
     assert.equal(nodes(element).find(n=>n.type==="button"&&n.props.children==="保存自评修订").props.disabled,true);
     nodes(element).find(n=>n.type==="form").props.onSubmit({preventDefault(){}});await drain();assert.equal(state.writes,1);
+    const writesBeforeReload=state.writes;
+    nodes(element).find(n=>n.type==="button"&&n.props.children==="重新加载").props.onClick();
+    // Before the passive read effect commits, the old history/form still exists and remains locked.
+    element=tree();assert.equal(nodes(element).find(n=>n.type==="button"&&n.props.children==="保存自评修订").props.disabled,true);
+    let resolveRead;state.queue.push(new Promise(resolve=>{resolveRead=resolve;}));state.effects[0]();
+    element=tree();assert.match(renderToStaticMarkup(element),/正在读取本地复查/);assert.equal(nodes(element).some(n=>n.type==="form"),false);
+    const content={environment:"",closing_board_rank:null,stop_price:null,judgment:"unknown",execution:"unknown",pattern_id:null,pattern_revision:null,violations:[],note:"Synthetic private draft retained"};
+    resolveRead({...valid,assessment_history:{[props.trade.trade_id]:[{revision:1,content,saved_at:"2026-07-28T00:00:00Z",stop_recorded_at:null,classification:"RETROSPECTIVE_SELF_ASSESSMENT"}]}});await drain();
+    element=tree();assert.equal(nodes(element).find(n=>n.type==="button"&&n.props.children==="保存自评修订").props.disabled,false);
+    assert.match(renderToStaticMarkup(element),/Synthetic private draft retained/);assert.equal(state.writes,writesBeforeReload);
     props={};state.values=[];
     const episode={episode_id:"b".repeat(32),code:"600000",name:"Synthetic",trade_ids:["a".repeat(32)],opened_at:"2026-07-21T02:00:00Z",closed_at:"2026-07-24T02:00:00Z",holding_calendar_days:3,state:"CLOSED",gross_pnl:0,net_pnl:0,fees:0,fee_coverage:"LEDGER_RECORDED",assessment:null,formal_attributions:[]};
     state.queue.push({...valid,closed_episodes:[episode]});tree();state.effects[0]();await drain();

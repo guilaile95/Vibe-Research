@@ -2,6 +2,7 @@ import {isDeepStrictEqual} from 'node:util';
 import {readFileSync} from 'node:fs';
 import {createFixture} from './next-day-verification.fixture.mjs';
 const load=name=>JSON.parse(readFileSync(new URL('../fixtures/'+name,import.meta.url),'utf8'));
+export const startupGolden=load('extended-page-startup.golden.json');
 export const marketGolden=load('extended-page-market.golden.json');
 export const companyGolden=load('extended-public-research.golden.json');
 export const failureGolden=load('extended-page-market-failure.golden.json');
@@ -20,6 +21,10 @@ export function createExtendedPageFixture(origin){
  return {base,calls,violations,expectedPosts,expectResearch(market,action){expectedPosts.push({market,action});},setNext(value){next=structuredClone(value);},handle(url,method='GET',body){
   const u=new URL(url);if(u.origin!==origin)return deny('foreign origin');
   calls.push({method,path:u.pathname,search:u.search});
+  // Full-page initial renders observed in CI: before dr arrives, the journal
+  // uses the fixed clock's Shanghai date; CN StockData mounts its event calendar.
+  if(u.pathname==='/api/next-day-verification/2026-10-13')return method==='GET'&&u.search===''?{kind:'json',status:200,body:structuredClone(startupGolden.journal)}:deny('startup journal method/query');
+  if(u.pathname==='/api/research-events')return method==='GET'&&u.search==='?security_code=600000'?{kind:'json',status:200,body:structuredClone(startupGolden.calendar)}:deny('startup calendar method/security/query');
   if(u.pathname.startsWith('/api/company-research/')){
    const expected=expectedPosts[0];if(method!=='POST'||u.search||!expected||u.pathname!=='/api/company-research/'+expected.action)return deny('unplanned research request');
    const g=researchGolden[expected.market],bundle=g.bundle;

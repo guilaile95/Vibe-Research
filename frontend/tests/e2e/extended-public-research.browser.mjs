@@ -100,6 +100,7 @@ try{
     const input=page.getByPlaceholder('A 股 6 位代码，或美股/港股/韩股（AAPL / 00700 / 005930.KS）');await input.fill('00700');await input.press('Enter');await card.getByRole('heading',{name:'HK 00700 财务与预期原料',exact:true}).waitFor();assert.equal(await page.getByLabel('原料研究截止日',{exact:true}).inputValue(),'');await page.getByLabel('原料研究截止日',{exact:true}).fill(CUTOFF);await card.getByRole('button',{name:'读取来源归档',exact:true}).click();await ready(card,companyGolden.HK);await release(oldCompany);assert.doesNotMatch(await card.innerText(),/US:AAPL|US AAPL/);assert.match(await card.innerText(),/HK:00700/);await shot(card,'late-US-cannot-own-HK');
    }
   }
+  phase=`${width} completed scenarios: strict request audit`;
   assert.equal(posts().length,8,'three qualified plus one failed-quote archive freeze/stream pair, each explicit');assert.deepEqual(fixture.expectedPosts,[]);assert.deepEqual(fixture.violations,[]);assert.deepEqual(fixture.base.violations,[]);assert.deepEqual(fixture.base.writes,[]);await context.close();page=null;
  }
  assert.deepEqual(errors,[]);assert.deepEqual(violations,[]);

@@ -1,0 +1,219 @@
+{
+  "journal": {
+    "data": {
+      "schema_version": "next-day-verification.v0.2",
+      "research_only": true,
+      "trade_date": "2026-10-13",
+      "state": "NOT_YET_OPEN",
+      "next_trade_date": "2026-10-14",
+      "seals_at": "2026-10-14T01:15:00.000000+00:00",
+      "revision": 0,
+      "items": [],
+      "metrics": [
+        {
+          "key": "limit_up_count",
+          "label": "涨停家数",
+          "unit": "家",
+          "epsilon": 5
+        },
+        {
+          "key": "failed_board_rate",
+          "label": "炸板率",
+          "unit": "0–1 比率",
+          "epsilon": 0.05
+        },
+        {
+          "key": "highest_board",
+          "label": "最高连板高度（源口径）",
+          "unit": "板",
+          "epsilon": 0.5
+        },
+        {
+          "key": "promotion_1to2",
+          "label": "1进2晋级率（研究观察）",
+          "unit": "0–1 比率",
+          "epsilon": 0.05
+        },
+        {
+          "key": "money_effect_median",
+          "label": "昨日涨停队列收益中位数",
+          "unit": "百分点",
+          "epsilon": 0.5
+        },
+        {
+          "key": "deep_loss_count",
+          "label": "昨日涨停队列跌幅≥5%家数",
+          "unit": "家",
+          "epsilon": 5
+        },
+        {
+          "key": "theme_concentration",
+          "label": "头部题材集中度（供应商标签）",
+          "unit": "0–1 比率",
+          "epsilon": 0.05
+        },
+        {
+          "key": "market_limit_down",
+          "label": "全市场跌停家数",
+          "unit": "家",
+          "epsilon": 5
+        }
+      ],
+      "summary": {
+        "total": 0,
+        "decided": 0,
+        "hit": 0,
+        "unknown": 0,
+        "rate": null,
+        "coverage": null,
+        "baseline_covered": 0,
+        "expected_rate": null,
+        "edge": null
+      },
+      "history": {
+        "from": "2026-07-14",
+        "through": "2026-10-13",
+        "summary": {
+          "total": 0,
+          "decided": 0,
+          "hit": 0,
+          "unknown": 0,
+          "rate": null,
+          "coverage": null,
+          "baseline_covered": 0,
+          "expected_rate": null,
+          "edge": null
+        }
+      },
+      "generated_at": "2026-10-12T23:00:00.000000+00:00",
+      "limitations": [
+        "仅记录您事前写下的市场读数条件，不提供个股建议，不自动交易。",
+        "只读取本地已存的合格收盘事实；未启用自动采集，缺少事实时保留待核验，不算失败。",
+        "基准为保存时已知的历史发生频率，不代表投资胜率或未来概率。",
+        "对账使用当前已存的收盘观察，源数据更正可能改变结果；事前值和基准已冻结。",
+        "新增六项仅冻结保存时读取的当前归档研究观察，不宣称历史收盘时已知；历史基准保持未知。"
+      ]
+    }
+  },
+  "calendar": {
+    "data": {
+      "schema_version": "research_event_calendar.v0.1",
+      "status": "UNAVAILABLE",
+      "as_of": "2026-10-13",
+      "fetched_at": "2026-10-12T23:00:00.000000Z",
+      "window": {
+        "date_from": "2026-09-29",
+        "date_to": "2027-01-11",
+        "semantics": "CALENDAR_DAYS"
+      },
+      "universe": {
+        "kind": "SINGLE_SECURITY",
+        "status": "NORMAL",
+        "campaign_count": 0,
+        "unique_security_count": 1,
+        "max_unique_securities": 1,
+        "securities": [
+          {
+            "security_code": "600000",
+            "security_name": null,
+            "campaign_ids": []
+          }
+        ]
+      },
+      "events": [],
+      "sources": [
+        {
+          "event_type": "PERIODIC_REPORT",
+          "source": "eastmoney:RPT_PUBLIC_BS_APPOIN",
+          "status": "UNAVAILABLE",
+          "security_count": 1,
+          "success_count": 0,
+          "failure_count": 1,
+          "unavailable_count": 0,
+          "no_record_count": 0,
+          "security_statuses": [
+            {
+              "security_code": "600000",
+              "status": "ERROR",
+              "reason": "PROVIDER_FAILURE"
+            }
+          ],
+          "limitations": [
+            "NO_EXPLICIT_EVENT_CATALYST_LINK"
+          ]
+        },
+        {
+          "event_type": "LOCKUP_EXPIRY",
+          "source": "eastmoney:RPT_LIFT_STAGE",
+          "status": "UNAVAILABLE",
+          "security_count": 1,
+          "success_count": 0,
+          "failure_count": 1,
+          "unavailable_count": 0,
+          "no_record_count": 0,
+          "security_statuses": [
+            {
+              "security_code": "600000",
+              "status": "ERROR",
+              "reason": "PROVIDER_FAILURE"
+            }
+          ],
+          "limitations": [
+            "NO_EXPLICIT_EVENT_CATALYST_LINK"
+          ]
+        },
+        {
+          "event_type": "DIVIDEND_BONUS",
+          "source": "eastmoney:RPT_SHAREBONUS_DET",
+          "status": "UNAVAILABLE",
+          "security_count": 1,
+          "success_count": 0,
+          "failure_count": 1,
+          "unavailable_count": 0,
+          "no_record_count": 0,
+          "security_statuses": [
+            {
+              "security_code": "600000",
+              "status": "ERROR",
+              "reason": "PROVIDER_FAILURE"
+            }
+          ],
+          "limitations": [
+            "NO_EXPLICIT_EVENT_CATALYST_LINK"
+          ]
+        },
+        {
+          "event_type": "ANNOUNCEMENT",
+          "source": "eastmoney:np-anotice-stock",
+          "status": "UNAVAILABLE",
+          "security_count": 1,
+          "success_count": 0,
+          "failure_count": 1,
+          "unavailable_count": 0,
+          "no_record_count": 0,
+          "security_statuses": [
+            {
+              "security_code": "600000",
+              "status": "ERROR",
+              "reason": "PROVIDER_FAILURE"
+            }
+          ],
+          "limitations": [
+            "NO_EXPLICIT_EVENT_CATALYST_LINK"
+          ]
+        }
+      ],
+      "limitations": [
+        "NO_EXPLICIT_EVENT_CATALYST_LINK"
+      ],
+      "writes": {
+        "campaign": 0,
+        "thesis": 0,
+        "evidence": 0,
+        "decision": 0,
+        "trade": 0,
+        "account": 0
+      }
+    }
+  }
+}
