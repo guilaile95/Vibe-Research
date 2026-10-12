@@ -27,9 +27,14 @@ _CODE_RE = re.compile(r"^\d{6}$")
 _MAX_WORKERS = 4
 
 
-def _research_bars(code: str, days: int) -> tuple[list[dict], dict[str, Any]]:
+def _research_bars(code: str, days: int, *, snapshot_id: str | None = None, cutoff: str | None = None) -> tuple[list[dict], dict[str, Any]]:
     """Load one code from the bounded Research Runtime and preserve its envelope."""
-    envelope = rdp.query_daily_bars(code=code, limit=min(days, rdp._MAX_LIMIT))
+    envelope = rdp.query_daily_bars(
+        code=code, limit=min(days, rdp._MAX_LIMIT), snapshot_id=snapshot_id,
+        date_to=cutoff, latest_window=True,
+    )
+    if snapshot_id is not None and envelope.get("snapshot_id") != snapshot_id:
+        return [], rdp.build_unavailable_envelope("Research Runtime 快照不一致")
     if envelope.get("status") != "normal":
         return [], envelope
     rows = envelope.get("rows")
@@ -84,14 +89,61 @@ def _public_research_data(envelope: dict[str, Any]) -> dict[str, Any]:
     return {key: envelope.get(key) for key in _RESEARCH_DATA_RESPONSE_KEYS}
 
 
+def _sample_coverage(rows: list[dict], envelope: dict[str, Any], cutoff: str | None) -> dict[str, Any]:
+    readable = envelope.get("status") == "normal"
+    dates = [row.get("trade_date") or row.get("datetime") for row in rows if isinstance(row, dict)]
+    dates = [value for value in dates if isinstance(value, str) and value]
+    return {
+        "status": ("available" if rows else "empty") if readable else "unavailable",
+        "returned_rows": len(rows) if readable else None,
+        "start": min(dates) if dates and readable else None,
+        "end": max(dates) if dates and readable else None,
+        "snapshot_id": envelope.get("snapshot_id"),
+        "artifact_sha256": (envelope.get("provenance") or {}).get("artifact_sha256"),
+        "cutoff": cutoff,
+    }
+
+
+def _stock_coverage(stock: dict[str, Any]) -> dict[str, Any]:
+    envelope = stock.get("research_data") or {}
+    return envelope.get("_screener_sample") or _sample_coverage([], envelope, None)
+
+
+def _batch_coverage(stocks: list[dict]) -> dict[str, int]:
+    samples = [_stock_coverage(stock) for stock in stocks]
+    return {
+        "requested_count": len(stocks),
+        "with_data_count": sum(sample["status"] == "available" for sample in samples),
+        "empty_count": sum(sample["status"] == "empty" for sample in samples),
+        "failed_count": sum(sample["status"] == "unavailable" for sample in samples),
+        "fully_evaluable_count": sum(
+            bool(stock.get("condition_results"))
+            and all(result.get("evaluable") is True for result in stock["condition_results"])
+            for stock in stocks
+        ),
+        "missing_condition_count": sum(
+            any(result.get("evaluable") is False for result in stock.get("condition_results", []))
+            for stock in stocks
+        ),
+        "unavailable_count": sum(stock.get("bucket") == "unavailable" for stock in stocks),
+    }
+
+
 def _research_data_for(stocks: list[dict]) -> dict[str, Any]:
-    for stock in stocks:
-        envelope = stock.get("research_data")
-        if isinstance(envelope, dict):
-            return _public_research_data(envelope)
-    return _public_research_data(
-        rdp.build_unavailable_envelope("Research Runtime provenance unavailable")
+    # This is artifact provenance, never requested-universe or per-stock coverage.
+    sources = [stock["research_data"] for stock in stocks
+               if _stock_coverage(stock)["status"] in {"available", "empty"}]
+    if not sources:
+        return _public_research_data(rdp.build_unavailable_envelope("本批次没有可读取的研究数据"))
+    source = _public_research_data(sources[0])
+    if any(_public_research_data(candidate) != source for candidate in sources[1:]):
+        return _public_research_data(rdp.build_unavailable_envelope("本批次研究来源不一致；请逐股核对来源"))
+    coverage = _batch_coverage(stocks)
+    source["status"] = (
+        "normal" if coverage["with_data_count"] == coverage["requested_count"]
+        else "partial" if coverage["with_data_count"] else "unavailable"
     )
+    return source
 
 
 # Trigger keys from technical_indicators._detect_triggers (do not invent names)
@@ -297,6 +349,9 @@ def evaluate_one_stock(
     kline_fn=None,
     compute_fn=None,
     days: int = SCREENER_KLINE_DAYS,
+    snapshot_id: str | None = None,
+    cutoff: str | None = None,
+    snapshot_unavailable: bool = False,
 ) -> dict:
     """Evaluate a single code. Isolates all exceptions into unavailable."""
     compute_fn = compute_fn or ti.compute_indicators
@@ -305,16 +360,21 @@ def evaluate_one_stock(
 
     try:
         try:
-            if kline_fn is not None:
+            if snapshot_unavailable:
+                research_data = rdp.build_unavailable_envelope("Research Runtime 批次快照不可用")
+                raw_klines = []
+            elif kline_fn is not None:
                 raw_klines = kline_fn(code, days)
                 research_data = _injected_data_envelope()
             else:
-                raw_klines, research_data = _research_bars(code, days)
+                raw_klines, research_data = _research_bars(code, days, snapshot_id=snapshot_id, cutoff=cutoff)
         except Exception as exc:
             research_data = rdp.build_unavailable_envelope(f"Research Runtime 查询失败: {exc}")
             raw_klines = []
         if research_data is None:
             research_data = rdp.build_unavailable_envelope("Research Runtime provenance unavailable")
+
+        research_data = {**research_data, "_screener_sample": _sample_coverage(raw_klines, research_data, cutoff)}
 
         if research_data.get("status") != "normal":
             return _unavailable_stock(
@@ -431,6 +491,11 @@ def _top_status(stocks: list[dict]) -> str:
     return "normal"
 
 
+def _pin_research_snapshot() -> tuple[str, str]:
+    manifest = rdp.read_manifest()
+    return manifest["snapshot_id"], manifest["coverage_end"]
+
+
 def evaluate_screener(
     body: ScreenerEvaluateIn,
     *,
@@ -444,12 +509,21 @@ def evaluate_screener(
     conditions = list(body.conditions)
     evaluated_at = now_iso or _utc_now_iso()
 
+    snapshot_id = cutoff = None
+    snapshot_unavailable = False
+    if kline_fn is None:
+        try:
+            snapshot_id, cutoff = _pin_research_snapshot()
+        except Exception:
+            snapshot_unavailable = True
+
     results: dict[str, dict] = {}
     workers = max(1, min(max_workers, len(codes)))
 
     if len(codes) == 1:
         results[codes[0]] = evaluate_one_stock(
-            codes[0], conditions, kline_fn=kline_fn, compute_fn=compute_fn
+            codes[0], conditions, kline_fn=kline_fn, compute_fn=compute_fn,
+            snapshot_id=snapshot_id, cutoff=cutoff, snapshot_unavailable=snapshot_unavailable
         )
     else:
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -460,6 +534,7 @@ def evaluate_screener(
                     conditions,
                     kline_fn=kline_fn,
                     compute_fn=compute_fn,
+                    snapshot_id=snapshot_id, cutoff=cutoff, snapshot_unavailable=snapshot_unavailable,
                 ): code
                 for code in codes
             }
@@ -490,7 +565,8 @@ def evaluate_screener(
     research_data = _research_data_for(stocks)
 
     def public_stock(stock: dict[str, Any]) -> dict[str, Any]:
-        return {key: value for key, value in stock.items() if key != "research_data"}
+        return {**{key: value for key, value in stock.items() if key != "research_data"},
+                "data_coverage": _stock_coverage(stock)}
 
     return {
         "status": _top_status(stocks),
@@ -500,6 +576,7 @@ def evaluate_screener(
         "rejected": [public_stock(stock) for stock in rejected],
         "unavailable": [public_stock(stock) for stock in unavailable],
         "research_data": research_data,
+        "batch_coverage": _batch_coverage(stocks),
         "limitations": [],
         "schema_version": SCHEMA_VERSION,
     }

@@ -115,9 +115,55 @@ try {
     const providerLabel = time => new Date(time).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) + ' 北京时间';
     const oldProviderLabel = providerLabel(defaultQuotes['000001'].data_time);
     const recentProviderLabel = providerLabel(defaultQuotes['600519'].data_time);
+    const checkStatusLayout = async () => {
+      const geometry = await page.getByTestId('quote-refresh-layout').evaluate(group => {
+        const metadata = group.querySelector('[data-testid="quote-provenance"]');
+        const button = group.querySelector('button[aria-label="刷新行情与异动"]');
+        const box = element => {
+          const r = element.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height,
+            scrollWidth: element.scrollWidth, clientWidth: element.clientWidth };
+        };
+        return {
+          viewport: innerWidth, documentWidth: document.documentElement.scrollWidth,
+          group: box(group), metadata: box(metadata), button: box(button),
+          display: getComputedStyle(metadata).display, wrap: getComputedStyle(metadata).flexWrap,
+          items: [...metadata.querySelectorAll('.quote-status-item')].map(item => ({ ...box(item), error: item.classList.contains('quote-status-error') })),
+          labels: [...metadata.querySelectorAll('.quote-status-label')].map(label => getComputedStyle(label).display),
+        };
+      });
+      assert.ok(geometry.documentWidth <= geometry.viewport + 1, 'Watchlist must not overflow horizontally');
+      assert.ok(geometry.group.left >= -1 && geometry.group.right <= geometry.viewport + 1, 'status group remains within viewport');
+      assert.ok(geometry.button.width >= 44 && geometry.button.height >= 44, 'refresh target remains at least 44 by 44');
+      assert.ok(geometry.metadata.right <= geometry.button.left - 8, 'refresh has a separate nonoverlapping column');
+      assert.ok(geometry.items.length >= 5, 'all quote provenance fields are inspected');
+      for (const item of geometry.items) {
+        assert.ok(item.left >= geometry.metadata.left - 1 && item.right <= geometry.metadata.right + 1, 'status block remains inside metadata');
+        assert.ok(item.scrollWidth <= item.clientWidth + 1, 'status text is not horizontally clipped');
+      }
+      if (width === 390) {
+        assert.equal(geometry.display, 'grid');
+        assert.ok(geometry.labels.every(display => display === 'block'), 'mobile source/receipt labels stack over values');
+        for (const [index, item] of geometry.items.entries()) {
+          assert.ok(item.width >= 180 && item.width >= geometry.metadata.width - 1, 'mobile status uses a readable full-width block, not a narrow vertical strip');
+          assert.ok(item.height <= 100, 'fixture status text must not become a tall character column');
+          if (index) assert.ok(item.top >= geometry.items[index - 1].bottom + 4, 'mobile status blocks stack without overlap');
+        }
+      } else {
+        assert.equal(geometry.display, 'flex'); assert.equal(geometry.wrap, 'wrap');
+        assert.ok(geometry.labels.every(display => display === 'inline'), 'desktop labels stay compact');
+        const regular = geometry.items.filter(item => !item.error);
+        assert.ok(regular.some((item, index) => regular.slice(index + 1).some(next => Math.abs(item.top - next.top) < 1)), 'desktop status shares rows rather than becoming a mobile-only column');
+      }
+      return geometry;
+    };
     const checkpoint = async name => {
+      // The SPA cleanup checkpoint intentionally has no Watchlist. Every other
+      // actual-app checkpoint must satisfy both semantics above and geometry here.
+      const layout = name === 'spa-unmount-pending-cleanup' ? null : await checkStatusLayout();
       await page.screenshot({ path: join(output, `${width}-${name}.png`), fullPage: true });
-      results.cases.push({ width, name, quoteRequests: requests.length, timers: await page.evaluate(() => window.__quoteAcceptance.timers()) }); record();
+      if (layout) await page.getByTestId('quote-refresh-layout').screenshot({ path: join(output, `${width}-${name}-status.png`) });
+      results.cases.push({ width, name, quoteRequests: requests.length, timers: await page.evaluate(() => window.__quoteAcceptance.timers()), layout }); record();
     };
     try {
       await page.goto(`${origin}/watchlist`, { waitUntil: 'domcontentloaded' });

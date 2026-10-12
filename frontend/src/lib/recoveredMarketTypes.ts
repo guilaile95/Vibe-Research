@@ -61,11 +61,32 @@ export type ScreenerConditionResult = {
   evidence: Record<string, unknown>;
 };
 
+export type ScreenerStockCoverage = {
+  status: "available" | "empty" | "unavailable";
+  returned_rows: number | null;
+  start: string | null;
+  end: string | null;
+  snapshot_id: string | null;
+  artifact_sha256: string | null;
+  cutoff: string | null;
+};
+
+export type ScreenerBatchCoverage = {
+  requested_count: number;
+  with_data_count: number;
+  empty_count: number;
+  failed_count: number;
+  fully_evaluable_count: number;
+  missing_condition_count: number;
+  unavailable_count: number;
+};
+
 export type ScreenerStockResult = {
   code: string;
   bucket: "matched" | "rejected" | "unavailable" | string;
   matched: boolean | null;
   technical_status: string;
+  data_coverage?: ScreenerStockCoverage;
   trade_date: string | null;
   condition_results: ScreenerConditionResult[];
   limitations: string[];
@@ -90,7 +111,7 @@ export type ScreenerResearchData = {
   dataset_id: string;
   provider_id: string;
   adjustment: string;
-  status: "normal" | "unavailable";
+  status: "normal" | "partial" | "unavailable";
   fetched_at: string | null;
   as_of: string | null;
   coverage: ScreenerResearchCoverage | null;
@@ -106,6 +127,7 @@ export type ScreenerEvaluateResult = {
   rejected: ScreenerStockResult[];
   unavailable: ScreenerStockResult[];
   research_data: ScreenerResearchData;
+  batch_coverage?: ScreenerBatchCoverage;
   limitations: string[];
   schema_version: string;
 };

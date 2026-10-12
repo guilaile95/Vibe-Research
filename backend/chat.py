@@ -316,6 +316,20 @@ def _check_base_url(url: str) -> None:
                 raise RuntimeError("Base URL 解析到了不允许的内网地址")
 
 
+def _reject_model_redirect(response, *args, **kwargs):
+    """Reject at headers, before Requests drains or prepares a redirect body.
+
+    allow_redirects=False alone still lets Session prepare response.next by
+    consuming the redirect body. The response hook runs before that handling.
+    """
+    if 300 <= response.status_code < 400:
+        try:
+            response.close()
+        finally:
+            raise ModelTransportError("模型接口返回跳转，请配置最终 API 地址") from None
+    return response
+
+
 def _call_llm(cfg: dict, messages: list, use_tools: bool) -> dict:
     _check_base_url(cfg.get("baseURL", ""))
     base = cfg["baseURL"].rstrip("/")
@@ -331,6 +345,8 @@ def _call_llm(cfg: dict, messages: list, use_tools: bool) -> dict:
         headers=_request_headers(cfg),
         json=payload,
         timeout=90,
+        allow_redirects=False,
+        hooks={"response": _reject_model_redirect},
     )
     if r.status_code != 200:
         r.close()
@@ -410,6 +426,8 @@ def _call_llm_stream(cfg: dict, messages: list, use_tools: bool):
         r = requests.post(
             request.pop("url"), **request,
             timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT), stream=True,
+            allow_redirects=False,
+            hooks={"response": _reject_model_redirect},
         )
     except requests.Timeout as exc:
         _check_active(cfg)

@@ -19,6 +19,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
 const backendDir = path.join(root, "backend");
 const frontendDist = path.join(root, "frontend", "dist");
+const browserForbidden = [];
+const backendGuardLogs = [];
 const screenshotDir = process.env.E2E_SCREENSHOT_DIR || path.join(root, "docs", "screenshots", "full-market-source-to-sink");
 
 function sleep(ms) {
@@ -101,6 +103,15 @@ function startStaticServer(dir, port, backendPort, { apiRoute } = {}) {
       return;
     }
     res.setHeader("Content-Type", mime[path.extname(target)] || "application/octet-stream");
+    if (path.extname(target) === ".html") {
+      // Browser request routes cannot observe speculative DNS/preconnect sockets.
+      // Strip only resource hints in this test server; the exact font stylesheet
+      // is separately fulfilled locally by the browser guard.
+      void readFile(target, "utf8").then(html => {
+        res.end(html.replace(/<link\b(?=[^>]*\brel=["'](?:preconnect|dns-prefetch)["'])[^>]*>/gi, ""));
+      }).catch(() => { res.writeHead(500); res.end("fixture HTML read failed"); });
+      return;
+    }
     createReadStream(target).pipe(res);
   });
   return new Promise((resolve, reject) => {
@@ -228,11 +239,23 @@ async function runProcess(command, args, options = {}) {
   });
 }
 
-async function seedRdpFixture() {
+async function seedRdpFixture(kind = "full-market") {
   const tempDir = await mkdtemp(path.join(tmpdir(), "vr-full-market-e2e-"));
-  const csv = path.join(tempDir, "full-market.csv");
+  const csv = path.join(tempDir, `${kind}.csv`);
   const rdpRoot = path.join(tempDir, "research-data-plane");
   const lines = ["code,trade_date,open,high,low,close,volume"];
+  if (kind === "candidate-window") {
+    const start = Date.UTC(2026, 0, 1);
+    for (let index = 0; index < 150; index += 1) {
+      const tradeDate = new Date(start + index * 86400000).toISOString().slice(0, 10);
+      const close = index < 120 ? 10 + index / 10 : 1;
+      lines.push(`000001,${tradeDate},${close},${close + 1},${close - 0.5},${close},${1000 + index}`);
+      if (index < 30) {
+        const other = 20 - index / 10;
+        lines.push(`000003,${tradeDate},${other},${other + 1},${other - 0.5},${other},${1000 + index}`);
+      }
+    }
+  } else {
   const start = Date.UTC(2026, 0, 2);
   for (let index = 0; index < 65; index += 1) {
     const tradeDate = new Date(start + index * 86400000).toISOString().slice(0, 10);
@@ -242,6 +265,7 @@ async function seedRdpFixture() {
     }
   }
   lines.push("600519,2026-03-07,12,13,11,12,300");
+  }
   await writeFile(csv, `${lines.join("\n")}\n`, "utf8");
   const python = resolvePython();
   await runProcess(python.command, [...python.prefix, "-m", "research_data_plane", "import-csv", csv, "--root", rdpRoot], {
@@ -255,11 +279,15 @@ async function seedRdpFixture() {
 async function startBackend(rdpRoot, tempDir) {
   const port = await getFreePort();
   const python = resolvePython();
-  const child = spawn(python.command, [...python.prefix, "-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", String(port)], {
+  const networkLog = path.join(tempDir, `network-guard-${port}.json`);
+  backendGuardLogs.push(networkLog);
+  const child = spawn(python.command, [...python.prefix, "-m", "uvicorn", "screener_offline_harness_app:app", "--loop", "asyncio", "--host", "127.0.0.1", "--port", String(port)], {
     cwd: backendDir,
     env: {
       ...process.env,
-      PYTHONPATH: backendDir,
+      PYTHONPATH: [__dirname, backendDir].join(path.delimiter),
+      VR_SCREENER_NETWORK_LOG: networkLog,
+      VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH: "1",
       VR_DATA_DIR: tempDir,
       VR_REPORTS_DIR: path.join(tempDir, "reports"),
       VIBE_RESEARCH_RESEARCH_DATA_DIR: rdpRoot,
@@ -307,6 +335,41 @@ async function launchBrowser() {
   }
 }
 
+async function newOfflinePage(browser, origin) {
+  const context = await browser.newContext({ serviceWorkers: "block" });
+  await context.routeWebSocket("**/*", socket => {
+    browserForbidden.push(`WebSocket ${socket.url()}`);
+    socket.close();
+  });
+  await context.route("**/*", route => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === "GET" && request.resourceType() === "stylesheet"
+      && url.href === "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap") {
+      return route.fulfill({ contentType: "text/css", body: "/* Offline system font fallback. */" });
+    }
+    if (url.origin !== origin) {
+      browserForbidden.push(`HTTP ${url.origin}`);
+      return route.abort();
+    }
+    return route.continue();
+  });
+  return context.newPage();
+}
+
+async function assertOfflineAudit() {
+  const backendAttempts = [];
+  for (const log of backendGuardLogs) {
+    const attempts = JSON.parse(await readFile(log, "utf8"));
+    if (!Array.isArray(attempts)) throw new Error("Backend network guard receipt is invalid");
+    backendAttempts.push(...attempts);
+  }
+  const result = { browserForbidden, backendAttempts, guardedBackends: backendGuardLogs.length };
+  await writeFile(path.join(screenshotDir, "network-audit.json"), JSON.stringify(result, null, 2));
+  if (browserForbidden.length || backendAttempts.length) throw new Error(`Offline guard violations: ${JSON.stringify(result)}`);
+  console.log(`[E2E] Offline audit: ${backendGuardLogs.length} guarded backends; zero forbidden browser/backend network attempts`);
+}
+
 async function assertVisible(locator, label) {
   if (!(await locator.isVisible().catch(() => false))) throw new Error(`missing visible ${label}`);
 }
@@ -316,7 +379,7 @@ async function runNormalScenario(browser, fixture) {
   const frontendPort = await getFreePort();
   const staticServer = await startStaticServer(frontendDist, frontendPort, backend.port);
   const baseUrl = `http://127.0.0.1:${frontendPort}`;
-  const page = await browser.newPage();
+  const page = await newOfflinePage(browser, baseUrl);
   const apiRequests = [];
   const consoleErrors = [];
   page.on("request", (request) => {
@@ -327,7 +390,8 @@ async function runNormalScenario(browser, fixture) {
   });
   page.on("pageerror", (error) => consoleErrors.push(`pageerror: ${error.message}`));
   try {
-    await page.goto(`${baseUrl}/screener`, { waitUntil: "domcontentloaded" });
+    // Avoid the default live-provider Discovery tab; these scenarios use local RDP only.
+    await page.goto(`${baseUrl}/screener?mode=candidate`, { waitUntil: "domcontentloaded" });
     await page.getByTestId("full-market-tab").waitFor({ state: "visible" });
     await assertVisible(page.getByRole("tab", { name: "全市场筛选", exact: true }), "Full Market tab on /screener");
     await page.screenshot({ path: path.join(screenshotDir, "normal-01-screener.png"), fullPage: true });
@@ -426,10 +490,14 @@ async function runNormalScenario(browser, fixture) {
     await page.setViewportSize({ width: 1280, height: 720 });
     console.log(`[E2E] AND conditions=2 rows=${combined.total_rows}; candidate=/candidates/000001; url=${baseUrl}/screener`);
 
-    await page.getByRole("link", { name: "000001" }).click();
-    await page.waitForURL(`${baseUrl}/stock-data?code=000001`);
-    if (page.url() !== `${baseUrl}/stock-data?code=000001`) throw new Error(`code link URL mismatch: ${page.url()}`);
-    await page.screenshot({ path: path.join(screenshotDir, "normal-04-stock-data-code-000001.png"), fullPage: true });
+    // Keep this vertical within local RDP. Loading StockData would start unrelated
+    // live-source reads. This assertion covers the handoff href only; destination
+    // query/Back/Forward behavior has separate qa-stock-navigation.browser.mjs
+    // coverage, and stock-data-panel.smoke.browser.mjs runs in the existing CI job.
+    if (await page.getByRole("link", { name: "000001" }).getAttribute("href") !== "/stock-data?code=000001") {
+      throw new Error("code link handoff href mismatch");
+    }
+    await page.screenshot({ path: path.join(screenshotDir, "normal-04-stock-data-handoff-link.png"), fullPage: true });
     if (consoleErrors.length) throw new Error(`browser console errors: ${consoleErrors.join(" | ")}`);
     return { payload, requestUrl: response.url() };
   } finally {
@@ -445,9 +513,10 @@ async function runFailureClearsScenario(browser, fixture) {
   const frontendPort = await getFreePort();
   const staticServer = await startStaticServer(frontendDist, frontendPort, backend.port, timing);
   const baseUrl = `http://127.0.0.1:${frontendPort}`;
-  const page = await browser.newPage();
+  const page = await newOfflinePage(browser, baseUrl);
   try {
-    await page.goto(`${baseUrl}/screener`, { waitUntil: "domcontentloaded" });
+    // Avoid the default live-provider Discovery tab; these scenarios use local RDP only.
+    await page.goto(`${baseUrl}/screener?mode=candidate`, { waitUntil: "domcontentloaded" });
     await page.getByTestId("full-market-tab").waitFor({ state: "visible" });
     await page.getByTestId("full-market-tab").click();
 
@@ -507,9 +576,10 @@ async function runModeSwitchScenario(browser, fixture) {
   const frontendPort = await getFreePort();
   const staticServer = await startStaticServer(frontendDist, frontendPort, backend.port, timing);
   const baseUrl = `http://127.0.0.1:${frontendPort}`;
-  const page = await browser.newPage();
+  const page = await newOfflinePage(browser, baseUrl);
   try {
-    await page.goto(`${baseUrl}/screener`, { waitUntil: "domcontentloaded" });
+    // Avoid the default live-provider Discovery tab; these scenarios use local RDP only.
+    await page.goto(`${baseUrl}/screener?mode=candidate`, { waitUntil: "domcontentloaded" });
     await page.getByTestId("full-market-tab").waitFor({ state: "visible" });
     await page.getByTestId("full-market-tab").click();
     await page.getByTestId("run-full-market").click();
@@ -555,10 +625,11 @@ async function runUnavailableScenario(browser, rdpRoot, tempDir, kind, expectedR
   const frontendPort = await getFreePort();
   const staticServer = await startStaticServer(frontendDist, frontendPort, backend.port);
   const baseUrl = `http://127.0.0.1:${frontendPort}`;
-  const page = await browser.newPage();
+  const page = await newOfflinePage(browser, baseUrl);
   const prefix = kind === "corrupt" ? "corrupt" : "unavailable";
   try {
-    await page.goto(`${baseUrl}/screener`, { waitUntil: "domcontentloaded" });
+    // Avoid the default live-provider Discovery tab; these scenarios use local RDP only.
+    await page.goto(`${baseUrl}/screener?mode=candidate`, { waitUntil: "domcontentloaded" });
     await page.getByTestId("full-market-tab").waitFor({ state: "visible" });
     await page.screenshot({ path: path.join(screenshotDir, `${prefix}-01-screener.png`), fullPage: true });
     await page.getByTestId("full-market-tab").click();
@@ -594,12 +665,97 @@ async function runUnavailableScenario(browser, rdpRoot, tempDir, kind, expectedR
   }
 }
 
+async function runCandidateCoverageScenario(browser, fixture) {
+  const backend = await startBackend(fixture.rdpRoot, fixture.tempDir);
+  const frontendPort = await getFreePort();
+  const staticServer = await startStaticServer(frontendDist, frontendPort, backend.port);
+  const baseUrl = `http://127.0.0.1:${frontendPort}`;
+  const page = await newOfflinePage(browser, baseUrl);
+  const mutations = [];
+  const errors = [];
+  page.on("request", request => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname.startsWith("/api/") && !["GET", "HEAD", "OPTIONS"].includes(request.method())
+      && !(pathname === "/api/screener/evaluate" && request.method() === "POST")) {
+      mutations.push(`${request.method()} ${pathname}`);
+    }
+  });
+  page.on("pageerror", error => errors.push(error.message));
+  const submit = async (codes) => {
+    await page.getByPlaceholder("000001 600519", { exact: true }).fill(codes);
+    const responsePromise = page.waitForResponse(response => new URL(response.url()).pathname === "/api/screener/evaluate"
+      && response.request().method() === "POST");
+    await page.getByRole("button", { name: "运行筛选", exact: true }).click();
+    const response = await responsePromise;
+    if (response.status() !== 200) throw new Error(`Candidate response ${response.status()}: ${await response.text()}`);
+    await page.getByRole("button", { name: "运行筛选", exact: true }).waitFor({ state: "visible" });
+    return response.json();
+  };
+  const requireText = async (locator, expected) => {
+    await locator.filter({ hasText: expected }).waitFor({ state: "visible" });
+  };
+  try {
+    // Avoid the default live-provider Discovery tab; these scenarios use local RDP only.
+    await page.goto(`${baseUrl}/screener?mode=candidate`, { waitUntil: "domcontentloaded" });
+    await page.getByPlaceholder("000001 600519", { exact: true }).waitFor({ state: "visible" });
+    const source = page.getByTestId("screener-research-source");
+    const batch = page.getByTestId("screener-batch-coverage");
+    const latest = await submit("000001");
+    const row = latest.rejected?.[0];
+    if (latest.matched.length || row?.code !== "000001" || row.trade_date !== "2026-05-30"
+      || row.condition_results[0]?.passed !== false || row.data_coverage?.returned_rows !== 120
+      || row.data_coverage.start !== "2026-01-31" || row.data_coverage.end !== "2026-05-30"
+      || row.data_coverage.artifact_sha256 !== fixture.manifest.artifact_sha256
+      || !/^[0-9a-f]{64}$/.test(row.data_coverage.snapshot_id || "")) {
+      throw new Error(`Candidate must evaluate latest 120, not oldest matching 120: ${JSON.stringify(latest)}`);
+    }
+    await requireText(source, "全部请求已读到样本");
+    await requireText(source, "整份数据集覆盖（非本次请求）");
+    await requireText(source, "180 行 · 2 个代码");
+    await requireText(batch, "本次请求 1 股 · 读到样本 1 股");
+    const detail = page.locator("details").filter({ has: page.getByTestId("screener-candidate-000001") });
+    await detail.locator("summary").press("Enter");
+    await requireText(page.getByTestId("screener-sample-000001"), "本股样本：120 行 · 2026-01-31 至 2026-05-30");
+    await requireText(page.getByTestId("screener-sample-000001"), row.data_coverage.snapshot_id);
+    await requireText(detail, "不通过");
+    await page.screenshot({ path: path.join(screenshotDir, "candidate-01-latest-window.png"), fullPage: true });
+
+    const partial = await submit("000001 000002");
+    if (partial.status !== "partial" || partial.research_data.status !== "partial"
+      || partial.batch_coverage?.requested_count !== 2 || partial.batch_coverage.with_data_count !== 1
+      || partial.batch_coverage.empty_count !== 1 || partial.unavailable[0]?.matched !== null) {
+      throw new Error(`Missing requested code must remain partial/unknown: ${JSON.stringify(partial)}`);
+    }
+    await requireText(source, "部分请求读到样本");
+    await requireText(batch, "本次请求 2 股 · 读到样本 1 股 · 空样本 1 股");
+    await requireText(source, "整份数据集覆盖（非本次请求）");
+    await page.screenshot({ path: path.join(screenshotDir, "candidate-02-partial-coverage.png"), fullPage: true });
+
+    const empty = await submit("000002");
+    if (empty.status !== "unavailable" || empty.research_data.status !== "unavailable"
+      || empty.matched.length || empty.rejected.length || empty.unavailable[0]?.data_coverage?.returned_rows !== 0) {
+      throw new Error(`Absent code must not inherit artifact availability: ${JSON.stringify(empty)}`);
+    }
+    await requireText(source, "请求样本不可用");
+    await requireText(batch, "本次请求 1 股 · 读到样本 0 股 · 空样本 1 股");
+    if (await page.getByTestId("screener-candidate-000001").count()) throw new Error("Previous candidate result remained after rerun");
+    await page.screenshot({ path: path.join(screenshotDir, "candidate-03-unavailable-coverage.png"), fullPage: true });
+    if (mutations.length || errors.length) throw new Error(`Unexpected writes/page errors: ${JSON.stringify({ mutations, errors })}`);
+    console.log("[E2E] Candidate latest120, immutable source, partial/empty coverage and repeated evaluation OK");
+  } finally {
+    await page.close().catch(() => {});
+    await new Promise(resolve => staticServer.close(resolve));
+    await stopProcess(backend.child);
+  }
+}
+
 async function main() {
   if (!existsSync(frontendDist)) throw new Error(`Frontend dist missing: ${frontendDist}; run npm run build first`);
   await mkdir(screenshotDir, { recursive: true });
 
   const normal = await seedRdpFixture();
   const corrupt = await seedRdpFixture();
+  const candidate = await seedRdpFixture("candidate-window");
   const corruptArtifact = path.join(corrupt.rdpRoot, "artifacts", `${corrupt.manifest.artifact_sha256}.parquet`);
   await appendFile(corruptArtifact, Buffer.from("tampered-by-#220-e2e"));
   const missing = await mkdtemp(path.join(tmpdir(), "vr-full-market-missing-e2e-"));
@@ -610,6 +766,7 @@ async function main() {
     console.log(`[E2E] normal result=${result.payload.status} rows=${result.payload.rows.length} artifact=${result.payload.provenance.artifact_sha256}`);
     await runFailureClearsScenario(browser, normal);
     await runModeSwitchScenario(browser, normal);
+    await runCandidateCoverageScenario(browser, candidate);
     await runUnavailableScenario(browser, missing, missing, "unavailable", "research bulk dataset is not configured");
     console.log("[E2E] unavailable fail-closed OK");
     await runUnavailableScenario(browser, corrupt.rdpRoot, corrupt.tempDir, "corrupt", "Full Market 数据校验失败");
@@ -617,8 +774,10 @@ async function main() {
     console.log(`[E2E] Full Market source-to-sink browser vertical OK; screenshots=${screenshotDir}`);
   } finally {
     await browser.close().catch(() => {});
+    await assertOfflineAudit();
     await rm(normal.tempDir, { recursive: true, force: true });
     await rm(corrupt.tempDir, { recursive: true, force: true });
+    await rm(candidate.tempDir, { recursive: true, force: true });
     await rm(missing, { recursive: true, force: true });
   }
 }

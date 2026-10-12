@@ -82,3 +82,39 @@ test('automatic error header discloses backoff instead of promising fixed three-
   const actions=nodes(tree).find(node=>node.props?.title==='自选股')?.props.actions;
   assert.ok(nodes(actions).some(node=>node.props?.title==='关闭自动刷新'));
 });
+
+test('quote status layout stacks readable mobile blocks and wraps compact desktop items', async () => {
+  const h = harness({...quoteState, updatedAt: instant}, true);
+  h.render(); await tick(); const tree = h.render();
+  const all = nodes(tree);
+  const group = all.find(node => node.props?.['data-testid'] === 'quote-refresh-layout');
+  const provenance = nodes(group).find(node => node.props?.['data-testid'] === 'quote-provenance');
+  assert.ok(group); assert.ok(provenance);
+  const items = nodes(provenance).filter(node => node.props?.className?.split(' ').includes('quote-status-item'));
+  assert.equal(items.length, 6, 'error, coverage, polling, session rule, source time and completion remain separate blocks');
+  const error = items.find(node => node.props?.role === 'status');
+  assert.ok(error?.props.className.includes('quote-status-error'));
+  const labels = nodes(provenance).filter(node => node.props?.className === 'quote-status-label');
+  assert.deepEqual(labels.map(text), ['快照覆盖 ', '已显示快照最早行情时间 ', '上次请求完成 ']);
+  const refresh = nodes(group).find(node => node.props?.['aria-label'] === '刷新行情与异动');
+  assert.ok(refresh); assert.equal(nodes(provenance).includes(refresh), false, 'button has its own column outside status blocks');
+  assert.match(refresh.props.className, /min-h-11 min-w-11 shrink-0/);
+  const css = all.filter(node => node.type === 'style').map(text).join('\n');
+  assert.match(css, /\.quote-refresh-layout\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 44px/);
+  assert.match(css, /\.quote-provenance\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/);
+  assert.match(css, /\.quote-status-label\s*\{\s*display:\s*block/);
+  assert.match(css, /@media \(min-width: 768px\)[\s\S]*\.quote-provenance\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap/);
+  assert.match(css, /\.quote-status-item\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%;[^}]*overflow-wrap:\s*anywhere/);
+});
+
+test('separate refresh control retains action and loading accessibility behavior', async () => {
+  let refreshes = 0;
+  for (const loading of [false, true]) {
+    const h = harness({...quoteState, loading, refresh: () => { refreshes++; }});
+    h.render(); await tick(); const tree = h.render();
+    const button = nodes(tree).find(node => node.props?.['aria-label'] === '刷新行情与异动');
+    assert.equal(button.props.disabled, loading);
+    if (!loading) button.props.onClick();
+  }
+  assert.equal(refreshes, 1);
+});

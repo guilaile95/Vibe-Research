@@ -371,7 +371,7 @@ try {
     $env:VR_AGENT_RUNTIME_URL = $AgentRuntimeUrl
 
     $backendEntry = $null
-    if (Test-HttpEndpoint -Uri "$BackendUrl/api/health") {
+    if (Test-HttpEndpoint -Uri "$BackendUrl/api/health" -ExpectedText "vibe-research-api") {
         Write-Host "后端已在运行，直接复用。" -ForegroundColor Green
     }
     else {
@@ -387,7 +387,7 @@ try {
         $ownedProcesses += $backendEntry
         Wait-ForService `
             -Name "后端" `
-            -Probe { Test-HttpEndpoint -Uri "$BackendUrl/api/health" } `
+            -Probe { Test-HttpEndpoint -Uri "$BackendUrl/api/health" -ExpectedText "vibe-research-api" } `
             -Process $backendEntry.Process
     }
 
