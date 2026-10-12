@@ -92,7 +92,9 @@ test("actual editor JSX recovers malformed GET and locks uncertain PUT without w
     const mode={pattern_id:"c".repeat(32),revision:1,content:{name:"Synthetic mode",setup:"Synthetic setup",entry_rule:"Synthetic entry",exit_rule:"Synthetic exit",invalidation:"Synthetic invalidation"},saved_at:"2026-07-28T00:00:00Z",effective_from:"2026-07-29",effective_rule:"NEXT_SHANGHAI_CALENDAR_DAY",effective_until:null,statistics:zero};
     state.queue.push({...valid,patterns:[mode]});tree();state.effects[0]();await drain();
     element=tree();const modeDetails=nodes(element).find(n=>n.type==="details"&&nodes(n).some(c=>c.type==="summary"&&c.props.children==="模式卡 · 版本历史与复用"));
-    assert.ok(modeDetails);assert.equal(modeDetails.props.open,undefined,"fresh readback recreates an ordinary closed disclosure");
+    assert.ok(modeDetails);assert.equal(nodes(element).filter(n=>n.type==="summary"&&n.props.children==="模式卡 · 版本历史与复用").length,1);
+    assert.equal([modeDetails.props.children].flat(Infinity).filter(n=>n?.type==="summary"&&n.props.children==="模式卡 · 版本历史与复用").length,1,"the unique ordinary summary is a direct child of its disclosure");
+    assert.equal(modeDetails.props.open,undefined,"fresh readback recreates an ordinary closed disclosure");
     assert.match(renderToStaticMarkup(modeDetails),/<h3>Synthetic mode v1<\/h3>/);
     nodes(modeDetails).find(n=>n.type==="button"&&n.props.children==="复制为新模式草稿").props.onClick();
     element=tree();assert.equal(nodes(element).find(n=>n.type==="textarea"&&n.props.id.endsWith("-name")).props.value,"Synthetic mode（副本）");

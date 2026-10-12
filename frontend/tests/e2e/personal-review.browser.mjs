@@ -91,7 +91,7 @@ try {
     await Promise.all([patternReads,patternWrite,overview.getByRole("button",{name:"发布新版本到本地"}).click()]);
     const savedMode = overview.getByRole("heading",{name:"Synthetic mode v1",exact:true,includeHidden:true});
     await savedMode.waitFor({state:"attached",timeout:10000});
-    const modeDisclosure = overview.locator("details").filter({has:overview.getByText("模式卡 · 版本历史与复用",{exact:true})});
+    const modeDisclosure = overview.locator("details").filter({has:page.getByText("模式卡 · 版本历史与复用",{exact:true})});
     if (!await modeDisclosure.evaluate(element => element.open)) await modeDisclosure.locator(":scope > summary").click();
     await overview.getByRole("heading",{name:"Synthetic mode v1",exact:true}).waitFor();
     await overview.getByRole("button",{name:"复制为新模式草稿"}).click();
