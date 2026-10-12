@@ -374,6 +374,17 @@ async function assertVisible(locator, label) {
   if (!(await locator.isVisible().catch(() => false))) throw new Error(`missing visible ${label}`);
 }
 
+async function captureScenarioFailure(page, label, error) {
+  // Diagnostic failures must not hide the assertion or skip the offline audit.
+  await Promise.allSettled([
+    page.screenshot({ path: path.join(screenshotDir, `${label}-failure.png`), fullPage: true }),
+    page.locator("body").innerText().then(text => writeFile(
+      path.join(screenshotDir, `${label}-failure.json`),
+      JSON.stringify({ error: String(error?.message || error), url: page.url(), text }, null, 2),
+    )),
+  ]);
+}
+
 async function runNormalScenario(browser, fixture) {
   const backend = await startBackend(fixture.rdpRoot, fixture.tempDir);
   const frontendPort = await getFreePort();
@@ -452,7 +463,7 @@ async function runNormalScenario(browser, fixture) {
 
     await page.getByTestId("full-market-summary").waitFor({ state: "visible" });
     const summaryText = await page.getByTestId("full-market-summary").innerText();
-    for (const expected of ["全市场筛选数据", "可用", "2026-01-02", "2026-03-07", "131 行", "3 个代码", "当前横截面 3 个代码", "full-market.csv", fixture.manifest.artifact_sha256]) {
+    for (const expected of ["全市场筛选数据", "可用", "2026-01-02", "2026-03-07", "131 行", "3 个代码", "横截面 3 个代码", "当期 3 · 过期 0", "full-market.csv", fixture.manifest.artifact_sha256]) {
       if (!summaryText.includes(expected)) throw new Error(`normal summary missing ${expected}`);
     }
     await assertVisible(page.getByTestId("full-market-results"), "normal Full Market results");
@@ -500,6 +511,9 @@ async function runNormalScenario(browser, fixture) {
     await page.screenshot({ path: path.join(screenshotDir, "normal-04-stock-data-handoff-link.png"), fullPage: true });
     if (consoleErrors.length) throw new Error(`browser console errors: ${consoleErrors.join(" | ")}`);
     return { payload, requestUrl: response.url() };
+  } catch (error) {
+    await captureScenarioFailure(page, "normal", error);
+    throw error;
   } finally {
     await page.close().catch(() => {});
     await new Promise((resolve) => staticServer.close(resolve));
@@ -562,6 +576,9 @@ async function runFailureClearsScenario(browser, fixture) {
       throw new Error("failed Full Market query re-rendered the old result table");
     }
     console.log("[E2E] Full Market success -> failure clears stale rows immediately OK");
+  } catch (error) {
+    await captureScenarioFailure(page, "failure-clears", error);
+    throw error;
   } finally {
     timing.release();
     await page.close().catch(() => {});
@@ -612,6 +629,9 @@ async function runModeSwitchScenario(browser, fixture) {
       throw new Error("late Full Market response changed the reset loading state");
     }
     console.log("[E2E] Full Market pending -> Candidate Pool resets loading and blocks stale response OK");
+  } catch (error) {
+    await captureScenarioFailure(page, "mode-switch", error);
+    throw error;
   } finally {
     timing.release();
     await page.close().catch(() => {});
@@ -658,6 +678,9 @@ async function runUnavailableScenario(browser, rdpRoot, tempDir, kind, expectedR
     }
     if (await page.getByRole("link", { name: "000001" }).count()) throw new Error(`${kind} rendered a result link`);
     await page.screenshot({ path: path.join(screenshotDir, `${prefix}-03-unavailable.png`), fullPage: true });
+  } catch (error) {
+    await captureScenarioFailure(page, kind, error);
+    throw error;
   } finally {
     await page.close().catch(() => {});
     await new Promise((resolve) => staticServer.close(resolve));
@@ -742,6 +765,9 @@ async function runCandidateCoverageScenario(browser, fixture) {
     await page.screenshot({ path: path.join(screenshotDir, "candidate-03-unavailable-coverage.png"), fullPage: true });
     if (mutations.length || errors.length) throw new Error(`Unexpected writes/page errors: ${JSON.stringify({ mutations, errors })}`);
     console.log("[E2E] Candidate latest120, immutable source, partial/empty coverage and repeated evaluation OK");
+  } catch (error) {
+    await captureScenarioFailure(page, "candidate", error);
+    throw error;
   } finally {
     await page.close().catch(() => {});
     await new Promise(resolve => staticServer.close(resolve));
