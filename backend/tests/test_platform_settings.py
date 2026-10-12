@@ -163,7 +163,7 @@ def test_http_failures_no_redirect(status, expected):
     assert ps.check_update(client_factory=transport(status=status, headers={"location": "https://evil.invalid/"}), now=NOW)["status"] == expected
 
 
-@pytest.mark.parametrize("body,headers", [(b"x" * (ps.MAX_BODY + 1), {}), (b"not json PRIVATE_FIXTURE", {}), ([], {}), (RELEASE, {"content-encoding": "gzip"})])
+@pytest.mark.parametrize("body,headers", [(b"x" * (ps.MAX_BODY + 1), {}), (b"not json PRIVATE_FIXTURE", {}), ([], {}), (RELEASE, {"content-encoding": "gzip"})], ids=["oversized-body", "invalid-json", "invalid-envelope", "compressed-body"])
 def test_response_byte_cap_and_shape(body, headers):
     out = ps.check_update(client_factory=transport(body, headers=headers), now=NOW)
     assert out["status"] == "unavailable" and "PRIVATE_FIXTURE" not in str(out)

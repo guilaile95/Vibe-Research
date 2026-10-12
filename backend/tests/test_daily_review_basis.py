@@ -59,7 +59,7 @@ def test_malformed_basis_rejected(mutate):
     with pytest.raises(ValueError): validate(b, r)
 
 
-@pytest.mark.parametrize("text", ["{}", "[]", '{"schema_version":1,"schema_version":2}', '{"n":NaN}', "[" * 40 + "0" + "]" * 40, "x" * (basis.MAX_CONTEXT_BYTES + 1)])
+@pytest.mark.parametrize("text", ["{}", "[]", '{"schema_version":1,"schema_version":2}', '{"n":NaN}', "[" * 40 + "0" + "]" * 40, "x" * (basis.MAX_CONTEXT_BYTES + 1)], ids=["empty-object", "array", "duplicate-schema", "nonfinite", "deep-nesting", "oversized-context"])
 def test_invalid_or_oversized_context_fails(text):
     with pytest.raises(ValueError): basis.capture_basis(text, review())
 
