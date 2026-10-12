@@ -113,3 +113,46 @@ test("dedicated offline CI harness exits build-only before server or browser and
   assert.match(ci, /tests\/e2e\/cohort-identity\.browser\.mjs/);
   assert.match(ci, /name: cohort-identity-evidence/);
 });
+
+test("loading readiness awaits committed render after request admission and fails if old members remain", async () => {
+  const { waitForCohortLoading } = await import("./e2e/cohort-identity-readiness.mjs");
+  let commit, cleared = false;
+  const render = new Promise(resolve => { commit = () => { cleared = true; resolve(); }; });
+  const steps = [];
+  const card = { getByText(text, options) {
+    assert.equal(text, "正在读取两日名单…"); assert.deepEqual(options, { exact: true });
+    return { async waitFor(options) { assert.deepEqual(options, { state: "visible", timeout: 10000 }); steps.push("loading-wait"); await render; } };
+  } };
+  const table = { async waitFor(options) { assert.deepEqual(options, { state: "detached", timeout: 10000 }); assert.equal(cleared, true); steps.push("detached"); } };
+  let done = false;
+  const pending = waitForCohortLoading(card, table).then(() => { done = true; });
+  await Promise.resolve(); assert.equal(done, false); assert.deepEqual(steps, ["loading-wait"]);
+  commit(); await pending; assert.deepEqual(steps, ["loading-wait", "detached"]);
+  const stuckTable = { async waitFor() { throw Error("old members still attached"); } };
+  await assert.rejects(waitForCohortLoading(card, stuckTable), /old members still attached/);
+  const noLoading = { getByText() { return { async waitFor() { throw Error("loading never committed"); } }; } };
+  await assert.rejects(waitForCohortLoading(noLoading, table), /loading never committed/);
+});
+
+test("member readiness cannot accept an old date table and diagnostics precede gate release", async () => {
+  const { waitForCohortMembers } = await import("./e2e/cohort-identity-readiness.mjs");
+  const calls = [];
+  const card = { getByText(text, options) {
+    calls.push(text); assert.deepEqual(options, { exact: true });
+    return { async waitFor(options) { assert.deepEqual(options, { state: "visible", timeout: 10000 }); throw Error("selected pair absent"); } };
+  } };
+  await assert.rejects(waitForCohortMembers(card, { async waitFor() { calls.push("table"); } }, "2026-07-30", "2026-07-29"), /selected pair absent/);
+  assert.deepEqual(calls, ["前一交易日 2026-07-29 → 所选交易日 2026-07-30"]);
+  const source = readFileSync(new URL("./e2e/cohort-identity.browser.mjs", import.meta.url), "utf8");
+  const started = source.indexOf("await bounded(late.started.promise)");
+  const loading = source.indexOf("await waitForCohortLoading(card, table)", started);
+  const absent = source.indexOf('assert.equal(await table.count(), 0, "a pending reread hides old members")', loading);
+  const nextDate = source.indexOf('await page.getByRole("button", { name: dayB, exact: true }).click()', absent);
+  const release = source.indexOf("late.gate.release()", absent);
+  assert.ok(started >= 0 && loading > started && absent > loading && nextDate > absent && release > nextDate);
+  assert.ok(source.includes('"pending state still belongs to the held date"'));
+  assert.ok(!source.includes("await table.waitFor()"));
+  assert.ok(source.indexOf('`failure-${activeWidth}.html`') < source.indexOf("for (const gate of gates) gate.release()"));
+  assert.ok(source.includes('`failure-${activeWidth}.png`'));
+  assert.ok(source.includes("diagnostics.capture_errors.push"));
+});

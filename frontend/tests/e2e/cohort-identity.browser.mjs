@@ -13,6 +13,8 @@ import { chromium } from "playwright";
 import { COHORT_DAY_A as dayA, COHORT_DAY_B as dayB, COHORT_CLOCK, cohortReply,
   validCohortQuery, validCohortStaticRequest, observeCohortReads } from "./cohort-identity.fixture.mjs";
 
+import { waitForCohortLoading, waitForCohortMembers } from "./cohort-identity-readiness.mjs";
+
 const frontend = fileURLToPath(new URL("../../", import.meta.url));
 const output = process.env.COHORT_IDENTITY_BROWSER_OUTPUT_DIR || mkdtempSync(join(tmpdir(), "cohort-identity-dom-"));
 mkdirSync(output, { recursive: true });
@@ -55,7 +57,8 @@ const bounded = async promise => {
   finally { clearTimeout(timer); }
 };
 const results = [];
-let browser, status = "FAIL";
+let browser, activePage, activeWidth, phase = "startup", status = "FAIL";
+const diagnostics = { failure: null, capture_errors: [] };
 try {
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
@@ -84,13 +87,14 @@ try {
       }
       return route.fulfill({ json: { data: reply } });
     });
-    const page = await context.newPage(); page.setDefaultTimeout(10000);
+    const page = await context.newPage(); activePage = page; activeWidth = width; phase = "initial members"; page.setDefaultTimeout(10000);
     page.on("pageerror", error => audit.errors.push(error.message));
     page.on("console", message => { if (message.type() === "error") audit.errors.push(message.text()); });
     await page.clock.setFixedTime(new Date(COHORT_CLOCK));
     await page.goto(origin);
     const card = page.getByTestId("cohort-identity-card");
     const table = card.getByTestId("cohort-members-table");
+    const readyMembers = day => waitForCohortMembers(card, table, day, cohortReply(day).previous_trade_date);
     const retry = card.getByRole("button", { name: "重新读取归档", exact: true });
     const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const rejectedRead = async action => {
@@ -101,7 +105,7 @@ try {
       await card.getByRole("alert").waitFor();
       assert.equal(await table.count(), 0);
     };
-    await table.waitFor();
+    await readyMembers(dayA);
     assert.equal(await table.locator("tbody tr").count(), 2);
     await table.getByText("今日所选名单未出现", { exact: true }).waitFor();
     const absentRow = table.locator("tbody tr").filter({ hasText: "000001" });
@@ -114,6 +118,8 @@ try {
     assert.ok((await card.innerText()).includes(dayB));
     results.push({ width, check: "individual source members, absent is not zero, two-date provenance and post-hoc scope" });
 
+    await card.screenshot({ path: join(output, `cohort-initial-${width}.png`) });
+    phase = "missing archive";
     mode = "unavailable";
     await retry.click();
     await card.getByText("缺少完整的两日名单归档，无法进行对照", { exact: true }).waitFor();
@@ -121,31 +127,40 @@ try {
     assert.equal(await card.getByText("今日所选名单未出现", { exact: true }).count(), 0);
     results.push({ width, check: "missing archive is unknown with no fabricated absence rows" });
 
+    phase = "wrong date";
     mode = "wrong-date";
     await rejectedRead(() => page.getByRole("button", { name: dayB, exact: true }).click());
     results.push({ width, check: "wrong-date envelope is rejected rather than relabeled" });
 
+    phase = "unsafe authority";
     mode = "unsafe-authority";
     await rejectedRead(() => retry.click());
     results.push({ width, check: "point-in-time authority escalation is rejected" });
 
+    phase = "inconsistent member";
     mode = "inconsistent-member";
     await rejectedRead(() => retry.click());
     results.push({ width, check: "inconsistent false member cannot become a trusted absence" });
 
+    phase = "unsupported empty members";
     mode = "empty-members";
     await rejectedRead(() => retry.click());
     results.push({ width, check: "normal empty membership cannot become a fabricated complete zero" });
 
+    phase = "pending reread";
     mode = "normal";
     await page.getByRole("button", { name: dayA, exact: true }).click();
-    await table.waitFor();
+    await readyMembers(dayA);
     const late = { date: dayA, started: deferred(), gate: deferred(), index: -1 }; hold = late;
     await retry.click();
     await bounded(late.started.promise);
+    await waitForCohortLoading(card, table);
     assert.equal(await table.count(), 0, "a pending reread hides old members");
+    assert.ok((await card.innerText()).includes(`所选交易日：${dayA}`), "pending state still belongs to the held date");
+    await card.screenshot({ path: join(output, `cohort-loading-${width}.png`) });
+    phase = "superseded parsed reply";
     await page.getByRole("button", { name: dayB, exact: true }).click();
-    await table.waitFor();
+    await readyMembers(dayB);
     late.gate.release();
     await page.waitForFunction(index => window.__cohortReads[index]?.parsed, late.index);
     await settle();
@@ -156,6 +171,7 @@ try {
     assert.equal(await table.locator("tbody tr").count(), 2);
     results.push({ width, check: "superseded parsed response cannot replace selected date and abort is observed" });
 
+    phase = "empty date";
     await page.getByRole("button", { name: "清空日期", exact: true }).click();
     await card.getByText("等待页面交易日", { exact: false }).waitFor();
     assert.equal(await table.count(), 0);
@@ -167,6 +183,7 @@ try {
     assert.equal(readIndex, readCount);
     results.push({ width, check: "empty date and remount never invent a current-date read" });
 
+    phase = "in-flight unmount";
     const unmounted = { date: dayA, started: deferred(), gate: deferred(), index: -1 }; hold = unmounted;
     await page.getByRole("button", { name: dayA, exact: true }).click();
     await bounded(unmounted.started.promise);
@@ -177,11 +194,12 @@ try {
     assert.equal(await page.evaluate(index => window.__cohortReads[index].aborted, unmounted.index), true);
     assert.equal(await card.count(), 0);
     await page.getByRole("button", { name: "切换显示", exact: true }).click();
-    await table.waitFor();
+    await readyMembers(dayA);
     assert.equal(readIndex, readCount + 2);
     results.push({ width, check: "in-flight unmount aborts and remount owns a fresh read" });
 
     await card.getByText("查看两日来源证据", { exact: true }).click();
+    phase = "final layout";
     const layout = await card.evaluate(element => {
       const rect = element.getBoundingClientRect();
       return { viewport: innerWidth, documentWidth: document.documentElement.scrollWidth, left: rect.left, right: rect.right,
@@ -194,16 +212,31 @@ try {
     for (const control of layout.controls) assert.ok(control.width > 0 && control.left >= layout.left - 1 && control.right <= layout.right + 1);
     await card.screenshot({ path: join(output, `cohort-identity-${width}.png`) });
     results.push({ width, check: "member table and source hashes stay within desktop/mobile page width" });
-    await context.close();
+    await context.close(); activePage = null;
   }
   assert.deepEqual(audit.external, []); assert.deepEqual(audit.unexpected, []); assert.deepEqual(audit.errors, []);
   assert.equal(results.length, 20);
   status = "PASS";
+} catch (error) {
+  diagnostics.failure = { width: activeWidth, phase, message: String(error?.message ?? error), stack: String(error?.stack ?? "") };
+  // Capture while the held read is still pending, before cleanup releases gates.
+  if (activePage && !activePage.isClosed()) {
+    for (const [name, capture] of [
+      ["dom", async () => writeFileSync(join(output, `failure-${activeWidth}.html`), await activePage.content(), "utf8")],
+      ["state", async () => writeFileSync(join(output, `failure-${activeWidth}.json`), JSON.stringify(await activePage.evaluate(() => ({
+        url: location.href, reads: window.__cohortReads ?? [], body_text: document.body.innerText,
+      })), null, 2), "utf8")],
+      ["screenshot", async () => activePage.screenshot({ path: join(output, `failure-${activeWidth}.png`), fullPage: true, timeout: 5000 })],
+    ]) {
+      try { await capture(); } catch (captureError) { diagnostics.capture_errors.push({ name, message: String(captureError) }); }
+    }
+  }
+  throw error;
 } finally {
   for (const gate of gates) gate.release();
   writeFileSync(join(output, "result.json"), JSON.stringify({ status,
     scope: "production cohort member card + API client; strict synthetic two-date readback, no live archive claim",
-    backend_processes_started: 0, provider_requests: 0, results, audit }, null, 2));
+    backend_processes_started: 0, provider_requests: 0, results, audit, diagnostics }, null, 2));
   await browser?.close(); await new Promise(resolve => server.close(resolve));
 }
 console.log(JSON.stringify({ status, results: results.length, output }));
