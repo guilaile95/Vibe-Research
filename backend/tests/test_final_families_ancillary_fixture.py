@@ -9,7 +9,7 @@ import short_term_seal_quality_service as seal
 
 
 def test_fixed_ancillary_responses_match_empty_service_contracts(monkeypatch, tmp_path):
-    fixture = json.loads((Path(__file__).parents[2] / "frontend/tests/fixtures/final-families-ancillary.json").read_text())
+    fixture = json.loads((Path(__file__).parents[2] / "frontend/tests/fixtures/final-families-ancillary.json").read_text(encoding="utf-8"))
     monkeypatch.setenv("VR_DATA_DIR", str(tmp_path / "not-created"))
     monkeypatch.delenv("VR_FACT_LAKE_ROOT", raising=False)
     monkeypatch.setattr(journal, "_now", lambda: datetime(2026, 10, 8, 8, tzinfo=timezone.utc))

@@ -328,4 +328,4 @@ def test_browser_golden_payloads_match_real_journal_service(monkeypatch):
     from pathlib import Path
     from next_day_verification_browser_fixture import contracts
     fixture = Path(__file__).resolve().parents[2] / "frontend/tests/fixtures/next-day-verification.json"
-    assert contracts(monkeypatch) == json.loads(fixture.read_text())
+    assert contracts(monkeypatch) == json.loads(fixture.read_text(encoding="utf-8"))
