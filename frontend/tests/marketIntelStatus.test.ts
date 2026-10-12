@@ -102,3 +102,25 @@ test("unread and unavailable trend states never claim the window is empty", () =
   assert.equal(TREND_EMPTY_LABELS.empty, "当前窗口暂无可计算的关注趋势。");
   assert.equal(TREND_EMPTY_LABELS.loading, "正在计算关注趋势…");
 });
+
+test("radar coverage distinguishes failed, partial, empty-success and unknown", async () => {
+  const { radarCoverageNotice } = await import("../src/lib/marketIntelStatus.ts");
+  assert.match(radarCoverageNotice({ state: "unavailable", expected_sources: 2, succeeded_sources: 0 })!, /全部未取得.*不能把空列表/);
+  assert.match(radarCoverageNotice({ state: "partial", expected_sources: 2, succeeded_sources: 1 })!, /1\/2.*不完整/);
+  assert.equal(radarCoverageNotice({ state: "normal", expected_sources: 2, succeeded_sources: 2 }), null);
+  assert.match(radarCoverageNotice({ state: "unknown", expected_sources: 2, succeeded_sources: null })!, /未知/);
+  assert.match(radarCoverageNotice(undefined)!, /未知/);
+  assert.equal(deriveMarketIntelStatus({ ...base, radarStatus: "partial" }), "partial");
+  assert.equal(deriveMarketIntelStatus({ ...base, radarStatus: "unavailable", hasRadarData: false }), "partial");
+  assert.equal(deriveMarketIntelStatus({ ...base, radarStatus: "unavailable", hasRadarData: false, hasNativeData: false }), "unavailable");
+});
+
+test("radar outage gates new generation without hiding saved digest navigation", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../src/components/market/MarketIntelPanel.tsx", import.meta.url), "utf8");
+  assert.match(source, /const hasRadarData = Boolean\(radar\?\.generated_at\);/);
+  assert.match(source, /hasRadarData: hasRadarData && !radarUnavailable/);
+  assert.match(source, /disabled=\{bulk\.running \|\| refreshing \|\| radarUnavailable\}/);
+  assert.match(source, /sourceCoverage: radar\?\.source_coverage/);
+  assert.match(source, /radarNotice && <p>\{radarNotice\}<\/p>/);
+});

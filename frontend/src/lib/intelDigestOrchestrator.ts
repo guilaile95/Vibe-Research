@@ -11,12 +11,14 @@
  * - POST uses the real material status (normal | partial), never hard-coded "normal"
  */
 
-import { api, type Industry, type IntelDigest, type IntelDigestSaveIn, type IntelDigestSaveResult } from "./api.ts";
+import { api, type Industry, type RadarSourceCoverage, type IntelDigest, type IntelDigestSaveIn, type IntelDigestSaveResult } from "./api.ts";
+import { radarCoverageNotice } from "./marketIntelStatus.ts";
 import { chatStream } from "./llm.ts";
 import { prepareDigestItems, shouldSaveDigest } from "./intelDigestView.ts";
 
 export interface RunIntelDigestGenerationParams {
   industry: Industry;
+  sourceCoverage?: RadarSourceCoverage;
   signal: AbortSignal;
   generationId: number;
   getCurrentGenerationId: () => number;
@@ -51,6 +53,7 @@ export async function runIntelDigestGeneration(
 ): Promise<RunIntelDigestGenerationResult> {
   const {
     industry,
+    sourceCoverage,
     signal,
     generationId,
     getCurrentGenerationId,
@@ -65,6 +68,11 @@ export async function runIntelDigestGeneration(
     return { status: "cancelled" };
   }
 
+  if (sourceCoverage?.state === "unavailable") {
+    return { status: "unavailable", materialStatus: "unavailable",
+      error: radarCoverageNotice(sourceCoverage) || ZERO_VALID_MSG };
+  }
+
   const prepared = prepareDigestItems(industry.items);
 
   // Zero valid materials: never call chatStream, never POST save
@@ -77,11 +85,14 @@ export async function runIntelDigestGeneration(
     };
   }
 
-  const { promptContext, inputItems, sourceRefs, status: materialStatus, droppedCount } = prepared;
+  const { promptContext, inputItems, sourceRefs, droppedCount } = prepared;
+  const materialStatus = prepared.status === "partial" || sourceCoverage?.state !== "normal" ? "partial" : "normal";
+  const coverageContext = radarCoverageNotice(sourceCoverage) || "配置来源均返回响应；不证明资讯历史完整或筛选赛道完整。";
 
   const prompt =
     `以下是「${industry.name}」赛道近期资讯。请提炼「今日要点」3-5 条：每条一句话（≤40 字），` +
-    `抓住重要事件、趋势与可能影响。直接用「- 」列点，不要多余前后缀。\n\n${promptContext}`;
+    `抓住重要事件、趋势与可能影响。直接用「- 」列点，不要多余前后缀。\n` +
+    `来源范围：全部配置来源的缓存抓取，不是所选赛道的独立覆盖统计。${coverageContext} 来源受限或未知时，须在要点中明确说明。\n\n${promptContext}`;
 
   let accText = "";
   onPhaseChange?.("generating");

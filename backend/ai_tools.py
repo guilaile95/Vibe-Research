@@ -490,10 +490,27 @@ def _gpu_rent(args: dict):
     }
 
 
+def _reports(args: dict, *, industry: bool = False):
+    result = (astock.eastmoney_industry_reports(keywords=args.get("keywords"),
+              days=int(args.get("days") or 90), max_pages=1, with_coverage=True)
+              if industry else astock.eastmoney_reports(str(args["code"]), max_pages=1, with_coverage=True))
+    window = astock.report_window_compat(result, 1)
+    items = _metadata_rows(window["rows"],
+        ("title", "publishDate", "orgSName", "industryName" if industry else "emRatingName"),
+        20 if industry else 15, references=("infoCode",))
+    if not items:
+        return [] if window["status"] == "normal" else {
+            "status": "unavailable", "source_coverage": window["source_coverage"], "items": []}
+    items[0]["source_coverage"] = window["source_coverage"]
+    if window["status"] != "normal":
+        items[0]["status"] = "partial"
+    return items
+
+
 def _radar(args: dict):
     """资讯雷达：数据按 12 条赛道分组，这里摊平成一张扁平清单（每条带赛道名）方便模型阅读。
     可传 track 只看某条赛道；每赛道取最新若干条，避免 12×几十条把上下文吃光。"""
-    d = newsradar.get_radar(force=False) or {}
+    d = newsradar.with_source_coverage(newsradar.get_radar(force=False) or {})
     want = str(args.get("track") or "").strip()
     per = max(1, min(int(args.get("per_track") or 5), 20))
     out, total = [], 0
@@ -506,7 +523,9 @@ def _radar(args: dict):
         for it in items[:per]:
             out.append({"track": name, "title": it.get("title"),
                         "time": it.get("time"), "source": it.get("source")})
-    return {"generated_at": d.get("generated_at"), "total_cached": total,
+    return {"status": d["status"], "source_coverage": d["source_coverage"],
+            "note": "来源覆盖为全部配置来源的本次缓存抓取；不证明历史完整或筛选赛道的完整性。",
+            "generated_at": d.get("generated_at"), "total_cached": total,
             "tracks": [i.get("name") for i in (d.get("industries") or [])], "items": out}
 
 
@@ -518,8 +537,7 @@ _HANDLERS = {
     "query_kline": _kline,
     "query_financials": lambda a: astock.financials(str(a["code"])),
     "query_company_info": _company_info,
-    "query_reports": lambda a: _metadata_rows(astock.eastmoney_reports(str(a["code"]), max_pages=1),
-                                     ("title", "publishDate", "orgSName", "emRatingName"), 15, references=("infoCode",)),
+    "query_reports": _reports,
     "query_news": _news,
     "query_fund_flow": _fund_flow,
     "query_margin": lambda a: _pick(astock.margin_trading(str(a["code"])),
@@ -534,9 +552,7 @@ _HANDLERS = {
     "query_investor_qa": _investor_qa,
     "query_concepts": _concepts,
     "query_industry_comparison": lambda a: astock.industry_comparison(top_n=max(5, min(int(a.get("top_n") or 20), 50))),
-    "query_industry_reports": lambda a: _metadata_rows(
-        astock.eastmoney_industry_reports(keywords=a.get("keywords"), days=int(a.get("days") or 90), max_pages=1),
-        ("title", "publishDate", "orgSName", "industryName"), 20, references=("infoCode",)),
+    "query_industry_reports": lambda a: _reports(a, industry=True),
     "query_market": _market,
     "query_news_radar": _radar,
     "query_gpu_rent": _gpu_rent,
@@ -552,6 +568,10 @@ def exec_tool(name: str, args: dict):
         return {"error": f"未知工具 {name}"}
     try:
         return fn(args or {})
+    except gstock.SearchAmbiguous:
+        return {"error": gstock.SEARCH_AMBIGUOUS_MESSAGE}
+    except gstock.SearchUnavailable:
+        return {"error": gstock.SEARCH_UNAVAILABLE_MESSAGE}
     except astock.DependencyMissing as e:
         return {"error": str(e)}
     except KeyError as e:

@@ -65,7 +65,7 @@ test("fundflow uses latest observations without mutating or filling missing date
 test("StockData wires guarded independent source requests to both UI and AI context", () => {
   const source = readFileSync(new URL("../src/pages/StockData.tsx", import.meta.url), "utf8");
   assert.match(source, /rid === runIdRef\.current\) set\(v\)/);
-  assert.match(source, /resolveEvidenceList\(api\.reports\(c\).*\.then\(ok\(setReportResult\)\)/);
+  assert.match(source, /resolveReportEvidence\(api\.reportsWithCoverage\(c\).*\.then\(ok\(setReportResult\)\)/);
   assert.match(source, /resolveEvidenceList\(api\.announcements\(c\).*\.then\(ok\(setAnnouncementResult\)\)/);
   assert.match(source, /reportEvidenceContext\(reportResult\)/);
   assert.match(source, /announcementEvidenceContext\(announcementResult\)/);

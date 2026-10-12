@@ -8,6 +8,7 @@ import ai_tools
 import chat
 import debate
 import mcp_server
+from report_page_fixtures import complete_report_window
 
 
 def news_window(rows):
@@ -20,11 +21,11 @@ def news_window(rows):
 
 CASES = [
     ('query_reports', 'eastmoney_reports', ('title', 'publishDate', 'orgSName', 'emRatingName'),
-     15, {'code': '000001'}, {'max_pages': 1}, 'abstract'),
+     15, {'code': '000001'}, {'max_pages': 1, 'with_coverage': True}, 'abstract'),
     ('query_news', 'stock_news', ('新闻标题', '发布时间', '文章来源'),
      15, {'code': '000001'}, {'limit': 15, 'with_coverage': True}, '新闻内容'),
     ('query_industry_reports', 'eastmoney_industry_reports', ('title', 'publishDate', 'orgSName', 'industryName'),
-     20, {'keywords': ['fixture'], 'days': 7}, {'keywords': ['fixture'], 'days': 7, 'max_pages': 1}, 'abstract'),
+     20, {'keywords': ['fixture'], 'days': 7}, {'keywords': ['fixture'], 'days': 7, 'max_pages': 1, 'with_coverage': True}, 'abstract'),
 ]
 
 
@@ -36,7 +37,9 @@ def source(request, monkeypatch):
 
     def read(*actual_args, **actual_kwargs):
         calls.append((actual_args, actual_kwargs))
-        return news_window(rows) if actual_kwargs.get('with_coverage') else rows
+        if actual_kwargs.get('with_coverage'):
+            return news_window(rows) if provider == 'stock_news' else complete_report_window(rows)
+        return rows
 
     monkeypatch.setattr(ai_tools.astock, provider, read)
     return tool, keys, limit, args, kwargs, rows, calls
@@ -133,5 +136,6 @@ def test_http_reports_does_not_inherit_tool_projection(monkeypatch):
     monkeypatch.setattr(ai_tools.astock, 'pdf_url', lambda code: 'https://example.test/fixture.pdf')
     ai_tools.exec_tool('query_reports', {'code': '000001'})
     payload = app.reports(code='000001', pages=1)
-    assert payload == {'data': [{'title': 'fixture title', 'infoCode': 'fixture-id', 'pdfUrl': 'https://example.test/fixture.pdf'}]}
+    assert payload['data'] == [{'title': 'fixture title', 'infoCode': 'fixture-id', 'pdfUrl': 'https://example.test/fixture.pdf'}]
+    assert payload['status'] == 'partial'  # Legacy mocked reader has unknown source coverage.
     assert 'adapter_coverage' not in rows[0]

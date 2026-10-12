@@ -8,6 +8,7 @@ import ai_tools
 import chat
 import debate
 import mcp_server
+from report_page_fixtures import complete_report_window
 
 
 CASES = [
@@ -30,6 +31,8 @@ def mock_source(monkeypatch, provider, rows):
     calls = []
     def read(*args, **kwargs):
         calls.append((args, kwargs))
+        if kwargs.get('with_coverage') and provider != 'stock_news':
+            return complete_report_window(rows)
         if kwargs.get('with_coverage'):
             return {'rows': rows, 'source_coverage': {
                 'scope': 'provider_response_before_requested_limit', 'provider_response_rows': len(rows),
@@ -200,6 +203,7 @@ def test_cumulative_stream_keeps_each_tool_outcome_and_source_identity(monkeypat
     # Actual Q&A millisecond conversion, followed by answer clipping.
     class Response:
         def __init__(self, payload): self.payload = payload
+        def raise_for_status(self): pass
         def json(self): return self.payload
     def post(url, **kwargs):
         return Response({'data': [{'secid': 'fixture'}]} if url.endswith('queryKeyboardInfo') else

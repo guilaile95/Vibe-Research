@@ -7,6 +7,7 @@ import { storageSetChecked, storageRemoveChecked } from "./storage.ts";
 
 import type { MarketCloudEnvelope } from "./marketCloud.ts";
 import { parseReportChatCoverage } from "./reportChatCoverage.ts";
+import { parseReportListResult } from "./reportSourceCoverage.ts";
 import { parseLeadAnalysisContext } from "./leadAnalysisContext.ts";
 import { parseChatToolResult } from "./chatToolStatus.ts";
 import type {
@@ -32,6 +33,7 @@ import type {
   Quote,
   Valuation,
   Report,
+  ReportListResult,
   ValPercentile,
   Announcement,
   Financials,
@@ -890,6 +892,12 @@ export const api = {
   announcements: (code: string) => get<Announcement[]>(`/announcements?code=${code}`),
   quote: (codes: string) => get<Record<string, Quote>>(`/quote?codes=${codes}`),
   reports: (code: string) => get<Report[]>(`/reports?code=${code}`),
+  reportsWithCoverage: async (code: string): Promise<ReportListResult> => {
+    const payload = await get<unknown>(`/reports?code=${encodeURIComponent(code)}`, { unwrapData: false });
+    const result = parseReportListResult(payload);
+    if (!result) throw new ApiError("研报响应格式异常，请稍后重试", 502);
+    return result;
+  },
   news: (code: string) => get<NewsItem[]>(`/news?code=${code}`),
   margin: (code: string) => get<MarginRow[]>(`/margin?code=${code}`),
   blockTrade: (code: string) => get<BlockTradeRow[]>(`/block-trade?code=${code}`),

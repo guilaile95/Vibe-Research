@@ -186,6 +186,7 @@ async function run() {
     await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/transitions`, "POST", { expected_status: "RESEARCHING", to_status: "PRE-ENTRY" });
     const decision = createRealFrozenDecision(env, campaign.campaign_id);
     const trade = await jsonRequest(backend, "/api/trades", "POST", {
+      fee: 0, other_cost: 0,
       code: "600519", name: "贵州茅台", operation: "buy", execution_status: "full",
       actual_price: 100, actual_quantity: 1, executed_at: "2098-01-01T01:00:00Z",
     });
@@ -226,6 +227,7 @@ async function run() {
     assert.equal((await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}`)).status, "ACTIVE");
 
     const secondTrade = await jsonRequest(backend, "/api/trades", "POST", {
+      fee: 0, other_cost: 0,
       code: "600519", name: "贵州茅台", operation: "add", execution_status: "full",
       actual_price: 101, actual_quantity: 1, executed_at: "2098-01-01T01:01:00Z",
     });

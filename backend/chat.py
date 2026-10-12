@@ -132,6 +132,8 @@ _TOOL_METADATA_KEYS = {
     "stale", "unavailable", "note", "unit", "code", "symbol", "date", "period_end",
     "observed_at", "generated_at", "updated", "warnings", "error", "err", "errors", "fetch_error",
     "adjustment", "latest_bar_date", "fallback", "adapter_coverage", "source_coverage",
+    "scope", "requested_pages", "reported_total_pages", "expected_pages",
+    "attempted_pages", "received_pages", "returned_rows", "reason", "historical_complete",
 } | _TOOL_REFERENCE_KEYS
 _TOOL_EMPTY_METADATA = tools.PAYLOAD_META_KEYS | _TOOL_METADATA_KEYS
 

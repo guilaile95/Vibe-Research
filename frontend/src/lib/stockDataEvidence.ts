@@ -1,4 +1,5 @@
-import type { Announcement, FundFlowRow, Report, Valuation } from "./api/types.ts";
+import type { Announcement, FundFlowRow, Report, ReportListResult, ReportSourceCoverage, Valuation } from "./api/types.ts";
+import { parseReportSourceCoverage, reportSourceCoverageText, reportSourceStatus } from "./reportSourceCoverage.ts";
 
 export type EvidenceState<T> =
   | { status: "idle" | "loading"; data: T }
@@ -6,6 +7,10 @@ export type EvidenceState<T> =
   | { status: "error" | "unsupported"; data: T; error: string };
 
 export type EvidenceListState<T> = EvidenceState<T[]>;
+
+/** Report pagination can retain useful rows without claiming source completeness. */
+export type ReportEvidenceState = (EvidenceListState<Report> & { source_coverage?: ReportSourceCoverage | null })
+  | { status: "partial"; data: Report[]; source_coverage: ReportSourceCoverage | null };
 
 /** Source errors never supply provider details or masquerade as empty evidence. */
 export async function resolveEvidence<T>(
@@ -23,6 +28,20 @@ export async function resolveEvidence<T>(
 
 export function resolveEvidenceList<T>(request: Promise<T[]>, error: string): Promise<EvidenceListState<T>> {
   return resolveEvidence(request, [], error);
+}
+
+export async function resolveReportEvidence(request: Promise<ReportListResult>, error: string): Promise<ReportEvidenceState> {
+  try {
+    const result = await request;
+    const source_coverage = parseReportSourceCoverage(result.source_coverage);
+    const status = reportSourceStatus(result.status, source_coverage);
+    if (status === "unavailable") return { status: "error", data: [], source_coverage, error };
+    if (status === "partial") return { status, data: result.data, source_coverage };
+    return { status: "success", data: result.data, source_coverage, empty: result.data.length === 0 };
+  } catch (cause) {
+    const unsupported = typeof cause === "object" && cause !== null && "status" in cause && cause.status === 501;
+    return { status: unsupported ? "unsupported" : "error", data: [], error };
+  }
 }
 
 /** Shared by the page's independent requests; both start and settlement reject stale runs. */
@@ -49,11 +68,25 @@ export function evidenceStatusText<T>(state: EvidenceState<T>): string {
 
 export const evidenceListStatusText = evidenceStatusText;
 
-export function reportEvidenceContext(state: EvidenceListState<Report>): string {
-  const items = state.status === "success" ? state.data.slice(0, 5).map((r) =>
+export function reportEvidenceStatusText(state: ReportEvidenceState): string {
+  if (state.status !== "success" && state.status !== "partial") return evidenceListStatusText(state);
+  const coverage = parseReportSourceCoverage(state.source_coverage);
+  const status = reportSourceStatus(state.status === "success" ? "normal" : "partial", coverage);
+  return `本次接口返回 ${state.data.length} 条记录；${reportSourceCoverageText(status, coverage)}`;
+}
+
+export function reportEvidenceContext(state: ReportEvidenceState): string {
+  const hasRows = state.status === "success" || state.status === "partial";
+  const coverage = parseReportSourceCoverage(state.source_coverage);
+  const items = hasRows ? state.data.slice(0, 5).map((r) =>
     `${r.title}（发布日期 ${r.publishDate || "未知"}；机构 ${r.orgSName || "未知"}${r.pdfUrl ? `；来源 ${r.pdfUrl}` : ""}）`,
   ).join("；") : "";
-  return `近期研报：${evidenceListStatusText(state)}${items ? `\n${items}` : ""}`;
+  const metadata = hasRows || coverage
+    ? `\n研报来源覆盖：${JSON.stringify({
+      status: reportSourceStatus(hasRows ? state.status === "success" ? "normal" : "partial" : "unavailable", coverage),
+      source_coverage: coverage,
+    })}` : "";
+  return `近期研报：${reportEvidenceStatusText(state)}${metadata}${items ? `\n${items}` : ""}`;
 }
 
 export function announcementEvidenceContext(state: EvidenceListState<Announcement>): string {

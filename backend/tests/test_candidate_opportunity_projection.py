@@ -788,6 +788,8 @@ def test_effective_trade_stales_account_and_rejects_old_preview(tmp_path, monkey
         "actual_price": 100.0,
         "actual_quantity": 100,
         "executed_at": runtime.utc_now_iso(),
+        "fee": 0.0,
+        "other_cost": 0.0,
     })
 
     reality = account_reality_service.get_account_reality()

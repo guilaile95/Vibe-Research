@@ -67,7 +67,9 @@ export interface AgentRuntimeStatus {
   installed: boolean;
   authenticated: boolean;
   available: boolean;
-  status: "ready" | "not_authenticated" | "login_pending" | "login_failed" | "runtime_unavailable";
+  status: "ready" | "not_authenticated" | "login_pending" | "login_failed" | "runtime_unavailable" | "probe_failed";
+  auth_kind?: "chatgpt" | "api_key" | "logged_out" | "unknown";
+  probe_error?: "timeout" | "not_found" | "malformed_output" | "nonzero_exit" | "process_error" | null;
   version: string | null;
 }
 

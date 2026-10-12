@@ -145,56 +145,119 @@ def _report_session():
     return s
 
 
-def eastmoney_reports(code: str, max_pages: int = 3) -> list[dict]:
-    """按个股代码拉研报列表（qType=0）。"""
+def _report_page_window(params: dict, max_pages: int, *, with_coverage: bool):
+    """Bounded provider pages; never infer row totals from requested page size."""
+    if type(max_pages) is not int or not 1 <= max_pages <= 10:
+        raise ValueError("max_pages must be between 1 and 10")
     session = _report_session()
-    out: list[dict] = []
+    rows, attempted, received = [], 0, 0
+    total = None
+    reason = None
     for page in range(1, max_pages + 1):
-        params = {
-            "industryCode": "*", "pageSize": "100", "industry": "*",
-            "rating": "*", "ratingChange": "*",
-            "beginTime": "2000-01-01", "endTime": "2030-01-01",
-            "pageNo": str(page), "fields": "", "qType": "0",
-            "orgCode": "", "code": code, "rcode": "",
-            "p": str(page), "pageNum": str(page), "pageNumber": str(page),
-        }
-        r = session.get(_REPORT_API, params=params, timeout=30)
-        d = r.json()
-        rows = d.get("data") or []
-        if not rows:
+        attempted += 1
+        try:
+            page_params = {**params, "pageNo": str(page)}
+            if params.get("qType") == "0":
+                page_params.update({"p": str(page), "pageNum": str(page), "pageNumber": str(page)})
+            response = session.get(_REPORT_API, params=page_params, timeout=30)
+            if response.status_code != 200:
+                raise ValueError("report source unavailable")
+            payload = response.json()
+            if (not isinstance(payload, dict) or not isinstance(payload.get("data"), list)
+                    or any(not isinstance(row, dict) or not isinstance(row.get("title"), str)
+                           or not row["title"].strip() for row in payload["data"])):
+                raise ValueError("report source malformed response")
+            page_rows = payload["data"]
+            raw_total = payload.get("TotalPage")
+            page_total = (int(raw_total) if type(raw_total) is int and raw_total >= 0
+                          or isinstance(raw_total, str) and raw_total.isascii() and raw_total.isdigit()
+                          else None)
+            if page == 1:
+                total = page_total
+            elif page_total != total:
+                reason = "TOTAL_CHANGED"
+            received += 1
+            rows.extend(page_rows)
+            if page_total == 0 and page_rows:
+                reason = "TOTAL_CHANGED"
+            if not page_rows:
+                if total is not None and total >= page and total > 1:
+                    reason = "EMPTY_BEFORE_EXPECTED"
+                break
+            if (reason == "TOTAL_CHANGED" or (total is not None and page >= max(1, total))
+                    or total is None and params.get("qType") == "0"):
+                # The company reader historically stopped after page one when
+                # TotalPage was absent. Disclose unknown coverage, do not add fetches.
+                break
+        except Exception as exc:
+            if not with_coverage:
+                raise
+            reason = ("MALFORMED_RESPONSE" if isinstance(exc, ValueError)
+                      and str(exc) == "report source malformed response" else "SOURCE_ERROR")
             break
-        out.extend(rows)
-        if page >= (d.get("TotalPage", 1) or 1):
-            break
-        time.sleep(0.3)
-    return out
+        if page < max_pages:
+            time.sleep(0.3)
+    if reason is None:
+        reason = "UNKNOWN_TOTAL" if total is None else "REQUEST_LIMIT" if total > max_pages else None
+    if not with_coverage:
+        if reason in {"TOTAL_CHANGED", "EMPTY_BEFORE_EXPECTED"}:
+            raise ValueError("report source incomplete response")
+        return rows
+    return {
+        "rows": rows,
+        "status": ("normal" if reason is None else "partial" if rows else "unavailable"),
+        "source_coverage": {
+            "scope": "provider_report_page_window", "requested_pages": max_pages,
+            "reported_total_pages": total,
+            "expected_pages": min(max_pages, max(1, total)) if total is not None else None,
+            "attempted_pages": attempted, "received_pages": received,
+            "returned_rows": len(rows), "reason": reason, "historical_complete": False,
+        },
+    }
 
 
-def eastmoney_industry_reports(keywords: list[str] | None = None, days: int = 90, max_pages: int = 3) -> list[dict]:
-    """按行业拉研报（qType=1）——适合产业链 / 主题级检索。keywords 在标题上过滤。"""
+def eastmoney_reports(code: str, max_pages: int = 3, *, with_coverage: bool = False):
+    """Company report metadata; opt in to honest bounded-page coverage."""
+    return _report_page_window({
+        "industryCode": "*", "pageSize": "100", "industry": "*",
+        "rating": "*", "ratingChange": "*", "beginTime": "2000-01-01",
+        "endTime": "2030-01-01", "fields": "", "qType": "0",
+        "orgCode": "", "code": code, "rcode": "",
+    }, max_pages, with_coverage=with_coverage)
+
+
+def eastmoney_industry_reports(keywords: list[str] | None = None, days: int = 90,
+                              max_pages: int = 3, *, with_coverage: bool = False):
+    """Industry report metadata; source counts precede title filtering."""
     from datetime import date, timedelta
-
-    session = _report_session()
     end = date.today()
-    begin = end - timedelta(days=days)
-    out: list[dict] = []
-    for page in range(1, max_pages + 1):
-        params = {
-            "industryCode": "*", "pageSize": "100", "industry": "*",
-            "rating": "*", "ratingChange": "*",
-            "beginTime": begin.isoformat(), "endTime": end.isoformat(),
-            "pageNo": str(page), "fields": "", "qType": "1",
-            "orgCode": "", "code": "", "rcode": "",
-        }
-        r = session.get(_REPORT_API, params=params, timeout=30)
-        rows = r.json().get("data") or []
-        if not rows:
-            break
-        out.extend(rows)
-        time.sleep(0.3)
+    result = _report_page_window({
+        "industryCode": "*", "pageSize": "100", "industry": "*",
+        "rating": "*", "ratingChange": "*",
+        "beginTime": (end - timedelta(days=days)).isoformat(), "endTime": end.isoformat(),
+        "fields": "", "qType": "1", "orgCode": "", "code": "", "rcode": "",
+    }, max_pages, with_coverage=with_coverage)
     if keywords:
-        out = [r for r in out if any(k in r.get("title", "") for k in keywords)]
-    return out
+        rows = result["rows"] if with_coverage else result
+        filtered = [r for r in rows if any(k in r["title"] for k in keywords)]
+        if with_coverage:
+            result = {**result, "rows": filtered}
+        else:
+            result = filtered
+    return result
+
+
+def report_window_compat(result, requested_pages: int) -> dict:
+    """Legacy injected list readers carry unknown coverage, never full coverage."""
+    if isinstance(result, dict):
+        return result
+    if not isinstance(result, list):
+        raise ValueError("report source malformed response")
+    return {"rows": result, "status": "partial" if result else "unavailable",
+            "source_coverage": {"scope": "provider_report_page_window",
+                "requested_pages": requested_pages, "reported_total_pages": None,
+                "expected_pages": None, "attempted_pages": 0, "received_pages": 0,
+                "returned_rows": len(result), "reason": "UNKNOWN_TOTAL", "historical_complete": False}}
 
 
 def pdf_url(info_code: str) -> str:
@@ -2007,36 +2070,56 @@ def hot_concepts(code: str, *, strict: bool = False) -> list[dict]:
 
 
 def investor_qa(code: str, page_size: int = 30) -> list[dict]:
-    """互动易问答（巨潮）；ask_time 为北京时间分钟字符串，空值表示未知。
+    """CNInfo question page, not exchange-wide or complete historical coverage.
 
-    pubDate 为 Unix 毫秒，不能用服务器本地时区解释；answer=None 表示未回复。
+    Only an explicit rows=[] for a resolved company is a successful empty page.
+    Missing company matches, HTTP/JSON/schema failures must not poison the cache.
+    pubDate is Unix milliseconds; answer=None means unanswered/unknown.
     """
     import requests
 
     try:
         r1 = requests.post("https://irm.cninfo.com.cn/newircs/index/queryKeyboardInfo",
                            data={"keyWord": code}, headers={"User-Agent": UA}, timeout=10)
-        d1 = r1.json().get("data") or []
-        if not d1:
-            return []
-        org_id = d1[0].get("secid")
+        r1.raise_for_status()
+        lookup = r1.json()
+        if not isinstance(lookup, dict) or not isinstance(lookup.get("data"), list):
+            raise ValueError("invalid company lookup")
+        matches = lookup["data"]
+        if not matches or any(not isinstance(item, dict) for item in matches):
+            raise ValueError("company lookup unavailable")
+        org_id = matches[0].get("secid")
+        if not isinstance(org_id, str) or not org_id.strip():
+            raise ValueError("missing company identity")
         params = {"_t": 1, "stockcode": code, "orgId": org_id, "pageSize": page_size,
                   "pageNum": 1, "keyWord": "", "startDay": "", "endDay": ""}
-        rows = requests.post("https://irm.cninfo.com.cn/newircs/company/question",
-                             params=params, headers={"User-Agent": UA}, timeout=10).json().get("rows") or []
-    except Exception:
-        return []
-    out = []
-    for it in rows:
-        ts = it.get("pubDate")
-        out.append({
-            "company": it.get("companyShortName"),
-            "question": it.get("mainContent"), "answer": it.get("attachedContent"),
-            "answerer": it.get("attachedAuthor"),
-            "ask_time": datetime.fromtimestamp(ts / 1000, tz=timezone(timedelta(hours=8))).strftime(
-                "%Y-%m-%d %H:%M") if ts else "",
-        })
-    return out
+        response = requests.post("https://irm.cninfo.com.cn/newircs/company/question",
+                                 params=params, headers={"User-Agent": UA}, timeout=10)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
+            raise ValueError("invalid question page")
+        out = []
+        for item in payload["rows"]:
+            if not isinstance(item, dict) or not isinstance(item.get("mainContent"), str):
+                raise ValueError("invalid question row")
+            for field in ("companyShortName", "attachedContent", "attachedAuthor"):
+                if item.get(field) is not None and not isinstance(item[field], str):
+                    raise ValueError("invalid optional question field")
+            ts = item.get("pubDate")
+            if ts not in (None, 0, "", False) and (isinstance(ts, bool) or not isinstance(ts, (int, float)) or not math.isfinite(ts)):
+                raise ValueError("invalid question time")
+            out.append({
+                "company": item.get("companyShortName"),
+                "question": item["mainContent"], "answer": item.get("attachedContent"),
+                "answerer": item.get("attachedAuthor"),
+                "ask_time": datetime.fromtimestamp(ts / 1000, tz=timezone(timedelta(hours=8))).strftime(
+                    "%Y-%m-%d %H:%M") if ts else "",
+            })
+        return out
+    except Exception as exc:
+        # Also reaches AI tools: never expose URLs, provider payloads or credentials.
+        raise RuntimeError("投资者互动数据暂不可用；不能据此判断没有问答。") from exc
 
 
 def industry_comparison(top_n: int = 20) -> dict:

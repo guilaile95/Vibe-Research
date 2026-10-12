@@ -126,6 +126,81 @@ async function scenario(browser, baseURL, spec, width, evidenceDir) {
     writeFileSync(join(evidenceDir, `${prefix}-failure.json`), JSON.stringify(failure, null, 2)); return failure;
   } finally { await context?.close(); }
 }
+// Runtime detection is mocked at the HTTP boundary, never by executing a CLI.
+// Keep this separate from settings write/recovery scenarios: every API is GET-only.
+async function runtimeScenario(browser, baseURL, width, evidenceDir) {
+  const requests = [], unexpected = [], external = [], errors = [], observations = [];
+  const common = { runtime: 'Codex Subscription', installed: true, authenticated: false, available: false, version: 'codex-cli 0.149.0' };
+  const states = [
+    { name: 'timeout', payload: { ...common, status: 'probe_failed', auth_kind: 'unknown', probe_error: 'timeout' }, label: '登录状态检测未完成，请重试（现有登录不会被清除）' },
+    { name: 'outer-timeout', payload: { ...common, installed: false, version: null, status: 'probe_failed', auth_kind: 'unknown', probe_error: 'timeout' }, label: '登录状态检测未完成，请重试（现有登录不会被清除）' },
+    { name: 'malformed', payload: { ...common, status: 'probe_failed', auth_kind: 'unknown', probe_error: 'malformed_output' }, label: '登录状态检测未完成，请重试（现有登录不会被清除）' },
+    { name: 'api-key', payload: { ...common, status: 'not_authenticated', auth_kind: 'api_key', probe_error: null }, label: '当前为 API key 登录，订阅接入需要 ChatGPT 登录' },
+    { name: 'chatgpt', payload: { ...common, authenticated: true, available: true, status: 'ready', auth_kind: 'chatgpt', probe_error: null }, label: '已连接' },
+    { name: 'logged-out', payload: { ...common, status: 'not_authenticated', auth_kind: 'logged_out', probe_error: null }, label: '未连接' },
+    { name: 'legacy-ready', payload: { ...common, authenticated: true, available: true, status: 'ready' }, label: '已连接' },
+    { name: 'legacy-logged-out', payload: { ...common, status: 'not_authenticated' }, label: '未连接' },
+  ];
+  let context, page, active = states[0], statusReads = 0;
+  const prefix = `runtime-classification-${width}`;
+  const shot = phase => page.screenshot({ path: join(evidenceDir, `${prefix}-${phase}.png`), fullPage: true });
+  try {
+    context = await browser.newContext({ baseURL, viewport: { width, height: 960 }, serviceWorkers: 'block' });
+    await context.routeWebSocket('**/*', socket => { external.push(`WebSocket ${socket.url()}`); socket.close(); });
+    await context.route('**/*', async route => {
+      const request = route.request(), url = new URL(request.url()), method = request.method();
+      if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' });
+      if (url.origin !== baseURL) { external.push(url.origin); return route.abort(); }
+      if (!url.pathname.startsWith('/api/')) return route.continue();
+      const key = `${method} ${url.pathname}${url.search}`; requests.push(key);
+      if (method === 'GET' && url.pathname === '/api/agent-runtime/status' && !url.search) {
+        statusReads++; return route.fulfill({ json: active.payload });
+      }
+      const allowed = ['/api/health', '/api/runtime-info', '/api/ai/credential-status', '/api/native-intel/sources', '/api/native-intel/config', '/api/native-intel/filter/profile'];
+      const reply = allowed.includes(url.pathname) ? readReply(method, url.pathname, url.search) : null;
+      if (reply) return route.fulfill({ json: reply });
+      unexpected.push(key); return route.fulfill({ status: 503, json: { detail: 'UNEXPECTED_SYNTHETIC_REQUEST' } });
+    });
+    page = await context.newPage(); page.setDefaultTimeout(10000);
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    await page.goto('/settings');
+    await page.getByRole('heading', { name: '订阅接入', exact: true }).waitFor();
+    assert.equal(statusReads, 0, 'API mode must not probe the subscription runtime');
+    const runtimeLine = page.locator('span').filter({ hasText: /^Runtime：Codex Subscription · / });
+    const refresh = page.getByRole('button', { name: '检查', exact: true });
+    for (const [index, state] of states.entries()) {
+      active = state;
+      const before = statusReads;
+      const response = page.waitForResponse(r => new URL(r.url()).pathname === '/api/agent-runtime/status' && r.request().method() === 'GET');
+      if (index === 0) await page.getByRole('heading', { name: '订阅接入', exact: true }).click();
+      else await refresh.click();
+      assert.equal((await response).status(), 200);
+      // Actionability waits for the async refresh to finish, including consecutive
+      // timeout/malformed cases that intentionally have the same visible label.
+      await refresh.click({ trial: true });
+      await runtimeLine.filter({ hasText: state.label }).waitFor();
+      const text = await runtimeLine.innerText();
+      assert.equal(text, `Runtime：Codex Subscription · ${state.label}${state.payload.version ? ` · ${state.payload.version}` : ''}`);
+      assert.equal(statusReads, before + 1, 'one explicit action must produce exactly one status read');
+      if (state.payload.status === 'probe_failed') assert.doesNotMatch(text, /未连接|未登录|Runtime 未启动|已连接/);
+      if (state.name === 'api-key') assert.doesNotMatch(text, /已连接/);
+      assert.equal(await page.getByRole('button', { name: '连接 Codex', exact: true }).count(), state.payload.available ? 0 : 1);
+      assert.ok(requests.every(key => key.startsWith('GET ')), 'status display cannot trigger login, model calls, or writes');
+      await shot(state.name);
+      observations.push({ name: state.name, label: text, status: state.payload.status, authKind: state.payload.auth_kind ?? 'legacy-absent', probeError: state.payload.probe_error ?? null, statusReads });
+    }
+    assert.equal(new URL(page.url()).pathname, '/settings');
+    assert.equal(await page.locator('vite-error-overlay').count(), 0);
+    assert.deepEqual(unexpected, []); assert.deepEqual(external, []); assert.deepEqual(errors, []);
+    return { scenario: 'runtime-classification', width, status: 'PASS', statusReads, requests, observations, boundary: 'Synthetic GET-only status; no runtime process, login, credentials, model call or writes' };
+  } catch (error) {
+    await shot('failure').catch(() => {});
+    const failure = { scenario: 'runtime-classification', width, status: 'FAIL', error: error.message, statusReads, requests, observations, unexpected, external, errors };
+    writeFileSync(join(evidenceDir, `${prefix}-failure.json`), JSON.stringify(failure, null, 2)); return failure;
+  } finally { await context?.close(); }
+}
+
 async function main() {
   const evidenceDir = process.env.SETTINGS_RECOVERY_EVIDENCE_DIR || mkdtempSync(join(tmpdir(), 'vr-settings-recovery-'));
   mkdirSync(evidenceDir, { recursive: true });
@@ -140,7 +215,11 @@ async function main() {
       const row = await scenario(browser, baseURL, spec, width, evidenceDir); result.results.push(row);
       console.log(`[SETTINGS-RECOVERY] ${spec.name} ${width}px ${row.status}${row.error ? `: ${row.error}` : ''}`);
     }
-    assert.deepEqual(serverUnexpected, []); assert.equal(result.results.length, 4);
+    for (const width of [1440, 390]) {
+      const row = await runtimeScenario(browser, baseURL, width, evidenceDir); result.results.push(row);
+      console.log(`[SETTINGS-RECOVERY] runtime-classification ${width}px ${row.status}${row.error ? `: ${row.error}` : ''}`);
+    }
+    assert.deepEqual(serverUnexpected, []); assert.equal(result.results.length, 6);
     assert.equal(result.results.filter(row => row.status !== 'PASS').length, 0, 'all settings recovery cases must pass');
   } catch (error) { result.error = error.message; throw error; }
   finally {

@@ -51,3 +51,18 @@ test("stream observation records real abort but lets late chunks reach parsing; 
   listeners.storage({ key: "vr-sidebar", storageArea: storage, isTrusted: true });
   assert.equal(window.__storageEvents[0].local, true); assert.equal(window.__storageEvents[0].trusted, true);
 });
+
+test("mounted draft scenario has distinct selectable reports without broadening the send whitelist", () => {
+  const reports = readReply("GET", "/api/myreports");
+  assert.deepEqual(reports.map(report => [report.id, report.title]), [
+    ["synthetic-report", "Synthetic report"], ["synthetic-report-b", "Synthetic report B"],
+  ]);
+  const body = { llm: config, messages: [{ role: "user", content: "SYNTHETIC_QUESTION" }] };
+  assert.equal(validSyntheticStream("POST", "/api/chat", { ...body, report_ids: ["synthetic-report"] }), true);
+  assert.equal(validSyntheticStream("POST", "/api/chat", { ...body, report_ids: ["synthetic-report-b"] }), false);
+  assert.equal(validSyntheticStream("POST", "/api/chat", { ...body, report_ids: reports.map(report => report.id) }), false);
+  const browser = readFileSync(new URL("./e2e/ai-settings-storage.browser.mjs", import.meta.url), "utf8");
+  assert.match(browser, /scenario === "chat-drafts"/);
+  assert.match(browser, /for \(const width of \[1440, 390\]\)/);
+  assert.match(browser, /assert\.equal\(result\.results\.length, 20\)/);
+});

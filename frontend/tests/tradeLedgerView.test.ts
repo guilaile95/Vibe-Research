@@ -303,3 +303,23 @@ describe("tradeLedgerView pure helpers", () => {
     });
   });
 });
+
+test("executed costs require explicit knowledge while zero stays valid", () => {
+  for (const status of ["full", "partial"] as const) {
+    const draft: TradeDraft = {
+      code: "600000", name: "SYNTHETIC", operation: "buy", execution_status: status,
+      actual_price: 10, actual_quantity: 100, executed_at: "2026-10-09T10:00",
+      fee: 0, other_cost: 0,
+      ...(status === "partial" ? { planned_quantity: 200, unexecuted_reason: "Synthetic partial" } : {}),
+    };
+    for (const field of ["fee", "other_cost"] as const) {
+      for (const value of [undefined, null, "", NaN, Infinity, -Infinity, -1]) {
+        assert.notEqual(validateTradeDraft({ ...draft, [field]: value }), null);
+      }
+    }
+    assert.equal(validateTradeDraft(draft), null);
+    const payload = buildTradeCreateInput(draft);
+    assert.equal(payload.fee, 0);
+    assert.equal(payload.other_cost, 0);
+  }
+});

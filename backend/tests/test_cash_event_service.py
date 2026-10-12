@@ -45,6 +45,7 @@ def _trade(code: str, operation: str, price: float, qty: int, name: str = "æµ‹è¯
         "actual_quantity": qty,
         "executed_at": "2026-08-03T09:30:00+08:00",
         "fee": fee,
+        "other_cost": 0.0,
     })
 
 

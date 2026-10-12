@@ -186,7 +186,16 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
       key: c.key,
       msgs: typeof updater === "function" ? updater(c.msgs) : updater,
     }));
-  const [input, setInput] = useState("");
+  // Unsent drafts belong to this mounted instance and the exact conversation key.
+  // No storage: unmounting discards them, and identical keys in other buttons do not share input.
+  const [drafts, setDrafts] = useState(() => new Map<string, string>());
+  const input = drafts.get(chatKey) ?? "";
+  const setInput = (text: string) => setDrafts((current) => {
+    const next = new Map(current);
+    if (text) next.set(chatKey, text);
+    else next.delete(chatKey);
+    return next;
+  });
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [epoch, setEpoch] = useState(() => loadEpoch(chatKey));
@@ -238,7 +247,6 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     abortRef.current?.abort();
     abortRef.current = null;
     setLoading(false);
-    setInput("");
     setEpoch(loadEpoch(chatKey));
     setChat({ key: chatKey, msgs: loadChat(chatKey) });
   }, [chatKey]);
