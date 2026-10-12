@@ -215,6 +215,16 @@ export function Watchlist() {
   return (
     <div className="watchlist-page">
       <style>{`
+        .quote-refresh-layout { display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: start; gap: 12px; width: 100%; min-width: 0; }
+        .quote-provenance { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; min-width: 0; }
+        .quote-status-item { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+        .quote-status-label { display: block; }
+        @media (min-width: 768px) {
+          .quote-refresh-layout { width: auto; flex: 1 1 560px; }
+          .quote-provenance { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+          .quote-status-label { display: inline; }
+          .quote-status-error { flex-basis: 100%; }
+        }
         @media (max-width: 767px) {
           .watchlist-records, .watchlist-records tbody { display: block; min-width: 0; }
           .watchlist-records thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
@@ -310,26 +320,28 @@ export function Watchlist() {
             <Star className="h-4 w-4 text-primary" /> 自选总览
             <span className="text-xs font-normal text-muted-foreground">{watchlistLoading || watchlistError ? "（未确认）" : `（${codes.length}）`}</span>
           </h3>
-          <div className="flex items-center gap-2 text-[11px] text-muted-foreground/70">
-            {error && <span role="status" className="text-warning">{error}</span>}
-            {codes.length > 0 && (
-              <>
-                <span>快照覆盖 {Object.keys(quotes).length}/{codes.length}</span>
-                {!live && <span>自动刷新已关闭</span>}
-                {live && !polling && <span>{isTradingHours() ? "自动刷新已暂停（页面未激活或等待请求）" : "非轮询时段 · 自动刷新已暂停"}</span>}
-                {polling && <span>自动刷新 · 常规请求间隔 3 秒，失败时退避</span>}
-                <span title="按北京时间工作日时段判断，不含节假日；轮询状态不代表行情新鲜度">时段规则不含节假日</span>
-                <span>{updatedAt != null ? `已显示快照最早行情时间 ${formatQuoteTime(updatedAt)}` : "汇总行情时间未知"}</span>
-                {requestCompletedAt != null && <span>上次请求完成 {formatQuoteTime(requestCompletedAt)}（不是行情时间）</span>}
-              </>
-            )}
+          <div className="quote-refresh-layout" data-testid="quote-refresh-layout">
+            <div className="quote-provenance text-xs leading-relaxed text-muted-foreground/70 md:text-[11px]" data-testid="quote-provenance">
+              {error && <span role="status" className="quote-status-item quote-status-error text-warning">{error}</span>}
+              {codes.length > 0 && (
+                <>
+                  <span className="quote-status-item"><span className="quote-status-label">快照覆盖 </span><span>{Object.keys(quotes).length}/{codes.length}</span></span>
+                  {!live && <span className="quote-status-item">自动刷新已关闭</span>}
+                  {live && !polling && <span className="quote-status-item">{isTradingHours() ? "自动刷新已暂停（页面未激活或等待请求）" : "非轮询时段 · 自动刷新已暂停"}</span>}
+                  {polling && <span className="quote-status-item">自动刷新 · 常规请求间隔 3 秒，失败时退避</span>}
+                  <span className="quote-status-item" title="按北京时间工作日时段判断，不含节假日；轮询状态不代表行情新鲜度">时段规则不含节假日</span>
+                  <span className="quote-status-item">{updatedAt != null ? <><span className="quote-status-label">已显示快照最早行情时间 </span><span>{formatQuoteTime(updatedAt)}</span></> : "汇总行情时间未知"}</span>
+                  {requestCompletedAt != null && <span className="quote-status-item"><span className="quote-status-label">上次请求完成 </span><span>{formatQuoteTime(requestCompletedAt)}（不是行情时间）</span></span>}
+                </>
+              )}
+            </div>
             <button
               onClick={() => {
                 refreshQuotes();
                 void loadAnomalies();
               }}
               disabled={loading || anomalyLoading}
-              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded text-muted-foreground hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+              className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
               aria-label="刷新行情与异动"
               title="刷新行情与异动"
             >

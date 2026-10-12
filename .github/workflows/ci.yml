@@ -185,6 +185,22 @@ jobs:
         working-directory: frontend
         run: npm run test:e2e:discovery
 
+      - name: Run full-market source and screener coverage E2E
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          VR_E2E_PYTHON: python
+          E2E_SCREENSHOT_DIR: ${{ runner.temp }}/screener-coverage-evidence
+        run: npm run test:e2e:full-market
+
+      - name: Preserve synthetic screener coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: screener-coverage-evidence
+          path: ${{ runner.temp }}/screener-coverage-evidence
+          if-no-files-found: warn
+
   e2e-thesis-smoke:
     name: Playwright thesis smoke E2E
     runs-on: ubuntu-latest

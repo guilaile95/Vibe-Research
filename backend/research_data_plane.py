@@ -601,7 +601,10 @@ def query_daily_bars(
     date_to: str | None = None,
     limit: int = 200,
     offset: int = 0,
+    latest_window: bool = False,
 ) -> dict[str, Any]:
+    if not isinstance(latest_window, bool):
+        raise ResearchDataPlaneQueryValidationError("latest_window must be boolean")
     _validate_query(code, date_from, date_to, limit, offset)
     manifest = read_manifest(root, snapshot_id=snapshot_id)
     root_path = resolve_root(root)
@@ -610,6 +613,13 @@ def query_daily_bars(
         "code": code, "date_from": date_from, "date_to": date_to,
         "limit": limit, "offset": offset,
     }
+    if latest_window:
+        # Only the opt-in lookback mode records this parameter. Historical default
+        # receipts retain their exact shape and ascending pagination semantics.
+        replay_parameters["latest_window"] = True
+        date_to = min(date_to, manifest["coverage_end"]) if date_to else manifest["coverage_end"]
+        # Replay records the validated request bounds, not a clipped bound that
+        # could precede date_from. The pinned snapshot repeats this same clamp.
     predicates: list[str] = []
     params: list[Any] = [str(artifact)]
     if code is not None:
@@ -624,7 +634,9 @@ def query_daily_bars(
     where = " WHERE " + " AND ".join(predicates) if predicates else ""
     query = (
         "SELECT code, CAST(trade_date AS VARCHAR), open, high, low, close, volume "
-        "FROM read_parquet(?)" + where + " ORDER BY trade_date, code LIMIT ? OFFSET ?"
+        "FROM read_parquet(?)" + where
+        + (" ORDER BY trade_date DESC, code DESC LIMIT ? OFFSET ?" if latest_window
+           else " ORDER BY trade_date, code LIMIT ? OFFSET ?")
     )
     params.extend([limit, offset])
     connection = duckdb.connect(database=":memory:")
@@ -637,6 +649,8 @@ def query_daily_bars(
             ) from exc
     finally:
         connection.close()
+    if latest_window:
+        result.reverse()  # Indicator consumers always receive chronological rows.
     rows = [
         {
             "code": row[0],
@@ -650,6 +664,7 @@ def query_daily_bars(
         for row in result
     ]
     return _with_replay_receipt({
+        **({"window_cutoff": date_to} if latest_window else {}),
         "schema_version": SCHEMA_VERSION,
         "dataset_id": manifest["dataset_id"],
         "provider_id": manifest.get("provider_id", PROVIDER_ID),

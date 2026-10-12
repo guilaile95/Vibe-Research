@@ -169,10 +169,11 @@ def test_hash_mismatch_is_unavailable_without_fallback(tmp_path, monkeypatch):
 
 
 def test_happy_path_match_and_reject(monkeypatch):
+    monkeypatch.setattr(svc, "_pin_research_snapshot", lambda: (None, None))
     monkeypatch.setattr(
         svc,
         "_research_bars",
-        lambda code, days: (
+        lambda code, days, **kwargs: (
             [{"datetime": "2026-07-01", "close": 10, "high": 11, "low": 9, "volume": 1}],
             svc._injected_data_envelope(),
         ),
@@ -198,12 +199,13 @@ def test_happy_path_match_and_reject(monkeypatch):
 
 
 def test_kline_exception_isolated(monkeypatch):
+    monkeypatch.setattr(svc, "_pin_research_snapshot", lambda: (None, None))
     def kline(code, category=4, offset=120):
         if code == "000002":
             raise RuntimeError("down")
         return [{"datetime": "2026-07-01", "close": 10, "high": 11, "low": 9, "volume": 1}]
 
-    monkeypatch.setattr(svc, "_research_bars", lambda code, days: (kline(code, days), svc._injected_data_envelope()))
+    monkeypatch.setattr(svc, "_research_bars", lambda code, days, **kwargs: (kline(code, days), svc._injected_data_envelope()))
     monkeypatch.setattr(
         "screener_service.ti.compute_indicators",
         lambda raw, **kw: _mock_env(close=12, sma20=11),
@@ -222,10 +224,11 @@ def test_kline_exception_isolated(monkeypatch):
 
 
 def test_missing_sma60_unavailable(monkeypatch):
+    monkeypatch.setattr(svc, "_pin_research_snapshot", lambda: (None, None))
     monkeypatch.setattr(
         svc,
         "_research_bars",
-        lambda code, days: ([{"datetime": "2026-07-01", "close": 10, "high": 11, "low": 9, "volume": 1}], svc._injected_data_envelope()),
+        lambda code, days, **kwargs: ([{"datetime": "2026-07-01", "close": 10, "high": 11, "low": 9, "volume": 1}], svc._injected_data_envelope()),
     )
     monkeypatch.setattr(
         "screener_service.ti.compute_indicators",
@@ -244,13 +247,14 @@ def test_missing_sma60_unavailable(monkeypatch):
 
 
 def test_code_dedupe_sort(monkeypatch):
+    monkeypatch.setattr(svc, "_pin_research_snapshot", lambda: (None, None))
     seen = []
 
     def kline(code, category=4, offset=120):
         seen.append(code)
         return [{"datetime": "2026-07-01", "close": 10, "high": 11, "low": 9, "volume": 1}]
 
-    monkeypatch.setattr(svc, "_research_bars", lambda code, days: (kline(code, days), svc._injected_data_envelope()))
+    monkeypatch.setattr(svc, "_research_bars", lambda code, days, **kwargs: (kline(code, days), svc._injected_data_envelope()))
     monkeypatch.setattr(
         "screener_service.ti.compute_indicators",
         lambda raw, **kw: _mock_env(close=12, sma20=11),
@@ -278,11 +282,12 @@ def test_too_many_unique_codes_422():
 
 
 def test_31_raw_30_unique_accepted_200(monkeypatch):
+    monkeypatch.setattr(svc, "_pin_research_snapshot", lambda: (None, None))
     """Dedupe-before-limit: 31 raw with one duplicate → 30 unique → 200."""
     monkeypatch.setattr(
         svc,
         "_research_bars",
-        lambda code, days: ([{"datetime": "2026-07-01", "close": 10, "high": 11, "low": 9, "volume": 1}], svc._injected_data_envelope()),
+        lambda code, days, **kwargs: ([{"datetime": "2026-07-01", "close": 10, "high": 11, "low": 9, "volume": 1}], svc._injected_data_envelope()),
     )
     monkeypatch.setattr(
         "screener_service.ti.compute_indicators",
@@ -462,10 +467,11 @@ def test_sector_representatives_endpoint():
 
 
 def test_determinism_excluding_evaluated_at(monkeypatch):
+    monkeypatch.setattr(svc, "_pin_research_snapshot", lambda: (None, None))
     monkeypatch.setattr(
         svc,
         "_research_bars",
-        lambda code, days: ([{"datetime": "2026-07-01", "close": 10, "high": 11, "low": 9, "volume": 1}], svc._injected_data_envelope()),
+        lambda code, days, **kwargs: ([{"datetime": "2026-07-01", "close": 10, "high": 11, "low": 9, "volume": 1}], svc._injected_data_envelope()),
     )
     monkeypatch.setattr(
         "screener_service.ti.compute_indicators",
