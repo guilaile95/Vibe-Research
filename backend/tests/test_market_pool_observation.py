@@ -33,6 +33,21 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(astock, "em_get", blocked)
 
 
+@pytest.fixture
+def review_clock(monkeypatch):
+    """Keep review session checks and cache insertion timestamps on one fixture clock."""
+    class Clock(datetime):
+        current = datetime.fromisoformat(AS_OF)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.current.astimezone(tz or timezone.utc)
+
+    monkeypatch.setattr(daily_review, "datetime", Clock)
+    monkeypatch.setattr(daily_review.time, "time", lambda: Clock.current.timestamp())
+    return Clock
+
+
 class Response:
     def __init__(self, payload, status=200):
         self.payload, self.status_code = payload, status
@@ -310,7 +325,7 @@ def _old_and_qualified_reviews(monkeypatch):
     return old, new
 
 
-def test_qualified_refresh_replaces_legacy_normal_memory_and_latest_only(monkeypatch, tmp_path):
+def test_qualified_refresh_replaces_legacy_normal_memory_and_latest_only(monkeypatch, tmp_path, review_clock):
     import daily_review_cache as cache
     import time
     old, new = _old_and_qualified_reviews(monkeypatch)
@@ -377,19 +392,14 @@ def test_current_verified_normal_is_preserved_but_prior_session_can_refresh(monk
 
 
 @pytest.mark.parametrize("legacy", [False, True])
-def test_review_cache_crossing_0930_is_stale_and_read_only_does_not_write(monkeypatch, legacy):
+def test_review_cache_crossing_0930_is_stale_and_read_only_does_not_write(monkeypatch, legacy, review_clock):
     import daily_review_cache as cache
     import push2_guard
     from pathlib import Path
     old, qualified = _old_and_qualified_reviews(monkeypatch)
     value = old if legacy else qualified
-    class Clock(datetime):
-        current = datetime.fromisoformat("2026-10-12T01:29:59+00:00")
-        @classmethod
-        def now(cls, tz=None):
-            return cls.current.astimezone(tz or timezone.utc)
-    monkeypatch.setattr(daily_review, "datetime", Clock)
-    monkeypatch.setattr(daily_review.time, "time", lambda: Clock.current.timestamp())
+    Clock = review_clock
+    Clock.current = datetime.fromisoformat("2026-10-12T01:29:59+00:00")
     assert cache.save_latest_review(value, saved_at=value["generated_at"])
     daily_review._review_cache[daily_review._REVIEW_CACHE_KEY] = (Clock.current.timestamp(), copy.deepcopy(value))
     assert daily_review._cached_review() is not None
@@ -397,6 +407,9 @@ def test_review_cache_crossing_0930_is_stale_and_read_only_does_not_write(monkey
     path = Path(cache.cache_path())
     before_disk = path.read_bytes()
     Clock.current = datetime.fromisoformat("2026-10-12T01:30:00+00:00")
+    # A one-second-old package is rejected by the session boundary, not its TTL.
+    assert Clock.current.timestamp() - before_memory[daily_review._REVIEW_CACHE_KEY][0] == 1
+    assert daily_review._REVIEW_TTL > 1
     with push2_guard.read_only():
         assert daily_review._cached_review() is None
         assert daily_review._cached_review_age_seconds() is None

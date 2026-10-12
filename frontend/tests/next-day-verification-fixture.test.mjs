@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { createFixture, golden, DAY } from "./e2e/next-day-verification.fixture.mjs";
+import { createFixture, golden, DAY, JOURNAL_VIEWPORTS } from "./e2e/next-day-verification.fixture.mjs";
 const origin = "http://127.0.0.1:18761";
 const payload = { revision: 0, items: [{ metric: "limit_up_count", direction: "up", reason: "Synthetic prior condition" }] };
 
@@ -62,4 +62,21 @@ test("held-response hook cannot hide cross-origin or non-GET requests", () => {
   const source = readFileSync(new URL("./e2e/next-day-verification.browser.mjs", import.meta.url), "utf8");
   assert.match(source, /url.origin === location.origin && method === "GET" && window.__holdJournalDate/);
   assert.match(source, /input instanceof Request \? input.method : "GET"/);
+});
+
+
+test("both real viewport suites run every flow and capture state-ready cropped evidence", () => {
+  assert.deepEqual(JOURNAL_VIEWPORTS.map(({ width, height }) => [width, height]), [[1440, 1000], [390, 844]]);
+  assert.equal(new Set(JOURNAL_VIEWPORTS.map(({ label }) => label)).size, 2);
+  const source = readFileSync(new URL("./e2e/next-day-verification.browser.mjs", import.meta.url), "utf8");
+  assert.match(source, /for \(const viewport of JOURNAL_VIEWPORTS\)/);
+  assert.match(source, /viewport: \{ width: viewport.width, height: viewport.height \}/);
+  assert.match(source, /state.scrollWidth <= state.clientWidth \+ 1/);
+  assert.match(source, /control.right <= state.right \+ 1/);
+  assert.match(source, /-card-top.png/);
+  assert.match(source, /captureRegion\(card.locator\("fieldset"\), "controls"\)/);
+  assert.match(source, /shot\("03a-save-error-retains-input", "验证记录不可写入，未保存修改"\)/);
+  assert.match(source, /shot\("03b-revision-conflict", "记录已改变，请重新读取后再保存"\)/);
+  assert.match(source, /shot\("04-sealed-missing-is-not-failure", "已封存，不能修改或删除"\)/);
+  assert.match(source, /shot\("07a-read-error", "验证记录不可读取，已停止操作"\)/);
 });

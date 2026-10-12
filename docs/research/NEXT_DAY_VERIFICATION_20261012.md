@@ -82,3 +82,24 @@ the exact accepted `/api/market/seal-quality?trade_date=...` unavailable envelop
 no ratio is asserted or invented without evidence. Standalone journal-only
 acceptance omits this flag. This cross-slice smoke complements the seal component
 adapter and real archive/API tests; it does not replace them.
+
+
+## Evidence extension: real narrow-viewport execution
+
+The initial CI journal assertions passed, but its desktop full-page screenshots
+could show blank space because the app scrolls inside `main`. Those pixels did
+not establish journal sealed-state or mobile acceptance. The test-only extension
+runs the entire existing flow independently at 1440×1000 and 390×844, with fresh
+browser contexts and isolated fixture histories. It does not resize old images.
+
+Every evidence capture waits for its named state, scrolls the actual journal card
+into view, checks card/control horizontal containment and writes viewport-labeled
+files. The visible card top is cropped to the actual main scrollport; short state,
+controls, saved-result and coverage regions are captured separately so a tall
+mobile card cannot hide its footer outside the scrollport. Retained-input write
+failure, revision conflict and read failure are now captured before recovery.
+`results.json` records the viewport, selected date, current text, control disabled
+states, dimensions and exact image files for each capture. The existing CI entry
+runs both widths without a new flag. New runtime/pixel acceptance requires the
+next CI run and inspection of its artifacts; no browser was run locally while
+preparing this extension. Product files and golden service contracts are unchanged.

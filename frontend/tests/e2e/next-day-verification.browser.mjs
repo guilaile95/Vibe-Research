@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { createFixture, golden, DAY, CLOCK } from "./next-day-verification.fixture.mjs";
+import { createFixture, golden, DAY, CLOCK, JOURNAL_VIEWPORTS } from "./next-day-verification.fixture.mjs";
 
 const frontend = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const dist = path.join(frontend, "dist");
@@ -19,10 +19,12 @@ const withSealQuality = process.argv.includes("--with-seal-quality");
 const violations = [];
 const pageErrors = [];
 const results = [];
+const captures = [];
+let currentViewport;
 let browser, context, page, origin;
 let fixture;
 const fixtureRuns = [];
-function resetFixture(label) { fixture = createFixture(origin, { withSealQuality }); fixtureRuns.push({ label, fixture }); }
+function resetFixture(label) { fixture = createFixture(origin, { withSealQuality }); fixtureRuns.push({ label: `${currentViewport?.label || "setup"}/${label}`, fixture }); }
 async function until(predicate) {
   for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise((done) => setTimeout(done, 25)); }
   assert.fail("Timed out waiting for fixture request receipt");
@@ -51,10 +53,74 @@ const server = createServer((req, res) => {
   res.end(bytes);
 });
 
-async function shot(name) {
-  await page.screenshot({ path: path.join(evidenceDir, `${name}.png`), fullPage: true });
-  results.push(name);
+async function shot(name, requiredText) {
+  const card = page.getByTestId("next-day-verification");
+  await card.waitFor({ state: "visible" });
+  if (requiredText) await card.getByText(requiredText, { exact: false }).first().waitFor({ state: "visible" });
+  await card.scrollIntoViewIfNeeded();
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+  const state = await card.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const controls = [...element.querySelectorAll("input, select, button")].map((control) => {
+      const box = control.getBoundingClientRect();
+      return { label: control.getAttribute("aria-label") || control.textContent?.trim(),
+        disabled: control.matches(":disabled"), visible: box.width > 0 && box.height > 0,
+        left: box.left, right: box.right, width: box.width };
+    });
+    return { text: element.innerText, selectedDate: element.querySelector('input[type="date"]')?.value,
+      left: rect.left, right: rect.right, width: rect.width, height: rect.height,
+      clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, controls };
+  });
+  assert.ok(state.width > 0 && state.height > 0, "journal card must be painted");
+  assert.ok(state.left >= -1 && state.right <= currentViewport.width + 1, "journal card must fit the real viewport");
+  assert.ok(state.scrollWidth <= state.clientWidth + 1, "journal card must not horizontally overflow");
+  for (const control of state.controls.filter((entry) => entry.visible)) {
+    assert.ok(control.left >= state.left - 1 && control.right <= state.right + 1, `control must fit journal card: ${control.label}`);
+  }
+  const prefix = `${currentViewport.label}-${name}`;
+  const files = [];
+  // DailyReview scrolls inside <main>. Capturing an element taller than that
+  // scrollport can still produce blank pixels. Crop only the visible card top,
+  // then scroll/capture short state, controls and result regions separately.
+  await card.evaluate((element) => element.scrollIntoView({ block: "start", inline: "nearest", behavior: "instant" }));
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const clip = await card.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const main = element.closest("main")?.getBoundingClientRect() || { top: 0, bottom: innerHeight, left: 0, right: innerWidth };
+    const x = Math.max(0, box.left, main.left), y = Math.max(0, box.top, main.top);
+    return { x, y, width: Math.min(innerWidth, box.right, main.right) - x,
+      height: Math.min(innerHeight, box.bottom, main.bottom) - y };
+  });
+  assert.ok(clip.width > 0 && clip.height > 100, "card top must be inside the main scrollport");
+  files.push(`${prefix}-card-top.png`, `${prefix}-viewport.png`);
+  await page.screenshot({ path: path.join(evidenceDir, files[0]), clip, animations: "disabled", caret: "hide" });
+  await page.screenshot({ path: path.join(evidenceDir, files[1]), fullPage: false, animations: "disabled", caret: "hide" });
+  async function captureRegion(locator, label) {
+    if (!await locator.count()) return;
+    await locator.scrollIntoViewIfNeeded();
+    const box = await locator.boundingBox();
+    assert.ok(box && box.height <= currentViewport.height - 100, `${label} must fit in the scrollport`);
+    const region = await locator.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const main = element.closest("main")?.getBoundingClientRect() || { top: 0, bottom: innerHeight };
+      return { top: box.top, bottom: box.bottom, clipTop: Math.max(0, main.top), clipBottom: Math.min(innerHeight, main.bottom) };
+    });
+    assert.ok(region.top >= region.clipTop - 1 && region.bottom <= region.clipBottom + 1, `${label} must be fully visible before capture`);
+    const filename = `${prefix}-${label}.png`;
+    await locator.screenshot({ path: path.join(evidenceDir, filename), animations: "disabled", caret: "hide" });
+    files.push(filename);
+  }
+  if (requiredText) await captureRegion(card.getByText(requiredText, { exact: false }).first(), "state");
+  await captureRegion(card.locator("fieldset"), "controls");
+  await captureRegion(card.locator("div").filter({ hasText: "事前冻结值" }).last(), "saved-result");
+  await captureRegion(card.getByText(/^近 60 个交易日条件：/), "coverage");
+  captures.push({ name: prefix, viewport: currentViewport, requiredText: requiredText || null, ...state, files });
+  results.push(prefix);
 }
+
 async function readyDate(day) {
   await page.waitForFunction((expected) => {
     const card = document.querySelector('[data-testid="next-day-verification"]');
@@ -69,9 +135,12 @@ try {
   mkdirSync(evidenceDir, { recursive: true });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
-  resetFixture("save-conflict-clear");
   browser = await chromium.launch({ headless: true, args: ["--disable-background-networking", "--dns-prefetch-disable", "--disable-features=NetworkPrediction"] });
-  context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: "zh-CN", timezoneId: "America/Los_Angeles", serviceWorkers: "block" });
+  for (const viewport of JOURNAL_VIEWPORTS) {
+  currentViewport = viewport;
+  dailyGate = deferred();
+  resetFixture("save-conflict-clear");
+  context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, locale: "zh-CN", timezoneId: "America/Los_Angeles", serviceWorkers: "block" });
   await context.routeWebSocket("**/*", (ws) => { violations.push(`WebSocket forbidden ${ws.url()}`); ws.close(); });
   await context.route("**/*", async (route) => {
     const req = route.request();
@@ -128,9 +197,9 @@ try {
     const seal = page.getByTestId("seal-quality-card");
     await seal.getByText("封板质量归档证据未连接；不会自动启用采集或请求行情。", { exact: true }).waitFor();
     assert.equal(await seal.getByTestId("seal-never_broken_ratio").count(), 0);
-    results.push("integrated-seal-archive-unconnected-smoke");
+    results.push(`${currentViewport.label}-integrated-seal-archive-unconnected-smoke`);
   }
-  await shot("01-cold-canonical-and-loaded-date");
+  await shot("01-cold-canonical-and-loaded-date", "可记录，下一交易日");
 
   await card.getByLabel("涨停家数方向").selectOption("up");
   await card.getByLabel("涨停家数理由").fill("Synthetic prior condition");
@@ -146,7 +215,7 @@ try {
   saveGate.resolve();
   await card.getByText(/已保存；仅记录研究条件/).waitFor();
   await card.getByText(/待下一交易日收盘/).waitFor();
-  await shot("02-explicit-save-missing-prior");
+  await shot("02-explicit-save-missing-prior", "待下一交易日收盘");
 
   await card.getByLabel("涨停家数方向").selectOption("down");
   await card.getByLabel("涨停家数理由").fill("Unsaved input survives failure");
@@ -154,9 +223,11 @@ try {
   await card.getByRole("button", { name: "保存整晚条件", exact: true }).click();
   await card.getByText(/输入已保留/).waitFor();
   assert.equal(await card.getByLabel("涨停家数理由").inputValue(), "Unsaved input survives failure");
+  await shot("03a-save-error-retains-input", "验证记录不可写入，未保存修改");
   fixture.expectSave(body(1, "down", "Unsaved input survives failure"), "open_external", 409);
   await card.getByRole("button", { name: "保存整晚条件", exact: true }).click();
   await card.getByText(/记录已改变/).waitFor();
+  await shot("03b-revision-conflict", "记录已改变，请重新读取后再保存");
   await card.getByRole("button", { name: /重新读取/ }).click();
   await card.getByText(/条件版本：2/).waitFor();
   assert.equal(await card.getByLabel("涨停家数理由").inputValue(), "Saved by another window");
@@ -164,7 +235,7 @@ try {
   fixture.expectSave(body(2, null), "open_cleared");
   await card.getByRole("button", { name: "保存为空（清除本晚条件）", exact: true }).click();
   await card.getByText(/条件版本：3/).waitFor();
-  await shot("03-conflict-recovery-explicit-clear");
+  await shot("03c-conflict-recovery-explicit-clear", "条件版本：3");
 
   // Start a separate synthetic journal for sealed rendering. Never resurrect a
   // cleared row or move revision3 back to revision2 within the same fixture.
@@ -185,11 +256,11 @@ try {
   await card.getByRole("button", { name: "保存整晚条件", exact: true }).evaluate((el) => el.click());
   assert.equal(fixture.writes.length, count);
   assert.doesNotMatch(await card.innerText(), /· 不成立/);
-  await shot("04-sealed-missing-is-not-failure");
+  await shot("04-sealed-missing-is-not-failure", "已封存，不能修改或删除");
   await card.getByLabel("验证复盘交易日").fill("2026-12-31");
   await card.getByText(/交易日历未知或日期不是支持的交易日/).waitFor();
   assert.equal(await card.getByRole("button", { name: "保存为空（清除本晚条件）", exact: true }).isDisabled(), true);
-  await shot("05-unknown-calendar-blocks-writes");
+  await shot("05-unknown-calendar-blocks-writes", "交易日历未知或日期不是支持的交易日");
 
   // Another independent pre-seal journal owns the delayed-read tests.
   await page.close();
@@ -212,15 +283,16 @@ try {
   assert.equal(await card.getByLabel("验证复盘交易日").inputValue(), DAY);
   assert.doesNotMatch(await card.innerText(), /OLDER_RESPONSE_MUST_NOT_REPLACE_CURRENT/);
   assert.equal(fixture.writes.length, count);
-  await shot("06-stale-date-response-suppressed");
+  await shot("06-stale-date-response-suppressed", "条件版本：1");
 
   fixture.failGet(DAY);
   await card.getByRole("button", { name: /重新读取/ }).click();
   await card.getByText(/验证记录不可读取，已停止操作/).waitFor();
   assert.equal(await card.getByLabel("涨停家数方向").count(), 0, "failed read hides stale editor");
+  await shot("07a-read-error", "验证记录不可读取，已停止操作");
   await card.getByRole("button", { name: /重新读取/ }).click();
   await card.getByText(/条件版本：1/).waitFor();
-  await shot("07-read-error-recovery");
+  await shot("07b-read-error-recovery", "条件版本：1");
   await page.close();
 
   // Late market data must not overwrite a date deliberately chosen by the user.
@@ -238,19 +310,26 @@ try {
   // Wait for the actual market response and ensuing state to settle.
   await page.waitForFunction(() => document.body.textContent.includes("2026-07-31 · 当前市场快照"));
   assert.equal(await card.getByLabel("验证复盘交易日").inputValue(), "2026-12-31");
-  await shot("08-user-date-survives-late-market-response");
+  await shot("08-user-date-survives-late-market-response", "交易日历未知或日期不是支持的交易日");
+  await context.close();
+  context = undefined;
+  }
   for (const run of fixtureRuns) { assert.deepEqual(run.fixture.expectedWrites, [], run.label); assert.deepEqual(run.fixture.violations, [], run.label); }
   assert.deepEqual(violations, []);
   assert.deepEqual(pageErrors, []);
   console.log(JSON.stringify({ status: "passed", scenarios: results, explicit_puts: fixtureRuns.reduce((sum, run) => sum + run.fixture.writes.length, 0), unexpected_requests: 0 }));
 } catch (error) {
-  if (page && !page.isClosed()) await page.screenshot({ path: path.join(evidenceDir, "failure.png"), fullPage: true }).catch(() => {});
+  if (page && !page.isClosed()) {
+    const prefix = currentViewport?.label || "setup";
+    await page.getByTestId("next-day-verification").screenshot({ path: path.join(evidenceDir, `${prefix}-failure-card.png`), animations: "disabled" }).catch(() => {});
+    await page.screenshot({ path: path.join(evidenceDir, `${prefix}-failure-viewport.png`), fullPage: false }).catch(() => {});
+  }
   process.exitCode = 1;
   console.error(error);
 } finally {
   for (const gate of pendingGates) gate.resolve();
   mkdirSync(evidenceDir, { recursive: true });
-  writeFileSync(path.join(evidenceDir, "results.json"), JSON.stringify({ scenarios: results, fixtureRuns: fixtureRuns.map(({ label, fixture: f }) => ({ label, requests: f.requests, writes: f.writes })), violations: [...violations, ...fixtureRuns.flatMap(({ fixture: f }) => f.violations)], pageErrors, passed: !process.exitCode }, null, 2));
+  writeFileSync(path.join(evidenceDir, "results.json"), JSON.stringify({ scenarios: results, viewports: JOURNAL_VIEWPORTS, captures, fixtureRuns: fixtureRuns.map(({ label, fixture: f }) => ({ label, requests: f.requests, writes: f.writes })), violations: [...violations, ...fixtureRuns.flatMap(({ fixture: f }) => f.violations)], pageErrors, passed: !process.exitCode }, null, 2));
   await context?.close();
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));

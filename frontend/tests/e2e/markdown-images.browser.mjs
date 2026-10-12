@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
-import { ancillaryReply, encode, syntheticLlm } from './final-families.fixture.mjs';
+import { ANCILLARY_CLOCK, ancillaryReply, encode, syntheticLlm } from './final-families.fixture.mjs';
 
 const dist = fileURLToPath(new URL('../../dist/', import.meta.url));
 assert.ok(process.env.E2E_MARKDOWN_IMAGES_OUTPUT_DIR, 'Set E2E_MARKDOWN_IMAGES_OUTPUT_DIR');
@@ -112,6 +112,7 @@ try {
       return route.fulfill({ status: 503, json: { detail: 'Synthetic unrelated panel unavailable' } });
     });
     const page = await context.newPage();
+    await page.clock.setFixedTime(new Date(ANCILLARY_CLOCK));
     page.setDefaultTimeout(10000); page.setDefaultNavigationTimeout(15000);
     page.on('pageerror', error => errors.push(error.message));
     const verify = async (name, scope = page) => {

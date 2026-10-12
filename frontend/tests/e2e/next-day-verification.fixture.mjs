@@ -5,6 +5,10 @@ import { isDeepStrictEqual } from "node:util";
 export const golden = JSON.parse(readFileSync(new URL("../fixtures/next-day-verification.json", import.meta.url), "utf8"));
 export const DAY = "2026-07-31";
 export const CLOCK = "2026-08-03T00:00:00Z";
+export const JOURNAL_VIEWPORTS = Object.freeze([
+  Object.freeze({ label: "desktop-1440", width: 1440, height: 1000 }),
+  Object.freeze({ label: "mobile-390", width: 390, height: 844 }),
+]);
 export const json = (body, status = 200) => ({ kind: "json", status, body });
 const copy = (value) => structuredClone(value);
 
