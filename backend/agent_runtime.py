@@ -37,7 +37,7 @@ def _base_url() -> str:
 def _safe_status_payload(payload: object) -> dict:
     if not isinstance(payload, dict):
         raise AgentRuntimeError("RUNTIME_BAD_RESPONSE", "Codex Subscription Runtime 返回无效")
-    return {
+    result = {
         "runtime": "Codex Subscription",
         "installed": bool(payload.get("installed")),
         "authenticated": bool(payload.get("authenticated")),
@@ -45,6 +45,15 @@ def _safe_status_payload(payload: object) -> dict:
         "status": str(payload.get("status") or "runtime_unavailable"),
         "version": str(payload.get("version")) if payload.get("version") else None,
     }
+
+    # Optional for compatibility with older runtime servers. Never copy raw details.
+    if "auth_kind" in payload:
+        kind = payload.get("auth_kind")
+        result["auth_kind"] = kind if kind in ("chatgpt", "api_key", "logged_out", "unknown") else "unknown"
+    if "probe_error" in payload:
+        error = payload.get("probe_error")
+        result["probe_error"] = error if error in (None, "timeout", "not_found", "malformed_output", "nonzero_exit", "process_error") else "process_error"
+    return result
 
 
 def status() -> dict:
@@ -54,6 +63,14 @@ def status() -> dict:
         return _safe_status_payload(response.json())
     except AgentRuntimeError:
         raise
+    except requests.Timeout:
+        # The outer HTTP budget can expire before either bounded CLI probe.
+        # No conclusion about the account or installed binary is available.
+        return {
+            "runtime": "Codex Subscription", "installed": False,
+            "authenticated": False, "available": False, "status": "probe_failed",
+            "version": None, "auth_kind": "unknown", "probe_error": "timeout",
+        }
     except (requests.RequestException, ValueError):
         return {
             "runtime": "Codex Subscription",

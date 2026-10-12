@@ -20,6 +20,7 @@ import {
   type WatchlistAnomalyItem,
 } from "@/lib/decisionCockpit";
 import { useLiveQuotes, isTradingHours } from "@/hooks/useLiveQuotes";
+import { formatQuoteTime, quoteSnapshotLabel } from "@/lib/quoteSnapshot";
 import { cn } from "@/lib/utils";
 import { NativeIntelWatchlistContext } from "@/components/native-intel/NativeIntelWatchlistContext";
 
@@ -69,7 +70,7 @@ export function Watchlist() {
   // 实时行情默认**关闭**——开着会持续请求，让用户自己决定要不要开。
   const [live, setLive] = useState(loadLive);
 
-  const { quotes, loading, updatedAt, polling, error, refresh: refreshQuotes } = useLiveQuotes(codes, live);
+  const { quotes, loading, updatedAt, requestCompletedAt, snapshots, polling, error, refresh: refreshQuotes } = useLiveQuotes(codes, live);
 
   const toggleLive = () => {
     setLive((on) => {
@@ -203,12 +204,12 @@ export function Watchlist() {
                 ? ` 异动：${events.map((item) => `${item.type}（${item.reason}）`).join("；")}`
                 : "";
               return q
-                ? `${q.name}(${c}) 现价${q.price} ${pct(q.change_pct)} PE(TTM)${q.pe_ttm ?? "—"} 换手${q.turnover_pct ?? "—"}%${eventText}`
+                ? `${q.name}(${c}) 快照价格${q.price}（${quoteSnapshotLabel(snapshots?.[c])}） ${pct(q.change_pct)} PE(TTM)${q.pe_ttm ?? "—"} 换手${q.turnover_pct ?? "—"}%${eventText}`
                 : `${c}（行情未取到）${eventText}`;
             })
             .join("\n")
         : "还没有自选股。",
-    [anomalyByCode, codes, quotes],
+    [anomalyByCode, codes, quotes, snapshots],
   );
 
   return (
@@ -231,7 +232,7 @@ export function Watchlist() {
           <div className="flex items-center gap-2">
             <button
               onClick={toggleLive}
-              title={live ? "关闭实时行情" : "开启实时行情（交易时段每 3 秒自动刷新）"}
+              title={live ? "关闭自动刷新" : "开启自动刷新（按北京时间工作日时段，每次请求后等待 3 秒；不含节假日判断）"}
               className={cn(
                 "inline-flex min-h-11 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
                 live
@@ -250,7 +251,7 @@ export function Watchlist() {
                   )}
                 />
               </span>
-              实时行情
+              自动刷新
             </button>
             {codes.length > 0 && (
               <AskAiButton
@@ -310,18 +311,16 @@ export function Watchlist() {
             <span className="text-xs font-normal text-muted-foreground">{watchlistLoading || watchlistError ? "（未确认）" : `（${codes.length}）`}</span>
           </h3>
           <div className="flex items-center gap-2 text-[11px] text-muted-foreground/70">
-            {error ? (
-              <span className="text-warning">{error}</span>
-            ) : (
+            {error && <span role="status" className="text-warning">{error}</span>}
+            {codes.length > 0 && (
               <>
-                {/* 把「开着却没在刷」的原因说清楚，否则用户会以为坏了 */}
-                {live && !polling && codes.length > 0 && (
-                  <span>{isTradingHours() ? "已暂停（页面未激活）" : "非交易时段 · 已暂停"}</span>
-                )}
-                {polling && <span className="text-primary/80">实时 · 每 3 秒</span>}
-                {updatedAt && (
-                  <span className="font-mono">{new Date(updatedAt).toLocaleTimeString("zh-CN", { hour12: false })}</span>
-                )}
+                <span>快照覆盖 {Object.keys(quotes).length}/{codes.length}</span>
+                {!live && <span>自动刷新已关闭</span>}
+                {live && !polling && <span>{isTradingHours() ? "自动刷新已暂停（页面未激活或等待请求）" : "非轮询时段 · 自动刷新已暂停"}</span>}
+                {polling && <span>自动刷新 · 常规请求间隔 3 秒，失败时退避</span>}
+                <span title="按北京时间工作日时段判断，不含节假日；轮询状态不代表行情新鲜度">时段规则不含节假日</span>
+                <span>{updatedAt != null ? `已显示快照最早行情时间 ${formatQuoteTime(updatedAt)}` : "汇总行情时间未知"}</span>
+                {requestCompletedAt != null && <span>上次请求完成 {formatQuoteTime(requestCompletedAt)}（不是行情时间）</span>}
               </>
             )}
             <button
@@ -396,7 +395,7 @@ export function Watchlist() {
                   <thead role="rowgroup">
                     <tr role="row" className="border-b border-border/50 text-left text-xs text-muted-foreground">
                       <th role="columnheader" scope="col" id="watchlist-stock" className="px-2 py-2 font-normal">股票</th>
-                      <th role="columnheader" scope="col" id="watchlist-price" className="px-2 py-2 text-right font-normal">最新价</th>
+                      <th role="columnheader" scope="col" id="watchlist-price" className="px-2 py-2 text-right font-normal">快照价</th>
                       <th role="columnheader" scope="col" id="watchlist-change" className="px-2 py-2 text-right font-normal">涨跌幅</th>
                       <th role="columnheader" scope="col" id="watchlist-amount" className="px-2 py-2 text-right font-normal">成交额</th>
                       <th role="columnheader" scope="col" id="watchlist-anomaly" className="px-2 py-2 font-normal">当日异动事实</th>
@@ -422,11 +421,12 @@ export function Watchlist() {
                         候选研究
                       </Link>
                     </div>
+                    <div className="text-xs text-muted-foreground" data-testid={`quote-status-${c}`}>{quoteSnapshotLabel(snapshots?.[c])}</div>
                     {(q?.name || events[0]?.name) && (
                       <span className="ml-2 text-muted-foreground">{q?.name || events[0]?.name}</span>
                     )}
                   </td>
-                  <td role="cell" headers="watchlist-price" className="px-2 py-3 text-right font-mono"><span aria-hidden="true" className="watchlist-field-label hidden">最新价</span>{q?.price ?? "—"}</td>
+                  <td role="cell" headers="watchlist-price" className="px-2 py-3 text-right font-mono"><span aria-hidden="true" className="watchlist-field-label hidden">快照价</span>{q?.price ?? "—"}</td>
                   <td role="cell" headers="watchlist-change" className={cn("px-2 py-3 text-right font-mono", color(q?.change_pct))}>
                       <span aria-hidden="true" className="watchlist-field-label hidden">涨跌幅</span>
                       {pct(q?.change_pct)}

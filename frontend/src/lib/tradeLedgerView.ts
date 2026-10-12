@@ -344,7 +344,9 @@ export function buildTradeCreateInput(draft: TradeDraft): TradeCreateInput {
     code: draft.code.trim(),
     name: draft.name.trim(),
     operation,
-    execution_status: executionStatus,
+    ...(executionStatus === "not_executed"
+      ? { execution_status: executionStatus }
+      : { execution_status: executionStatus, fee, other_cost: otherCost }),
     planned_price: plannedPrice,
     planned_quantity: plannedQty,
     unexecuted_reason: draft.unexecuted_reason?.trim() || null,
@@ -355,8 +357,6 @@ export function buildTradeCreateInput(draft: TradeDraft): TradeCreateInput {
     res.actual_price = actualPrice;
     res.actual_quantity = actualQty;
     res.executed_at = executedAt;
-    res.fee = fee;
-    res.other_cost = otherCost;
   }
 
   if (draft.advice_ref) {

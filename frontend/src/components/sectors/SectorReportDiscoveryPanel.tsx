@@ -8,8 +8,10 @@ import {
   type DiscoveredSectorReport,
   type MyReport,
   type SectorReportScope,
+  type SectorReportsDiscoveryResult,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { sectorReportCoverageView } from "@/lib/reportSourceCoverage";
 
 type Props = {
   sectorKey: string;
@@ -44,6 +46,7 @@ export function SectorReportDiscoveryPanel({ sectorKey }: Props) {
   const [discovered, setDiscovered] = useState<DiscoveredSectorReport[] | null>(null);
   const [filtered, setFiltered] = useState<DiscoveredSectorReport[] | null>(null);
   const [meta, setMeta] = useState<{ total?: number; returned?: number; truncated?: boolean }>({});
+  const [coverage, setCoverage] = useState<Pick<SectorReportsDiscoveryResult, "status" | "source_coverage">>({});
   const [importMap, setImportMap] = useState<Record<string, ImportState>>({});
   const [archived, setArchived] = useState<Map<string, MyReport>>(new Map());
   const mounted = useRef(true);
@@ -92,6 +95,7 @@ export function SectorReportDiscoveryPanel({ sectorKey }: Props) {
     setError(null);
     setDiscovered(null);
     setFiltered(null);
+    setCoverage({});
     setImportMap({});
     try {
       const result = await api.discoverSectorReports(sectorKey, {
@@ -104,6 +108,7 @@ export function SectorReportDiscoveryPanel({ sectorKey }: Props) {
       }
       setDiscovered(result.discovered ?? []);
       setFiltered(result.filtered ?? []);
+      setCoverage({ status: result.status, source_coverage: result.source_coverage });
       setMeta({
         total: result.total_discovered,
         returned: result.returned,
@@ -116,6 +121,7 @@ export function SectorReportDiscoveryPanel({ sectorKey }: Props) {
       setDiscovered([]);
       setFiltered([]);
       setMeta({});
+      setCoverage({ status: "unavailable" });
     } finally {
       if (mounted.current && discoverSeq.current === seq) setLoading(false);
     }
@@ -153,6 +159,8 @@ export function SectorReportDiscoveryPanel({ sectorKey }: Props) {
       }));
     }
   }, [sectorKey]);
+
+  const coverageView = sectorReportCoverageView(coverage);
 
   return (
     <GlassCard className="p-4 sm:p-5">
@@ -210,13 +218,19 @@ export function SectorReportDiscoveryPanel({ sectorKey }: Props) {
       )}
 
       {!loading && discovered !== null && rows.length === 0 && !error && (
-        <p className="mt-3 text-xs text-muted-foreground">未发现匹配研报，可调整范围或天数后重试。</p>
+        <p className="mt-3 text-xs text-muted-foreground">{coverageView.emptyText}</p>
+      )}
+
+      {!loading && discovered !== null && (
+        <p className={cn("mt-3 text-xs", coverageView.status === "normal" ? "text-muted-foreground" : "text-warning")} data-testid="sector-report-source-coverage" data-source-state={coverageView.status}>
+          {coverageView.notice}
+        </p>
       )}
 
       {rows.length > 0 && (
         <p className="mt-3 text-xs text-muted-foreground">
           {meta.truncated && meta.total != null && meta.returned != null
-            ? `共发现 ${meta.total} 条，当前展示前 ${meta.returned} 条（按相关性截断，均可在有效期内导入）`
+            ? `本次页窗内发现 ${meta.total} 条，当前展示前 ${meta.returned} 条（按相关性截断，均可在有效期内导入）`
             : `当前展示 ${rows.length} 条`}
         </p>
       )}

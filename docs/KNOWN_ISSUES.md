@@ -45,6 +45,12 @@ an `UNPLANNED` origin.
 Estimated amounts are not guaranteed fills and do not silently invent fees, slippage, tax, sellable
 quantity or broker state.
 
+New `full` and `partial` trade writes require explicit finite, nonnegative `fee` and
+`other_cost` values; use `0` only to confirm zero cost. Missing or null costs are rejected
+by the API with 422. `not_executed` rows retain zero-cost normalization. Historical zero
+costs are unchanged: older records may have defaulted missing costs to zero, so their
+original cost knowledge cannot be inferred from the stored value.
+
 ## Native Intel relevance is intentionally simple
 
 Native Intel provides deterministic public-information observations and source health. Security

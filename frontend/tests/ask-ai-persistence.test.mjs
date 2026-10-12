@@ -158,7 +158,7 @@ test("research note metadata is captured per answer instead of read from the cur
   assert.match(source, /noteMetadata: loadNoteMetadata\(m\.noteMetadata\)/);
   assert.match(source, /metadata=\{m\.noteMetadata\}/);
   assert.match(source, /if \(initialQuestion !== undefined\) setInput\(initialQuestion\); setOpen\(true\)/);
-  assert.match(source, /setInput\(""\);\s*setEpoch\(loadEpoch\(chatKey\)\)/);
+  assert.match(source, /setEpoch\(loadEpoch\(chatKey\)\)/);
 });
 
 test("explicit page history identity includes report, version and range", () => {

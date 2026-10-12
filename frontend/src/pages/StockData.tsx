@@ -30,7 +30,7 @@ import {
   togglePanelState,
 } from "@/components/ui/optionalDataPanelState";
 import {
-  api, ApiError, type Valuation, type Report, type NewsItem, type ValPercentile, type ValMetric,
+  api, ApiError, type Valuation, type NewsItem, type ValPercentile, type ValMetric,
   type Financials, type Announcement, type MarginRow, type BlockTradeRow, type HolderRow,
   type DividendRow, type FundFlowRow, type DragonTiger, type Lockup, type Blocks, type HotConcept, type QaRow,
   type GlobalStock, type HkCashflow, type KlineBar, type DisclosureItem, type TechnicalIndicators, type TopRiskAnalysis,
@@ -43,6 +43,7 @@ import { safeInternalReturnTo } from "@/lib/internalReturnTo";
 import { cn } from "@/lib/utils";
 import {
   type EvidenceListState, type EvidenceState, resolveEvidenceList, evidenceListStatusText, evidenceStatusText, loadEvidenceSource,
+  type ReportEvidenceState, resolveReportEvidence, reportEvidenceStatusText,
   reportEvidenceContext, announcementEvidenceContext, quoteEvidenceContext, summarizeStockFundFlow, formatStockCapitalValue,
 } from "@/lib/stockDataEvidence";
 
@@ -138,7 +139,7 @@ export function StockData() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [val, setVal] = useState<Valuation | null>(null);
-  const [reportResult, setReportResult] = useState<EvidenceListState<Report>>({ status: "idle", data: [] });
+  const [reportResult, setReportResult] = useState<ReportEvidenceState>({ status: "idle", data: [] });
   const reports = reportResult.data;
   const [newsResult, setNewsResult] = useState<EvidenceListState<NewsItem>>({ status: "idle", data: [] });
   const news = newsResult.data;
@@ -408,7 +409,7 @@ export function StockData() {
     const ok = <T,>(set: (v: T) => void) => (v: T) => { if (rid === runIdRef.current) set(v); };
     setReportResult({ status: "loading", data: [] });
     setAnnouncementResult({ status: "loading", data: [] });
-    void resolveEvidenceList(api.reports(c), "研报数据暂不可用").then(ok(setReportResult));
+    void resolveReportEvidence(api.reportsWithCoverage(c), "研报数据暂不可用").then(ok(setReportResult));
     void resolveEvidenceList(api.announcements(c), "公告数据暂不可用").then(ok(setAnnouncementResult));
     void loadEvidenceSource(() => api.margin(c), [], "融资融券数据暂不可用", setMarginResult, () => rid === runIdRef.current);
     void loadEvidenceSource(() => api.blockTrade(c), [], "大宗交易数据暂不可用", setBlockTResult, () => rid === runIdRef.current);
@@ -922,8 +923,8 @@ export function StockData() {
                 <NativeIntelSecurityContext code={activeCode} />
 
                 <GlassCard className="mb-4" data-testid="stock-reports-source-state">
-                    <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><FileText className="h-4 w-4 text-primary" /> 近期研报{reportResult.status === "success" ? `（${reports.length}）` : ""}</h3>
-                    <p className="mb-2 text-xs text-muted-foreground" data-source-state={reportResult.status}>{evidenceListStatusText(reportResult)}</p>
+                    <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><FileText className="h-4 w-4 text-primary" /> 近期研报{reportResult.status === "success" || reportResult.status === "partial" ? `（${reports.length}）` : ""}</h3>
+                    <p className={cn("mb-2 text-xs", reportResult.status === "partial" || reportResult.status === "error" || reportResult.status === "unsupported" ? "text-warning" : "text-muted-foreground")} data-source-state={reportResult.status}>{reportEvidenceStatusText(reportResult)}</p>
                     <div className="space-y-2">
                       {reports.slice(0, 12).map((r, i) => (
                         <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">

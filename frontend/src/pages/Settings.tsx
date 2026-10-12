@@ -265,6 +265,8 @@ export function Settings() {
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/20 p-3 text-xs">
               <span className={runtimeStatus?.available ? "text-success" : "text-muted-foreground"}>
                 Runtime：{runtimeStatus?.runtime || "Codex Subscription"} · {
+                  runtimeStatus?.auth_kind === "api_key" ? "当前为 API key 登录，订阅接入需要 ChatGPT 登录" :
+                  runtimeStatus?.status === "probe_failed" ? "登录状态检测未完成，请重试（现有登录不会被清除）" :
                   runtimeStatus?.status === "ready" ? "已连接" :
                   runtimeStatus?.status === "login_pending" ? "等待登录" :
                   runtimeStatus?.status === "login_failed" ? "登录未完成" :

@@ -138,7 +138,10 @@ def _require_number(value: Any, field: str) -> float:
         raise TradeValidationError(f"{field} 必须是数字")
     if value != value or value == float("inf") or value == float("-inf"):
         raise TradeValidationError(f"{field} 必须是有限数字")
-    return float(value)
+    try:
+        return float(value)
+    except OverflowError as exc:
+        raise TradeValidationError(f"{field} 必须是有限数字") from exc
 
 
 def _optional_number(value: Any, field: str) -> float | None:
@@ -204,8 +207,13 @@ def validate_and_build_record(data: dict[str, Any]) -> dict[str, Any]:
     planned_quantity = _optional_int(data.get("planned_quantity"), "planned_quantity")
     actual_price = _optional_number(data.get("actual_price"), "actual_price")
     actual_quantity = _optional_int(data.get("actual_quantity"), "actual_quantity") or 0
-    fee = _optional_number(data.get("fee"), "fee") or 0.0
-    other_cost = _optional_number(data.get("other_cost"), "other_cost") or 0.0
+    if execution_status in ("full", "partial"):
+        # Zero is a confirmed cost, not a substitute for missing knowledge.
+        fee = _require_number(data.get("fee"), "fee")
+        other_cost = _require_number(data.get("other_cost"), "other_cost")
+    else:
+        fee = _optional_number(data.get("fee"), "fee") or 0.0
+        other_cost = _optional_number(data.get("other_cost"), "other_cost") or 0.0
     unexecuted_reason = _optional_str(data.get("unexecuted_reason"), "unexecuted_reason", max_len=_MAX_REASON_LEN)
     note = _optional_str(data.get("note"), "note", max_len=_MAX_NOTE_LEN)
 

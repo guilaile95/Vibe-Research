@@ -40,6 +40,8 @@ class TestValidation:
             "actual_price": 1500.0,
             "actual_quantity": 100,
             "executed_at": "2026-07-28T09:30:00+08:00",
+            "fee": 0.0,
+            "other_cost": 0.0,
         }
         data.update(overrides)
         return data
@@ -410,6 +412,8 @@ class TestPortfolioJsonZeroSideEffects:
             "actual_price": 1500.0,
             "actual_quantity": 100,
             "executed_at": "2026-07-28T09:30:00+08:00",
+            "fee": 0.0,
+            "other_cost": 0.0,
         }
         trade = svc.create_trade(data)
         svc.get_trade(trade["trade_id"])

@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { runRssCoverageScenario } from "./rss-coverage.browser.mjs";
 
 const frontend = fileURLToPath(new URL("../../", import.meta.url));
 const dist = join(frontend, "dist");
@@ -254,8 +255,12 @@ async function main() {
       result.results.push(row);
       console.log(`[RECOVERY] ${scenario} ${width}px PASS`);
     }
-    assert.equal(result.results.length, 6);
-    console.log(`[RECOVERY] 6/6 PASS; evidence: ${evidenceDir}`);
+    for (const width of [1440, 390]) for (const mode of ["partial", "unavailable", "empty"]) {
+      result.results.push(await runRssCoverageScenario(browser, baseURL, width, mode, evidenceDir));
+      console.log(`[RECOVERY] rss-${mode} ${width}px PASS`);
+    }
+    assert.equal(result.results.length, 12);
+    console.log(`[RECOVERY] 12/12 PASS; evidence: ${evidenceDir}`);
   } catch (error) {
     result.error = error.message;
     throw error;

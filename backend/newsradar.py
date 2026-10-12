@@ -233,7 +233,41 @@ def fetch_radar() -> dict:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False)
     os.replace(tmp, cfile)  # 原子改名，防两次并发刷新交错写坏缓存
-    return data
+    return with_source_coverage(data)
+
+
+def with_source_coverage(data: dict) -> dict:
+    """Response-only fetch coverage; cached items do not prove source success.
+
+    Existing caches record aggregate failures and per-track configured totals,
+    not per-track successes. Keep that global scope explicit, including for AI
+    track filters. Do not rewrite the cache or infer missing legacy counters.
+    """
+    stats = data.get("stats") or {}
+    expected = stats.get("total_sources")
+    failed = stats.get("failed_sources")
+    totals = [ind.get("total") for ind in data.get("industries") or []]
+    count = lambda value: type(value) is int and value >= 0
+    attempted = sum(totals) if totals and all(count(n) for n in totals) else None
+    known = (bool(data.get("generated_at")) and count(expected) and expected > 0
+             and count(failed) and attempted is not None
+             and 0 <= failed <= attempted <= expected)
+    if known:
+        succeeded = attempted - failed
+        state = ("unavailable" if succeeded == 0 else
+                 "partial" if failed or attempted < expected else "normal")
+    else:
+        succeeded = None
+        state = "unknown"
+    return {**data, "status": state if known else "partial",
+            "source_coverage": {
+                "scope": "cached_fetch_all_configured_sources",
+                "state": state,
+                "expected_sources": expected if count(expected) else None,
+                "attempted_sources": attempted if known else None,
+                "succeeded_sources": succeeded,
+                "failed_sources": failed if known else None,
+            }}
 
 
 def migrate_radar_item(item: dict) -> dict:
@@ -307,4 +341,4 @@ def skeleton() -> dict:
 def get_radar(force: bool = False) -> dict:
     if force:
         return fetch_radar()
-    return load_cache() or skeleton()
+    return with_source_coverage(load_cache() or skeleton())

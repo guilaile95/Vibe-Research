@@ -4,7 +4,10 @@ export const chatKey = `vr-askai-chat:/my-reports#reports:synthetic-report@${con
 export const readPaths = ["/api/myreports", "/api/health", "/api/runtime-info", "/api/ai/credential-status", "/api/native-intel/filter/profile", "/api/native-intel/sources", "/api/native-intel/config"];
 export function readReply(method, path, search = "") {
   if (method !== "GET") return null;
-  if (path === "/api/myreports" && !search) return [{ id: "synthetic-report", name: "Synthetic report.pdf", title: "Synthetic report", size: 100, ts: 1791417600000, sector_keys: [], institution: "Synthetic", publish_date: "2026-10-08", text_index_status: "SEARCHABLE" }];
+  if (path === "/api/myreports" && !search) return [
+    { id: "synthetic-report", title: "Synthetic report" },
+    { id: "synthetic-report-b", title: "Synthetic report B" },
+  ].map(report => ({ ...report, name: `${report.title}.pdf`, size: 100, ts: 1791417600000, sector_keys: [], institution: "Synthetic", publish_date: "2026-10-08", text_index_status: "SEARCHABLE" }));
   if (path === "/api/health" && !search) return { ok: true, service: "vibe-research-api", version: "synthetic" };
   if (path === "/api/runtime-info" && !search) return { service: "vibe-research-api", version: "synthetic", git_sha: null, source_state: "unknown", source_directory: null, working_directory: null };
   if (path === "/api/ai/credential-status" && !search) return { configured: false, provider: null, scheduled_available: false };

@@ -422,9 +422,9 @@ def publish_price(trade_date, close, event, fetched_at):
     publish_tushare_daily_canonical_fact(lake, fact)
 publish_price(start_trade_date, 100.0, 1, visible_before(committed_at))
 publish_price(end_trade_date, 110.0, 2, visible_before(evaluation_at))
-exact = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'buy', 'execution_status': 'full', 'actual_price': 100, 'actual_quantity': 1, 'executed_at': executed_at_text})
-unplanned = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'add', 'execution_status': 'full', 'actual_price': 101, 'actual_quantity': 1, 'executed_at': unplanned_at_text})
-unallocated = tls.create_trade({'code': '600519', 'name': '贵州茅台', 'operation': 'add', 'execution_status': 'full', 'actual_price': 102, 'actual_quantity': 1, 'executed_at': unallocated_at_text})
+exact = tls.create_trade({'fee': 0, 'other_cost': 0, 'code': '600519', 'name': '贵州茅台', 'operation': 'buy', 'execution_status': 'full', 'actual_price': 100, 'actual_quantity': 1, 'executed_at': executed_at_text})
+unplanned = tls.create_trade({'fee': 0, 'other_cost': 0, 'code': '600519', 'name': '贵州茅台', 'operation': 'add', 'execution_status': 'full', 'actual_price': 101, 'actual_quantity': 1, 'executed_at': unplanned_at_text})
+unallocated = tls.create_trade({'fee': 0, 'other_cost': 0, 'code': '600519', 'name': '贵州茅台', 'operation': 'add', 'execution_status': 'full', 'actual_price': 102, 'actual_quantity': 1, 'executed_at': unallocated_at_text})
 record = fta.create_attribution(first, exact, attribution_id=fta.new_attribution_id(), created_at=created_at_text).to_dict()
 ats.write_attribution(db_path=ats.resolve_formal_trade_attribution_db_path(), record=record)
 tar.mark_unplanned(unplanned['trade_id'], {'confirm': True})
@@ -754,6 +754,7 @@ async function run() {
     const counterfactualBefore = JSON.stringify(firstBefore.counterfactual_outcome);
 
     const laterTrade = await jsonRequest(backend, "/api/trades", "POST", {
+      fee: 0, other_cost: 0,
       code: "600519", name: "贵州茅台", operation: "add", execution_status: "full",
       actual_price: 103, actual_quantity: 1, executed_at: "2026-09-01T01:00:00Z",
     }, 200);

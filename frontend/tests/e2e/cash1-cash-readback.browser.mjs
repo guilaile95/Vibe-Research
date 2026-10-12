@@ -236,6 +236,7 @@ astock.kline = _cash1_kline
 
     // ---- C. trade 通过同一权威更新展示现金 -------------------------------
     await jsonRequest(backend, "/api/trades", "POST", {
+      fee: 0, other_cost: 0,
       code: "600519",
       name: "贵州茅台",
       operation: "buy",

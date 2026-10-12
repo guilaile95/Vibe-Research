@@ -664,6 +664,10 @@ def _require_llm_ready(llm: LLMConfig) -> bool:
     if provider == "cli-codex":
         runtime_status = agent_runtime.status()
         if not runtime_status["available"]:
+            if runtime_status["status"] == "probe_failed":
+                raise HTTPException(503, "Codex 登录状态检测未完成，请重试；现有登录不会被清除")
+            if runtime_status.get("auth_kind") == "api_key":
+                raise HTTPException(401, "Codex 当前使用 API key；订阅接入需要 ChatGPT 登录")
             code = 401 if runtime_status["status"] in {"not_authenticated", "login_pending", "login_failed"} else 503
             raise HTTPException(code, "Codex Subscription 尚未连接，请先在设置页登录")
         return True
@@ -2388,8 +2392,10 @@ def global_stock(symbol: str = Query(..., min_length=1, max_length=16)):
         return {"data": data}
     except HTTPException:
         raise
-    except gstock.SearchUnavailable as e:
-        raise HTTPException(503, str(e)) from None
+    except gstock.SearchAmbiguous:
+        raise HTTPException(400, gstock.SEARCH_AMBIGUOUS_MESSAGE) from None
+    except gstock.SearchUnavailable:
+        raise HTTPException(503, gstock.SEARCH_UNAVAILABLE_MESSAGE) from None
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "美港股查询异常，请稍后重试。") from e
 
@@ -2404,8 +2410,10 @@ def global_hk_cashflow(symbol: str = Query(..., min_length=1, max_length=16)):
         return {"data": data}
     except HTTPException:
         raise
-    except gstock.SearchUnavailable as e:
-        raise HTTPException(503, str(e)) from None
+    except gstock.SearchAmbiguous:
+        raise HTTPException(400, gstock.SEARCH_AMBIGUOUS_MESSAGE) from None
+    except gstock.SearchUnavailable:
+        raise HTTPException(503, gstock.SEARCH_UNAVAILABLE_MESSAGE) from None
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "港股现金流查询异常，请稍后重试。") from e
 
@@ -2651,10 +2659,14 @@ def reports(code: str = Query(...), pages: int = Query(2, ge=1, le=5)):
     """个股研报列表（东财，含 PDF 链接）。仅需 requests。"""
     code = _validate(code)
     try:
-        rows = astock.eastmoney_reports(code, max_pages=pages)
+        window = astock.report_window_compat(
+            astock.eastmoney_reports(code, max_pages=pages, with_coverage=True), pages)
+        rows = window["rows"]
+        if window["status"] == "unavailable":
+            raise ValueError("report source unavailable")
         for r in rows:
             r["pdfUrl"] = astock.pdf_url(r.get("infoCode", "")) if r.get("infoCode") else None
-        return {"data": rows}
+        return {"data": rows, "status": window["status"], "source_coverage": window["source_coverage"]}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "研报源异常，请稍后重试。") from e
 
@@ -2976,6 +2988,8 @@ def sector_research_reports(
     return {
         "data": {
             "sector_key": result.source_key,
+            "status": result.status,
+            "source_coverage": result.source_coverage,
             "discovered": result.discovered,
             "filtered": result.filtered,
             "error": result.error,

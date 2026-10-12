@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import re
+
 import astock
 
 _UA_H = {"User-Agent": astock.UA}
@@ -107,85 +109,104 @@ _SEARCH_ENDPOINTS = (
 )
 
 
-def _search(q: str) -> dict | None:
-    """东财搜索一次：市场过滤 + **精确代码匹配优先**，退而取第一条。
+class SearchAmbiguous(RuntimeError):
+    """Several distinct provider identities match; never choose by result order."""
 
-    只按 MktNum 过滤挑不出正股——东财搜 AAPL 会混入 AAPL22(票据)/AAPB(2倍做多ETF)，
-    搜 BABA 混入 05593(窝轮)，且 SecurityType 分不开(正股与 ETF 同为 Type7、正股港股与窝轮同为 Type6)。
-    正股的 Code 恰好等于查询词，故精确匹配 Code==q 最稳；无精确匹配(名称查询)才退回第一条。
+
+SEARCH_UNAVAILABLE_MESSAGE = "证券搜索接口暂时不可用，请稍后重试；这与「查无此代码」不同。"
+SEARCH_AMBIGUOUS_MESSAGE = "证券标识存在歧义，请核对并输入准确代码及适用的市场后缀。"
+
+
+def _search_rows(data: list) -> list[tuple[int, dict]]:
+    """Validate identity fields before trusting even an exact-looking candidate."""
+    matches = []
+    for row in data:
+        if not isinstance(row, dict):
+            raise ValueError("invalid search row")
+        raw_market = row.get("MktNum")
+        if type(raw_market) is int:
+            market = raw_market
+        elif isinstance(raw_market, str) and re.fullmatch(r"[0-9]+", raw_market):
+            market = int(raw_market)
+        else:
+            raise ValueError("invalid search market")
+        if market not in _MKT:
+            continue
+        code, name = row.get("Code"), row.get("Name", "")
+        pattern = r"[0-9]{5}" if market == 116 else r"[0-9]{6}" if market == 177 else r"[A-Z][A-Z0-9.-]{0,15}"
+        if not isinstance(code, str) or not re.fullmatch(pattern, code) or not isinstance(name, str):
+            raise ValueError("invalid search identity")
+        matches.append((market, row))
+    return matches
+
+
+def _search(q: str, *, market: int | None = None, code_alias: str | None = None) -> dict | None:
+    """Exact code first, then unique exact name; suggestions never select a security.
+
+    Only documented HK zero-padding is an alias. Different (MktNum, Code) pairs
+    remain distinct, including US provider markets 105 and 107 with .O suffixes.
     """
     params = {"input": q, "type": 14,
               "token": "D43BF722C8E33BDC906FB84D85E326E8", "count": 10}
-
-    rows, last_error = None, None
+    matches = None
     for url in _SEARCH_ENDPOINTS:
         try:
-            r = astock.em_get(url, params=params, headers=_UA_H, timeout=10)
-            status = getattr(r, "status_code", 200)
-            if status >= 400:
-                # em_get 不会 raise_for_status，HTTP 错误页照样能 .json() 成功
-                raise RuntimeError(f"HTTP {status}")
-            payload = r.json()
-        except Exception as e:  # noqa: BLE001 — 网络/HTTP/JSON 解析都可能
-            last_error = f"{url} → {type(e).__name__}: {str(e)[:80]}"
+            response = astock.em_get(url, params=params, headers=_UA_H, timeout=10)
+            if getattr(response, "status_code", 200) >= 400:
+                continue
+            payload = response.json()
+            table = payload.get("QuotationCodeTable") if isinstance(payload, dict) else None
+            data = table.get("Data") if isinstance(table, dict) else None
+            if not isinstance(data, list):
+                continue
+            matches = _search_rows(data)
+        except Exception:  # network, JSON or malformed identity: try existing backup
             continue
-
-        # 🔴 必须校验响应结构再决定收手。主端点返回「合法 JSON 但没有
-        # QuotationCodeTable」（错误响应 / 接口改版 / 风控页）时若当成
-        # "查得到但没有匹配"直接 break，备用端点根本轮不上（upstream #26）。
-        # payload 本身也可能不是对象（`null` / 数组）；Data 也可能不是列表。
-        table = payload.get("QuotationCodeTable") if isinstance(payload, dict) else None
-        data = table.get("Data") if isinstance(table, dict) else None
-        if not isinstance(data, list):
-            last_error = (
-                f"{url} → 响应结构异常（缺少 QuotationCodeTable.Data 或类型不对）"
-                f"，可能是接口改版或被风控页拦截"
-            )
-            continue
-
-        rows = data   # 结构正常但为空 = 真的没匹配到
         break
-
-    if rows is None:
-        # 🔴 全部端点都请求失败 ≠ 查无此票——两种情况不能压成同一个"未找到"。
-        raise SearchUnavailable(
-            f"证券搜索接口暂时不可用（已尝试 {len(_SEARCH_ENDPOINTS)} 个端点）。"
-            f"最后一个错误：{last_error}。"
-            f"这与「查无此代码」是两回事——请检查网络环境，或稍后重试。"
-        )
-    matches = []
-    for s in rows:
-        try:
-            mkt = int(s.get("MktNum"))
-        except (TypeError, ValueError):
-            continue
-        if mkt in _MKT:
-            matches.append((mkt, s))
-    if not matches:
+    if matches is None:
+        # Public API and AI callers expose exception text; never include provider
+        # URLs, response content, credentials or transport exception details.
+        raise SearchUnavailable(SEARCH_UNAVAILABLE_MESSAGE)
+    candidates = [(m, row) for m, row in matches if market is None or m == market]
+    codes = {q, code_alias} if code_alias else {q}
+    exact = [(m, row) for m, row in candidates if row["Code"] in codes]
+    if not exact:
+        # Numeric code intent must not resolve through a coincidentally equal name.
+        exact = [] if q.isdigit() else [(m, row) for m, row in candidates if row.get("Name", "").strip().upper() == q]
+    identities = {(m, row["Code"]): (m, row) for m, row in exact}
+    if not identities:
         return None
-    mkt, s = next(((m, x) for m, x in matches if str(x.get("Code", "")).upper() == q), matches[0])
-    suffix, market = _MKT[mkt]
-    code = s.get("Code", "")
-    return {"code": code, "name": s.get("Name", ""), "secid_prefix": mkt,
-            "secucode": f"{code}{suffix}", "market": market}
+    if len(identities) > 1:
+        raise SearchAmbiguous(SEARCH_AMBIGUOUS_MESSAGE)
+    mkt, row = next(iter(identities.values()))
+    suffix, label = _MKT[mkt]
+    code = row["Code"]
+    return {"code": code, "name": row.get("Name", ""), "secid_prefix": mkt,
+            "secucode": f"{code}{suffix}", "market": label}
 
 
 def resolve_symbol(query: str) -> dict | None:
-    """代码/名称 → {code, name, secid_prefix, secucode, market}。认美股/港股/韩股。
-    数字型港股短代码（如 `700`）补零到 5 位再试一次（东财按 `00700` 收）。
-    韩股用国际后缀 `.KS`/`.KQ`/`.KR`（如三星 `005930.KS`）——韩股代码与 A 股同为 6 位数字，
-    需显式后缀区分，否则前端会按 A 股处理、后端也搜不到韩股。"""
+    """Resolve an exact code/name without silently changing security or market.
+
+    Short numeric codes are HK (zero-padded to five digits). Bare six-digit
+    codes belong to the A-share entry point, not this global resolver. Explicit
+    .KS/.KQ/.KR expresses KR intent; the existing provider only exposes market
+    177, not a verifiable distinction between Korean exchanges.
+    """
     q = query.strip().upper()
     if not q:
         return None
-    for suf in (".KS", ".KQ", ".KR"):  # 剥掉韩股后缀，按裸代码搜（东财 177=韩股）
-        if q.endswith(suf):
-            q = q[: -len(suf)]
-            break
-    hit = _search(q)
-    if hit is None and q.isdigit() and len(q) < 5:
-        hit = _search(q.zfill(5))
-    return hit
+    for suffix in (".KS", ".KQ", ".KR"):
+        if q.endswith(suffix):
+            code = q[:-len(suffix)]
+            return _search(code, market=177) if re.fullmatch(r"[0-9]{6}", code) else None
+    if q.isdigit():
+        if not re.fullmatch(r"[0-9]{1,5}", q):
+            return None
+        padded = q.zfill(5)
+        hit = _search(q, market=116, code_alias=padded)
+        return _search(padded, market=116) if hit is None and padded != q else hit
+    return _search(q)
 
 
 def _key_metrics(secucode: str) -> dict | None:

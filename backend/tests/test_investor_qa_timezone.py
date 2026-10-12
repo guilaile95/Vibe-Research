@@ -25,6 +25,7 @@ def provider(monkeypatch, value):
     class Response:
         def __init__(self, payload):
             self.payload = payload
+        def raise_for_status(self): pass
         def json(self):
             return self.payload
     def post(url, **kwargs):
@@ -52,6 +53,7 @@ if hasattr(time, 'tzset'):
 calls = []
 class Response:
     def __init__(self, payload): self.payload = payload
+    def raise_for_status(self): pass
     def json(self): return self.payload
 def post(url, **kwargs):
     calls.append((url, kwargs))
@@ -67,7 +69,7 @@ with patch('requests.post', post), patch.object(app, '_cached', lambda k, c, t, 
                       'calls': len(calls), 'page_sizes': [kw['params']['pageSize'] for _, kw in calls if 'params' in kw]}))
 '''
     backend = str(Path(astock.__file__).parent)
-    env = {**os.environ, 'TZ': zone, 'PYTHONPATH': backend}
+    env = {**os.environ, 'TZ': zone, 'PYTHONPATH': os.pathsep.join(filter(None, [backend, os.environ.get('PYTHONPATH')]))}
     result = subprocess.run([sys.executable, '-c', script], env=env, cwd=backend,
                             capture_output=True, text=True, check=True, timeout=30)
     payload = json.loads(result.stdout)
@@ -97,7 +99,7 @@ def test_existing_missing_time_behavior_stays_unknown(monkeypatch, value):
 ])
 def test_existing_malformed_source_behavior_stays_failed(monkeypatch, value, exception):
     provider(monkeypatch, value)
-    with pytest.raises(exception):
+    with pytest.raises(RuntimeError, match="投资者互动数据暂不可用"):
         astock.investor_qa('000001')
     with pytest.raises(app.HTTPException) as error:
         app.investor_qa(code='000001')

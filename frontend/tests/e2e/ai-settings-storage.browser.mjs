@@ -108,7 +108,55 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
     };
     const aborted = index => page.waitForFunction(i => window.__streams[i]?.aborted, index);
     const stored = () => page.evaluate(() => JSON.stringify(Object.fromEntries(Object.entries(localStorage))));
-    if (scenario.startsWith("chat-")) {
+    if (scenario === "chat-drafts") {
+      await page.goto("/my-reports");
+      const a = page.getByRole("checkbox", { name: "选择 Synthetic report", exact: true });
+      const b = page.getByRole("checkbox", { name: "选择 Synthetic report B", exact: true });
+      const trigger = page.getByRole("button", { name: "基于所选资料提问（1）", exact: true });
+      const panel = page.locator('aside[aria-label="Vibe AI 对话"]');
+      const input = page.getByPlaceholder("询问 Vibe...");
+      const draftA = "SYNTHETIC_UNSENT_DRAFT_A", draftB = "SYNTHETIC_UNSENT_DRAFT_B", nextA = "SYNTHETIC_UNSENT_NEXT_A";
+      await a.check();
+      // A real, unchanged trigger node proves selection changes retain this instance.
+      const originalTrigger = await trigger.elementHandle();
+      assert.ok(originalTrigger);
+      const open = async () => { await trigger.click(); await input.waitFor(); };
+      const switchSelection = async (add, remove) => {
+        await panel.getByRole("button", { name: "关闭", exact: true }).click();
+        // Keep at least one report selected throughout; empty selection unmounts.
+        await add.check(); await remove.uncheck();
+        assert.equal(await trigger.evaluate((node, original) => node === original, originalTrigger), true);
+        await open();
+      };
+      await open(); await input.fill(draftA);
+      await switchSelection(b, a); assert.equal(await input.inputValue(), ""); await input.fill(draftB);
+      await switchSelection(a, b); assert.equal(await input.inputValue(), draftA);
+      assert.equal(await streamCount(), 0, "typing and selection changes must never send");
+      assert.doesNotMatch(await stored(), /SYNTHETIC_UNSENT_/);
+      const index = await streamCount(), slot = prepareStream(streamState, "/api/chat");
+      await panel.getByRole("button", { name: "发送", exact: true }).click(); await started(slot, index);
+      assert.equal(await input.inputValue(), "", "sending clears only the current draft");
+      assert.deepEqual(slot.body.report_ids, ["synthetic-report"]);
+      assert.deepEqual(slot.body.messages, [{ role: "user", content: draftA }]);
+      await finished(slot, index, "SYNTHETIC_DRAFT_REPLY");
+      await page.waitForFunction(key => localStorage.getItem(key)?.includes("SYNTHETIC_DRAFT_REPLY"), chatKey);
+      await switchSelection(b, a); assert.equal(await input.inputValue(), draftB);
+      await switchSelection(a, b); assert.equal(await input.inputValue(), "", "sent draft must not return");
+      await input.fill(nextA);
+      await panel.getByRole("button", { name: "清空本页对话", exact: true }).click();
+      assert.equal(await input.inputValue(), nextA, "clear history retains unsent input");
+      await page.waitForFunction(key => localStorage.getItem(key) === null && localStorage.getItem(`vr-askai-epoch:${key}`) === "1", chatKey);
+      assert.doesNotMatch(await panel.innerText(), /SYNTHETIC_DRAFT_REPLY/);
+      await switchSelection(b, a); assert.equal(await input.inputValue(), draftB);
+      await switchSelection(a, b); assert.equal(await input.inputValue(), nextA);
+      assert.equal(await streamCount(), 1, "only the explicit send starts a request");
+      assert.doesNotMatch(await stored(), /SYNTHETIC_UNSENT_/);
+      await page.reload(); await a.check(); await open();
+      assert.equal(await input.inputValue(), "", "unmount/reload intentionally discards drafts");
+      await panel.getByRole("button", { name: "关闭", exact: true }).click();
+      await b.check(); await a.uncheck(); await open(); assert.equal(await input.inputValue(), "");
+      assert.equal(await streamCount(), 0, "reload does not automatically send");
+    } else if (scenario.startsWith("chat-")) {
       const openChat = async () => {
         await page.getByRole("checkbox", { name: "选择 Synthetic report", exact: true }).check();
         await page.getByRole("button", { name: "基于所选资料提问（1）", exact: true }).click();
@@ -285,13 +333,13 @@ async function main() {
     browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } : {}) });
     server = await staticServer(streamState);
     const baseURL = `http://127.0.0.1:${server.address().port}`;
-    for (const width of [1440, 390]) for (const scenario of ["chat-unrelated", "chat-runtime", "chat-access", "chat-current", "chat-epoch", "chat-clear", "chat-controls", "settings-save", "settings-races"]) {
+    for (const width of [1440, 390]) for (const scenario of ["chat-drafts", "chat-unrelated", "chat-runtime", "chat-access", "chat-current", "chat-epoch", "chat-clear", "chat-controls", "settings-save", "settings-races"]) {
       try { result.results.push(await runScenario(browser, baseURL, width, scenario, streamState, evidenceDir)); console.log(`[AI-SET] ${scenario} ${width}px PASS`); }
       catch (error) { result.results.push({ scenario, width, status: "FAIL", error: error.message }); console.error(`[AI-SET] ${scenario} ${width}px FAIL: ${error.message}`); }
     }
-    assert.equal(result.results.length, 18);
+    assert.equal(result.results.length, 20);
     assert.equal(result.results.filter(row => row.status !== "PASS").length, 0, "all scenario groups must pass");
-    console.log("[AI-SET] 18/18 PASS");
+    console.log("[AI-SET] 20/20 PASS");
   } catch (error) { result.error = error.message; throw error; }
   finally {
     try { writeFileSync(join(evidenceDir, "results.json"), JSON.stringify(result, null, 2)); }

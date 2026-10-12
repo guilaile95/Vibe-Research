@@ -92,7 +92,10 @@ def _trade(**overrides):
     return trades.create_trade({
         "code": "600519", "name": "Synthetic restore fixture", "operation": "buy",
         "execution_status": "full", "actual_price": 100.0,
-        "actual_quantity": 1, "executed_at": "2098-01-01T01:00:00Z", **overrides,
+        "actual_quantity": 1, "executed_at": "2098-01-01T01:00:00Z",
+        "fee": 0.0,
+        "other_cost": 0.0,
+        **overrides,
     })
 
 

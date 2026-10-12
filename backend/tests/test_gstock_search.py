@@ -50,7 +50,8 @@ def test_all_endpoints_down_raises_instead_of_returning_none(monkeypatch):
         gstock._search("AAPL")
     message = str(exc.value)
     assert "查无此代码" in message, "报错要点破这与「查无此票」不是一回事"
-    assert "ConnectionError" in message, "要带上真实的底层错误，便于排查"
+    assert message == gstock.SEARCH_UNAVAILABLE_MESSAGE
+    assert "ConnectionError" not in message
 
 
 def test_unknown_symbol_still_returns_none(monkeypatch):
@@ -115,7 +116,7 @@ def test_all_endpoints_return_bad_shape_raises(monkeypatch):
 
     monkeypatch.setattr(gstock.astock, "em_get", fake_get)
 
-    with pytest.raises(gstock.SearchUnavailable, match="QuotationCodeTable"):
+    with pytest.raises(gstock.SearchUnavailable, match="证券搜索接口暂时不可用"):
         gstock._search("AAPL")
 
 
@@ -126,7 +127,7 @@ def test_http_error_with_json_body_is_not_a_match(monkeypatch):
 
     monkeypatch.setattr(gstock.astock, "em_get", fake_get)
 
-    with pytest.raises(gstock.SearchUnavailable, match="HTTP 403"):
+    with pytest.raises(gstock.SearchUnavailable, match="证券搜索接口暂时不可用"):
         gstock._search("AAPL")
 
 

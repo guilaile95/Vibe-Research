@@ -1,7 +1,7 @@
-/** CI-only full-app synthetic quote scheduler acceptance. Build first.
+/** CI-only full-app synthetic quote scheduler and snapshot acceptance. Build first.
  * E2E_LIVE_QUOTES_OUTPUT_DIR is required. No backend, quote provider or model.
  * The app interval is fixed: exercise failure backoff, not a nonexistent setting.
- * Request cancellation, stale responses and freshness are intentionally unchanged.
+ * Provider times and failure states are fixture provenance, never valuation authority.
  */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -15,7 +15,7 @@ assert.ok(process.env.E2E_LIVE_QUOTES_OUTPUT_DIR, 'Set E2E_LIVE_QUOTES_OUTPUT_DI
 const output = resolve(process.env.E2E_LIVE_QUOTES_OUTPUT_DIR);
 mkdirSync(output, { recursive: true });
 const results = { suite: 'live-quotes-ownership', transport: 'synthetic held responses; no backend/provider/model',
-  boundary: 'scheduler ownership only; no cancellation or freshness claim', cases: [], status: 'running' };
+  boundary: 'scheduler ownership and quote snapshot provenance; no real-provider freshness or valuation claim', cases: [], status: 'running' };
 const record = () => writeFileSync(join(output, 'results.json'), JSON.stringify(results, null, 2));
 record();
 let browser, server;
@@ -30,6 +30,10 @@ try {
     const page = await context.newPage(); page.setDefaultTimeout(10000);
     const errors = [], external = [], requests = [], pending = new Set();
     let currentCase = 'initial-readiness';
+    const defaultQuotes = {
+      '600519': { name: 'Synthetic quote', price: 1300, change_pct: 2.5, amount_wan: 20000, data_time: '2026-10-12T09:59:00+08:00', trade_date: '2026-10-12' },
+      '000001': { name: 'Older synthetic quote', price: 10, change_pct: -1, amount_wan: 0, data_time: '2026-10-09T15:00:00+08:00', trade_date: '2026-10-09' },
+    };
     page.on('pageerror', error => errors.push(error.message));
     await page.clock.install({ time: new Date('2026-10-12T01:59:59Z') });
     await context.addInitScript(() => {
@@ -65,22 +69,22 @@ try {
       if (!url.pathname.startsWith('/api/')) return route.continue();
       if (request.method() !== 'GET') { errors.push(`Unexpected mutation: ${request.method()} ${url.pathname}`); return route.abort(); }
       if (url.pathname === '/api/watchlist') return route.fulfill({ json: { data: {
-        status: 'valid', data: { codes: ['600519'], updated_at: '2026-10-12 10:00:00' }, etag: 'synthetic-quotes',
+        status: 'valid', data: { codes: ['600519', '000001'], updated_at: '2026-10-12 10:00:00' }, etag: 'synthetic-quotes',
       } } });
       if (url.pathname === '/api/watchlist/anomalies') return route.fulfill({ json: { data: { items: [], unavailable_codes: [] } } });
       if (url.pathname === '/api/native-intel/watchlist-context') return route.fulfill({ json: { data: {
-        status: 'ok', codes: ['600519'], degraded: [], securities: [], usage_boundary: 'observation_only_not_an_investment_authority',
+        status: 'ok', codes: ['600519', '000001'], degraded: [], securities: [], usage_boundary: 'observation_only_not_an_investment_authority',
       } } });
       if (url.pathname === '/api/quote') {
         let release;
         const gate = new Promise(done => { release = done; });
-        const hold = { release, status: 200, codes: url.searchParams.get('codes') };
+        const hold = { release, status: 200, data: defaultQuotes, codes: url.searchParams.get('codes') };
         requests.push(hold); pending.add(hold);
         const timeout = setTimeout(() => { errors.push('Unreleased synthetic quote hold expired'); release(); }, 20000);
         try {
           await gate;
           await route.fulfill({ status: hold.status, json: hold.status === 200
-            ? { data: { '600519': { name: 'Synthetic quote', price: 1300, change_pct: 2.5, amount_wan: 20000 } } }
+            ? { data: hold.data }
             : { detail: 'SYNTHETIC_QUOTE_FAILURE' } });
         } catch (error) { errors.push(`Quote route: ${error.message}`); }
         finally { clearTimeout(timeout); pending.delete(hold); }
@@ -93,7 +97,8 @@ try {
       while (!predicate()) { assert.ok(Date.now() < deadline, `Timed out: ${currentCase}`); await new Promise(done => setTimeout(done, 10)); }
     };
     const count = async expected => { await until(() => requests.length >= expected); assert.equal(requests.length, expected); };
-    const settle = async (index, status = 200) => {
+    const settle = async (index, status = 200, data = defaultQuotes) => {
+      requests[index].data = data;
       requests[index].status = status; requests[index].release(); await until(() => !pending.has(requests[index]));
     };
     const timers = async expected => {
@@ -103,6 +108,13 @@ try {
     const visibilityBurst = () => page.evaluate(() => {
       for (let i = 0; i < 8; i++) { window.__quoteAcceptance.visible(false); window.__quoteAcceptance.visible(true); }
     });
+    const rowStatus = async (code, expected) => {
+      await page.waitForFunction(({ code, expected }) => document.querySelector(`[data-testid="quote-status-${code}"]`)?.textContent === expected, { code, expected });
+      assert.equal(await page.getByTestId(`quote-status-${code}`).textContent(), expected);
+    };
+    const providerLabel = time => new Date(time).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) + ' 北京时间';
+    const oldProviderLabel = providerLabel(defaultQuotes['000001'].data_time);
+    const recentProviderLabel = providerLabel(defaultQuotes['600519'].data_time);
     const checkpoint = async name => {
       await page.screenshot({ path: join(output, `${width}-${name}.png`), fullPage: true });
       results.cases.push({ width, name, quoteRequests: requests.length, timers: await page.evaluate(() => window.__quoteAcceptance.timers()) }); record();
@@ -113,26 +125,47 @@ try {
       await count(1); await settle(0);
       currentCase = 'initial-quote-render';
       await page.getByText('Synthetic quote', { exact: true }).first().waitFor();
-      await page.getByTitle('开启实时行情（交易时段每 3 秒自动刷新）', { exact: true }).waitFor();
+      await page.getByRole('button', { name: '自动刷新', exact: true }).waitFor();
       // React's lazy-route Suspense reveal uses a timer. Keep the installed clock
       // running through concrete app readiness, then freeze while polling is off.
       // The one-second future boundary is required by pauseAt; no quote timer
       // exists yet, so every tested interval still starts from a paused clock.
       await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 1000)));
       await timers([]);
+      currentCase = 'mixed-provider-times';
+      await rowStatus('600519', `快照 · 行情时间 ${recentProviderLabel}`);
+      await rowStatus('000001', `快照 · 行情时间 ${oldProviderLabel}`);
+      await page.getByText(`已显示快照最早行情时间 ${oldProviderLabel}`, { exact: true }).waitFor();
+      await page.getByText('快照覆盖 2/2', { exact: true }).waitFor();
+      await page.getByText(/上次请求完成.*不是行情时间/).waitFor();
+      await checkpoint(currentCase);
       currentCase = 'enable-first-poll';
-      await page.getByTitle('开启实时行情（交易时段每 3 秒自动刷新）', { exact: true }).click();
+      await page.getByRole('button', { name: '自动刷新', exact: true }).click();
       await count(2);
       currentCase = 'held-visibility-single-owner';
       await visibilityBurst(); await page.clock.runFor(9000);
       assert.equal(requests.length, 2); await timers([]);
+      // A held request must not advance the displayed provider time.
+      await rowStatus('000001', `快照 · 行情时间 ${oldProviderLabel}`);
       await settle(1); await timers([3000]); await checkpoint(currentCase);
 
       currentCase = 'backoff-interval-change';
       await page.clock.runFor(3000); await count(3); await visibilityBurst();
       await settle(2, 503); await timers([6000]);
+      await rowStatus('600519', `旧快照 · 刷新失败 · 行情时间 ${recentProviderLabel}`);
+      await rowStatus('000001', `旧快照 · 刷新失败 · 行情时间 ${oldProviderLabel}`);
+      await page.getByText('自动行情获取失败，已有报价仅为旧快照', { exact: true }).waitFor();
+      await page.getByText('自动刷新 · 常规请求间隔 3 秒，失败时退避', { exact: true }).waitFor();
+      await page.getByText(`已显示快照最早行情时间 ${oldProviderLabel}`, { exact: true }).waitFor();
+      await checkpoint('first-failure-stale-provenance');
       await page.clock.runFor(5999); assert.equal(requests.length, 3);
-      await page.clock.runFor(1); await count(4); await settle(3); await timers([3000]); await checkpoint(currentCase);
+      await page.clock.runFor(1); await count(4); await settle(3); await timers([3000]);
+      await rowStatus('600519', `快照 · 行情时间 ${recentProviderLabel}`);
+      await rowStatus('000001', `快照 · 行情时间 ${oldProviderLabel}`);
+      await page.getByText('自动行情获取失败，已有报价仅为旧快照', { exact: true }).waitFor({ state: 'detached' });
+      // Recovery clears failed-request staleness, not the old provider timestamp.
+      await page.getByText(`已显示快照最早行情时间 ${oldProviderLabel}`, { exact: true }).waitFor();
+      await checkpoint(currentCase);
 
       currentCase = 'hidden-heartbeat-restart';
       await page.evaluate(() => window.__quoteAcceptance.visible(false));
@@ -142,16 +175,27 @@ try {
 
       currentCase = 'disable-pending-cleanup';
       await page.clock.runFor(3000); await count(6);
-      await page.getByTitle('关闭实时行情', { exact: true }).click();
-      await settle(5); await timers([]); await page.clock.runFor(30000); assert.equal(requests.length, 6);
-      await page.getByTitle('开启实时行情（交易时段每 3 秒自动刷新）', { exact: true }).click();
-      await count(7); await settle(6); await timers([3000]); await checkpoint(currentCase);
+      await page.getByRole('button', { name: '自动刷新', exact: true }).click();
+      await settle(5, 200, { '600519': defaultQuotes['600519'] }); await timers([]);
+      await rowStatus('000001', '行情未获取');
+      await page.getByText('快照覆盖 1/2', { exact: true }).waitFor();
+      await page.getByText('自动刷新已关闭', { exact: true }).waitFor();
+      await page.getByText('行情未完整获取（1/2），缺失标的不显示报价', { exact: true }).waitFor();
+      await checkpoint('partial-missing-symbol');
+      await page.clock.runFor(30000); assert.equal(requests.length, 6);
+      await page.getByRole('button', { name: '自动刷新', exact: true }).click();
+      await count(7); await settle(6, 200, { ...defaultQuotes, '600519': { ...defaultQuotes['600519'], data_time: null, trade_date: null } }); await timers([3000]);
+      await rowStatus('600519', '快照 · 行情时间未知');
+      await rowStatus('000001', `快照 · 行情时间 ${oldProviderLabel}`);
+      await page.getByText('汇总行情时间未知', { exact: true }).waitFor();
+      await page.getByText('快照覆盖 2/2', { exact: true }).waitFor();
+      await checkpoint(currentCase);
 
       currentCase = 'spa-unmount-pending-cleanup';
       await page.clock.runFor(3000); await count(8);
       // Actual router transition preserves the document; a reload would hide leaked loops.
       await page.evaluate(() => { history.pushState({}, '', '/settings'); dispatchEvent(new PopStateEvent('popstate')); });
-      await page.getByTitle('关闭实时行情', { exact: true }).waitFor({ state: 'detached' });
+      await page.getByRole('button', { name: '自动刷新', exact: true }).waitFor({ state: 'detached' });
       await settle(7); await timers([]); await visibilityBurst();
       await page.clock.runFor(30000); assert.equal(requests.length, 8); await timers([]); await checkpoint(currentCase);
       assert.deepEqual(errors, []); assert.deepEqual(external, []);
@@ -174,4 +218,4 @@ finally {
   await browser?.close();
   if (server) await new Promise(done => server.httpServer.close(done));
 }
-console.log('live quote scheduler full-app acceptance: PASS');
+console.log('live quote scheduler and snapshot full-app acceptance: PASS');

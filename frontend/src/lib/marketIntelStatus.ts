@@ -9,6 +9,7 @@ export function deriveMarketIntelStatus({
   nativeError,
   radarError,
   radarFailedSources,
+  radarStatus,
 }: {
   loading: boolean;
   hasNativeData: boolean;
@@ -17,6 +18,7 @@ export function deriveMarketIntelStatus({
   nativeError: string | null;
   radarError: string | null;
   radarFailedSources: number;
+  radarStatus?: "normal" | "partial" | "unavailable";
 }): MarketIntelOverallStatus {
   if (loading && !hasNativeData && !hasRadarData) return "loading";
   if (!hasNativeData && !hasRadarData) return "unavailable";
@@ -24,6 +26,8 @@ export function deriveMarketIntelStatus({
     nativeError
     || radarError
     || radarFailedSources > 0
+    || radarStatus === "partial"
+    || radarStatus === "unavailable"
     || nativeStatus === "partial"
     || nativeStatus === "unavailable"
     || !hasNativeData
@@ -98,3 +102,14 @@ export const TREND_EMPTY_LABELS: Record<TrendEmptyReason, string> = {
   unavailable: "关注趋势暂不可用，不能判断当前窗口是否有趋势。",
   empty: "当前窗口暂无可计算的关注趋势。",
 };
+
+/** Global fetch coverage is independent of item count and selected track. */
+export function radarCoverageNotice(coverage?: {
+  state: "normal" | "partial" | "unavailable" | "unknown";
+  expected_sources: number | null; succeeded_sources: number | null;
+}): string | null {
+  if (!coverage || coverage.state === "unknown") return "赛道来源覆盖未知，不能据此判断没有资讯或来源齐全。";
+  if (coverage.state === "unavailable") return "赛道来源全部未取得可用响应，不能把空列表当成没有资讯。";
+  if (coverage.state === "partial") return `赛道来源部分可用：${knownCountText(coverage.succeeded_sources)}/${knownCountText(coverage.expected_sources)} 个来源成功；结果不完整。`;
+  return null;
+}

@@ -125,6 +125,9 @@ export type SectorReportsDiscoveryResult = {
   total_discovered?: number;
   returned?: number;
   truncated?: boolean;
+  /** Older servers omit coverage; absence must not be interpreted as complete. */
+  status?: ReportSourceStatus;
+  source_coverage?: (ReportSourceCoverage & { source_key?: string; status?: ReportSourceStatus })[];
 };
 
 
@@ -524,6 +527,31 @@ export interface Valuation {
 export interface Report {
   title: string; publishDate: string; orgSName: string;
   emRatingName?: string; indvInduName?: string; pdfUrl?: string | null;
+}
+
+export type ReportSourceStatus = "normal" | "partial" | "unavailable";
+
+export type ReportSourceCoverageReason = "REQUEST_LIMIT" | "UNKNOWN_TOTAL" | "TOTAL_CHANGED"
+  | "EMPTY_BEFORE_EXPECTED" | "SOURCE_ERROR" | "MALFORMED_RESPONSE";
+
+/** Completeness is only about the provider's requested page window, never full history. */
+export interface ReportSourceCoverage {
+  scope: "provider_report_page_window";
+  requested_pages: number;
+  reported_total_pages: number | null;
+  expected_pages: number | null;
+  attempted_pages: number;
+  received_pages: number;
+  returned_rows: number;
+  reason: ReportSourceCoverageReason | null;
+  historical_complete: false;
+}
+
+/** Coverage-aware sibling of the legacy reports array API. */
+export interface ReportListResult {
+  data: Report[];
+  status: ReportSourceStatus;
+  source_coverage: ReportSourceCoverage | null;
 }
 
 
@@ -1039,7 +1067,16 @@ export interface Industry {
   key: string; name: string; accent: string; total: number; items: RadarItem[];
 }
 
+export interface RadarSourceCoverage {
+  scope: "cached_fetch_all_configured_sources";
+  state: "normal" | "partial" | "unavailable" | "unknown";
+  expected_sources: number | null; attempted_sources: number | null;
+  succeeded_sources: number | null; failed_sources: number | null;
+}
+
 export interface RadarData {
+  status?: "normal" | "partial" | "unavailable";
+  source_coverage?: RadarSourceCoverage;
   generated_at: string | null; recent_days: number; industries: Industry[];
   stats: { industries: number; total_sources: number; failed_sources?: number };
 }
@@ -2453,11 +2490,10 @@ export interface TradeRecord {
   quantity_completion_pct: number | null;
 }
 
-export interface TradeCreateInput {
+interface TradeCreateCommon {
   code: string;
   name: string;
   operation: TradeOperation;
-  execution_status: TradeExecutionStatus;
 
   planned_price?: number | null;
   planned_quantity?: number | null;
@@ -2466,8 +2502,6 @@ export interface TradeCreateInput {
   actual_quantity?: number;
   executed_at?: string | null;
 
-  fee?: number;
-  other_cost?: number;
   unexecuted_reason?: string | null;
   note?: string | null;
 
@@ -2481,6 +2515,12 @@ export interface TradeCreateInput {
     revision_number: number;
   };
 }
+
+// Executed writes require explicit costs; 0 confirms that the cost is zero.
+export type TradeCreateInput = TradeCreateCommon & (
+  | { execution_status: "full" | "partial"; fee: number; other_cost: number }
+  | { execution_status: "not_executed"; fee?: number | null; other_cost?: number | null }
+);
 
 export interface TradeAttributionCandidate {
   decision_id: string;

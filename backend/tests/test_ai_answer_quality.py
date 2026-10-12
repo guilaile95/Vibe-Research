@@ -29,12 +29,11 @@ def test_literal_mismatch_is_reported_without_rewriting_or_source_claim(equation
     "1/3=33.3%", "2/3=66.67%", "1/8=13%", "1/8=12%",
     "-12/-20=60%", "(8 - -20)/20=140%", "0/20=0%",
     "12/20×100%=60%", "12/20*100=60%",
-    # Unsupported units, variables, chained expressions and grouped digits must
+    # Unsupported variables and grouped digits must
     # not be silently reduced to a supported suffix with a different meaning.
-    "12亿元/20亿元=-60%", "12万元/20亿元=0.006%", "x12/20=-60%",
-    "10 + 12/20=-60%", "10 - 12/20=-60%", "10 * (12-20)/20=40%",
+    "12万元/20亿元=0.006%", "x12/20=-60%",
     "1,012/20=-60%", "1, 012/20=-60%", "1e12/20=-60%",
-    "(12/20)=-60%", "12/20/2=-60%", "12/20=60%xyz",
+    "12/20=60%xyz",
     "9999999999999999999/20=-60%", "12/20=60.1234567890123%",
     # Correct arithmetic does not establish an appropriate denominator.
     "(10.1-7.2)/10.1=28.71%",
@@ -146,3 +145,60 @@ def test_non_report_chat_is_outside_this_bounded_audit(setup, monkeypatch):
     original = [{"type": "delta", "text": "12/20=-60%"}, {"type": "done"}]
     monkeypatch.setattr(app_module.chat_layer, "run_chat_stream", lambda *args, **kwargs: iter(original))
     assert events(request(report, report_page_context=None, report_ids=[])) == original
+
+
+@pytest.mark.parametrize("marker", ["~", "～", "–", "—", "±", "至", "到"])
+@pytest.mark.parametrize("spacing", ["", " ", "\n"])
+def test_interval_markers_do_not_check_partial_lhs_or_rhs(marker, spacing):
+    # Neither a stated interval nor the tail of a range/longer expression is
+    # a standalone scalar claim. Do not reinterpret dash punctuation as minus.
+    for text in [f"12/20=50%{spacing}{marker}{spacing}70%",
+                 f"10{spacing}{marker}{spacing}12/20=50%"]:
+        assert quality.ratio_equation_warnings(text) == []
+        split = text.index(marker)
+        original = [{"type": "delta", "text": text[:split]},
+                    {"type": "delta", "text": text[split:]}, {"type": "done"}]
+        assert list(quality.audit_report_stream(iter(original))) == original
+
+
+def test_mathematical_minus_is_preserved_and_interval_does_not_hide_later_error():
+    assert quality.ratio_equation_warnings("12/20=−60%")
+    assert quality.ratio_equation_warnings("12/20=50%～70%；12/20=−60%") == quality.ratio_equation_warnings("12/20=−60%")
+
+
+@pytest.mark.parametrize("text,actual,reason", [
+    ("12亿元/20亿元=-60%", "60", "explicit compatible units now supported"),
+    ("10 + 12/20=-60%", "1060", "whole sum with division precedence"),
+    ("10 - 12/20=-60%", "940", "whole difference with division precedence"),
+    ("10 * (12-20)/20=40%", "-400", "grouped product, not a ratio tail"),
+    ("(12/20)=-60%", "60", "explicit grouped ratio"),
+    ("12/20/2=-60%", "30", "left associative chained division"),
+])
+def test_previously_unsupported_explicit_grammar_is_checked_whole(text, actual, reason):
+    # Migrated fixtures, not deleted: intentional coverage expansion.
+    diagnostic, = quality._arithmetic_diagnostics(text)
+    assert diagnostic.status == "mismatch", reason
+    assert diagnostic.raw == text and diagnostic.recomputed == quality.Decimal(actual)
+    assert len(quality.ratio_equation_warnings(text)) == 1
+
+
+@pytest.mark.parametrize("provider", ["api", "cli-codex"])
+@pytest.mark.parametrize("text,has_note", [
+    ("2亿元+3万元=5亿元", True),
+    ("444.64÷453.90−1=+0.2%", True),
+    ("12/20=50%～70%", False),
+])
+def test_expanded_grammar_report_path_keeps_single_call_and_original_answer(setup, monkeypatch, provider, text, has_note):
+    import app as app_module
+    report, _ = setup
+    called = []
+    original = [{"type": "delta", "text": text[:4]}, {"type": "delta", "text": text[4:]}, {"type": "done"}]
+    def synthetic(*args, **kwargs):
+        called.append(True)
+        yield from original
+    monkeypatch.setattr(app_module.chat_layer, "run_chat_stream", synthetic)
+    monkeypatch.setattr(app_module.agent_runtime, "stream_chat", synthetic)
+    result = events(request(report, provider))
+    assert called == [True]
+    assert result[1:3] == original[:2] and result[-1] == original[-1]
+    assert any("确定性算式复核提示" in event.get("text", "") for event in result) is has_note
