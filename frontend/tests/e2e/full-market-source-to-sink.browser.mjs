@@ -277,8 +277,15 @@ async function seedRdpFixture(kind = "full-market") {
   return { tempDir, rdpRoot, manifest };
 }
 
-async function startBackend(rdpRoot, tempDir) {
-  const port = await getFreePort();
+async function startBackend(rdpRoot, tempDir, frontendOrigin) {
+  // The frontend port is chosen first but not listening yet; do not reuse it.
+  const frontendPort = Number(new URL(frontendOrigin).port);
+  let port;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    port = await getFreePort();
+    if (port !== frontendPort) break;
+  }
+  if (port === frontendPort) throw new Error("Cannot allocate distinct fixture ports");
   const python = resolvePython();
   const networkLog = path.join(tempDir, `network-guard-${port}.json`);
   backendGuardLogs.push(networkLog);
@@ -288,6 +295,7 @@ async function startBackend(rdpRoot, tempDir) {
       ...process.env,
       PYTHONPATH: [__dirname, backendDir].join(path.delimiter),
       VR_SCREENER_NETWORK_LOG: networkLog,
+      VR_ALLOW_ORIGINS: frontendOrigin,
       VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH: "1",
       VR_DATA_DIR: tempDir,
       VR_REPORTS_DIR: path.join(tempDir, "reports"),
@@ -387,10 +395,10 @@ async function captureScenarioFailure(page, label, error) {
 }
 
 async function runNormalScenario(browser, fixture) {
-  const backend = await startBackend(fixture.rdpRoot, fixture.tempDir);
   const frontendPort = await getFreePort();
-  const staticServer = await startStaticServer(frontendDist, frontendPort, backend.port);
   const baseUrl = `http://127.0.0.1:${frontendPort}`;
+  const backend = await startBackend(fixture.rdpRoot, fixture.tempDir, baseUrl);
+  const staticServer = await startStaticServer(frontendDist, frontendPort, backend.port);
   const page = await newOfflinePage(browser, baseUrl);
   const apiRequests = [];
   const consoleErrors = [];
@@ -525,10 +533,10 @@ async function runNormalScenario(browser, fixture) {
 
 async function runFailureClearsScenario(browser, fixture) {
   const timing = createFailureTimingFixture();
-  const backend = await startBackend(fixture.rdpRoot, fixture.tempDir);
   const frontendPort = await getFreePort();
-  const staticServer = await startStaticServer(frontendDist, frontendPort, backend.port, timing);
   const baseUrl = `http://127.0.0.1:${frontendPort}`;
+  const backend = await startBackend(fixture.rdpRoot, fixture.tempDir, baseUrl);
+  const staticServer = await startStaticServer(frontendDist, frontendPort, backend.port, timing);
   const page = await newOfflinePage(browser, baseUrl);
   try {
     // Avoid the default live-provider Discovery tab; these scenarios use local RDP only.
@@ -592,10 +600,10 @@ async function runFailureClearsScenario(browser, fixture) {
 
 async function runModeSwitchScenario(browser, fixture) {
   const timing = createDelayedResponseFixture();
-  const backend = await startBackend(fixture.rdpRoot, fixture.tempDir);
   const frontendPort = await getFreePort();
-  const staticServer = await startStaticServer(frontendDist, frontendPort, backend.port, timing);
   const baseUrl = `http://127.0.0.1:${frontendPort}`;
+  const backend = await startBackend(fixture.rdpRoot, fixture.tempDir, baseUrl);
+  const staticServer = await startStaticServer(frontendDist, frontendPort, backend.port, timing);
   const page = await newOfflinePage(browser, baseUrl);
   try {
     // Avoid the default live-provider Discovery tab; these scenarios use local RDP only.
@@ -647,10 +655,10 @@ async function runModeSwitchScenario(browser, fixture) {
 }
 
 async function runUnavailableScenario(browser, rdpRoot, tempDir, kind, expectedReason) {
-  const backend = await startBackend(rdpRoot, tempDir);
   const frontendPort = await getFreePort();
-  const staticServer = await startStaticServer(frontendDist, frontendPort, backend.port);
   const baseUrl = `http://127.0.0.1:${frontendPort}`;
+  const backend = await startBackend(rdpRoot, tempDir, baseUrl);
+  const staticServer = await startStaticServer(frontendDist, frontendPort, backend.port);
   const page = await newOfflinePage(browser, baseUrl);
   const prefix = kind === "corrupt" ? "corrupt" : "unavailable";
   try {
@@ -696,10 +704,10 @@ async function runUnavailableScenario(browser, rdpRoot, tempDir, kind, expectedR
 }
 
 async function runCandidateCoverageScenario(browser, fixture) {
-  const backend = await startBackend(fixture.rdpRoot, fixture.tempDir);
   const frontendPort = await getFreePort();
-  const staticServer = await startStaticServer(frontendDist, frontendPort, backend.port);
   const baseUrl = `http://127.0.0.1:${frontendPort}`;
+  const backend = await startBackend(fixture.rdpRoot, fixture.tempDir, baseUrl);
+  const staticServer = await startStaticServer(frontendDist, frontendPort, backend.port);
   const page = await newOfflinePage(browser, baseUrl);
   const mutations = [];
   const errors = [];

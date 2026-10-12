@@ -14,6 +14,7 @@ def environment(tmp_path):
             'VIBE_RESEARCH_RESEARCH_DATA_DIR':str(tmp_path/'rdp'),
             'VR_SCREENER_NETWORK_LOG':str(tmp_path/'network.json'),
             'VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH':'1',
+            'VR_ALLOW_ORIGINS':'http://127.0.0.1:41979',
             'PYTHONPATH':os.pathsep.join([str(HARNESS.parent),str(ROOT/'backend')])}
 
 
@@ -47,3 +48,14 @@ print(json.dumps({'attempts':harness.violations}))
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(result.stdout)['attempts'] == []
     assert json.loads((tmp_path/'network.json').read_text()) == []
+
+
+def test_complete_browser_request_inventory_uses_real_origin_gate_and_routes(tmp_path):
+    result = subprocess.run([sys.executable,str(HARNESS.parent/'screener_request_contract_probe.py')],
+                            env=environment(tmp_path),capture_output=True,text=True,timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    receipt = json.loads(result.stdout)
+    assert receipt['forbidden_attempts'] == []
+    assert receipt['fixture_files_unchanged'] is True
+    assert len(receipt['inventory']) == 15
+    assert [item['http_status'] for item in receipt['inventory'] if item['case']=='reject-other-origin'] == [403]*5
