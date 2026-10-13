@@ -1,12 +1,13 @@
 from fastapi.testclient import TestClient
 
 import app as app_module
+import public_data_budget
 
 
 client = TestClient(app_module.app)
 
 
-def test_financials_api_explicitly_requests_health_enrichment(monkeypatch):
+def test_financials_api_explicitly_requests_health_enrichment(monkeypatch, tmp_path):
     calls = []
 
     def financials(code: str, *, include_health: bool = False):
@@ -22,6 +23,12 @@ def test_financials_api_explicitly_requests_health_enrichment(monkeypatch):
         }
 
     monkeypatch.setattr(app_module.astock, "financials", financials)
+    def bounded(operation, code):
+        assert operation == "financials"
+        path = str(tmp_path / "result.json")
+        public_data_budget._child(path, operation, code)
+        return public_data_budget._read_result(path)
+    monkeypatch.setattr(public_data_budget, "run", bounded)
     response = client.get("/api/financials?code=600520")
 
     assert response.status_code == 200

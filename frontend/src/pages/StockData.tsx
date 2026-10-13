@@ -448,21 +448,17 @@ export function StockData() {
       if (rid === runIdRef.current) setStockValuationLoading(false);
     });
     // K 线 / 季报财务 / 基本面 / 巨潮公告：均为可选依赖，改为按需展开加载（避免每次查询都发 501）
+    // Financial enrichment must not hold an already available quote hostage.
+    void api.financials(c).then((data) => {
+      if (rid === runIdRef.current) { setFin(data); setFinError(null); }
+    }).catch((e) => {
+      if (rid === runIdRef.current) setFinError(e instanceof ApiError ? e.message : "财务数据暂不可用");
+    });
     try {
-      // 核心行情与财务；次级来源独立完成，不阻塞报价或相互等待
-      const [v, financialResult] = await Promise.all([
-        api.valuation(c),
-        api.financials(c)
-          .then((data) => ({ data, error: null as string | null }))
-          .catch((e) => ({ data: null, error: e instanceof ApiError ? e.message : "财务数据暂不可用" })),
-      ]);
-      if (rid !== runIdRef.current) return;
-      setVal(v);
-      setFin(financialResult.data);
-      setFinError(financialResult.error);
+      const v = await api.valuation(c);
+      if (rid === runIdRef.current) setVal(v);
     } catch (e) {
-      if (rid !== runIdRef.current) return;
-      setErr(e instanceof ApiError ? e.message : "查询失败");
+      if (rid === runIdRef.current) setErr(e instanceof ApiError ? e.message : "查询失败");
     } finally {
       if (rid === runIdRef.current) setLoading(false);
     }
@@ -503,7 +499,7 @@ export function StockData() {
 
   const aiContext = val
     ? `个股：${val.name}（${val.code}）\n现价 ${val.price} · PE(TTM) ${fmt(val.pe_ttm)} · PB ${fmt(val.pb)} · 市值 ${fmt(val.mcap_yi, "亿")}\n` +
-      `26E EPS ${val.eps_26e ?? "—"} · 前向PE ${val.pe_26e ?? "—"} · PEG ${val.peg ?? "—"} · 消化 ${val.digest_years ?? "—"}年 · 机构覆盖 ${val.analyst_count} 家\n` +
+      `26E EPS ${val.eps_26e ?? "—"} · 前向PE ${val.pe_26e ?? "—"} · PEG ${val.peg ?? "—"} · 消化 ${val.digest_years ?? "—"}年 · 机构覆盖 ${val.analyst_count ?? "未知"} 家\n` +
       `估值历史分位：${evidenceStatusText(pctlResult)}\n` +
       (pctl?.metrics.pe_ttm ? `估值历史分位(近5年)：PE-TTM 处于 ${pctl.metrics.pe_ttm.percentile}% 分位、PB 处于 ${pctl.metrics.pb?.percentile ?? "—"}% 分位\n` : "") +
       (fin?.revenue ? `财务快照(报告期末${fin.period_end ?? "未知"}，披露日期未知，非PIT)：营收 ${fin.revenue}(同比${fin.revenue_yoy ?? "未知"})、净利润 ${fin.net_profit ?? "未知"}(同比${fin.net_profit_yoy ?? "未知"})、扣非净利润同比 ${fin.deduct_net_profit_yoy ?? "未知"}、ROE ${fin.roe ?? "未知"}、毛利率 ${fin.gross_margin ?? "未知"}、经营现金流 ${fin.operating_cash_flow ?? "未知"}、现金转化率 ${fin.cash_conversion_ratio ?? "未知"}、自由现金流 ${fin.free_cash_flow ?? "未知"}、资产负债率 ${fin.debt_ratio ?? "未知"}\n` : "") +
@@ -675,7 +671,7 @@ export function StockData() {
           <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-3">
             <h2 className="text-xl font-bold">{val.name}</h2>
             <span className="font-mono text-sm text-muted-foreground">{val.code}</span>
-            {val.analyst_count > 0 && (
+            {(val.analyst_count ?? 0) > 0 && (
               <span className="text-xs text-muted-foreground">机构覆盖 {val.analyst_count} 家</span>
             )}
             <div className="flex w-full gap-2 sm:ml-auto sm:w-auto">{queryBox}</div>

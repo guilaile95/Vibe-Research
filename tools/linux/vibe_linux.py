@@ -193,6 +193,32 @@ def stop_children(children):
             print("A child did not exit after SIGKILL; inspect operating-system process state", file=sys.stderr)
 
 
+def runtime_endpoint(environ):
+    """Resolve an explicit loopback runtime override without changing defaults."""
+    from urllib.parse import urlsplit
+    raw_url = environ.get("VR_AGENT_RUNTIME_URL", "").strip()
+    raw_port = environ.get("VR_AGENT_RUNTIME_PORT", "").strip()
+    if raw_port and (not raw_port.isascii() or not raw_port.isdigit()):
+        raise ValueError("VR_AGENT_RUNTIME_PORT must be an integer")
+    port = int(raw_port) if raw_port else None
+    if raw_url:
+        if any(ord(c) <= 32 for c in raw_url) or "?" in raw_url or "#" in raw_url or "\\" in raw_url:
+            raise ValueError("Runtime URL contains unsupported syntax")
+        parsed = urlsplit(raw_url)
+        if (parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+                or parsed.username or parsed.password or parsed.path not in {"", "/"}
+                or parsed.query or parsed.fragment or parsed.port is None):
+            raise ValueError("VR_AGENT_RUNTIME_URL must be an explicit loopback HTTP endpoint")
+        if port is not None and port != parsed.port:
+            raise ValueError("Runtime URL and port disagree")
+        port = parsed.port
+    port = port if port is not None else 8911
+    if not 1024 <= port <= 65535 or port in {8900, 5899}:
+        raise ValueError("Runtime port is invalid or conflicts with an application port")
+    # The launcher-owned runtime listens on IPv4 loopback.
+    return f"http://127.0.0.1:{port}", port
+
+
 def commands(root):
     return [
         ([str(root / ".venv/bin/python"), "-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", "8900"], root / "backend"),
@@ -211,11 +237,12 @@ def run(open_browser=False):
     data.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (data / ".linux-launcher.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        for port in PORTS:
+        runtime_url, runtime_port = runtime_endpoint(os.environ)
+        for port in (8900, runtime_port, 5899):
             with socket.socket() as probe:
                 probe.bind(("127.0.0.1", port))
-        env = dict(os.environ, VR_DATA_DIR=str(data), VR_AGENT_RUNTIME_URL="http://127.0.0.1:8911",
-                   VR_AGENT_RUNTIME_PORT="8911", VITE_API_URL="http://127.0.0.1:8900")
+        env = dict(os.environ, VR_DATA_DIR=str(data), VR_AGENT_RUNTIME_URL=runtime_url,
+                   VR_AGENT_RUNTIME_PORT=str(runtime_port), VITE_API_URL="http://127.0.0.1:8900")
         children = []
         old_handlers = {}
         def interrupted(signum, frame):
@@ -226,7 +253,7 @@ def run(open_browser=False):
             for args, cwd in commands(ROOT):
                 children.append(subprocess.Popen(args, cwd=cwd, env=env, start_new_session=True))
             deadline = time.monotonic() + 90
-            pending = {"http://127.0.0.1:8900/api/health", "http://127.0.0.1:8911/health", URL}
+            pending = {"http://127.0.0.1:8900/api/health", runtime_url + "/health", URL}
             # Never use a network proxy for loopback health checks.
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             while pending:

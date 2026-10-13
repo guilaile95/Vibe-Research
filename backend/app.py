@@ -16,10 +16,11 @@ import logging
 import os
 import re
 import threading
+import uuid
 import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from itertools import count
 from typing import Literal
@@ -1517,9 +1518,14 @@ def signals_gpu_rent_refresh():
 def market_overview():
     """市场情绪 + 板块资金流（板块/大盘级，全站共享缓存 5 分钟）。"""
     try:
-        return {"data": market.get_overview()}
+        import public_data_budget
+        return {"data": public_data_budget.run("overview")}
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, "市场总览异常，请稍后重试。") from e
+        return {"data": {"status": "unavailable", "reason_code": getattr(e, "code", "SOURCE_UNAVAILABLE"),
+                         "sentiment": {"status": "unavailable", "warnings": ["市场总览来源暂不可用，请稍后重试"],
+                                       "up": None, "down": None, "flat": None, "zt": None, "dt": None,
+                                       "active": "", "up_ratio": None, "breadth": None, "speculation": None,
+                                       "date": None}, "sectors": [], "updated": None}}
 
 
 @app.get("/api/market/emotion")
@@ -2025,47 +2031,65 @@ def _validate_probe_base_url(value: str) -> str:
 
 @app.post("/api/ai/connection-test")
 async def test_ai_connection(req: AIConnectionTestRequest):
-    """One synthetic API request; no private context, state reads or writes."""
+    """Synthetic API probe; one retry only for empty output within one budget."""
     if req.llm.provider.strip().startswith("cli-"):
         raise HTTPException(400, "连接测试仅支持 API Compatible 接入")
     _require_llm_ready(req.llm)
     _validate_probe_base_url(req.llm.baseURL)
     disconnect_event = threading.Event()
-    cfg = {**req.llm.model_dump(), "_cancel_event": disconnect_event}
+    cfg = {**req.llm.model_dump(), "_cancel_event": disconnect_event, "_session": uuid.uuid4().hex}
 
     async def gen():
-        source = None
+        deadline = time.monotonic() + chat_layer.CONNECTION_TEST_LIMITS.timeout
+        error_code = "PROBE_INVALID_RESPONSE"
         try:
-            source = chat_layer.stream_api_messages(
-                cfg, chat_layer.CONNECTION_TEST_MESSAGES,
-                limits=chat_layer.CONNECTION_TEST_LIMITS,
-            )
-            has_text = False
-            saw_done = False
-            async for event in source:
-                if disconnect_event.is_set():
+            for attempt in range(2):
+                source = None
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    error_code = "PROBE_TIMEOUT"
+                    break
+                try:
+                    source = chat_layer.stream_api_messages(
+                        cfg, chat_layer.CONNECTION_TEST_MESSAGES,
+                        limits=replace(chat_layer.CONNECTION_TEST_LIMITS, timeout=remaining),
+                    )
+                    has_text = saw_done = False
+                    async for event in source:
+                        if disconnect_event.is_set():
+                            return
+                        if saw_done or not isinstance(event, dict):
+                            raise ValueError("invalid probe event")
+                        if event.get("type") == "delta" and isinstance(event.get("text"), str):
+                            has_text = has_text or bool(event["text"].strip())
+                        elif event.get("type") == "done":
+                            saw_done = True
+                        else:
+                            raise ValueError("invalid probe event")
+                    if not has_text or not saw_done:
+                        raise ValueError("incomplete probe")
+                    if not disconnect_event.is_set():
+                        yield json.dumps({"type": "done", "trace": [], "rounds": 1}) + "\n"
                     return
-                if saw_done or not isinstance(event, dict):
-                    raise ValueError("invalid probe event")
-                if event.get("type") == "delta" and isinstance(event.get("text"), str):
-                    has_text = has_text or bool(event["text"].strip())
-                elif event.get("type") == "done":
-                    saw_done = True
-                else:
-                    raise ValueError("invalid probe event")
-            if not has_text or not saw_done:
-                raise ValueError("incomplete probe")
+                except chat_layer.ModelEmptyResponseError:
+                    error_code = "PROBE_EMPTY_RESPONSE"
+                    if attempt == 0 and not disconnect_event.is_set():
+                        continue
+                    break
+                except Exception as exc:
+                    # Only fixed, locally generated transport classifications escape.
+                    text = str(exc) if isinstance(exc, chat_layer.ModelTransportError) else ""
+                    error_code = {"模型响应超时": "PROBE_TIMEOUT", "模型接口 HTTP 401": "PROBE_UPSTREAM_AUTH",
+                                  "模型接口 HTTP 403": "PROBE_UPSTREAM_AUTH", "模型接口 HTTP 429": "PROBE_RATE_LIMIT"}.get(text, "PROBE_INVALID_RESPONSE")
+                    break
+                finally:
+                    if source is not None:
+                        with anyio.move_on_after(chat_layer.CONNECTION_TEST_LIMITS.cleanup_grace, shield=True):
+                            await source.aclose()
             if not disconnect_event.is_set():
-                yield json.dumps({"type": "done", "trace": [], "rounds": 1}) + "\n"
-        except Exception:
-            if not disconnect_event.is_set():
-                yield json.dumps({"type": "error", "message": "模型连接测试失败，请检查配置后重试"},
-                                 ensure_ascii=False) + "\n"
+                yield json.dumps({"type": "error", "code": error_code, "message": error_code}) + "\n"
         finally:
             disconnect_event.set()
-            if source is not None:
-                with anyio.move_on_after(chat_layer.CONNECTION_TEST_LIMITS.cleanup_grace, shield=True):
-                    await source.aclose()
 
     return _LeadAnalysisStreamingResponse(
         gen(), media_type="application/x-ndjson", disconnect_event=disconnect_event,
@@ -2645,7 +2669,8 @@ def financials(code: str = Query(...)):
     if hit is not _CACHE_MISS:
         return {"data": hit}
     try:
-        data = astock.financials(code, include_health=True)
+        import public_data_budget
+        data = public_data_budget.run("financials", code)
         _FIN_CACHE.set(code, data)
         try:
             import data_health_event_store as _dhes
@@ -2674,7 +2699,7 @@ def financials(code: str = Query(...)):
             _dhes.safe_call(_dhes.record_failure, "financials", "SOURCE_UNAVAILABLE")
         except Exception:
             pass
-        raise HTTPException(502, "财务摘要异常，请稍后重试。") from e
+        raise HTTPException(503, "同花顺财务摘要暂不可用或请求超时；未使用 mootdx 财务值替代，行情可独立查看。") from e
 
 
 @app.get("/api/valuation")
@@ -2682,11 +2707,17 @@ def valuation(code: str = Query(...)):
     """完整估值：行情 + 一致预期 + 前向PE/PEG/消化年数。"""
     code = _validate(code)
     try:
-        return {"data": astock.full_valuation(code)}
+        import public_data_budget
+        return {"data": public_data_budget.run("valuation", code)}
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, "估值计算异常，请稍后重试。") from e
+        return {"data": {"name": code, "code": code, "price": None, "mcap_yi": None,
+                         "pe_ttm": None, "pb": None, "eps_26e": None, "eps_27e": None,
+                         "pe_26e": None, "cagr_pct": None, "peg": None, "digest_years": None,
+                         "analyst_count": None, "status": "unavailable",
+                         "reason_code": getattr(e, "code", "SOURCE_UNAVAILABLE"),
+                         "forecast_note": "行情或估值来源暂不可用，请稍后重试；缺失值未补零"}}
 
 
 @app.get("/api/reports")

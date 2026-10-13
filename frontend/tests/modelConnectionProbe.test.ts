@@ -87,3 +87,12 @@ test("disclosed recipient and submitted canonical URL cannot diverge across pars
   const source = readFileSync(new URL("../src/pages/Settings.tsx", import.meta.url), "utf8");
   assert.match(source, /probe\.start\(\{ provider: providerOf\(apiId\), baseURL: probeBaseURL/);
 });
+
+test("only fixed probe classifications reach UI, arbitrary upstream text stays hidden", async () => {
+  for (const [code, expected] of [["PROBE_EMPTY_RESPONSE", "两次返回空内容"], ["PROBE_TIMEOUT", "超过测试时限"], ["PROBE_UPSTREAM_AUTH", "拒绝鉴权"], ["PROBE_RATE_LIMIT", "限流"], ["PROBE_INVALID_RESPONSE", "格式不受支持"]]) {
+    const states: ProbeState[] = [];
+    const probe = createModelConnectionProbe(async () => { throw new Error(code); }, state => states.push(state));
+    await probe.start(cfg);
+    assert.ok(states.at(-1)?.message.includes(expected));
+  }
+});

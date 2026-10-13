@@ -169,6 +169,34 @@ def _valid_trade_date(value) -> tuple[str | None, str | None]:
     return None, f"交易日期格式无效：{s!r}（期望 YYYY-MM-DD）"
 
 
+def _index_source_trade_date(indices: dict) -> str | None:
+    """Use agreeing, identified source timestamps, never the collection day."""
+    rows = indices.get("data") if indices.get("status") == "normal" else None
+    if not isinstance(rows, list) or not rows:
+        return None
+    dates, codes = set(), set()
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        if not isinstance(row, dict) or row.get("code") not in astock.A_INDICES or row["code"] in codes:
+            return None
+        codes.add(row["code"])
+        raw = row.get("data_time")
+        if not isinstance(raw, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\+08:00", raw):
+            return None
+        try:
+            instant = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        day = row.get("trade_date")
+        if instant > now or day != instant.date().isoformat():
+            return None
+        observed = trade_calendar.observation_trade_date_at(instant.astimezone(timezone.utc).isoformat())
+        if observed != day:
+            return None
+        dates.add(day)
+    return next(iter(dates)) if len(dates) == 1 else None
+
+
 def _component_status(comp: dict | None) -> str:
     if not isinstance(comp, dict):
         return "unavailable"
@@ -661,6 +689,13 @@ def _build_daily_review() -> dict:
         if td2:
             trade_date = td2
 
+    trade_date_basis = "component_source" if trade_date else None
+    if trade_date is None:
+        trade_date = _index_source_trade_date(indices)
+        if trade_date:
+            trade_date_basis = "tencent_index_source_time"
+            top_warnings.append("复盘日期来自一致的大盘指数源时间；其他组件仍按各自缺数与日期状态展示")
+
     # —— data_health ——
     components = {
         "indices": _component_status(indices),
@@ -679,6 +714,7 @@ def _build_daily_review() -> dict:
         "schema_version": SCHEMA_VERSION,
         "generated_at": _now_str(),
         "trade_date": trade_date,
+        "trade_date_basis": trade_date_basis,
         "data_cutoff": None,
         "status": status,
         "warnings": warnings,

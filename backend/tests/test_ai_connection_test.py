@@ -17,7 +17,10 @@ URL = "/api/ai/connection-test"
 LLM = {"provider": "api-compatible", "model": "synthetic-model",
        "baseURL": "https://example.test/v1", "apiKey": "synthetic-key"}
 DONE = {"type": "done", "trace": [], "rounds": 1}
-ERROR = {"type": "error", "message": "模型连接测试失败，请检查配置后重试"}
+def probe_error(code="PROBE_INVALID_RESPONSE"):
+    return {"type": "error", "code": code, "message": code}
+
+ERROR = probe_error()
 
 
 def sse(text="Connected", **choice):
@@ -132,7 +135,6 @@ def test_invalid_url_no_http(base):
 
 
 @pytest.mark.parametrize("chunks", [
-    [b"data: [DONE]\n\n"], [sse("   "), b"data: [DONE]\n\n"],
     [sse(), b""], [b"data: invalid-json\n\n"],
     [sse(), sse("", finish_reason="length"), b"data: [DONE]\n\n"],
     [b'data: {"choices":[{"delta":{"refusal":"private"}}]}\n\n'],
@@ -159,7 +161,8 @@ def test_compression_rejected_before_decoding(monkeypatch, encoding):
 def test_provider_status_is_sanitized_stream_error_no_redirect_or_retry(monkeypatch, status):
     seen, closed = transport(monkeypatch, [b"PRIVATE PROVIDER"], status=status,
                              headers={"location": "https://private.test/redirect"})
-    assert events(post()) == [ERROR]
+    code = "PROBE_UPSTREAM_AUTH" if status == 401 else "PROBE_RATE_LIMIT" if status == 429 else "PROBE_INVALID_RESPONSE"
+    assert events(post()) == [probe_error(code)]
     assert len(seen) == 1 and closed == [True]
 
 
@@ -218,7 +221,7 @@ def test_dns_deadline_never_opens_client_after_worker_finishes(monkeypatch):
     monkeypatch.setattr(chat.socket, "getaddrinfo", resolve)
     monkeypatch.setattr(chat, "CONNECTION_TEST_LIMITS", replace(chat.CONNECTION_TEST_LIMITS, timeout=0.05))
     try:
-        assert events(post()) == [ERROR]
+        assert events(post()) == [probe_error("PROBE_TIMEOUT")]
         assert started.is_set() and not finished.is_set()
     finally:
         release.set()
@@ -299,7 +302,7 @@ def test_network_failure_is_fixed_safe_error(monkeypatch, failure):
     real_client = httpx.AsyncClient
     monkeypatch.setattr(chat.httpx, "AsyncClient",
                         lambda **kw: real_client(transport=httpx.MockTransport(handle), **kw))
-    assert events(post()) == [ERROR]
+    assert events(post()) == [probe_error("PROBE_TIMEOUT") if failure is httpx.ReadTimeout else ERROR]
     assert len(attempts) == 1
 
 
@@ -354,3 +357,58 @@ def test_mapped_private_addresses_follow_public_mode_policy(monkeypatch, host):
         chat._check_base_url(f'https://[{host}]/v1')
     monkeypatch.setattr(chat, '_PUBLIC_MODE', False)
     assert not chat._ip_blocked(host)
+
+
+@pytest.mark.parametrize("empty", [[], [b"data: [DONE]\n\n"], [sse("   "), b"data: [DONE]\n\n"]])
+def test_empty_response_retries_once_and_reports_precise_error(monkeypatch, empty):
+    seen, closed = transport(monkeypatch, empty)
+    assert events(post()) == [probe_error("PROBE_EMPTY_RESPONSE")]
+    assert len(seen) == 2 and closed == [True, True]
+
+
+def test_empty_then_success_shares_budget_and_does_not_publish_empty_attempt(monkeypatch):
+    from types import SimpleNamespace
+    clock = [100.0]
+    # Patch only the endpoint's clock, not asyncio/AnyIO's real scheduler clock.
+    monkeypatch.setattr(app_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    calls = []
+    async def stream(cfg, messages, *, limits):
+        calls.append((cfg["_session"], limits.timeout))
+        if len(calls) == 1:
+            clock[0] += 0.25
+            raise chat.ModelEmptyResponseError()
+        yield {"type": "delta", "text": "ok"}
+        yield {"type": "done"}
+    monkeypatch.setattr(chat, "stream_api_messages", stream)
+    assert events(post()) == [DONE]
+    assert len(calls) == 2 and calls[0][0] == calls[1][0]
+    assert 0 < calls[1][1] < calls[0][1] <= 15
+    assert [call[1] for call in calls] == [15.0, 14.75]
+
+
+def test_role_only_chunk_followed_by_text_is_not_retried(monkeypatch):
+    seen, closed = transport(monkeypatch, [b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n', sse("ok"), b"data: [DONE]\n\n"])
+    assert events(post()) == [DONE]
+    assert len(seen) == 1
+
+
+def test_empty_then_timeout_reports_timeout_not_two_empty_responses(monkeypatch):
+    calls=[]
+    async def stream(cfg,messages,*,limits):
+        calls.append(limits.timeout)
+        if len(calls)==1:raise chat.ModelEmptyResponseError()
+        raise chat.ModelTransportError("模型响应超时")
+        yield
+    monkeypatch.setattr(chat,"stream_api_messages",stream)
+    assert events(post())==[probe_error("PROBE_TIMEOUT")]
+    assert len(calls)==2
+
+
+def test_cancellation_after_empty_does_not_retry(monkeypatch):
+    calls=[]
+    async def stream(cfg,messages,*,limits):
+        calls.append(True);cfg["_cancel_event"].set()
+        raise chat.ModelEmptyResponseError()
+        yield
+    monkeypatch.setattr(chat,"stream_api_messages",stream)
+    assert events(post())==[] and len(calls)==1

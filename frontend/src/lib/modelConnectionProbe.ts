@@ -3,6 +3,14 @@ import type { LlmConfig } from "./llm.ts";
 export type ProbeState = { status: "idle" | "pending" | "success" | "cancelled" | "error"; message: string };
 const IDLE: ProbeState = { status: "idle", message: "" };
 
+const PROBE_ERRORS: Record<string, string> = {
+  PROBE_EMPTY_RESPONSE: "上游两次返回空内容，请稍后重试；不代表配置无效。",
+  PROBE_TIMEOUT: "模型响应超过测试时限，已停止等待。",
+  PROBE_UPSTREAM_AUTH: "模型服务拒绝鉴权，请检查当前模型凭据或权限。",
+  PROBE_RATE_LIMIT: "模型服务限流，请稍后重试。",
+  PROBE_INVALID_RESPONSE: "模型响应未完整结束或格式不受支持，请检查服务兼容性。",
+};
+
 /** Ephemeral generation ownership: no credentials, fingerprints or results are persisted. */
 export function createModelConnectionProbe(
   run: (config: LlmConfig, signal: AbortSignal) => Promise<unknown>,
@@ -48,7 +56,7 @@ export function createModelConnectionProbe(
           const backendAuth = typeof error === "object" && error !== null && "status" in error && error.status === 401;
           publish({ status: "error", message: backendAuth
             ? "后端访问鉴权失败，请检查并保存下方的后端访问密钥。"
-            : "模型连接测试未完成，请检查当前配置或稍后重试。" });
+            : (error instanceof Error && Object.prototype.hasOwnProperty.call(PROBE_ERRORS, error.message) ? PROBE_ERRORS[error.message] : "模型连接测试未完成，请检查当前配置或稍后重试。") });
         }
       } finally {
         if (generation === mine) {

@@ -112,7 +112,7 @@ def test_source_failure_preserved_as_unavailable_not_empty_success(tmp_path, sta
     (200,{'content-length':str(C.MAX_BYTES+1)},b'x','RESPONSE_SIZE_REJECTED'),
     (200,{'content-length':'invalid'},b'x','RESPONSE_SIZE_REJECTED'),
     (200,{},b'x'*(C.MAX_BYTES+1),'RESPONSE_SIZE_REJECTED'),
-    (200,{},b'','EMPTY_RESPONSE')])
+    (200,{},b'','EMPTY_RESPONSE')], ids=['redirect','encoded-response','declared-oversize','invalid-length','stream-oversize','empty-response'])
 def test_transport_rejection_does_not_publish_receipt(tmp_path,status,headers,body,code):
     root=tmp_path/'lake';initialize_fact_lake(root)
     before={str(p.relative_to(root)):p.read_bytes() for p in root.rglob('*') if p.is_file()}
