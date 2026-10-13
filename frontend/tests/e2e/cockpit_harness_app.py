@@ -207,6 +207,18 @@ astock.valuation_percentile = _fake_valuation_percentile  # type: ignore[assignm
 astock.full_valuation = _fake_full_valuation  # type: ignore[assignment]
 astock.tencent_quote = _fake_tencent_quote  # type: ignore[assignment]
 
+# Match the subprocess boundary without launching providers in this fixture.
+import public_data_budget
+
+def _offline_public_budget(operation, code=None, **kwargs):
+    if operation == "valuation":
+        return _fake_full_valuation(code)
+    if operation == "financials":
+        return _fake_financials(code)
+    raise RuntimeError("Unexpected public-data operation in cockpit fixture")
+
+public_data_budget.run = _offline_public_budget
+
 _seed_review_snapshot()
 _seed_watchlist()
 _seed_canonical_holding_with_stale_legacy_archive()

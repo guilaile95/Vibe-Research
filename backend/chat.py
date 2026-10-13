@@ -40,6 +40,12 @@ class ModelTransportError(RuntimeError):
     """Public, sanitized model failure; never contains provider bodies or URLs."""
 
 
+class ModelEmptyResponseError(ModelTransportError):
+    """HTTP 200 completed without usable content; a probe may retry once."""
+    def __init__(self):
+        super().__init__("模型返回空内容")
+
+
 class ModelStreamIncompleteError(ModelTransportError):
     """The upstream stream ended without its explicit completion signal."""
 
@@ -571,6 +577,7 @@ async def stream_api_messages(cfg: dict, messages: list, *, limits: ApiStreamLim
     response = None
     answered = False
     text_chars = 0
+    received_line = False
     try:
         # Public-mode endpoint validation resolves DNS synchronously. It must not
         # block ASGI disconnect handling, and cancelled preparation must never
@@ -596,8 +603,11 @@ async def stream_api_messages(cfg: dict, messages: list, *, limits: ApiStreamLim
                 with anyio.fail_after(cfg["_deadline"] - time.monotonic()):
                     line = await anext(lines)
             except StopAsyncIteration:
+                if not received_line:
+                    raise ModelEmptyResponseError() from None
                 raise ModelStreamIncompleteError() from None
             _check_active(cfg)
+            received_line = received_line or bool(line.strip())
             done, delta = _parse_sse_line(line, use_tools=False)
             if done:
                 break
@@ -608,7 +618,7 @@ async def stream_api_messages(cfg: dict, messages: list, *, limits: ApiStreamLim
                 answered = answered or bool(delta["content"].strip())
                 yield {"type": "delta", "text": delta["content"]}
         if not answered:
-            raise ModelTransportError("模型没有返回可用内容")
+            raise ModelEmptyResponseError()
     except (httpx.TimeoutException, TimeoutError) as exc:
         _check_active(cfg)
         raise ModelTransportError("模型响应超时") from exc

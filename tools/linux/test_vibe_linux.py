@@ -115,6 +115,19 @@ class LinuxPackageTests(unittest.TestCase):
                     linux.install(prefix)
                 self.assertFalse((prefix / "releases/test-1/.installed").exists())
 
+    def test_runtime_override_is_explicit_and_consistent(self):
+        self.assertEqual(linux.runtime_endpoint({}), ("http://127.0.0.1:8911", 8911))
+        for env in ({"VR_AGENT_RUNTIME_URL": "http://127.0.0.1:18302"},
+                    {"VR_AGENT_RUNTIME_PORT": "18302"},
+                    {"VR_AGENT_RUNTIME_URL": "http://localhost:18302", "VR_AGENT_RUNTIME_PORT": "18302"}):
+            self.assertEqual(linux.runtime_endpoint(env), ("http://127.0.0.1:18302", 18302))
+        for env in ({"VR_AGENT_RUNTIME_URL": "http://127.0.0.1:18302", "VR_AGENT_RUNTIME_PORT": "8911"},
+                    {"VR_AGENT_RUNTIME_PORT": "65536"}, {"VR_AGENT_RUNTIME_PORT": "5899"},
+                    {"VR_AGENT_RUNTIME_PORT": "abc"}, {"VR_AGENT_RUNTIME_PORT": "1"}):
+            with self.assertRaises(ValueError): linux.runtime_endpoint(env)
+        for url in ("https://127.0.0.1:8911", "http://external.test:8911", "http://u:p@127.0.0.1:8911", "http://127.0.0.1:8911?x=1", "http://127.0.0.1:8911/path"):
+            with self.assertRaises(ValueError): linux.runtime_endpoint({"VR_AGENT_RUNTIME_URL": url})
+
     def test_commands_use_existing_fixed_loopback_ports(self):
         commands = linux.commands(Path("/fixture"))
         self.assertEqual(len(commands), 3)

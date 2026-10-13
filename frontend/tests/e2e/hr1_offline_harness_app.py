@@ -78,6 +78,8 @@ def _empty_calendar(code, fetched_at):
 market.get_market_breadth = _unavailable
 astock.announcements = _unavailable
 astock.financials = _unavailable
+import public_data_budget
+public_data_budget.run = _unavailable
 astock.lockup_expiry = lambda *args, **kwargs: {"history": [], "upcoming": []}
 astock.dividend_history = lambda *args, **kwargs: []
 research_continuity_service._calendar = _empty_calendar

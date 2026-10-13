@@ -360,7 +360,7 @@ export function Settings() {
             <section className="rounded-lg border border-border p-3 text-xs" data-testid="model-connection-test">
               <h3 className="font-medium">手动检测当前 API 配置</h3>
               <p className="mt-2">接收端：{probeDestination || "请填写不含空白、账号密码、查询参数或片段的 HTTP(S) Base URL"}；模型：{modelName.trim() || "未填写"}</p>
-              <p className="mt-1 text-muted-foreground">点击后使用当前表单中的 API Key，仅发送一句固定测试请求，不发送持仓、研究或对话资料。只请求一次，不调用工具、不重试、不保存配置；请求最多 32 个输出 token，最多等待 15 秒。服务商可能收费，输出请求上限不等于金额保证；取消也不保证服务商停止计费。</p>
+              <p className="mt-1 text-muted-foreground">点击后使用当前表单中的 API Key，仅发送一句固定测试请求，不发送持仓、研究或对话资料。不调用工具、不保存配置；仅完整空响应最多重试一次，共最多两次请求，每次最多 32 个输出 token，总计最多等待 15 秒。服务商可能收费，输出请求上限不等于金额保证；取消也不保证服务商停止计费。</p>
               {!probeAccessReady && <p className="mt-2 text-warning">后端访问密钥修改后需先保存，再测试。</p>}
               <div className="mt-3 flex gap-3">
                 <button type="button" data-testid="model-connection-test-start" onClick={runProbe} disabled={probeState.status === "pending" || !probeDestination || !probeAccessReady || !apiKey.trim() || !modelName.trim()} className="rounded border border-primary/40 px-3 py-2 text-primary disabled:opacity-50">测试当前配置（可能产生费用）</button>

@@ -125,7 +125,7 @@ def index_quote() -> list[dict]:
     for full in A_INDICES:
         q = parsed.get(full[2:])
         if q:
-            out.append({"name": q["name"], "price": q["price"], "change_pct": q["change_pct"], "change_amt": q["change_amt"]})
+            out.append({"name": q["name"], "code": full, "price": q["price"], "change_pct": q["change_pct"], "change_amt": q["change_amt"], "data_time": q.get("data_time"), "trade_date": q.get("trade_date")})
     return out
 
 
@@ -784,7 +784,7 @@ def valuation_percentile(code: str, period: str = "近五年") -> dict:
     return {"period": "近5年", "metrics": metrics}
 
 
-def full_valuation(code: str, *, valuation_reader=None) -> dict:
+def full_valuation(code: str, *, valuation_reader=None, on_quote=None) -> dict:
     """单票完整估值：腾讯现价 + 东财 TTM PE/PB/总市值 + 一致预期 EPS。
 
     Header ``pe_ttm`` / ``pb`` / ``mcap_yi`` come from Eastmoney's single-security
@@ -801,19 +801,6 @@ def full_valuation(code: str, *, valuation_reader=None) -> dict:
     pe_ttm = None
     pb = None
     mcap_yi = None
-    try:
-        row = (valuation_reader or eastmoney_stock_valuation)(code)
-        if isinstance(row, dict) and str(row.get("code") or "").strip() == code:
-            pe_ttm = _optional_float(row.get("pe_ttm"))
-            pb = _optional_float(row.get("pb"))
-            mcap_yuan = _optional_float(row.get("market_cap"))
-            if mcap_yuan is not None:
-                mcap_yi = mcap_yuan / 1e8
-    except Exception:
-        pe_ttm = None
-        pb = None
-        mcap_yi = None
-
     out = {
         "name": q["name"], "code": code, "price": price,
         # These timestamps describe the Tencent quote only, not fundamentals or forecasts.
@@ -831,10 +818,35 @@ def full_valuation(code: str, *, valuation_reader=None) -> dict:
         "cagr_pct": None, "peg": None, "digest_years": None, "analyst_count": 0,
     }
 
+    if on_quote is not None:
+        on_quote(dict(out))
+
+    try:
+        row = (valuation_reader or eastmoney_stock_valuation)(code)
+        if isinstance(row, dict) and str(row.get("code") or "").strip() == code:
+            pe_ttm = _optional_float(row.get("pe_ttm"))
+            pb = _optional_float(row.get("pb"))
+            mcap_yuan = _optional_float(row.get("market_cap"))
+            if mcap_yuan is not None:
+                mcap_yi = mcap_yuan / 1e8
+    except Exception:
+        pe_ttm = None
+        pb = None
+        mcap_yi = None
+
+    out.update(pe_ttm=pe_ttm, pb=pb, mcap_yi=mcap_yi)
+
+    if on_quote is not None:
+        on_quote(dict(out))
+
     try:
         rows = profit_forecast(code)
     except DependencyMissing:
         out["forecast_note"] = "一致预期需安装 akshare"
+        return out
+    except Exception:
+        out["analyst_count"] = None
+        out["forecast_note"] = "一致预期来源暂不可用；保留已取得的行情与估值字段"
         return out
 
     def _eps(row: dict):
