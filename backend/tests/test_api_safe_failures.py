@@ -13,7 +13,7 @@ import app as app_module
     ('fund-flow','stock_fund_flow_120d'), ('dragon-tiger','dragon_tiger_board'),
     ('lockup','lockup_expiry'), ('blocks','concept_blocks'),
     ('hot-concepts','hot_concepts'), ('investor-qa','investor_qa'),
-    ('industry','industry_comparison'), ('valuation','full_valuation'),
+    ('industry','industry_comparison'),
     ('reports','eastmoney_reports'), ('info','individual_info'),
     ('disclosure','disclosure'), ('kline','kline'), ('finance','finance'),
 ])
@@ -40,3 +40,29 @@ def test_generic_502_literals_never_interpolate_raw_caught_exceptions():
             if not isinstance(call.args[0],ast.Constant) or call.args[0].value != 502:
                 continue
             assert not any(isinstance(node,ast.Name) and node.id==handler.name for node in ast.walk(call.args[1])), f'raw exception in HTTP 502 at line {call.lineno}'
+
+
+@pytest.mark.parametrize("endpoint,operation", [("valuation", "valuation"), ("market/overview", "overview")])
+def test_bounded_provider_failure_is_explicit_safe_unavailable_json(monkeypatch, endpoint, operation):
+    import public_data_budget
+    calls=[]
+    def fail(actual_operation, code=None):
+        calls.append((actual_operation, code))
+        raise RuntimeError("SYNTHETIC_SECRET https://private.example/path?token=fixture /private/file Traceback SQL SELECT")
+    monkeypatch.setattr(public_data_budget, "run", fail)
+    monkeypatch.setattr(public_data_budget, "_run_process", lambda *a, **k: pytest.fail("fixture must not spawn provider worker"))
+    response=TestClient(app_module.app).get(f"/api/{endpoint}", params={"code":"000001"} if operation=="valuation" else {})
+    assert response.status_code==200
+    data=response.json()["data"]
+    assert data["status"]=="unavailable" and data["reason_code"]=="SOURCE_UNAVAILABLE"
+    if operation=="valuation":
+        assert calls==[("valuation","000001")]
+        for name in ("price","pe_ttm","pb","mcap_yi","eps_26e","eps_27e","analyst_count"):
+            assert data[name] is None
+        assert "暂不可用" in data["forecast_note"]
+    else:
+        assert calls==[("overview",None)]
+        assert data["sentiment"]["up"] is None and data["sentiment"]["date"] is None
+        assert data["sectors"]==[] and data["updated"] is None
+    for forbidden in ["SYNTHETIC_SECRET","private.example","token=","/private/file","Traceback","SELECT"]:
+        assert forbidden not in response.text
