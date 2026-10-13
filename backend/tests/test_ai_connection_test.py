@@ -367,11 +367,15 @@ def test_empty_response_retries_once_and_reports_precise_error(monkeypatch, empt
 
 
 def test_empty_then_success_shares_budget_and_does_not_publish_empty_attempt(monkeypatch):
+    from types import SimpleNamespace
+    clock = [100.0]
+    # Patch only the endpoint's clock, not asyncio/AnyIO's real scheduler clock.
+    monkeypatch.setattr(app_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
     calls = []
     async def stream(cfg, messages, *, limits):
         calls.append((cfg["_session"], limits.timeout))
         if len(calls) == 1:
-            await anyio.sleep(.01)
+            clock[0] += 0.25
             raise chat.ModelEmptyResponseError()
         yield {"type": "delta", "text": "ok"}
         yield {"type": "done"}
@@ -379,6 +383,7 @@ def test_empty_then_success_shares_budget_and_does_not_publish_empty_attempt(mon
     assert events(post()) == [DONE]
     assert len(calls) == 2 and calls[0][0] == calls[1][0]
     assert 0 < calls[1][1] < calls[0][1] <= 15
+    assert [call[1] for call in calls] == [15.0, 14.75]
 
 
 def test_role_only_chunk_followed_by_text_is_not_retried(monkeypatch):
