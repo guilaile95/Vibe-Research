@@ -11,7 +11,7 @@ import hashlib
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import decision_trace_store as store
 import portfolio_advice_trace_adapter as adapter
@@ -41,6 +41,8 @@ def archive_decision_evidence(
     advice_result: Mapping[str, Any],
     context_data: Mapping[str, Any] | None = None,
     db_path: str | Path | None = None,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Extract evidence and explanations from portfolio advice result and archive them.
 
@@ -299,6 +301,7 @@ def archive_decision_evidence(
             evidence_items=evidence_items,
             explanation_items=explanation_items,
             db_path=db_path,
+            **({"should_cancel": should_cancel} if should_cancel is not None else {}),
         )
 
         return {
@@ -308,6 +311,8 @@ def archive_decision_evidence(
             "explanation_count": len(explanation_items),
         }
 
+    except store.DecisionTraceWriteCancelledError:
+        return {"status": "cancelled", "decision_run_id": run_id}
     except store.DecisionTraceCorruptedError:
         logger.error(
             "Decision trace store corrupted while archiving decision evidence for run_id %s",
@@ -315,6 +320,8 @@ def archive_decision_evidence(
         )
         return {"status": "failed", "decision_run_id": run_id, "reason": "db_corrupted"}
     except Exception as exc:
+        if should_cancel is not None and should_cancel():
+            return {"status": "cancelled", "decision_run_id": run_id}
         logger.exception(
             "Failed to archive decision evidence for run_id %s: %s", run_id, exc
         )
@@ -330,7 +337,12 @@ def archive_decision_evidence(
                 "trace_status": "failed",
                 "created_at": now_str,
             }
-            store.save_decision_run_bundle(run_record, [], [], db_path=db_path)
+            store.save_decision_run_bundle(
+                run_record, [], [], db_path=db_path,
+                **({"should_cancel": should_cancel} if should_cancel is not None else {}),
+            )
+        except store.DecisionTraceWriteCancelledError:
+            return {"status": "cancelled", "decision_run_id": run_id}
         except Exception:
             pass
         return {"status": "failed", "decision_run_id": run_id, "reason": str(exc)}

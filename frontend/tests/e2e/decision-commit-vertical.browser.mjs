@@ -495,7 +495,10 @@ async function run() {
       assert.match(changesText, /竞品跟踪简报：立场 反对/);
       assert.match(changesText, /卖方晨会纪要：立场 支持/);
       const conflictDetails = page.getByTestId("research-brief-conflict-records").first();
-      await conflictDetails.locator("summary").click();
+      const conflictSummary = conflictDetails.locator("summary");
+      await conflictSummary.focus();
+      assert.equal(await conflictSummary.evaluate((element) => element === document.activeElement), true);
+      await conflictSummary.press("Enter");
       const conflictText = await conflictDetails.innerText();
       assert.match(conflictText, /\[反对\] ?竞品正在放量/);
       assert.match(conflictText, /\[支持\] ?竞品正在放量/);
@@ -530,7 +533,9 @@ async function run() {
       assert.match(updateText, /确认时间：/);
       assert.match(updateText, /渠道复核/);
       // 展开已确认依据：反对依据带来源，且展开动作不产生任何业务写请求。
-      await updateItems.first().locator("summary").click();
+      const updateSummary = updateItems.first().locator("summary");
+      await updateSummary.focus();
+      await updateSummary.press("Enter");
       await page.getByTestId("research-brief-evidence-oppose").filter({ hasText: "7 月渠道复核显示动销略低于预期" }).first().waitFor();
       assert.equal(apiWriteRequests.length, 0, `opening/expanding the brief must make no business writes, saw ${JSON.stringify(apiWriteRequests)}`);
     }
@@ -541,10 +546,29 @@ async function run() {
       : disprovenScenario
         ? "research-brief-disproven-after.png"
         : "research-brief-after.png";
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      await brief.evaluate((element) => element.scrollIntoView({ block: "start" }));
+      await page.screenshot({ path: join(shotDir, shotName.replace(".png", `-${viewport.width}.png`)) });
+      const bounds = await Promise.all(["invalidation", "freshness", "view"].map((key) => page.getByTestId(`research-brief-${key}`).boundingBox()));
+      const [invalidation, freshness, frozenHistory] = bounds;
+      assert.ok(invalidation && freshness && frozenHistory);
+      assert.ok(invalidation.y < frozenHistory.y && freshness.y < frozenHistory.y, "conditions and data boundaries must precede frozen history");
+      if (viewport.width >= 1024) assert.ok(Math.abs(invalidation.y - freshness.y) < 2, "desktop attention blocks should share a row");
+      else {
+        assert.ok(freshness.y >= invalidation.y + invalidation.height, "narrow attention blocks should stack");
+        const heading = await brief.getByRole("heading", { name: "研究摘要", exact: true }).boundingBox();
+        assert.ok(heading && heading.y >= 56, "mobile anchor must leave room for the floating navigation button");
+      }
+      assert.equal(await brief.evaluate((element) => element.scrollWidth <= element.clientWidth + 1), true, "brief must not overflow horizontally");
+      assert.equal(await brief.locator("input, textarea, select").count(), 0, "reflow must remain read-only");
+      assert.equal(apiWriteRequests.length, 0, "reflow and keyboard expansion must not write business state");
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
     await brief.screenshot({ path: join(shotDir, shotName) });
-    if (disprovenScenario) {
-      // 已证伪案例不进入 Preview / Commit：终态研究不要求成功提交正式决定。
-      console.log("[E2E] research-brief disproven scenario captured");
+    if (disprovenScenario || process.env.BRIEF_LAYOUT_ONLY === "1") {
+      // Layout-only fixtures stop before any formal Preview / Commit action.
+      console.log("[E2E] research-brief read-only layout scenario captured");
       return;
     }
     // P1-DF3：结构化 review boundary——用户显式选择本地时间，页面展示
@@ -624,6 +648,7 @@ async function run() {
     assert.equal(item.critical_data.campaign_id, reread.critical_data.campaign_id);
     assert.equal(item.critical_data.security_code, reread.critical_data.security_code);
     assert.equal(item.critical_data.strategy, reread.critical_data.strategy);
+    const writesBeforeInbox = apiWriteRequests.length;
     await page.goto(`${frontend}/decision-inbox`, { waitUntil: "domcontentloaded" });
     await page.getByRole("heading", { name: "决策待办" }).waitFor();
     const actionPanel = page.locator(`[data-decision-action-panel="${campaign.campaign_id}"]`);
@@ -669,7 +694,61 @@ async function run() {
 
     // ── 冻结后研究更新（R2/R3/R4）：冻结原文不变，新证据经 UI 显式确认进入 delta，
     //    连续性识别为 ADDED，旧决定的 baseline 截断保持其当时依据。 ──
-    await page.waitForLoadState("networkidle");
+    // Readiness is the checked Campaign panel and its visible review link, not
+    // global network silence. PR375 timed out here while these assertions had
+    // already passed. Keep a synthetic unrelated GET pending to prove that
+    // fonts/background traffic cannot gate this user-visible transition.
+    let releaseReadinessProbe;
+    let markProbeIntercepted;
+    let probeWork = Promise.resolve();
+    let probeReleased = false;
+    const heldProbe = new Promise(resolve => { releaseReadinessProbe = resolve; });
+    const interceptedProbe = new Promise(resolve => { markProbeIntercepted = resolve; });
+    const probeRoute = "**/__e2e_inbox_readiness_probe";
+    const boundedProbeWait = async (work) => {
+      let timer;
+      try {
+        await Promise.race([work, new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("synthetic readiness probe did not settle")), 5000);
+        })]);
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    await page.route(probeRoute, route => {
+      markProbeIntercepted();
+      probeWork = (async () => {
+        await heldProbe;
+        probeReleased = true;
+        await route.fulfill({ status: 200, body: "synthetic readiness probe" });
+      })();
+      return probeWork;
+    });
+    try {
+      await page.evaluate(() => {
+        globalThis.__e2eInboxReadinessProbe = fetch("/__e2e_inbox_readiness_probe").then(response => response.text());
+      });
+      await boundedProbeWait(interceptedProbe);
+      await actionPanel.getByRole("link", { name: "打开决策复盘 →" }).waitFor({ state: "visible" });
+      // The visible continuity card also owns a batched read. Wait for its
+      // completed UI, not navigation-abort exclusions or global idle.
+      const inboxContinuity = page.locator(`[data-testid="research-continuity"][data-campaign-id="${campaign.campaign_id}"]`);
+      await inboxContinuity.locator('button[aria-label="刷新研究连续性"]:not([disabled])').waitFor({ state: "visible" });
+      assert.equal(await inboxContinuity.getByRole("alert").count(), 0, "Inbox continuity must finish without an error");
+      assert.equal(probeReleased, false, "readiness must not depend on unrelated network completion");
+      assert.equal(apiWriteRequests.length, writesBeforeInbox, "opening and reading Decision Inbox must not write business state");
+    } finally {
+      releaseReadinessProbe();
+      try {
+        await boundedProbeWait(probeWork);
+        // fulfill() alone can precede the browser's body read; finish our own
+        // fetch before leaving the page so no synthetic ERR_ABORTED is hidden.
+        await boundedProbeWait(page.evaluate(() => globalThis.__e2eInboxReadinessProbe));
+        await page.evaluate(() => { delete globalThis.__e2eInboxReadinessProbe; });
+      } finally {
+        await page.unroute(probeRoute);
+      }
+    }
     const apiWriteMarker = apiWriteRequests.length;
     // 1) 通过正常界面创建此前不存在的新证据（evidence 创建 ≠ 研究变化已确认）。
     await page.goto(`${frontend}/evidence/new?subject_type=stock&subject_id=600519&return_to=${encodeURIComponent(`/thesis/${thesisId}`)}`, { waitUntil: "domcontentloaded" });
@@ -701,6 +780,7 @@ async function run() {
     // Another editor changes this evidence after the user reviewed its previous version.
     const evidenceBefore = await jsonRequest(backend, `/api/evidence/${newOptionValue}`);
     const updatedEvidence = Object.fromEntries(["evidence_type", "claim", "source_title", "source_url", "source_date", "accessed_at", "classification", "confidence"].map((key) => [key, evidenceBefore[key]]));
+    updatedEvidence.expected_edit_token = evidenceBefore.edit_token;
     updatedEvidence.source_title = "渠道复核周记 v2";
     await jsonRequest(backend, `/api/evidence/${newOptionValue}`, "PUT", updatedEvidence);
     const rejected = page.waitForResponse((response) => response.url().endsWith(`/thesis/${thesisId}/deltas`) && response.request().method() === "POST" && response.status() === 409);

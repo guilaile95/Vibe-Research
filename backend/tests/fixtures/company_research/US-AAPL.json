@@ -1,0 +1,696 @@
+{
+  "fixture_only": true,
+  "authority": "registered FastAPI capture/generate with synthetic raw FactLake evidence and offline model stub",
+  "subject": {
+    "market": "US",
+    "symbol": "AAPL"
+  },
+  "as_of": "2026-09-30",
+  "bundle": {
+    "schema_version": "company_research.v1",
+    "bundle_id": "00000000000000000000000000000007",
+    "subject": {
+      "market": "US",
+      "symbol": "AAPL"
+    },
+    "captured_at": "2026-10-12T12:00:00.000000Z",
+    "archive_cutoff": "2026-09-30",
+    "sources": [
+      {
+        "evidence_id": "global_quote_ref",
+        "stages": [
+          "profile",
+          "valuation"
+        ],
+        "source": "immutable_public_source_archive",
+        "captured_at": "2026-10-12T12:00:00.000000Z",
+        "source_as_of": null,
+        "status": "AVAILABLE",
+        "payload": {
+          "schema_version": "company-public-source.v1",
+          "subject": {
+            "market": "US",
+            "symbol": "AAPL"
+          },
+          "market": "US",
+          "symbol": "AAPL",
+          "source_id": "global_quote_ref",
+          "status": "partial",
+          "qualification": "QUALIFIED_CURRENT_ARCHIVED_INPUT",
+          "as_of": "2026-09-30",
+          "source_time": null,
+          "capture_time": "2026-10-01T12:00:00.000000Z",
+          "source_artifact_hash": "sha256:13ca5b98ab363909b54fe9ed1a397147434bdc543400d761c3634dd0d2d3ef02",
+          "point_in_time_claim": "NONE",
+          "provider_fetch_performed": false,
+          "block": {
+            "schema_version": "public-research.v1",
+            "normalizer_version": "public-research-adapter.v1",
+            "source_id": "global_quote_ref",
+            "subject": "US:AAPL@2026-09-30",
+            "market": "US",
+            "symbol": "AAPL",
+            "requested_as_of": "2026-09-30",
+            "label": "港美股报价与基准",
+            "status": "partial",
+            "rows": [
+              {
+                "id": "US:AAPL",
+                "market": "US",
+                "symbol": "AAPL",
+                "quote": {
+                  "key": "usAAPL",
+                  "symbol": "AAPL",
+                  "name": "Synthetic AAPL",
+                  "price": 150.0,
+                  "prev_close": 148.0,
+                  "volume": 1000.0,
+                  "source_time": "2026-09-30T20:00:00.000000Z",
+                  "session_date": "2026-09-30",
+                  "timezone": "America/New_York",
+                  "currency": "USD",
+                  "unit": "quote currency per share"
+                },
+                "benchmark": {
+                  "key": "usINX",
+                  "symbol": "INX",
+                  "name": "Synthetic INX",
+                  "price": 150.0,
+                  "prev_close": 148.0,
+                  "volume": 1000.0,
+                  "source_time": "2026-09-30T20:00:00.000000Z",
+                  "session_date": "2026-09-30",
+                  "timezone": "America/New_York",
+                  "currency": null,
+                  "unit": "index points"
+                },
+                "reference_session_date": "2026-09-30",
+                "clock_phase": "pre_open_by_clock",
+                "session_calendar_confirmed": false,
+                "source_stale": false,
+                "quote_age_seconds_at_capture": 57600.0,
+                "benchmark_age_seconds_at_capture": 57600.0,
+                "freshness_qualification": "ARCHIVED_SNAPSHOT_NOT_LIVE_FRESHNESS_CERTIFICATION",
+                "requested_cutoff": "2026-09-30",
+                "after_requested_date": false,
+                "same_response": true
+              }
+            ],
+            "reason_codes": [
+              "CLOCK_PHASE_NOT_EXCHANGE_CALENDAR",
+              "SNAPSHOT_NOT_HISTORICAL_QUOTE"
+            ],
+            "counters": {},
+            "guard": "个股与基准来自同一响应；参考日是基准报价日期，不是官方交易日历。交易时段只按当地时钟推断，不能由基准陈旧断言休市。",
+            "captured_at": "2026-10-01T12:00:00.000000Z",
+            "source_url": "https://qt.gtimg.cn/q=usAAPL,usINX",
+            "license_status": "PROVIDER_TERMS_NOT_VERIFIED",
+            "selection_mode": "CURRENT_ARCHIVED_POSTHOC",
+            "point_in_time_claim": "NONE",
+            "source_revision": null,
+            "source_publication_time": null,
+            "archive_age_seconds": 950400.0,
+            "archive_stale": true,
+            "coverage": "bounded provider response; missing remains unknown",
+            "fixture": true,
+            "raw_bytes": 278,
+            "evidence": {
+              "observation_id": "public-research-00000000000000000000000000000001",
+              "raw_payload_hash": "sha256:13ca5b98ab363909b54fe9ed1a397147434bdc543400d761c3634dd0d2d3ef02",
+              "locally_received_at": "2026-10-12T12:00:00.000000Z",
+              "normalizer_version": "public-research-adapter.v1",
+              "point_in_time_claim": "NONE",
+              "provider_revision": null
+            }
+          },
+          "reason_codes": []
+        },
+        "scope": "QUALIFIED_CURRENT_ARCHIVED_POSTHOC_NOT_HISTORICAL_PIT",
+        "payload_sha256": "c6edfe67ffcaf56730f2b2f2f6b370ffe0276d90421ce66af80e66e3fb447fa5"
+      },
+      {
+        "evidence_id": "global_financials_pit",
+        "stages": [
+          "financials",
+          "risk"
+        ],
+        "source": "immutable_public_source_archive",
+        "captured_at": "2026-10-12T12:00:00.000000Z",
+        "source_as_of": null,
+        "status": "AVAILABLE",
+        "payload": {
+          "schema_version": "company-public-source.v1",
+          "subject": {
+            "market": "US",
+            "symbol": "AAPL"
+          },
+          "market": "US",
+          "symbol": "AAPL",
+          "source_id": "global_financials_pit",
+          "status": "partial",
+          "qualification": "QUALIFIED_CURRENT_ARCHIVED_INPUT",
+          "as_of": "2026-09-30",
+          "source_time": null,
+          "capture_time": "2026-10-01T12:00:00.000000Z",
+          "source_artifact_hash": "sha256:e746b5ed589afc872bfa77cc4f5a15ac0cfe6323126e9b14df8736b1c2e2c62f",
+          "point_in_time_claim": "NONE",
+          "provider_fetch_performed": false,
+          "block": {
+            "schema_version": "public-research.v1",
+            "normalizer_version": "public-research-adapter.v1",
+            "source_id": "global_financials_pit",
+            "subject": "US:AAPL@2026-09-30",
+            "market": "US",
+            "symbol": "AAPL",
+            "requested_as_of": "2026-09-30",
+            "label": "港美股公告日筛选财务",
+            "status": "partial",
+            "rows": [
+              {
+                "id": "2025-10-01..2026-06-30",
+                "market": "US",
+                "symbol": "AAPL",
+                "returned_secucode": "AAPL.O",
+                "start": "2025-10-01",
+                "end": "2026-06-30",
+                "notice_date": "2026-08-10",
+                "period_kind": "ytd",
+                "period_months": 9,
+                "period_days": 273,
+                "period_code": "004",
+                "currency": "USD",
+                "amount_unit": "PROVIDER_RAW_SCALE_UNVERIFIED",
+                "amount_scale_to_currency_units": null,
+                "revenue": 1200000.0,
+                "net_profit_parent": -20000.0,
+                "net_profit_deducted": null,
+                "eps_basic": -0.25,
+                "eps_diluted": null,
+                "eps_unit": "reporting currency per share",
+                "consolidation_scope": "provider consolidated label",
+                "revision_id": null,
+                "vintage": "CURRENT_STORED_POSTHOC",
+                "point_in_time_claim": "NONE",
+                "missing": []
+              }
+            ],
+            "reason_codes": [
+              "CURRENT_VINTAGE_NOTICE_FILTER_ONLY"
+            ],
+            "counters": {
+              "fetched_rows": 3,
+              "dropped_after_as_of": 1,
+              "dropped_no_notice": 1,
+              "unclassified": 0,
+              "duplicate_rows": 0
+            },
+            "guard": "当前存储版本按公告日及报告期末筛选；历史值可能重述、旧公告日可能被覆盖，不是历史版本PIT，不证明当时已知。",
+            "captured_at": "2026-10-01T12:00:00.000000Z",
+            "source_url": "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_USF10_FN_GMAININDICATOR&columns=ALL&filter=%28SECURITY_CODE%3D%22AAPL%22%29&pageSize=60&pageNumber=1&sortColumns=REPORT_DATE&sortTypes=-1",
+            "license_status": "PROVIDER_TERMS_NOT_VERIFIED",
+            "selection_mode": "CURRENT_ARCHIVED_POSTHOC",
+            "point_in_time_claim": "NONE",
+            "source_revision": null,
+            "source_publication_time": null,
+            "archive_age_seconds": 950400.0,
+            "archive_stale": true,
+            "coverage": "bounded provider response; missing remains unknown",
+            "fixture": true,
+            "raw_bytes": 1214,
+            "evidence": {
+              "observation_id": "public-research-00000000000000000000000000000003",
+              "raw_payload_hash": "sha256:e746b5ed589afc872bfa77cc4f5a15ac0cfe6323126e9b14df8736b1c2e2c62f",
+              "locally_received_at": "2026-10-12T12:00:00.000000Z",
+              "normalizer_version": "public-research-adapter.v1",
+              "point_in_time_claim": "NONE",
+              "provider_revision": null
+            }
+          },
+          "reason_codes": []
+        },
+        "scope": "QUALIFIED_CURRENT_ARCHIVED_POSTHOC_NOT_HISTORICAL_PIT",
+        "payload_sha256": "a91e167617075839f41324b5cdacf41cef892acb34adf9bc259be797ec5cf6f2"
+      },
+      {
+        "evidence_id": "yahoo_consensus",
+        "stages": [
+          "estimates"
+        ],
+        "source": "immutable_public_source_archive",
+        "captured_at": "2026-10-12T12:00:00.000000Z",
+        "source_as_of": null,
+        "status": "AVAILABLE",
+        "payload": {
+          "schema_version": "company-public-source.v1",
+          "subject": {
+            "market": "US",
+            "symbol": "AAPL"
+          },
+          "market": "US",
+          "symbol": "AAPL",
+          "source_id": "yahoo_consensus",
+          "status": "partial",
+          "qualification": "QUALIFIED_CURRENT_ARCHIVED_INPUT",
+          "as_of": "2026-09-30",
+          "source_time": null,
+          "capture_time": "2026-10-01T12:00:00.000000Z",
+          "source_artifact_hash": "sha256:45de212216a90eb1e52ae6729f0a09639bde866d9ad5b173583fdd67da844bd0",
+          "point_in_time_claim": "NONE",
+          "provider_fetch_performed": false,
+          "block": {
+            "schema_version": "public-research.v1",
+            "normalizer_version": "public-research-adapter.v1",
+            "source_id": "yahoo_consensus",
+            "subject": "US:AAPL@2026-09-30",
+            "market": "US",
+            "symbol": "AAPL",
+            "requested_as_of": "2026-09-30",
+            "label": "港美股年度一致预期",
+            "status": "partial",
+            "rows": [
+              {
+                "id": "0y",
+                "market": "US",
+                "symbol": "AAPL",
+                "returned_symbol": "AAPL",
+                "horizon": "0y",
+                "fiscal_end": "2026-09-30",
+                "fiscal_label": "FY2026",
+                "period_kind": "annual_estimate",
+                "currency": "USD",
+                "quote_currency": "USD",
+                "eps_avg": -1.0,
+                "eps_low": -2.0,
+                "eps_high": 0.0,
+                "eps_unit": "reporting currency per share",
+                "revenue_estimate": 1000000.0,
+                "revenue_unit": "reporting currency units",
+                "analyst_count": 5.0,
+                "source_update_time": null,
+                "revision_id": null,
+                "rating": null,
+                "missing": []
+              },
+              {
+                "id": "+1y",
+                "market": "US",
+                "symbol": "AAPL",
+                "returned_symbol": "AAPL",
+                "horizon": "+1y",
+                "fiscal_end": "2027-09-30",
+                "fiscal_label": "FY2027",
+                "period_kind": "annual_estimate",
+                "currency": "USD",
+                "quote_currency": "USD",
+                "eps_avg": -1.0,
+                "eps_low": -2.0,
+                "eps_high": 0.0,
+                "eps_unit": "reporting currency per share",
+                "revenue_estimate": 1000000.0,
+                "revenue_unit": "reporting currency units",
+                "analyst_count": 5.0,
+                "source_update_time": null,
+                "revision_id": null,
+                "rating": null,
+                "missing": []
+              }
+            ],
+            "reason_codes": [
+              "PROVIDER_UPDATE_TIME_UNKNOWN",
+              "CONSENSUS_NOT_COMPANY_FACT"
+            ],
+            "counters": {},
+            "guard": "年度分析师预期不是公司承诺或事实；使用报告币种，可能不同于股票报价币种；不提供升级降级评级。",
+            "captured_at": "2026-10-01T12:00:00.000000Z",
+            "source_url": "https://query2.finance.yahoo.com/v10/finance/quoteSummary/AAPL?modules=earningsTrend,earnings,price",
+            "license_status": "PROVIDER_TERMS_NOT_VERIFIED",
+            "selection_mode": "CURRENT_ARCHIVED_POSTHOC",
+            "point_in_time_claim": "NONE",
+            "source_revision": null,
+            "source_publication_time": null,
+            "archive_age_seconds": 950400.0,
+            "archive_stale": true,
+            "coverage": "bounded provider response; missing remains unknown",
+            "fixture": true,
+            "raw_bytes": 519,
+            "evidence": {
+              "observation_id": "public-research-00000000000000000000000000000005",
+              "raw_payload_hash": "sha256:45de212216a90eb1e52ae6729f0a09639bde866d9ad5b173583fdd67da844bd0",
+              "locally_received_at": "2026-10-12T12:00:00.000000Z",
+              "normalizer_version": "public-research-adapter.v1",
+              "point_in_time_claim": "NONE",
+              "provider_revision": null
+            }
+          },
+          "reason_codes": []
+        },
+        "scope": "QUALIFIED_CURRENT_ARCHIVED_POSTHOC_NOT_HISTORICAL_PIT",
+        "payload_sha256": "3ef8b1c04278a1cc3fac3555cd1a076ae2e38b5164d4abdeaa0dc4b40385a832"
+      }
+    ],
+    "classification": "PUBLIC_ADAPTER_INPUT_UNVERIFIED",
+    "limitations": [
+      "Capture time is not source publication time",
+      "Native adapter returns lack raw HTTP bytes; archived source envelopes retain immutable raw artifact hashes",
+      "Current archived post-hoc evidence, never historical-vintage PIT",
+      "Requested archive cutoff: 2026-09-30",
+      "No portfolio, account or private trade input",
+      "Source availability is not universe completeness"
+    ],
+    "bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e"
+  },
+  "events": [
+    {
+      "type": "run_started",
+      "run_id": "00000000000000000000000000000008",
+      "bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e",
+      "subject": {
+        "market": "US",
+        "symbol": "AAPL"
+      },
+      "max_model_calls": 6
+    },
+    {
+      "type": "stage_started",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "profile"
+    },
+    {
+      "type": "stage_done",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "profile",
+      "output": {
+        "stage": "profile",
+        "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+        "evidence_ids": [
+          "global_quote_ref"
+        ],
+        "gaps": [
+          "Current-vintage only, no historical PIT or verified monetary arithmetic"
+        ],
+        "output_sha256": "fa649d97a5fc77e76f2b7fb2f96878402333bab15a799bc554d4b349e39c1689",
+        "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+        "numeric_claim_verification": "NOT_EVALUATED",
+        "input_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e",
+        "previous_stage_hashes": [],
+        "source_gaps": []
+      }
+    },
+    {
+      "type": "stage_started",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "financials"
+    },
+    {
+      "type": "stage_done",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "financials",
+      "output": {
+        "stage": "financials",
+        "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+        "evidence_ids": [
+          "global_financials_pit"
+        ],
+        "gaps": [
+          "Current-vintage only, no historical PIT or verified monetary arithmetic"
+        ],
+        "output_sha256": "9532680cbcdbfa6170fb76f1c3f3dc8378247c449b3d66801143c2846efa9da1",
+        "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+        "numeric_claim_verification": "NOT_EVALUATED",
+        "input_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e",
+        "previous_stage_hashes": [
+          "fa649d97a5fc77e76f2b7fb2f96878402333bab15a799bc554d4b349e39c1689"
+        ],
+        "source_gaps": []
+      }
+    },
+    {
+      "type": "stage_started",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "estimates"
+    },
+    {
+      "type": "stage_done",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "estimates",
+      "output": {
+        "stage": "estimates",
+        "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+        "evidence_ids": [
+          "yahoo_consensus"
+        ],
+        "gaps": [
+          "Current-vintage only, no historical PIT or verified monetary arithmetic"
+        ],
+        "output_sha256": "e55851645ac60f3c955844a64618f216c7d2008b4a7855e4062bdc50b8e39dc5",
+        "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+        "numeric_claim_verification": "NOT_EVALUATED",
+        "input_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e",
+        "previous_stage_hashes": [
+          "fa649d97a5fc77e76f2b7fb2f96878402333bab15a799bc554d4b349e39c1689",
+          "9532680cbcdbfa6170fb76f1c3f3dc8378247c449b3d66801143c2846efa9da1"
+        ],
+        "source_gaps": []
+      }
+    },
+    {
+      "type": "stage_started",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "valuation"
+    },
+    {
+      "type": "stage_done",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "valuation",
+      "output": {
+        "stage": "valuation",
+        "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+        "evidence_ids": [
+          "global_quote_ref"
+        ],
+        "gaps": [
+          "Current-vintage only, no historical PIT or verified monetary arithmetic"
+        ],
+        "output_sha256": "40f97cd4426eccb8944bc00004b4a1b60cc7231b063895aaa901c0f42d84d595",
+        "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+        "numeric_claim_verification": "NOT_EVALUATED",
+        "input_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e",
+        "previous_stage_hashes": [
+          "fa649d97a5fc77e76f2b7fb2f96878402333bab15a799bc554d4b349e39c1689",
+          "9532680cbcdbfa6170fb76f1c3f3dc8378247c449b3d66801143c2846efa9da1",
+          "e55851645ac60f3c955844a64618f216c7d2008b4a7855e4062bdc50b8e39dc5"
+        ],
+        "source_gaps": []
+      }
+    },
+    {
+      "type": "stage_started",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "risk"
+    },
+    {
+      "type": "stage_done",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "risk",
+      "output": {
+        "stage": "risk",
+        "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+        "evidence_ids": [
+          "global_financials_pit"
+        ],
+        "gaps": [
+          "Current-vintage only, no historical PIT or verified monetary arithmetic"
+        ],
+        "output_sha256": "20d79d95f40387fee24451180b8230ccdcb3f39bcc8a2e815f685f0e9435bc59",
+        "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+        "numeric_claim_verification": "NOT_EVALUATED",
+        "input_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e",
+        "previous_stage_hashes": [
+          "fa649d97a5fc77e76f2b7fb2f96878402333bab15a799bc554d4b349e39c1689",
+          "9532680cbcdbfa6170fb76f1c3f3dc8378247c449b3d66801143c2846efa9da1",
+          "e55851645ac60f3c955844a64618f216c7d2008b4a7855e4062bdc50b8e39dc5",
+          "40f97cd4426eccb8944bc00004b4a1b60cc7231b063895aaa901c0f42d84d595"
+        ],
+        "source_gaps": []
+      }
+    },
+    {
+      "type": "stage_started",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "report"
+    },
+    {
+      "type": "stage_done",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "report",
+      "output": {
+        "stage": "report",
+        "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+        "evidence_ids": [
+          "global_quote_ref",
+          "global_financials_pit",
+          "yahoo_consensus"
+        ],
+        "gaps": [
+          "Current-vintage only, no historical PIT or verified monetary arithmetic"
+        ],
+        "output_sha256": "f0e628f61a7075d669bc9f0ac774ec332c3cd0d4233b305ab27a711b7466d089",
+        "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+        "numeric_claim_verification": "NOT_EVALUATED",
+        "input_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e",
+        "previous_stage_hashes": [
+          "fa649d97a5fc77e76f2b7fb2f96878402333bab15a799bc554d4b349e39c1689",
+          "9532680cbcdbfa6170fb76f1c3f3dc8378247c449b3d66801143c2846efa9da1",
+          "e55851645ac60f3c955844a64618f216c7d2008b4a7855e4062bdc50b8e39dc5",
+          "40f97cd4426eccb8944bc00004b4a1b60cc7231b063895aaa901c0f42d84d595",
+          "20d79d95f40387fee24451180b8230ccdcb3f39bcc8a2e815f685f0e9435bc59"
+        ],
+        "source_gaps": []
+      }
+    },
+    {
+      "type": "done",
+      "record": {
+        "schema_version": "company_research.v1",
+        "run_id": "00000000000000000000000000000008",
+        "bundle_id": "00000000000000000000000000000007",
+        "bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e",
+        "subject": {
+          "market": "US",
+          "symbol": "AAPL"
+        },
+        "status": "COMPLETED",
+        "started_at": "2026-10-12T12:00:00.000000Z",
+        "model": {
+          "provider": "fixture",
+          "name": "fixture"
+        },
+        "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+        "stages": [
+          {
+            "stage": "profile",
+            "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+            "evidence_ids": [
+              "global_quote_ref"
+            ],
+            "gaps": [
+              "Current-vintage only, no historical PIT or verified monetary arithmetic"
+            ],
+            "output_sha256": "fa649d97a5fc77e76f2b7fb2f96878402333bab15a799bc554d4b349e39c1689",
+            "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+            "numeric_claim_verification": "NOT_EVALUATED",
+            "input_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e",
+            "previous_stage_hashes": [],
+            "source_gaps": []
+          },
+          {
+            "stage": "financials",
+            "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+            "evidence_ids": [
+              "global_financials_pit"
+            ],
+            "gaps": [
+              "Current-vintage only, no historical PIT or verified monetary arithmetic"
+            ],
+            "output_sha256": "9532680cbcdbfa6170fb76f1c3f3dc8378247c449b3d66801143c2846efa9da1",
+            "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+            "numeric_claim_verification": "NOT_EVALUATED",
+            "input_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e",
+            "previous_stage_hashes": [
+              "fa649d97a5fc77e76f2b7fb2f96878402333bab15a799bc554d4b349e39c1689"
+            ],
+            "source_gaps": []
+          },
+          {
+            "stage": "estimates",
+            "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+            "evidence_ids": [
+              "yahoo_consensus"
+            ],
+            "gaps": [
+              "Current-vintage only, no historical PIT or verified monetary arithmetic"
+            ],
+            "output_sha256": "e55851645ac60f3c955844a64618f216c7d2008b4a7855e4062bdc50b8e39dc5",
+            "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+            "numeric_claim_verification": "NOT_EVALUATED",
+            "input_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e",
+            "previous_stage_hashes": [
+              "fa649d97a5fc77e76f2b7fb2f96878402333bab15a799bc554d4b349e39c1689",
+              "9532680cbcdbfa6170fb76f1c3f3dc8378247c449b3d66801143c2846efa9da1"
+            ],
+            "source_gaps": []
+          },
+          {
+            "stage": "valuation",
+            "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+            "evidence_ids": [
+              "global_quote_ref"
+            ],
+            "gaps": [
+              "Current-vintage only, no historical PIT or verified monetary arithmetic"
+            ],
+            "output_sha256": "40f97cd4426eccb8944bc00004b4a1b60cc7231b063895aaa901c0f42d84d595",
+            "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+            "numeric_claim_verification": "NOT_EVALUATED",
+            "input_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e",
+            "previous_stage_hashes": [
+              "fa649d97a5fc77e76f2b7fb2f96878402333bab15a799bc554d4b349e39c1689",
+              "9532680cbcdbfa6170fb76f1c3f3dc8378247c449b3d66801143c2846efa9da1",
+              "e55851645ac60f3c955844a64618f216c7d2008b4a7855e4062bdc50b8e39dc5"
+            ],
+            "source_gaps": []
+          },
+          {
+            "stage": "risk",
+            "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+            "evidence_ids": [
+              "global_financials_pit"
+            ],
+            "gaps": [
+              "Current-vintage only, no historical PIT or verified monetary arithmetic"
+            ],
+            "output_sha256": "20d79d95f40387fee24451180b8230ccdcb3f39bcc8a2e815f685f0e9435bc59",
+            "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+            "numeric_claim_verification": "NOT_EVALUATED",
+            "input_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e",
+            "previous_stage_hashes": [
+              "fa649d97a5fc77e76f2b7fb2f96878402333bab15a799bc554d4b349e39c1689",
+              "9532680cbcdbfa6170fb76f1c3f3dc8378247c449b3d66801143c2846efa9da1",
+              "e55851645ac60f3c955844a64618f216c7d2008b4a7855e4062bdc50b8e39dc5",
+              "40f97cd4426eccb8944bc00004b4a1b60cc7231b063895aaa901c0f42d84d595"
+            ],
+            "source_gaps": []
+          },
+          {
+            "stage": "report",
+            "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+            "evidence_ids": [
+              "global_quote_ref",
+              "global_financials_pit",
+              "yahoo_consensus"
+            ],
+            "gaps": [
+              "Current-vintage only, no historical PIT or verified monetary arithmetic"
+            ],
+            "output_sha256": "f0e628f61a7075d669bc9f0ac774ec332c3cd0d4233b305ab27a711b7466d089",
+            "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+            "numeric_claim_verification": "NOT_EVALUATED",
+            "input_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e",
+            "previous_stage_hashes": [
+              "fa649d97a5fc77e76f2b7fb2f96878402333bab15a799bc554d4b349e39c1689",
+              "9532680cbcdbfa6170fb76f1c3f3dc8378247c449b3d66801143c2846efa9da1",
+              "e55851645ac60f3c955844a64618f216c7d2008b4a7855e4062bdc50b8e39dc5",
+              "40f97cd4426eccb8944bc00004b4a1b60cc7231b063895aaa901c0f42d84d595",
+              "20d79d95f40387fee24451180b8230ccdcb3f39bcc8a2e815f685f0e9435bc59"
+            ],
+            "source_gaps": []
+          }
+        ],
+        "completed_stage_count": 6,
+        "numeric_claim_verification": "NOT_EVALUATED",
+        "finished_at": "2026-10-12T12:00:00.000000Z",
+        "result_sha256": "15ec11e7afedaa6e9431bf8bd96f11aab79024954e198d9716738e460f3a0255"
+      }
+    }
+  ]
+}

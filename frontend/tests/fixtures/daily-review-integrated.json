@@ -1,0 +1,828 @@
+{
+  "2026-07-31": {
+    "seal-quality": {
+      "schema_version": "short-term-seal-quality-archive-v0.1",
+      "trade_date": "2026-07-31",
+      "status": "normal",
+      "reason_codes": [],
+      "message": "已读取所选本地发布绑定的归档观测；不是实时行情、收盘定稿或可成交性证明。",
+      "selection": {
+        "schema_version": "fact-lake-publication-selection-v0.1",
+        "dataset_id": "ds_limit_up_pool",
+        "canonical_key": "ds_limit_up_pool:2026-07-31",
+        "primary_temporal_field": "trade_date",
+        "primary_temporal_value": "2026-07-31",
+        "selection_mode": "local_latest",
+        "selection_basis": "local_vintage_sequence",
+        "selected_publication_ids": [
+          "publication-f45768b8f44205a2c77d5e536cc67cc45b113ccea119b148111cc761b597429a"
+        ],
+        "selected_vintage_sequences": [
+          1
+        ],
+        "dataset_contract_revisions": [
+          "ds-limit-up-pool-contract-v0.1"
+        ],
+        "normalizer_versions": [
+          "ds-limit-up-pool-normalizer-v0.3"
+        ],
+        "artifact_schema_versions": [
+          "ds-limit-up-pool-parquet-v0.1"
+        ],
+        "revision_semantics": "unknown",
+        "provider_revision_claim": "NONE",
+        "point_in_time_claim": "NONE"
+      },
+      "archive_identity": {
+        "publication_id": "publication-f45768b8f44205a2c77d5e536cc67cc45b113ccea119b148111cc761b597429a",
+        "source_observation_id": "obs-78bc96300c2a6ba97089b9f6deb910ad94370bbc18e8fd73346992a88e671abe",
+        "raw_payload_hash": "sha256:5f58ceee08a96b6a6209e07969250705e38eab63dd10d7b616727f25259d7571",
+        "captured_at": "2026-07-31T07:05:00Z"
+      },
+      "projection": {
+        "schema_version": "short-term-seal-quality-observation-v0.1",
+        "layer": "RESEARCH_OBSERVATION",
+        "status": "normal",
+        "reason_codes": [],
+        "requested_trade_date": "2026-07-31",
+        "source_trade_date": "2026-07-31",
+        "observed_at": "2026-07-31T07:05:00Z",
+        "raw_payload_sha256": "5f58ceee08a96b6a6209e07969250705e38eab63dd10d7b616727f25259d7571",
+        "source_id": "eastmoney_getTopicZTPool",
+        "source_schema_version": "short-term-limit-up-pool-adapter-v0.2",
+        "source_status": "normal",
+        "source_reason_codes": [],
+        "finality": "NOT_ESTABLISHED",
+        "canonical_authority": false,
+        "sample_count": 1,
+        "excluded_universe_count": 0,
+        "coverage": {
+          "first_seal": {
+            "known_count": 1,
+            "unknown_count": 0,
+            "complete": true
+          },
+          "last_seal": {
+            "known_count": 1,
+            "unknown_count": 0,
+            "complete": true
+          },
+          "broken_times": {
+            "known_count": 1,
+            "unknown_count": 0,
+            "complete": true
+          }
+        },
+        "rows": [
+          {
+            "stock_code": "000001",
+            "lbc": 4,
+            "zt_stat": null,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "field_issues": {}
+          }
+        ],
+        "metrics": {
+          "never_broken_count": 0,
+          "never_broken_ratio": 0.0,
+          "reopened_count": 1,
+          "ever_opened_ratio": 1.0,
+          "average_broken_times": 1.0,
+          "first_seal_by_0935_count": 1,
+          "late_seal_count": 1
+        },
+        "units": {
+          "time": "HHMMSS Asia/Shanghai",
+          "ratio": "fraction_0_1",
+          "count": "stocks",
+          "average_broken_times": "times"
+        },
+        "descriptive_cutoffs": {
+          "first_seal_at_or_before": "093500",
+          "last_seal_at_or_after": "143000",
+          "auction_included": true,
+          "authority": "LOCAL_DESCRIPTIVE_CONVENTION"
+        },
+        "limitations": [
+          "仅描述同一涨停池观测中的沪深主板、创业板、科创板样本；不含北交所。",
+          "日期绑定不证明池子完整、收盘定稿或当时可成交；本投影不授予 final authority。",
+          "涨停股盘中开板比例不等于全市场炸板率；未读取炸板池，不计算炸板率。",
+          "每项指标只有相关字段覆盖全部入选样本才计算；缺失和无效值不是零。",
+          "首封与末封为来源当日上海时间，非首次抓取时间；不回填历史缺失字段。",
+          "不计算收益、分层晋级率、题材归因、交易信号或持仓动作。"
+        ]
+      },
+      "archive_only": true,
+      "ingestion_enabled": false
+    },
+    "cohort-identity": {
+      "schema_version": "archived-cohort-identity.v0.1",
+      "trade_date": "2026-07-31",
+      "previous_trade_date": "2026-07-30",
+      "status": "normal",
+      "reason_codes": [],
+      "message": "已读取两日完整名单；仅作逐股身份查阅",
+      "selection_mode": "CURRENT_STORED_POSTHOC",
+      "point_in_time_claim": "NONE",
+      "research_only": true,
+      "projection": {
+        "rows": [
+          {
+            "stock_code": "000003",
+            "previous_source_code": "000003.SZ",
+            "current_source_code": null,
+            "previous_boards": 1,
+            "current_boards": null,
+            "present_today": false
+          },
+          {
+            "stock_code": "600001",
+            "previous_source_code": "600001.SH",
+            "current_source_code": "600001.SH",
+            "previous_boards": 3,
+            "current_boards": 4,
+            "present_today": true
+          }
+        ]
+      },
+      "evidence": {
+        "previous": {
+          "trade_date": "2026-07-30",
+          "source_ids": [
+            "eastmoney_getTopicZTPool"
+          ],
+          "fetched_at": "2026-07-30T09:00:00.000000Z",
+          "snapshot_at": "2026-07-30T09:00:00.000000Z",
+          "stored_at": "2026-08-01T01:00:00+00:00",
+          "row_count": 2,
+          "envelope_sha256": "9b1ffb4902abe16a6e91df8817d569311132ce53c8c490b04406407c93584255"
+        },
+        "current": {
+          "trade_date": "2026-07-31",
+          "source_ids": [
+            "eastmoney_getTopicZTPool"
+          ],
+          "fetched_at": "2026-07-31T09:00:00.000000Z",
+          "snapshot_at": "2026-07-31T09:00:00.000000Z",
+          "stored_at": "2026-08-01T01:00:00+00:00",
+          "row_count": 2,
+          "envelope_sha256": "4af6cc417c44bdcc78077de4e429421e0059b6b2b3b63288a727914fdc41e5df"
+        }
+      }
+    },
+    "evidence-readiness": {
+      "schema_version": "evidence-readiness.v0.1",
+      "trade_date": "2026-07-31",
+      "generated_at": "2026-08-03T00:00:00.000000+00:00",
+      "read_only": true,
+      "ingestion_enabled": false,
+      "features": [
+        {
+          "feature": "seal_quality",
+          "status": "ready",
+          "reason_codes": [],
+          "required_dates": [
+            "2026-07-31"
+          ],
+          "requirements": "所选交易日的已发布涨停池原始回执，日期绑定、重放校验和封板字段覆盖通过现有检查。",
+          "next_step": "查看封板质量卡的来源与字段覆盖；缺少归档时需先通过现有获准来源获得证据，此处不能采集或导入。"
+        },
+        {
+          "feature": "cohort_identity",
+          "status": "ready",
+          "reason_codes": [],
+          "required_dates": [
+            "2026-07-30",
+            "2026-07-31"
+          ],
+          "requirements": "所选日及前一交易日的完整 v0.2 收盘名单；来源、时间、全名单与涨停家数一致。",
+          "next_step": "查看两日名单卡的来源明细；缺少任一天完整归档时保持未知，不用连板精选名单补齐。"
+        },
+        {
+          "feature": "next_day_verification",
+          "status": "ready",
+          "reason_codes": [],
+          "required_dates": [
+            "2026-07-31",
+            "2026-08-03"
+          ],
+          "requirements": "写下条件前已落库的合格收盘事实；次日收盘后另需目标日事实。基线至少需要 12 个有效相邻日样本。",
+          "next_step": "在明日验证卡查看保存窗口与逐项证据；先有事实再写条件，历史日期不能补写预测。"
+        }
+      ],
+      "journal": {
+        "state": "OPEN",
+        "next_trade_date": "2026-08-03",
+        "seals_at": "2026-08-03T01:15:00.000000+00:00",
+        "prior_metric_available": {
+          "limit_up_count": true,
+          "failed_board_rate": true
+        },
+        "verification_claim": "NONE"
+      },
+      "limitations": [
+        "只检查服务端已配置的归档；不连接来源、不上传导入、不创建归档。",
+        "各功能依次读取已有归档；不是跨数据源的原子快照。",
+        "可读取仅指现有合同检查通过；不证明上游真实性、历史当时已知或真实使用验收。",
+        "明日验证的可读取状态仅指所选日事前事实；不是预测已保存、次日已验证或有统计优势。"
+      ]
+    },
+    "journal-saved": {
+      "schema_version": "next-day-verification.v0.2",
+      "research_only": true,
+      "trade_date": "2026-07-31",
+      "state": "OPEN",
+      "next_trade_date": "2026-08-03",
+      "seals_at": "2026-08-03T01:15:00.000000+00:00",
+      "revision": 1,
+      "items": [
+        {
+          "metric": "limit_up_count",
+          "direction": "up",
+          "reason": "Synthetic prior condition",
+          "written_at": "2026-08-03T00:00:00.000000+00:00",
+          "prior_value": 2,
+          "prior_evidence": {
+            "values": {
+              "failed_board_rate": 0.8333,
+              "limit_up_count": 2
+            },
+            "source_ids": [
+              "tushare_daily",
+              "tushare_suspend_d",
+              "tushare_stk_limit",
+              "tushare_stock_basic"
+            ],
+            "fetched_at": "2026-07-31T09:00:00.000000Z",
+            "snapshot_at": "2026-07-31T09:00:00.000000Z",
+            "stored_at": "2026-08-01T01:00:00+00:00"
+          },
+          "baseline": {
+            "rate": null,
+            "samples": 3,
+            "possible_pairs": 60,
+            "coverage": 0.05,
+            "from": "2026-05-07",
+            "through": "2026-07-31",
+            "as_of": "2026-08-03T00:00:00.000000+00:00",
+            "minimum_samples": 12
+          },
+          "target_date": "2026-08-03",
+          "state": "PENDING_CLOSE",
+          "current_value": null,
+          "current_evidence": null,
+          "actual": null,
+          "verified": null
+        }
+      ],
+      "metrics": [
+        {
+          "key": "limit_up_count",
+          "label": "涨停家数",
+          "unit": "家",
+          "epsilon": 5
+        },
+        {
+          "key": "failed_board_rate",
+          "label": "炸板率",
+          "unit": "0–1 比率",
+          "epsilon": 0.05
+        },
+        {
+          "key": "highest_board",
+          "label": "最高连板高度（源口径）",
+          "unit": "板",
+          "epsilon": 0.5
+        },
+        {
+          "key": "promotion_1to2",
+          "label": "1进2晋级率（研究观察）",
+          "unit": "0–1 比率",
+          "epsilon": 0.05
+        },
+        {
+          "key": "money_effect_median",
+          "label": "昨日涨停队列收益中位数",
+          "unit": "百分点",
+          "epsilon": 0.5
+        },
+        {
+          "key": "deep_loss_count",
+          "label": "昨日涨停队列跌幅≥5%家数",
+          "unit": "家",
+          "epsilon": 5
+        },
+        {
+          "key": "theme_concentration",
+          "label": "头部题材集中度（供应商标签）",
+          "unit": "0–1 比率",
+          "epsilon": 0.05
+        },
+        {
+          "key": "market_limit_down",
+          "label": "全市场跌停家数",
+          "unit": "家",
+          "epsilon": 5
+        }
+      ],
+      "summary": {
+        "total": 1,
+        "decided": 0,
+        "hit": 0,
+        "unknown": 1,
+        "rate": null,
+        "coverage": 0.0,
+        "baseline_covered": 0,
+        "expected_rate": null,
+        "edge": null
+      },
+      "history": {
+        "from": "2026-05-08",
+        "through": "2026-07-31",
+        "summary": {
+          "total": 1,
+          "decided": 0,
+          "hit": 0,
+          "unknown": 1,
+          "rate": null,
+          "coverage": 0.0,
+          "baseline_covered": 0,
+          "expected_rate": null,
+          "edge": null
+        }
+      },
+      "generated_at": "2026-08-03T00:00:00.000000+00:00",
+      "limitations": [
+        "仅记录您事前写下的市场读数条件，不提供个股建议，不自动交易。",
+        "只读取本地已存的合格收盘事实；未启用自动采集，缺少事实时保留待核验，不算失败。",
+        "基准为保存时已知的历史发生频率，不代表投资胜率或未来概率。",
+        "对账使用当前已存的收盘观察，源数据更正可能改变结果；事前值和基准已冻结。",
+        "新增六项仅冻结保存时读取的当前归档研究观察，不宣称历史收盘时已知；历史基准保持未知。"
+      ]
+    }
+  },
+  "2026-07-30": {
+    "seal-quality": {
+      "schema_version": "short-term-seal-quality-archive-v0.1",
+      "trade_date": "2026-07-30",
+      "status": "normal",
+      "reason_codes": [],
+      "message": "已读取所选本地发布绑定的归档观测；不是实时行情、收盘定稿或可成交性证明。",
+      "selection": {
+        "schema_version": "fact-lake-publication-selection-v0.1",
+        "dataset_id": "ds_limit_up_pool",
+        "canonical_key": "ds_limit_up_pool:2026-07-30",
+        "primary_temporal_field": "trade_date",
+        "primary_temporal_value": "2026-07-30",
+        "selection_mode": "local_latest",
+        "selection_basis": "local_vintage_sequence",
+        "selected_publication_ids": [
+          "publication-55d657871455560c1a90605482b2752e3fba0fadd4ef2ec554fbd3151be8ad97"
+        ],
+        "selected_vintage_sequences": [
+          1
+        ],
+        "dataset_contract_revisions": [
+          "ds-limit-up-pool-contract-v0.1"
+        ],
+        "normalizer_versions": [
+          "ds-limit-up-pool-normalizer-v0.3"
+        ],
+        "artifact_schema_versions": [
+          "ds-limit-up-pool-parquet-v0.1"
+        ],
+        "revision_semantics": "unknown",
+        "provider_revision_claim": "NONE",
+        "point_in_time_claim": "NONE"
+      },
+      "archive_identity": {
+        "publication_id": "publication-55d657871455560c1a90605482b2752e3fba0fadd4ef2ec554fbd3151be8ad97",
+        "source_observation_id": "obs-11ac54537af6f99d25820b84b16a3fdd0c38114814ce13b74551f6c637ab1a7f",
+        "raw_payload_hash": "sha256:53a50556be4b0ab7980e9dc7b663d2bcf5e87707a67aebc8b1cac067c28b7881",
+        "captured_at": "2026-07-30T07:05:00Z"
+      },
+      "projection": {
+        "schema_version": "short-term-seal-quality-observation-v0.1",
+        "layer": "RESEARCH_OBSERVATION",
+        "status": "normal",
+        "reason_codes": [],
+        "requested_trade_date": "2026-07-30",
+        "source_trade_date": "2026-07-30",
+        "observed_at": "2026-07-30T07:05:00Z",
+        "raw_payload_sha256": "53a50556be4b0ab7980e9dc7b663d2bcf5e87707a67aebc8b1cac067c28b7881",
+        "source_id": "eastmoney_getTopicZTPool",
+        "source_schema_version": "short-term-limit-up-pool-adapter-v0.2",
+        "source_status": "normal",
+        "source_reason_codes": [],
+        "finality": "NOT_ESTABLISHED",
+        "canonical_authority": false,
+        "sample_count": 1,
+        "excluded_universe_count": 0,
+        "coverage": {
+          "first_seal": {
+            "known_count": 1,
+            "unknown_count": 0,
+            "complete": true
+          },
+          "last_seal": {
+            "known_count": 1,
+            "unknown_count": 0,
+            "complete": true
+          },
+          "broken_times": {
+            "known_count": 1,
+            "unknown_count": 0,
+            "complete": true
+          }
+        },
+        "rows": [
+          {
+            "stock_code": "000001",
+            "lbc": 3,
+            "zt_stat": null,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "field_issues": {}
+          }
+        ],
+        "metrics": {
+          "never_broken_count": 0,
+          "never_broken_ratio": 0.0,
+          "reopened_count": 1,
+          "ever_opened_ratio": 1.0,
+          "average_broken_times": 1.0,
+          "first_seal_by_0935_count": 1,
+          "late_seal_count": 1
+        },
+        "units": {
+          "time": "HHMMSS Asia/Shanghai",
+          "ratio": "fraction_0_1",
+          "count": "stocks",
+          "average_broken_times": "times"
+        },
+        "descriptive_cutoffs": {
+          "first_seal_at_or_before": "093500",
+          "last_seal_at_or_after": "143000",
+          "auction_included": true,
+          "authority": "LOCAL_DESCRIPTIVE_CONVENTION"
+        },
+        "limitations": [
+          "仅描述同一涨停池观测中的沪深主板、创业板、科创板样本；不含北交所。",
+          "日期绑定不证明池子完整、收盘定稿或当时可成交；本投影不授予 final authority。",
+          "涨停股盘中开板比例不等于全市场炸板率；未读取炸板池，不计算炸板率。",
+          "每项指标只有相关字段覆盖全部入选样本才计算；缺失和无效值不是零。",
+          "首封与末封为来源当日上海时间，非首次抓取时间；不回填历史缺失字段。",
+          "不计算收益、分层晋级率、题材归因、交易信号或持仓动作。"
+        ]
+      },
+      "archive_only": true,
+      "ingestion_enabled": false
+    },
+    "cohort-identity": {
+      "schema_version": "archived-cohort-identity.v0.1",
+      "trade_date": "2026-07-30",
+      "previous_trade_date": "2026-07-29",
+      "status": "normal",
+      "reason_codes": [],
+      "message": "已读取两日完整名单；仅作逐股身份查阅",
+      "selection_mode": "CURRENT_STORED_POSTHOC",
+      "point_in_time_claim": "NONE",
+      "research_only": true,
+      "projection": {
+        "rows": [
+          {
+            "stock_code": "000002",
+            "previous_source_code": "000002.SZ",
+            "current_source_code": null,
+            "previous_boards": 1,
+            "current_boards": null,
+            "present_today": false
+          },
+          {
+            "stock_code": "600001",
+            "previous_source_code": "600001.SH",
+            "current_source_code": "600001.SH",
+            "previous_boards": 2,
+            "current_boards": 3,
+            "present_today": true
+          }
+        ]
+      },
+      "evidence": {
+        "previous": {
+          "trade_date": "2026-07-29",
+          "source_ids": [
+            "eastmoney_getTopicZTPool"
+          ],
+          "fetched_at": "2026-07-29T09:00:00.000000Z",
+          "snapshot_at": "2026-07-29T09:00:00.000000Z",
+          "stored_at": "2026-08-01T01:00:00+00:00",
+          "row_count": 2,
+          "envelope_sha256": "476521d4be79b9c78f7c02d7451f235f8b428bd2df2f06342e7955613a2512c4"
+        },
+        "current": {
+          "trade_date": "2026-07-30",
+          "source_ids": [
+            "eastmoney_getTopicZTPool"
+          ],
+          "fetched_at": "2026-07-30T09:00:00.000000Z",
+          "snapshot_at": "2026-07-30T09:00:00.000000Z",
+          "stored_at": "2026-08-01T01:00:00+00:00",
+          "row_count": 2,
+          "envelope_sha256": "9b1ffb4902abe16a6e91df8817d569311132ce53c8c490b04406407c93584255"
+        }
+      }
+    },
+    "evidence-readiness": {
+      "schema_version": "evidence-readiness.v0.1",
+      "trade_date": "2026-07-30",
+      "generated_at": "2026-08-03T00:00:00.000000+00:00",
+      "read_only": true,
+      "ingestion_enabled": false,
+      "features": [
+        {
+          "feature": "seal_quality",
+          "status": "ready",
+          "reason_codes": [],
+          "required_dates": [
+            "2026-07-30"
+          ],
+          "requirements": "所选交易日的已发布涨停池原始回执，日期绑定、重放校验和封板字段覆盖通过现有检查。",
+          "next_step": "查看封板质量卡的来源与字段覆盖；缺少归档时需先通过现有获准来源获得证据，此处不能采集或导入。"
+        },
+        {
+          "feature": "cohort_identity",
+          "status": "ready",
+          "reason_codes": [],
+          "required_dates": [
+            "2026-07-29",
+            "2026-07-30"
+          ],
+          "requirements": "所选日及前一交易日的完整 v0.2 收盘名单；来源、时间、全名单与涨停家数一致。",
+          "next_step": "查看两日名单卡的来源明细；缺少任一天完整归档时保持未知，不用连板精选名单补齐。"
+        },
+        {
+          "feature": "next_day_verification",
+          "status": "ready",
+          "reason_codes": [],
+          "required_dates": [
+            "2026-07-30",
+            "2026-07-31"
+          ],
+          "requirements": "写下条件前已落库的合格收盘事实；次日收盘后另需目标日事实。基线至少需要 12 个有效相邻日样本。",
+          "next_step": "在明日验证卡查看保存窗口与逐项证据；先有事实再写条件，历史日期不能补写预测。"
+        }
+      ],
+      "journal": {
+        "state": "SEALED",
+        "next_trade_date": "2026-07-31",
+        "seals_at": "2026-07-31T01:15:00.000000+00:00",
+        "prior_metric_available": {
+          "limit_up_count": true,
+          "failed_board_rate": true
+        },
+        "verification_claim": "NONE"
+      },
+      "limitations": [
+        "只检查服务端已配置的归档；不连接来源、不上传导入、不创建归档。",
+        "各功能依次读取已有归档；不是跨数据源的原子快照。",
+        "可读取仅指现有合同检查通过；不证明上游真实性、历史当时已知或真实使用验收。",
+        "明日验证的可读取状态仅指所选日事前事实；不是预测已保存、次日已验证或有统计优势。"
+      ]
+    }
+  },
+  "2026-07-29": {
+    "seal-quality": {
+      "schema_version": "short-term-seal-quality-archive-v0.1",
+      "trade_date": "2026-07-29",
+      "status": "normal",
+      "reason_codes": [],
+      "message": "已读取所选本地发布绑定的归档观测；不是实时行情、收盘定稿或可成交性证明。",
+      "selection": {
+        "schema_version": "fact-lake-publication-selection-v0.1",
+        "dataset_id": "ds_limit_up_pool",
+        "canonical_key": "ds_limit_up_pool:2026-07-29",
+        "primary_temporal_field": "trade_date",
+        "primary_temporal_value": "2026-07-29",
+        "selection_mode": "local_latest",
+        "selection_basis": "local_vintage_sequence",
+        "selected_publication_ids": [
+          "publication-759b7ff84c43252733fd6c3ec5d3966e83cc163b2c27fdefd54b46b72a3e408f"
+        ],
+        "selected_vintage_sequences": [
+          1
+        ],
+        "dataset_contract_revisions": [
+          "ds-limit-up-pool-contract-v0.1"
+        ],
+        "normalizer_versions": [
+          "ds-limit-up-pool-normalizer-v0.3"
+        ],
+        "artifact_schema_versions": [
+          "ds-limit-up-pool-parquet-v0.1"
+        ],
+        "revision_semantics": "unknown",
+        "provider_revision_claim": "NONE",
+        "point_in_time_claim": "NONE"
+      },
+      "archive_identity": {
+        "publication_id": "publication-759b7ff84c43252733fd6c3ec5d3966e83cc163b2c27fdefd54b46b72a3e408f",
+        "source_observation_id": "obs-9379b76d58aff2ce4906d4807ad6c4549aa45078cbc38c9b49b7d0cef86d4f6d",
+        "raw_payload_hash": "sha256:9007ad047c9fdedc2b0696e42d59178eed7cc6dc0d7c007ea9ee21177ebb8520",
+        "captured_at": "2026-07-29T07:05:00Z"
+      },
+      "projection": {
+        "schema_version": "short-term-seal-quality-observation-v0.1",
+        "layer": "RESEARCH_OBSERVATION",
+        "status": "normal",
+        "reason_codes": [],
+        "requested_trade_date": "2026-07-29",
+        "source_trade_date": "2026-07-29",
+        "observed_at": "2026-07-29T07:05:00Z",
+        "raw_payload_sha256": "9007ad047c9fdedc2b0696e42d59178eed7cc6dc0d7c007ea9ee21177ebb8520",
+        "source_id": "eastmoney_getTopicZTPool",
+        "source_schema_version": "short-term-limit-up-pool-adapter-v0.2",
+        "source_status": "normal",
+        "source_reason_codes": [],
+        "finality": "NOT_ESTABLISHED",
+        "canonical_authority": false,
+        "sample_count": 1,
+        "excluded_universe_count": 0,
+        "coverage": {
+          "first_seal": {
+            "known_count": 1,
+            "unknown_count": 0,
+            "complete": true
+          },
+          "last_seal": {
+            "known_count": 1,
+            "unknown_count": 0,
+            "complete": true
+          },
+          "broken_times": {
+            "known_count": 1,
+            "unknown_count": 0,
+            "complete": true
+          }
+        },
+        "rows": [
+          {
+            "stock_code": "000001",
+            "lbc": 2,
+            "zt_stat": null,
+            "first_seal": "093000",
+            "last_seal": "143000",
+            "broken_times": 1,
+            "field_issues": {}
+          }
+        ],
+        "metrics": {
+          "never_broken_count": 0,
+          "never_broken_ratio": 0.0,
+          "reopened_count": 1,
+          "ever_opened_ratio": 1.0,
+          "average_broken_times": 1.0,
+          "first_seal_by_0935_count": 1,
+          "late_seal_count": 1
+        },
+        "units": {
+          "time": "HHMMSS Asia/Shanghai",
+          "ratio": "fraction_0_1",
+          "count": "stocks",
+          "average_broken_times": "times"
+        },
+        "descriptive_cutoffs": {
+          "first_seal_at_or_before": "093500",
+          "last_seal_at_or_after": "143000",
+          "auction_included": true,
+          "authority": "LOCAL_DESCRIPTIVE_CONVENTION"
+        },
+        "limitations": [
+          "仅描述同一涨停池观测中的沪深主板、创业板、科创板样本；不含北交所。",
+          "日期绑定不证明池子完整、收盘定稿或当时可成交；本投影不授予 final authority。",
+          "涨停股盘中开板比例不等于全市场炸板率；未读取炸板池，不计算炸板率。",
+          "每项指标只有相关字段覆盖全部入选样本才计算；缺失和无效值不是零。",
+          "首封与末封为来源当日上海时间，非首次抓取时间；不回填历史缺失字段。",
+          "不计算收益、分层晋级率、题材归因、交易信号或持仓动作。"
+        ]
+      },
+      "archive_only": true,
+      "ingestion_enabled": false
+    },
+    "cohort-identity": {
+      "schema_version": "archived-cohort-identity.v0.1",
+      "trade_date": "2026-07-29",
+      "previous_trade_date": "2026-07-28",
+      "status": "normal",
+      "reason_codes": [],
+      "message": "已读取两日完整名单；仅作逐股身份查阅",
+      "selection_mode": "CURRENT_STORED_POSTHOC",
+      "point_in_time_claim": "NONE",
+      "research_only": true,
+      "projection": {
+        "rows": [
+          {
+            "stock_code": "000001",
+            "previous_source_code": "000001.SZ",
+            "current_source_code": null,
+            "previous_boards": 1,
+            "current_boards": null,
+            "present_today": false
+          },
+          {
+            "stock_code": "600001",
+            "previous_source_code": "600001.SH",
+            "current_source_code": "600001.SH",
+            "previous_boards": 1,
+            "current_boards": 2,
+            "present_today": true
+          }
+        ]
+      },
+      "evidence": {
+        "previous": {
+          "trade_date": "2026-07-28",
+          "source_ids": [
+            "eastmoney_getTopicZTPool"
+          ],
+          "fetched_at": "2026-07-28T09:00:00.000000Z",
+          "snapshot_at": "2026-07-28T09:00:00.000000Z",
+          "stored_at": "2026-08-01T01:00:00+00:00",
+          "row_count": 2,
+          "envelope_sha256": "7322ebef238838f9b95ad8bf29ef8d35e34bd0b222d0f8ed213e14f389e71550"
+        },
+        "current": {
+          "trade_date": "2026-07-29",
+          "source_ids": [
+            "eastmoney_getTopicZTPool"
+          ],
+          "fetched_at": "2026-07-29T09:00:00.000000Z",
+          "snapshot_at": "2026-07-29T09:00:00.000000Z",
+          "stored_at": "2026-08-01T01:00:00+00:00",
+          "row_count": 2,
+          "envelope_sha256": "476521d4be79b9c78f7c02d7451f235f8b428bd2df2f06342e7955613a2512c4"
+        }
+      }
+    },
+    "evidence-readiness": {
+      "schema_version": "evidence-readiness.v0.1",
+      "trade_date": "2026-07-29",
+      "generated_at": "2026-08-03T00:00:00.000000+00:00",
+      "read_only": true,
+      "ingestion_enabled": false,
+      "features": [
+        {
+          "feature": "seal_quality",
+          "status": "ready",
+          "reason_codes": [],
+          "required_dates": [
+            "2026-07-29"
+          ],
+          "requirements": "所选交易日的已发布涨停池原始回执，日期绑定、重放校验和封板字段覆盖通过现有检查。",
+          "next_step": "查看封板质量卡的来源与字段覆盖；缺少归档时需先通过现有获准来源获得证据，此处不能采集或导入。"
+        },
+        {
+          "feature": "cohort_identity",
+          "status": "ready",
+          "reason_codes": [],
+          "required_dates": [
+            "2026-07-28",
+            "2026-07-29"
+          ],
+          "requirements": "所选日及前一交易日的完整 v0.2 收盘名单；来源、时间、全名单与涨停家数一致。",
+          "next_step": "查看两日名单卡的来源明细；缺少任一天完整归档时保持未知，不用连板精选名单补齐。"
+        },
+        {
+          "feature": "next_day_verification",
+          "status": "ready",
+          "reason_codes": [],
+          "required_dates": [
+            "2026-07-29",
+            "2026-07-30"
+          ],
+          "requirements": "写下条件前已落库的合格收盘事实；次日收盘后另需目标日事实。基线至少需要 12 个有效相邻日样本。",
+          "next_step": "在明日验证卡查看保存窗口与逐项证据；先有事实再写条件，历史日期不能补写预测。"
+        }
+      ],
+      "journal": {
+        "state": "SEALED",
+        "next_trade_date": "2026-07-30",
+        "seals_at": "2026-07-30T01:15:00.000000+00:00",
+        "prior_metric_available": {
+          "limit_up_count": true,
+          "failed_board_rate": true
+        },
+        "verification_claim": "NONE"
+      },
+      "limitations": [
+        "只检查服务端已配置的归档；不连接来源、不上传导入、不创建归档。",
+        "各功能依次读取已有归档；不是跨数据源的原子快照。",
+        "可读取仅指现有合同检查通过；不证明上游真实性、历史当时已知或真实使用验收。",
+        "明日验证的可读取状态仅指所选日事前事实；不是预测已保存、次日已验证或有统计优势。"
+      ]
+    }
+  }
+}

@@ -1,0 +1,709 @@
+{
+  "fixture_only": true,
+  "authority": "registered FastAPI capture/generate with synthetic raw FactLake evidence and offline model stub",
+  "subject": {
+    "market": "A",
+    "symbol": "600000"
+  },
+  "as_of": "2026-09-30",
+  "bundle": {
+    "schema_version": "company_research.v1",
+    "bundle_id": "00000000000000000000000000000007",
+    "subject": {
+      "market": "A",
+      "symbol": "600000"
+    },
+    "captured_at": "2026-10-12T12:00:00.000000Z",
+    "archive_cutoff": "2026-09-30",
+    "sources": [
+      {
+        "evidence_id": "cn_quote_ref",
+        "stages": [
+          "profile",
+          "valuation"
+        ],
+        "source": "immutable_public_source_archive",
+        "captured_at": "2026-10-12T12:00:00.000000Z",
+        "source_as_of": null,
+        "status": "AVAILABLE",
+        "payload": {
+          "schema_version": "company-public-source.v1",
+          "subject": {
+            "market": "A",
+            "symbol": "600000"
+          },
+          "market": "A",
+          "symbol": "600000",
+          "source_id": "cn_quote_ref",
+          "status": "partial",
+          "qualification": "QUALIFIED_CURRENT_ARCHIVED_INPUT",
+          "as_of": "2026-09-30",
+          "source_time": null,
+          "capture_time": "2026-10-01T12:00:00.000000Z",
+          "source_artifact_hash": "sha256:0a0534ce887be6c5af2d3e25948dd9659fbd42f5d83986cb5892b0383c8756ed",
+          "point_in_time_claim": "NONE",
+          "provider_fetch_performed": false,
+          "block": {
+            "schema_version": "public-research.v1",
+            "normalizer_version": "public-research-adapter.v1",
+            "source_id": "cn_quote_ref",
+            "subject": "A:600000@2026-09-30",
+            "market": "A",
+            "symbol": "600000",
+            "requested_as_of": "2026-09-30",
+            "label": "A股报价与基准原始回执",
+            "status": "partial",
+            "rows": [
+              {
+                "id": "A:600000",
+                "market": "A",
+                "symbol": "600000",
+                "quote": {
+                  "key": "sh600000",
+                  "symbol": "600000",
+                  "name": "Synthetic 600000",
+                  "price": 150.0,
+                  "prev_close": 148.0,
+                  "volume": 1000.0,
+                  "source_time": "2026-09-30T07:00:00.000000Z",
+                  "session_date": "2026-09-30",
+                  "timezone": "Asia/Shanghai",
+                  "currency": "CNY",
+                  "unit": "quote currency per share"
+                },
+                "benchmark": {
+                  "key": "sh000001",
+                  "symbol": "000001",
+                  "name": "Synthetic 000001",
+                  "price": 150.0,
+                  "prev_close": 148.0,
+                  "volume": 1000.0,
+                  "source_time": "2026-09-30T07:00:00.000000Z",
+                  "session_date": "2026-09-30",
+                  "timezone": "Asia/Shanghai",
+                  "currency": null,
+                  "unit": "index points"
+                },
+                "reference_session_date": "2026-09-30",
+                "clock_phase": "post_close_by_clock",
+                "session_calendar_confirmed": false,
+                "source_stale": false,
+                "quote_age_seconds_at_capture": 104400.0,
+                "benchmark_age_seconds_at_capture": 104400.0,
+                "freshness_qualification": "ARCHIVED_SNAPSHOT_NOT_LIVE_FRESHNESS_CERTIFICATION",
+                "requested_cutoff": "2026-09-30",
+                "after_requested_date": false,
+                "same_response": true
+              }
+            ],
+            "reason_codes": [
+              "CLOCK_PHASE_NOT_EXCHANGE_CALENDAR",
+              "SNAPSHOT_NOT_HISTORICAL_QUOTE"
+            ],
+            "counters": {},
+            "guard": "同一响应的A股报价与上证基准，逐个核验源标识及北京时间；不是历史行情回放，晚于截止日仅供诊断。",
+            "captured_at": "2026-10-01T12:00:00.000000Z",
+            "source_url": "https://qt.gtimg.cn/q=sh600000,sh000001",
+            "license_status": "PROVIDER_TERMS_NOT_VERIFIED",
+            "selection_mode": "CURRENT_ARCHIVED_POSTHOC",
+            "point_in_time_claim": "NONE",
+            "source_revision": null,
+            "source_publication_time": null,
+            "archive_age_seconds": 950400.0,
+            "archive_stale": true,
+            "coverage": "bounded provider response; missing remains unknown",
+            "fixture": true,
+            "raw_bytes": 283,
+            "evidence": {
+              "observation_id": "public-research-00000000000000000000000000000001",
+              "raw_payload_hash": "sha256:0a0534ce887be6c5af2d3e25948dd9659fbd42f5d83986cb5892b0383c8756ed",
+              "locally_received_at": "2026-10-12T12:00:00.000000Z",
+              "normalizer_version": "public-research-adapter.v1",
+              "point_in_time_claim": "NONE",
+              "provider_revision": null
+            }
+          },
+          "reason_codes": []
+        },
+        "scope": "QUALIFIED_CURRENT_ARCHIVED_POSTHOC_NOT_HISTORICAL_PIT",
+        "payload_sha256": "7f446405b872484df1e7717e6151d6a07b08b2a8fc8a3836f3d27c16423ab670"
+      },
+      {
+        "evidence_id": "cn_financials_ytd",
+        "stages": [
+          "financials",
+          "risk"
+        ],
+        "source": "immutable_public_source_archive",
+        "captured_at": "2026-10-12T12:00:00.000000Z",
+        "source_as_of": null,
+        "status": "AVAILABLE",
+        "payload": {
+          "schema_version": "company-public-source.v1",
+          "subject": {
+            "market": "A",
+            "symbol": "600000"
+          },
+          "market": "A",
+          "symbol": "600000",
+          "source_id": "cn_financials_ytd",
+          "status": "partial",
+          "qualification": "QUALIFIED_CURRENT_ARCHIVED_INPUT",
+          "as_of": "2026-09-30",
+          "source_time": null,
+          "capture_time": "2026-10-01T12:00:00.000000Z",
+          "source_artifact_hash": "sha256:449b23ac50f42690dcd857fe02d46355c0b9fae020764f41a84d9fbfba46ad3b",
+          "point_in_time_claim": "NONE",
+          "provider_fetch_performed": false,
+          "block": {
+            "schema_version": "public-research.v1",
+            "normalizer_version": "public-research-adapter.v1",
+            "source_id": "cn_financials_ytd",
+            "subject": "A:600000@2026-09-30",
+            "market": "A",
+            "symbol": "600000",
+            "requested_as_of": "2026-09-30",
+            "label": "A股累计财务原始回执",
+            "status": "partial",
+            "rows": [
+              {
+                "id": "2026-01-01..2026-06-30",
+                "market": "A",
+                "symbol": "600000",
+                "returned_secucode": "600000.SH",
+                "start": "2026-01-01",
+                "end": "2026-06-30",
+                "notice_date": "2026-08-10",
+                "period_kind": "ytd",
+                "period_months": 6,
+                "period_days": 181,
+                "period_code": "CN_STANDARD_REPORT_END",
+                "currency": "CNY",
+                "amount_unit": "PROVIDER_RAW_SCALE_UNVERIFIED",
+                "amount_scale_to_currency_units": null,
+                "revenue": 1200000.0,
+                "net_profit_parent": -20000.0,
+                "net_profit_deducted": null,
+                "eps_basic": -0.25,
+                "eps_diluted": null,
+                "eps_unit": "reporting currency per share",
+                "consolidation_scope": "provider consolidated label",
+                "revision_id": null,
+                "vintage": "CURRENT_STORED_POSTHOC",
+                "point_in_time_claim": "NONE",
+                "missing": [
+                  "net_profit_deducted"
+                ]
+              }
+            ],
+            "reason_codes": [
+              "CURRENT_VINTAGE_NOTICE_FILTER_ONLY"
+            ],
+            "counters": {
+              "fetched_rows": 3,
+              "dropped_after_as_of": 1,
+              "dropped_no_notice": 1,
+              "unclassified": 0,
+              "duplicate_rows": 0
+            },
+            "guard": "替代来源的报告期累计财务，源证券标识逐行核验；不是单季或TTM；扣非缺失保留，不用归母替代；当前版本不证明历史当时已知。",
+            "captured_at": "2026-10-01T12:00:00.000000Z",
+            "source_url": "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_DMSK_FN_INCOME&columns=ALL&filter=%28SECUCODE%3D%22600000.SH%22%29&pageSize=60&pageNumber=1&sortColumns=REPORT_DATE&sortTypes=-1",
+            "license_status": "PROVIDER_TERMS_NOT_VERIFIED",
+            "selection_mode": "CURRENT_ARCHIVED_POSTHOC",
+            "point_in_time_claim": "NONE",
+            "source_revision": null,
+            "source_publication_time": null,
+            "archive_age_seconds": 950400.0,
+            "archive_stale": true,
+            "coverage": "bounded provider response; missing remains unknown",
+            "fixture": true,
+            "raw_bytes": 1238,
+            "evidence": {
+              "observation_id": "public-research-00000000000000000000000000000003",
+              "raw_payload_hash": "sha256:449b23ac50f42690dcd857fe02d46355c0b9fae020764f41a84d9fbfba46ad3b",
+              "locally_received_at": "2026-10-12T12:00:00.000000Z",
+              "normalizer_version": "public-research-adapter.v1",
+              "point_in_time_claim": "NONE",
+              "provider_revision": null
+            }
+          },
+          "reason_codes": []
+        },
+        "scope": "QUALIFIED_CURRENT_ARCHIVED_POSTHOC_NOT_HISTORICAL_PIT",
+        "payload_sha256": "cded40bd2c00e230678723a33286f2361167c6d4ab64c871e10a02c509b872eb"
+      },
+      {
+        "evidence_id": "cn_consensus",
+        "stages": [
+          "estimates"
+        ],
+        "source": "immutable_public_source_archive",
+        "captured_at": "2026-10-12T12:00:00.000000Z",
+        "source_as_of": null,
+        "status": "AVAILABLE",
+        "payload": {
+          "schema_version": "company-public-source.v1",
+          "subject": {
+            "market": "A",
+            "symbol": "600000"
+          },
+          "market": "A",
+          "symbol": "600000",
+          "source_id": "cn_consensus",
+          "status": "partial",
+          "qualification": "QUALIFIED_CURRENT_ARCHIVED_INPUT",
+          "as_of": "2026-09-30",
+          "source_time": null,
+          "capture_time": "2026-10-01T12:00:00.000000Z",
+          "source_artifact_hash": "sha256:11d287ff52233bb7e19ce66e4621bfda37bc2f44f22683949c4415de1a5d171b",
+          "point_in_time_claim": "NONE",
+          "provider_fetch_performed": false,
+          "block": {
+            "schema_version": "public-research.v1",
+            "normalizer_version": "public-research-adapter.v1",
+            "source_id": "cn_consensus",
+            "subject": "A:600000@2026-09-30",
+            "market": "A",
+            "symbol": "600000",
+            "requested_as_of": "2026-09-30",
+            "label": "A股年度一致预期",
+            "status": "partial",
+            "rows": [
+              {
+                "id": "2026",
+                "market": "A",
+                "symbol": "600000",
+                "returned_identity_basis": "HTML page title",
+                "fiscal_end": "2026-12-31",
+                "fiscal_end_basis": "CN statutory calendar fiscal year",
+                "fiscal_label": "FY2026",
+                "period_kind": "annual_estimate",
+                "currency": "CNY",
+                "eps_unit": "CNY per share",
+                "eps_avg": -1.0,
+                "eps_low": -2.0,
+                "eps_high": 0.0,
+                "analyst_count": 5.0,
+                "rating": null,
+                "source_update_time": null,
+                "missing": []
+              },
+              {
+                "id": "2027",
+                "market": "A",
+                "symbol": "600000",
+                "returned_identity_basis": "HTML page title",
+                "fiscal_end": "2027-12-31",
+                "fiscal_end_basis": "CN statutory calendar fiscal year",
+                "fiscal_label": "FY2027",
+                "period_kind": "annual_estimate",
+                "currency": "CNY",
+                "eps_unit": "CNY per share",
+                "eps_avg": -1.0,
+                "eps_low": -2.0,
+                "eps_high": 0.0,
+                "analyst_count": 5.0,
+                "rating": null,
+                "source_update_time": null,
+                "missing": []
+              },
+              {
+                "id": "2028",
+                "market": "A",
+                "symbol": "600000",
+                "returned_identity_basis": "HTML page title",
+                "fiscal_end": "2028-12-31",
+                "fiscal_end_basis": "CN statutory calendar fiscal year",
+                "fiscal_label": "FY2028",
+                "period_kind": "annual_estimate",
+                "currency": "CNY",
+                "eps_unit": "CNY per share",
+                "eps_avg": -1.0,
+                "eps_low": -2.0,
+                "eps_high": 0.0,
+                "analyst_count": 5.0,
+                "rating": null,
+                "source_update_time": null,
+                "missing": []
+              }
+            ],
+            "reason_codes": [
+              "LATEST_SNAPSHOT_NOT_HISTORICAL_CONSENSUS",
+              "PROVIDER_UPDATE_TIME_UNKNOWN"
+            ],
+            "counters": {},
+            "guard": "同花顺年度EPS一致预期，均值/最小/最大/机构数分别保留；不是单篇研报预测，不构成评级或公司承诺。",
+            "captured_at": "2026-10-01T12:00:00.000000Z",
+            "source_url": "https://basic.10jqka.com.cn/new/600000/worth.html",
+            "license_status": "PROVIDER_TERMS_NOT_VERIFIED",
+            "selection_mode": "CURRENT_ARCHIVED_POSTHOC",
+            "point_in_time_claim": "NONE",
+            "source_revision": null,
+            "source_publication_time": null,
+            "archive_age_seconds": 950400.0,
+            "archive_stale": true,
+            "coverage": "bounded provider response; missing remains unknown",
+            "fixture": true,
+            "raw_bytes": 411,
+            "evidence": {
+              "observation_id": "public-research-00000000000000000000000000000005",
+              "raw_payload_hash": "sha256:11d287ff52233bb7e19ce66e4621bfda37bc2f44f22683949c4415de1a5d171b",
+              "locally_received_at": "2026-10-12T12:00:00.000000Z",
+              "normalizer_version": "public-research-adapter.v1",
+              "point_in_time_claim": "NONE",
+              "provider_revision": null
+            }
+          },
+          "reason_codes": []
+        },
+        "scope": "QUALIFIED_CURRENT_ARCHIVED_POSTHOC_NOT_HISTORICAL_PIT",
+        "payload_sha256": "9967393555e5de1da96765a898c5678e29db5c20eeb75294e66af5f9e7e34c32"
+      }
+    ],
+    "classification": "PUBLIC_ADAPTER_INPUT_UNVERIFIED",
+    "limitations": [
+      "Capture time is not source publication time",
+      "Native adapter returns lack raw HTTP bytes; archived source envelopes retain immutable raw artifact hashes",
+      "Current archived post-hoc evidence, never historical-vintage PIT",
+      "Requested archive cutoff: 2026-09-30",
+      "No portfolio, account or private trade input",
+      "Source availability is not universe completeness"
+    ],
+    "bundle_sha256": "bd6f55bfff84657d6e16f3f376526e2eca1236659652a0b83c6a611fff058640"
+  },
+  "events": [
+    {
+      "type": "run_started",
+      "run_id": "00000000000000000000000000000008",
+      "bundle_sha256": "bd6f55bfff84657d6e16f3f376526e2eca1236659652a0b83c6a611fff058640",
+      "subject": {
+        "market": "A",
+        "symbol": "600000"
+      },
+      "max_model_calls": 6
+    },
+    {
+      "type": "stage_started",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "profile"
+    },
+    {
+      "type": "stage_done",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "profile",
+      "output": {
+        "stage": "profile",
+        "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+        "evidence_ids": [
+          "cn_quote_ref"
+        ],
+        "gaps": [
+          "Current-vintage only, no historical PIT or verified monetary arithmetic"
+        ],
+        "output_sha256": "e2242c0f52c953800ead0b0009a755f8d25e495dd4b7b40536c1d8d7fd1a5bb6",
+        "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+        "numeric_claim_verification": "NOT_EVALUATED",
+        "input_bundle_sha256": "bd6f55bfff84657d6e16f3f376526e2eca1236659652a0b83c6a611fff058640",
+        "previous_stage_hashes": [],
+        "source_gaps": []
+      }
+    },
+    {
+      "type": "stage_started",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "financials"
+    },
+    {
+      "type": "stage_done",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "financials",
+      "output": {
+        "stage": "financials",
+        "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+        "evidence_ids": [
+          "cn_financials_ytd"
+        ],
+        "gaps": [
+          "Current-vintage only, no historical PIT or verified monetary arithmetic"
+        ],
+        "output_sha256": "8fd61107453023acb54f1701a2b1f4c240999453fea086b5a2eb4999e64f1d03",
+        "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+        "numeric_claim_verification": "NOT_EVALUATED",
+        "input_bundle_sha256": "bd6f55bfff84657d6e16f3f376526e2eca1236659652a0b83c6a611fff058640",
+        "previous_stage_hashes": [
+          "e2242c0f52c953800ead0b0009a755f8d25e495dd4b7b40536c1d8d7fd1a5bb6"
+        ],
+        "source_gaps": []
+      }
+    },
+    {
+      "type": "stage_started",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "estimates"
+    },
+    {
+      "type": "stage_done",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "estimates",
+      "output": {
+        "stage": "estimates",
+        "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+        "evidence_ids": [
+          "cn_consensus"
+        ],
+        "gaps": [
+          "Current-vintage only, no historical PIT or verified monetary arithmetic"
+        ],
+        "output_sha256": "8797873262c3432389d553dd1928b0052e5f8f281e4ea872877f56915d745710",
+        "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+        "numeric_claim_verification": "NOT_EVALUATED",
+        "input_bundle_sha256": "bd6f55bfff84657d6e16f3f376526e2eca1236659652a0b83c6a611fff058640",
+        "previous_stage_hashes": [
+          "e2242c0f52c953800ead0b0009a755f8d25e495dd4b7b40536c1d8d7fd1a5bb6",
+          "8fd61107453023acb54f1701a2b1f4c240999453fea086b5a2eb4999e64f1d03"
+        ],
+        "source_gaps": []
+      }
+    },
+    {
+      "type": "stage_started",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "valuation"
+    },
+    {
+      "type": "stage_done",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "valuation",
+      "output": {
+        "stage": "valuation",
+        "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+        "evidence_ids": [
+          "cn_quote_ref"
+        ],
+        "gaps": [
+          "Current-vintage only, no historical PIT or verified monetary arithmetic"
+        ],
+        "output_sha256": "dada57cbe7b67a1280584a5b7176a2d7ed22a591a686d7983ee1f21554b71ba0",
+        "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+        "numeric_claim_verification": "NOT_EVALUATED",
+        "input_bundle_sha256": "bd6f55bfff84657d6e16f3f376526e2eca1236659652a0b83c6a611fff058640",
+        "previous_stage_hashes": [
+          "e2242c0f52c953800ead0b0009a755f8d25e495dd4b7b40536c1d8d7fd1a5bb6",
+          "8fd61107453023acb54f1701a2b1f4c240999453fea086b5a2eb4999e64f1d03",
+          "8797873262c3432389d553dd1928b0052e5f8f281e4ea872877f56915d745710"
+        ],
+        "source_gaps": []
+      }
+    },
+    {
+      "type": "stage_started",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "risk"
+    },
+    {
+      "type": "stage_done",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "risk",
+      "output": {
+        "stage": "risk",
+        "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+        "evidence_ids": [
+          "cn_financials_ytd"
+        ],
+        "gaps": [
+          "Current-vintage only, no historical PIT or verified monetary arithmetic"
+        ],
+        "output_sha256": "6d81174603004f0ccb9f02b4a5f55947a3a1d7dd3e19492f27068483809d504a",
+        "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+        "numeric_claim_verification": "NOT_EVALUATED",
+        "input_bundle_sha256": "bd6f55bfff84657d6e16f3f376526e2eca1236659652a0b83c6a611fff058640",
+        "previous_stage_hashes": [
+          "e2242c0f52c953800ead0b0009a755f8d25e495dd4b7b40536c1d8d7fd1a5bb6",
+          "8fd61107453023acb54f1701a2b1f4c240999453fea086b5a2eb4999e64f1d03",
+          "8797873262c3432389d553dd1928b0052e5f8f281e4ea872877f56915d745710",
+          "dada57cbe7b67a1280584a5b7176a2d7ed22a591a686d7983ee1f21554b71ba0"
+        ],
+        "source_gaps": []
+      }
+    },
+    {
+      "type": "stage_started",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "report"
+    },
+    {
+      "type": "stage_done",
+      "run_id": "00000000000000000000000000000008",
+      "stage": "report",
+      "output": {
+        "stage": "report",
+        "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+        "evidence_ids": [
+          "cn_quote_ref",
+          "cn_financials_ytd",
+          "cn_consensus"
+        ],
+        "gaps": [
+          "Current-vintage only, no historical PIT or verified monetary arithmetic"
+        ],
+        "output_sha256": "5e86990226f6b9b02826d390b50e76f504e88ead5558bcbe642aca3cf46dc780",
+        "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+        "numeric_claim_verification": "NOT_EVALUATED",
+        "input_bundle_sha256": "bd6f55bfff84657d6e16f3f376526e2eca1236659652a0b83c6a611fff058640",
+        "previous_stage_hashes": [
+          "e2242c0f52c953800ead0b0009a755f8d25e495dd4b7b40536c1d8d7fd1a5bb6",
+          "8fd61107453023acb54f1701a2b1f4c240999453fea086b5a2eb4999e64f1d03",
+          "8797873262c3432389d553dd1928b0052e5f8f281e4ea872877f56915d745710",
+          "dada57cbe7b67a1280584a5b7176a2d7ed22a591a686d7983ee1f21554b71ba0",
+          "6d81174603004f0ccb9f02b4a5f55947a3a1d7dd3e19492f27068483809d504a"
+        ],
+        "source_gaps": []
+      }
+    },
+    {
+      "type": "done",
+      "record": {
+        "schema_version": "company_research.v1",
+        "run_id": "00000000000000000000000000000008",
+        "bundle_id": "00000000000000000000000000000007",
+        "bundle_sha256": "bd6f55bfff84657d6e16f3f376526e2eca1236659652a0b83c6a611fff058640",
+        "subject": {
+          "market": "A",
+          "symbol": "600000"
+        },
+        "status": "COMPLETED",
+        "started_at": "2026-10-12T12:00:00.000000Z",
+        "model": {
+          "provider": "fixture",
+          "name": "fixture"
+        },
+        "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+        "stages": [
+          {
+            "stage": "profile",
+            "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+            "evidence_ids": [
+              "cn_quote_ref"
+            ],
+            "gaps": [
+              "Current-vintage only, no historical PIT or verified monetary arithmetic"
+            ],
+            "output_sha256": "e2242c0f52c953800ead0b0009a755f8d25e495dd4b7b40536c1d8d7fd1a5bb6",
+            "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+            "numeric_claim_verification": "NOT_EVALUATED",
+            "input_bundle_sha256": "bd6f55bfff84657d6e16f3f376526e2eca1236659652a0b83c6a611fff058640",
+            "previous_stage_hashes": [],
+            "source_gaps": []
+          },
+          {
+            "stage": "financials",
+            "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+            "evidence_ids": [
+              "cn_financials_ytd"
+            ],
+            "gaps": [
+              "Current-vintage only, no historical PIT or verified monetary arithmetic"
+            ],
+            "output_sha256": "8fd61107453023acb54f1701a2b1f4c240999453fea086b5a2eb4999e64f1d03",
+            "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+            "numeric_claim_verification": "NOT_EVALUATED",
+            "input_bundle_sha256": "bd6f55bfff84657d6e16f3f376526e2eca1236659652a0b83c6a611fff058640",
+            "previous_stage_hashes": [
+              "e2242c0f52c953800ead0b0009a755f8d25e495dd4b7b40536c1d8d7fd1a5bb6"
+            ],
+            "source_gaps": []
+          },
+          {
+            "stage": "estimates",
+            "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+            "evidence_ids": [
+              "cn_consensus"
+            ],
+            "gaps": [
+              "Current-vintage only, no historical PIT or verified monetary arithmetic"
+            ],
+            "output_sha256": "8797873262c3432389d553dd1928b0052e5f8f281e4ea872877f56915d745710",
+            "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+            "numeric_claim_verification": "NOT_EVALUATED",
+            "input_bundle_sha256": "bd6f55bfff84657d6e16f3f376526e2eca1236659652a0b83c6a611fff058640",
+            "previous_stage_hashes": [
+              "e2242c0f52c953800ead0b0009a755f8d25e495dd4b7b40536c1d8d7fd1a5bb6",
+              "8fd61107453023acb54f1701a2b1f4c240999453fea086b5a2eb4999e64f1d03"
+            ],
+            "source_gaps": []
+          },
+          {
+            "stage": "valuation",
+            "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+            "evidence_ids": [
+              "cn_quote_ref"
+            ],
+            "gaps": [
+              "Current-vintage only, no historical PIT or verified monetary arithmetic"
+            ],
+            "output_sha256": "dada57cbe7b67a1280584a5b7176a2d7ed22a591a686d7983ee1f21554b71ba0",
+            "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+            "numeric_claim_verification": "NOT_EVALUATED",
+            "input_bundle_sha256": "bd6f55bfff84657d6e16f3f376526e2eca1236659652a0b83c6a611fff058640",
+            "previous_stage_hashes": [
+              "e2242c0f52c953800ead0b0009a755f8d25e495dd4b7b40536c1d8d7fd1a5bb6",
+              "8fd61107453023acb54f1701a2b1f4c240999453fea086b5a2eb4999e64f1d03",
+              "8797873262c3432389d553dd1928b0052e5f8f281e4ea872877f56915d745710"
+            ],
+            "source_gaps": []
+          },
+          {
+            "stage": "risk",
+            "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+            "evidence_ids": [
+              "cn_financials_ytd"
+            ],
+            "gaps": [
+              "Current-vintage only, no historical PIT or verified monetary arithmetic"
+            ],
+            "output_sha256": "6d81174603004f0ccb9f02b4a5f55947a3a1d7dd3e19492f27068483809d504a",
+            "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+            "numeric_claim_verification": "NOT_EVALUATED",
+            "input_bundle_sha256": "bd6f55bfff84657d6e16f3f376526e2eca1236659652a0b83c6a611fff058640",
+            "previous_stage_hashes": [
+              "e2242c0f52c953800ead0b0009a755f8d25e495dd4b7b40536c1d8d7fd1a5bb6",
+              "8fd61107453023acb54f1701a2b1f4c240999453fea086b5a2eb4999e64f1d03",
+              "8797873262c3432389d553dd1928b0052e5f8f281e4ea872877f56915d745710",
+              "dada57cbe7b67a1280584a5b7176a2d7ed22a591a686d7983ee1f21554b71ba0"
+            ],
+            "source_gaps": []
+          },
+          {
+            "stage": "report",
+            "summary": "Synthetic qualified current-vintage research; raw amount scales unverified.",
+            "evidence_ids": [
+              "cn_quote_ref",
+              "cn_financials_ytd",
+              "cn_consensus"
+            ],
+            "gaps": [
+              "Current-vintage only, no historical PIT or verified monetary arithmetic"
+            ],
+            "output_sha256": "5e86990226f6b9b02826d390b50e76f504e88ead5558bcbe642aca3cf46dc780",
+            "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+            "numeric_claim_verification": "NOT_EVALUATED",
+            "input_bundle_sha256": "bd6f55bfff84657d6e16f3f376526e2eca1236659652a0b83c6a611fff058640",
+            "previous_stage_hashes": [
+              "e2242c0f52c953800ead0b0009a755f8d25e495dd4b7b40536c1d8d7fd1a5bb6",
+              "8fd61107453023acb54f1701a2b1f4c240999453fea086b5a2eb4999e64f1d03",
+              "8797873262c3432389d553dd1928b0052e5f8f281e4ea872877f56915d745710",
+              "dada57cbe7b67a1280584a5b7176a2d7ed22a591a686d7983ee1f21554b71ba0",
+              "6d81174603004f0ccb9f02b4a5f55947a3a1d7dd3e19492f27068483809d504a"
+            ],
+            "source_gaps": []
+          }
+        ],
+        "completed_stage_count": 6,
+        "numeric_claim_verification": "NOT_EVALUATED",
+        "finished_at": "2026-10-12T12:00:00.000000Z",
+        "result_sha256": "d499ff4c24b318fd7ef1a90e51c1b2da3ed94bae606b45b0e7ce137b407d6539"
+      }
+    }
+  ]
+}

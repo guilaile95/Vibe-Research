@@ -1,3 +1,5 @@
+import { ShortlineReviewCard } from "@/components/dailyReview/ShortlineReviewCard";
+import { DailyReviewAiBasis } from "@/components/dailyReview/DailyReviewAiBasis";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
@@ -6,6 +8,7 @@ import {
   GitCompare, Inbox, Star, HeartPulse,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { noRemoteImages } from "@/lib/noRemoteImages";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -22,7 +25,15 @@ import {
 import { NorthboundCapitalFlowCard } from "@/components/market/NorthboundCapitalFlowCard";
 import { MarketCloud } from "@/components/market/MarketCloud";
 import MarketIntelPanel from "@/components/market/MarketIntelPanel";
+import { ObservationWorkflowCard } from "@/components/dailyReview/ObservationWorkflowCard";
+import { NextDayVerificationCard } from "@/components/dailyReview/NextDayVerificationCard";
 import { ShortTermHistoryCard } from "@/components/dailyReview/ShortTermHistoryCard";
+import { EvidenceReadinessCard } from "@/components/dailyReview/EvidenceReadinessCard";
+import { ExtendedResearchCard } from "@/components/research/ExtendedResearchCard";
+import { ShortlineResearchCard } from "@/components/dailyReview/ShortlineResearchCard";
+import { CohortIdentityCard } from "@/components/dailyReview/CohortIdentityCard";
+import { ThemeResearchCard } from "@/components/dailyReview/ThemeResearchCard";
+import { SealQualityCard } from "@/components/dailyReview/SealQualityCard";
 import { northboundErrorMessage } from "@/lib/northboundView";
 import { loadLlm } from "@/lib/llm";
 import { useDailyReviewAiTaskStore } from "@/stores/dailyReviewAiTaskStore";
@@ -100,7 +111,7 @@ const itemLabel = (it: { name?: string; code?: string } | null | undefined) => {
 };
 
 // A股红涨绿跌。全球市场（美股/港股指数）**也沿用红涨**——与整个看板及东财等中国平台一致。
-const pctColor = (p: number) => (p > 0 ? "text-danger" : p < 0 ? "text-success" : "text-muted-foreground");
+const pctColor = (p: number | null | undefined) => (p == null ? "text-muted-foreground" : p > 0 ? "text-danger" : p < 0 ? "text-success" : "text-muted-foreground");
 const fmt = (v: number) => v.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 const yi = (v: number | null | undefined) => (v == null ? "—" : `${fmt(v / 1e8)} 亿`);
 const numCell = (v: number | null | undefined): string | number => (v == null ? "—" : v);
@@ -186,12 +197,14 @@ export function DailyReview() {
   const [histFilterDate, setHistFilterDate] = useState("");
   const [histOffset, setHistOffset] = useState(0);
   const [histCount, setHistCount] = useState(0);
+  const historyRequestRef = useRef(0);
 
   // 历史详情（只读，不替换当前实时 dr）
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<number | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [selectedSnapshot, setSelectedSnapshot] = useState<DailyReviewHistorySnapshot | null>(null);
+  const detailRequestRef = useRef(0);
 
   // 快照对比（只读；不替换实时 dr / 不触发 AI / 不自动请求）
   const [baseSnapshot, setBaseSnapshot] = useState<DailyReviewHistoryItem | null>(null);
@@ -199,6 +212,7 @@ export function DailyReview() {
   const [comparison, setComparison] = useState<DailyReviewComparison | null>(null);
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
+  const comparisonRequestRef = useRef(0);
   const [compareBoardTab, setCompareBoardTab] = useState<"industry" | "concept" | "region">("industry");
 
   // 北向资金（独立 endpoint）
@@ -366,6 +380,8 @@ export function DailyReview() {
   }, [applyDailyReviewPayload, clearPoll]);
 
   const loadHistory = (opts?: { trade_date?: string; offset?: number }) => {
+    const generation = ++historyRequestRef.current;
+    const active = () => mountedRef.current && generation === historyRequestRef.current;
     const offset = opts?.offset ?? histOffset;
     const tradeDate = opts?.trade_date !== undefined ? opts.trade_date : histFilterDate;
     setHistLoading(true);
@@ -377,16 +393,19 @@ export function DailyReview() {
     if (tradeDate) params.trade_date = tradeDate;
     api.listDailyReviewHistory(params)
       .then((res) => {
+        if (!active()) return;
         setHistItems(res.items || []);
         setHistCount(res.count ?? (res.items?.length ?? 0));
         setHistOffset(res.offset ?? offset);
       })
       .catch((e) => {
+        if (!active()) return;
         setHistItems([]);
         setHistCount(0);
         setHistErr(e instanceof ApiError ? e.message : "历史记录加载失败");
       })
       .finally(() => {
+        if (!active()) return;
         setHistLoading(false);
         setHistDone(true);
       });
@@ -423,6 +442,9 @@ export function DailyReview() {
     // 仅首次挂载：不自动保存、不自动 AI
     return () => {
       mountedRef.current = false;
+      historyRequestRef.current += 1;
+      detailRequestRef.current += 1;
+      comparisonRequestRef.current += 1;
       clearPoll();
       bk11AbortRef.current?.abort();
     };
@@ -457,25 +479,30 @@ export function DailyReview() {
   };
 
   const openHistoryDetail = async (id: number) => {
+    const generation = ++detailRequestRef.current;
+    const active = () => mountedRef.current && generation === detailRequestRef.current;
     setSelectedSnapshotId(id);
     setSelectedSnapshot(null);
     setDetailError(null);
     setDetailLoading(true);
     try {
       const snap = await api.getDailyReviewHistorySnapshot(id);
+      if (!active()) return;
       setSelectedSnapshot(snap);
     } catch (e) {
+      if (!active()) return;
       if (e instanceof ApiError && e.status === 404) {
         setDetailError("该历史快照不存在");
       } else {
         setDetailError(e instanceof ApiError ? e.message : "历史详情加载失败");
       }
     } finally {
-      setDetailLoading(false);
+      if (active()) setDetailLoading(false);
     }
   };
 
   const closeHistoryDetail = () => {
+    detailRequestRef.current += 1;
     setSelectedSnapshotId(null);
     setSelectedSnapshot(null);
     setDetailError(null);
@@ -488,27 +515,33 @@ export function DailyReview() {
     loadHistory({ trade_date: value, offset: 0 });
   };
 
+  const invalidateComparison = () => {
+    comparisonRequestRef.current += 1;
+    setComparison(null);
+    setComparisonError(null);
+    setComparisonLoading(false);
+  };
+
   const clearCompareSelection = () => {
     setBaseSnapshot(null);
     setTargetSnapshot(null);
-    setComparison(null);
-    setComparisonError(null);
+    invalidateComparison();
   };
 
-  /** 更换基础/目标时立即清空旧比较结果，避免与当前选择不一致 */
+  /** Changing either side invalidates in-flight results as well as visible ones. */
   const selectBaseSnapshot = (item: DailyReviewHistoryItem) => {
     setBaseSnapshot(item);
-    setComparison(null);
-    setComparisonError(null);
+    invalidateComparison();
   };
   const selectTargetSnapshot = (item: DailyReviewHistoryItem) => {
     setTargetSnapshot(item);
-    setComparison(null);
-    setComparisonError(null);
+    invalidateComparison();
   };
 
   const runCompare = async () => {
     if (!baseSnapshot || !targetSnapshot || comparisonLoading) return;
+    const generation = ++comparisonRequestRef.current;
+    const active = () => mountedRef.current && generation === comparisonRequestRef.current;
     setComparisonLoading(true);
     setComparisonError(null);
     try {
@@ -519,8 +552,9 @@ export function DailyReview() {
         board_limit: COMPARE_BOARD_LIMIT,
         stock_limit: COMPARE_STOCK_LIMIT,
       });
-      setComparison(result);
+      if (active()) setComparison(result);
     } catch (e) {
+      if (!active()) return;
       setComparison(null);
       if (e instanceof ApiError) {
         if (e.status === 404) {
@@ -536,7 +570,7 @@ export function DailyReview() {
         setComparisonError("快照对比失败");
       }
     } finally {
-      setComparisonLoading(false);
+      if (active()) setComparisonLoading(false);
     }
   };
 
@@ -1060,7 +1094,7 @@ export function DailyReview() {
                   <p className="truncate text-xs text-muted-foreground">{q?.name || c}</p>
                   <p className={cn("mt-1 font-mono text-lg font-bold", q ? pctColor(q.change_pct) : "text-muted-foreground/40")}>{q ? q.price : "—"}</p>
                   <p className={cn("text-xs", q ? pctColor(q.change_pct) : "text-muted-foreground/40")}>
-                    {q ? `${q.change_pct > 0 ? "+" : ""}${q.change_pct}%` : c}
+                    {q ? pctCell(q.change_pct) : c}
                   </p>
                 </div>
               );
@@ -1135,9 +1169,10 @@ export function DailyReview() {
             <span>依据数据时间：{taskResultMeta.payload.source_data_cutoff || taskResultMeta.payload.source_review_generated_at}</span>
           </div>
         )}
+        {taskResultMeta && <DailyReviewAiBasis result={taskResultMeta} currentTradeDate={dr?.trade_date ?? null} currentCutoff={dr?.data_cutoff ?? null} />}
         {taskContent ? (
           <>
-            <div className="prose prose-sm dark:prose-invert mt-4 max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{taskContent}</ReactMarkdown></div>
+            <div className="prose prose-sm dark:prose-invert mt-4 max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>{taskContent}</ReactMarkdown></div>
             {(taskStatus === "success" || taskStatus === "restored") && <div className="mt-3"><SaveNoteButton kind="复盘" title={`每日复盘 ${dr?.trade_date || today}`} content={taskContent} /></div>}
           </>
         ) : !needConfig && taskStatus === "idle" ? (
@@ -1146,7 +1181,7 @@ export function DailyReview() {
         {taskStatus === "running" && taskStreamContent && (
           <div className="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
             <p className="mb-2 text-xs font-medium text-primary">新结果临时预览（完成并保存后才会替换旧结果）</p>
-            <div className="prose prose-sm dark:prose-invert max-w-none text-foreground/90"><ReactMarkdown remarkPlugins={[remarkGfm]}>{taskStreamContent}</ReactMarkdown></div>
+            <div className="prose prose-sm dark:prose-invert max-w-none text-foreground/90"><ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>{taskStreamContent}</ReactMarkdown></div>
           </div>
         )}
       </GlassCard>
@@ -1155,6 +1190,13 @@ export function DailyReview() {
 	      /* 11. BK-11 短线市场历史（独立只读请求；不随复盘轮询） */
 	      { order: 11, node: (<section key="bk11-history" className="order-[11]">
       <ShortTermHistoryCard env={bk11Env} loading={bk11Loading} error={bk11Error} />
+      <EvidenceReadinessCard tradeDate={dr?.trade_date ?? null} />
+      <SealQualityCard tradeDate={dr?.trade_date ?? null} />
+      <ThemeResearchCard tradeDate={dr?.trade_date ?? null} />
+      <CohortIdentityCard tradeDate={dr?.trade_date ?? null} />
+      <ShortlineResearchCard tradeDate={dr?.trade_date ?? null} />
+      <ShortlineReviewCard tradeDate={dr?.trade_date ?? null} />
+      <ExtendedResearchCard kind="market" tradeDate={dr?.trade_date ?? null} />
       </section>) },
 
       /* 3. 市场广度 */
@@ -1204,7 +1246,7 @@ export function DailyReview() {
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Flame className="h-4 w-4" /> 短线情绪</h3>
         <span className="text-[11px] text-muted-foreground/50">连板股 · 打板情绪</span>
-        {emotion?.date && <span className="ml-auto text-[11px] text-muted-foreground/50">{emotion.date}</span>}
+        {emotion?.date && <span className="ml-auto text-[11px] text-muted-foreground/50">{emotion.date_verified === false ? "请求交易日（来源日期未核实） " : ""}{emotion.date}</span>}
         {reviewBadge(emotionEnv?.status) && (
           <span className={cn("rounded-full px-2 py-0.5 text-[10px]", reviewBadge(emotionEnv?.status)!.cls)}>
             {reviewBadge(emotionEnv?.status)!.text}
@@ -1247,7 +1289,7 @@ export function DailyReview() {
             <div className="mt-3">
               <p className="mb-1.5 text-[11px] text-muted-foreground">连板股（2 板以上连续涨停）</p>
               {!emotion.lianban_stocks?.length ? (
-                <p className="text-xs text-muted-foreground/50">今日无 2 板以上个股</p>
+                <p className="text-xs text-muted-foreground/50">{emotion.lianban_count == null ? "连板股数据暂不可用" : "该池未见 2 板以上个股"}</p>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -1759,6 +1801,9 @@ export function DailyReview() {
             </>
             )}
 
+      <NextDayVerificationCard initialDate={dr?.trade_date} />
+      <ObservationWorkflowCard initialDate={dr?.trade_date} />
+
       {/* 10. 历史复盘（显式保存；只读浏览；不替换当前实时数据） */}
       {todayView === "history" && (
       <>
@@ -2026,6 +2071,14 @@ export function DailyReview() {
                       <span className={cn("rounded-full px-2 py-0.5 text-[10px]", snapBadge.cls)}>{snapBadge.text}</span>
                     )}
                   </div>
+
+                  <EvidenceReadinessCard tradeDate={snap.trade_date ?? null} />
+                  <SealQualityCard tradeDate={snap.trade_date ?? null} />
+                  <ThemeResearchCard tradeDate={snap.trade_date ?? null} />
+                  <CohortIdentityCard tradeDate={snap.trade_date ?? null} />
+                  <ShortlineResearchCard tradeDate={snap.trade_date ?? null} />
+                  <ShortlineReviewCard tradeDate={snap.trade_date ?? null} />
+                  <ExtendedResearchCard kind="market" tradeDate={snap.trade_date ?? null} />
 
                   {warnList.length > 0 && (
                     <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-warning">

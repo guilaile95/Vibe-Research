@@ -37,3 +37,19 @@ test("distinguishes normal, partial, empty, and error product states", () => {
   assert.equal(fundamentalHealthState(null, null), "empty");
   assert.equal(fundamentalHealthState(normal, "failed"), "error");
 });
+
+test("preserves numeric zero facts through the product state", () => {
+  for (const value of [0, "0", "0亿"]) {
+    const fin = { revenue: value, net_profit: value, data_quality: { status: "normal" } } as never;
+    assert.equal(fundamentalHealthState(fin, null), "normal");
+    assert.equal(fundamentalHealthState({ ...fin, data_quality: { status: "partial" } } as never, null), "partial");
+  }
+  assert.equal(fundamentalHealthState({ revenue: 0, net_profit: null, data_quality: { status: "partial" } } as never, null), "partial");
+});
+
+test("absent or non-finite observations remain empty while finite negatives are present", () => {
+  for (const value of [null, undefined, "", "  ", false, true, NaN, Infinity]) {
+    assert.equal(fundamentalHealthState({ revenue: value, net_profit: value } as never, null), "empty");
+  }
+  assert.equal(fundamentalHealthState({ revenue: -1, net_profit: -2, data_quality: { status: "normal" } } as never, null), "normal");
+});

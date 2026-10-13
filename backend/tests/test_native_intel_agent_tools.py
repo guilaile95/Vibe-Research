@@ -177,7 +177,11 @@ def test_agent_trend_analysis_tool(tmp_agent_db):
 
 
 # 34. Agent status tool
-def test_agent_status_tool(tmp_agent_db):
+def test_agent_status_tool(tmp_agent_db, monkeypatch):
+    monkeypatch.setattr(agent_tools.agent_runtime, "status", lambda: {
+        "installed": False, "authenticated": False, "available": False,
+        "status": "runtime_unavailable",
+    })
     tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
     status = tools.get_intel_status()
     assert status["success"] is True
@@ -525,7 +529,11 @@ def test_req_34_external_agent_trend_invocation(tmp_agent_db):
     assert content["method"] == "topic_trend"
 
 
-def test_req_35_external_agent_status_invocation(tmp_agent_db):
+def test_req_35_external_agent_status_invocation(tmp_agent_db, monkeypatch):
+    monkeypatch.setattr(agent_tools.agent_runtime, "status", lambda: {
+        "installed": False, "authenticated": False, "available": False,
+        "status": "runtime_unavailable",
+    })
     tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
     msg = {
         "jsonrpc": "2.0",

@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 
 import ai_result_store
+import daily_review_basis
 import account_reality_service
 import daily_review
 import daily_review_cache
@@ -477,6 +478,7 @@ def save_daily_review_ai(
     cfg: Any,
     *,
     should_cancel: Callable[[], bool] | None = None,
+    input_basis: dict | None = None,
 ) -> dict[str, Any]:
     if not isinstance(review, dict):
         raise AiResultValidationError("review 必须是对象")
@@ -495,15 +497,22 @@ def save_daily_review_ai(
             "source_data_cutoff": cutoff,
         }
     )
+    if input_basis is not None:
+        try:
+            payload["input_basis"] = daily_review_basis.validate_basis(
+                input_basis, trade_date=trade_date, source_generated_at=source_generated_at, source_cutoff=cutoff,
+            )
+        except ValueError as exc:
+            raise AiResultValidationError("复盘输入依据无效") from exc
     record = {
         "result_type": DAILY_REVIEW_AI,
         "trade_date": trade_date,
-        "schema_version": "daily_review_ai.v1",
+        "schema_version": "daily_review_ai.v2" if input_basis is not None else "daily_review_ai.v1",
         "payload": payload,
         "generated_at": generated_at,
         "model_provider": provider,
         "model_name": model,
-        "input_fingerprint": None,
+        "input_fingerprint": payload["input_basis"]["context_sha256"] if input_basis is not None else None,
     }
     return ai_result_store.upsert_result(
         review_history.resolve_review_db_path(),
@@ -519,6 +528,7 @@ def save_portfolio_advice(
     cfg: Any,
     *,
     input_fingerprint: str | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(review, dict):
         raise AiResultValidationError("review 必须是对象")
@@ -557,7 +567,9 @@ def save_portfolio_advice(
         "model_name": model,
         "input_fingerprint": fingerprint,
     }
-    return ai_result_store.upsert_result(review_history.resolve_review_db_path(), record)
+    return ai_result_store.upsert_result(
+        review_history.resolve_review_db_path(), record, should_cancel=should_cancel
+    )
 
 
 def _cached_display_trade_date() -> str | None:
@@ -661,7 +673,9 @@ def _validate_restored_record(record: Any, expected_type: str) -> None:
             DAILY_REVIEW_AI: "daily_review_ai.v1",
             PORTFOLIO_ADVICE: "portfolio_advice.v1",
         }[expected_type]
-        if record.get("schema_version") != expected_schema:
+        if record.get("schema_version") != expected_schema and not (
+            expected_type == DAILY_REVIEW_AI and record.get("schema_version") == "daily_review_ai.v2"
+        ):
             raise AiResultValidationError("schema_version mismatch")
         _, trade_date = validate_result_identity(expected_type, record.get("trade_date"))
         generated_at = _valid_timestamp(record.get("generated_at"), "generated_at")
@@ -670,11 +684,11 @@ def _validate_restored_record(record: Any, expected_type: str) -> None:
         payload = _validate_payload(record.get("payload"))
 
         if expected_type == DAILY_REVIEW_AI:
-            if set(payload) != {
-                "markdown",
-                "source_review_generated_at",
-                "source_data_cutoff",
-            }:
+            is_v2 = record["schema_version"] == "daily_review_ai.v2"
+            expected_fields = {"markdown", "source_review_generated_at", "source_data_cutoff"}
+            if is_v2:
+                expected_fields.add("input_basis")
+            if set(payload) != expected_fields:
                 raise AiResultValidationError("daily review payload fields mismatch")
             _nonempty_string(payload.get("markdown"), "markdown")
             _valid_timestamp(
@@ -686,7 +700,18 @@ def _validate_restored_record(record: Any, expected_type: str) -> None:
                 "source_data_cutoff",
                 allow_none=True,
             )
-            if record.get("input_fingerprint") is not None:
+            if is_v2:
+                try:
+                    basis = daily_review_basis.validate_basis(
+                        payload["input_basis"], trade_date=trade_date,
+                        source_generated_at=payload["source_review_generated_at"],
+                        source_cutoff=payload["source_data_cutoff"],
+                    )
+                except ValueError as exc:
+                    raise AiResultValidationError("invalid input basis") from exc
+                if record.get("input_fingerprint") != basis["context_sha256"]:
+                    raise AiResultValidationError("daily review context identity mismatch")
+            elif record.get("input_fingerprint") is not None:
                 raise AiResultValidationError("daily review metadata mismatch")
             return
 

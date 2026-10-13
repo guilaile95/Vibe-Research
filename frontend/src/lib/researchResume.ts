@@ -6,6 +6,7 @@ const KEY = "vr-research-resume-v1";
 export const RESEARCH_SECTIONS = [
   { id: "candidate-public-info", label: "查看公开资讯" },
   { id: "candidate-evidence-gap", label: "查看证据缺口" },
+  { id: "candidate-research-note", label: "提问与暂定研究" },
   { id: "candidate-existing-research", label: "继续已有研究" },
 ] as const;
 

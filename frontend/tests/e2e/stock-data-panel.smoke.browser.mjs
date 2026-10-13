@@ -7,6 +7,8 @@
  * - Covers query binding, deferred K-line expand, cache, retry, and race guards
  */
 import { chromium } from "playwright";
+import { runCompanyResearch } from "./company-research.fixture.mjs";
+import { runKlineResearchEvents } from "./kline-research-events.fixture.mjs";
 import { createReadStream, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -627,6 +629,7 @@ function jsonErr(status, detail) {
  */
 function createApiMockController() {
   const state = {
+    secondaryFailures: false,
     klineDelayMs: 0,
     klineError: false,
     klineHold: null, // { resolve, code } pending fulfill
@@ -670,6 +673,11 @@ function createApiMockController() {
 
     const pathname = pathnameOf(url);
     const code = codeOf(url);
+    if (state.secondaryFailures && ["/api/margin", "/api/fund-flow"].includes(pathname)) {
+      await route.fulfill(jsonErr(pathname === "/api/fund-flow" ? 501 : 502, "SYNTHETIC_PRIVATE_PROVIDER_DETAIL"));
+      return;
+    }
+
 
     if (pathname.endsWith("/stock-relative-context")) {
       state.relativeContextCalls.push({ code, url, ts: Date.now() });
@@ -773,7 +781,7 @@ function createApiMockController() {
         net_profit_yoy: "10%",
         deduct_net_profit: "190亿",
         deduct_net_profit_yoy: "9%",
-        eps: "1.50",
+        eps: 0, // Synthetic numeric zero must remain a visible fact.
         bvps: "15.0",
         roe: "12%",
         gross_margin: "40%",
@@ -923,6 +931,14 @@ function createApiMockController() {
           ],
         }),
       );
+      return;
+    }
+
+    if (state.capitalFixture && ["/api/margin", "/api/holders"].includes(pathname)) {
+      const value = state.capitalFixture.value;
+      await route.fulfill(jsonOk([pathname === "/api/margin"
+        ? { date: "2026-10-09", rzye: value, rqye: value }
+        : { date: "2026-09-30", holder_num: value, change_ratio: value }]));
       return;
     }
 
@@ -1538,6 +1554,9 @@ async function runSmoke(page, mock, errors) {
       errors.push(`${label}: fundamental health text not visible: ${text}`);
     }
   }
+  if (await health.getByText("基本每股收益", {exact:true}).locator("..").locator("p").nth(1).innerText() !== "0") {
+    errors.push(`${label}: numeric zero EPS was hidden as unknown`);
+  }
   const healthText = await health.innerText();
   for (const forbidden of ["归母净利润", "高增长", "高 ROE", "财务评分"]) {
     if (healthText.includes(forbidden)) errors.push(`${label}: forbidden health wording present: ${forbidden}`);
@@ -1908,6 +1927,43 @@ async function runSmoke(page, mock, errors) {
   }
   // restore normal TI for cleanliness
   mock.setTechnicalIndicatorsStatus("normal");
+  // Source-level failures stay visible instead of masquerading as no observations.
+  mock.state.secondaryFailures = true;
+  await fillCode(page, "000001");
+  await clickQuery(page);
+  await waitForStockHeader(page, "000001", "平安银行");
+  await openTab(page, "capital");
+  await page.locator('[data-source="融资融券"][data-source-state="error"]').waitFor();
+  await page.locator('[data-source="资金流向"][data-source-state="unsupported"]').waitFor();
+  const failedText = await page.locator('[data-source="融资融券"]').innerText();
+  if (!failedText.includes("不能据此判断没有记录")) errors.push("margin failure lost uncertainty");
+  if ((await page.locator("body").innerText()).includes("SYNTHETIC_PRIVATE_PROVIDER_DETAIL")) errors.push("source details leaked");
+  mock.state.secondaryFailures = false;
+  await clickQuery(page);
+  await waitForStockHeader(page, "000001", "平安银行");
+  await openTab(page, "capital");
+  await page.locator('[data-source="融资融券"][data-source-state="success"]').waitFor();
+  if (!(await page.locator('[data-source="融资融券"]').innerText()).includes("不能排除上游缺失")) errors.push("empty source falsely treated as complete absence");
+  // Actual rendered cards must distinguish missing fields from a genuine zero.
+  for (const value of [null, 0, ""]) {
+    mock.state.capitalFixture = { value };
+    await clickQuery(page);
+    await waitForStockHeader(page, "000001", "平安银行");
+    await openTab(page, "capital");
+    await page.locator('[data-source="股东户数"][data-source-state="success"]').waitFor();
+    const balance = value === 0 ? "0.00 亿" : "—";
+    const count = value === 0 ? "0" : "—";
+    const ratio = value === 0 ? "环比 0.00%" : "环比 —";
+    for (const [name, expected] of [["融资余额", balance], ["融券余额", balance], ["股东户数", count]]) {
+      const card = page.getByText(name, { exact: true }).locator("..");
+      await card.locator("p.font-mono").filter({ hasText: expected }).waitFor();
+      const actual = await card.locator("p.font-mono").innerText();
+      if (actual !== expected) errors.push(`capital ${name}: ${JSON.stringify(value)} displayed ${actual}`);
+    }
+    const holderCard = page.getByText("股东户数", { exact: true }).locator("..");
+    if (!(await holderCard.innerText()).includes(ratio)) errors.push(`capital ratio: ${JSON.stringify(value)} lost unknown/zero distinction`);
+  }
+  delete mock.state.capitalFixture;
 }
 
 async function main() {
@@ -1939,12 +1995,29 @@ async function main() {
       const sourceUrl = message.location().url || "unknown";
       // The existing K-line retry scenario intentionally returns one mocked
       // 500; do not treat that expected fixture transition as a page defect.
-      if (message.type() === "error" && !sourceUrl.includes("/api/kline")) {
+      if (message.type() === "error" && !sourceUrl.includes("/api/kline") && !(mock.state.secondaryFailures && /\/api\/(margin|fund-flow)(?:\?|$)/.test(sourceUrl))) {
         errors.push(`console.error: ${message.text()} @ ${sourceUrl}`);
       }
     });
 
     await runSmoke(page, mock, errors);
+    const researchContext = await browser.newContext();
+    try {
+      const researchPage = await researchContext.newPage();
+      const researchMock = createApiMockController();
+      await researchPage.route("**/api/**", (route) => researchMock.handle(route));
+      researchPage.on("pageerror", (error) => errors.push(`research pageerror: ${error.message}`));
+      researchPage.on("console", (message) => { if (message.type() === "error") errors.push(`research console.error: ${message.text()}`); });
+      await runKlineResearchEvents({ page: researchPage, mock: researchMock, baseUrl: `http://127.0.0.1:${frontendPort}`, openTab, expandKline, fillCode, clickQuery, waitForStockHeader });
+    } finally { await researchContext.close(); }
+    const companyContext = await browser.newContext();
+    try {
+      const companyPage = await companyContext.newPage();
+      const companyMock = createApiMockController();
+      await companyPage.route("**/api/**", route => companyMock.handle(route));
+      companyPage.on("pageerror", error => errors.push(`company research pageerror: ${error.message}`));
+      await runCompanyResearch({ page: companyPage, baseUrl: `http://127.0.0.1:${frontendPort}`, fillCode, clickQuery, waitForStockHeader });
+    } finally { await companyContext.close(); }
     await page.setViewportSize({ width: 390, height: 844 });
     try {
       // 相对表现 / 当前行业估值在「概览」页签（上一个步骤停在行情与技术）。

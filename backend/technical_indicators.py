@@ -25,7 +25,7 @@ KDJ_LIMITATION = "KDJ(9,3,3) 因高低价历史不足或无效而不可用"
 
 def _clean_float(v) -> float | None:
     """把任意值转为 float；None / NaN / Infinity → None。"""
-    if v is None:
+    if v is None or isinstance(v, bool):
         return None
     try:
         f = float(v)
@@ -58,6 +58,13 @@ def _parse_klines(raw: list[dict]) -> list[dict]:
 
         high = _clean_float(row.get("high"))
         low = _clean_float(row.get("low"))
+        # A finite provider value is not necessarily a valid price bound. Keep
+        # usable closes, but make contradictory/missing range evidence unknown
+        # for both KDJ and the 20-session breakout window.
+        if high is not None and (high <= 0 or high < close):
+            high = None
+        if low is not None and (low <= 0 or low > close):
+            low = None
         volume = _clean_float(row.get("volume"))
         if volume is None:
             volume = _clean_float(row.get("vol"))

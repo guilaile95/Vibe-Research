@@ -225,7 +225,7 @@ class TestEvidenceCascade:
         # 现在 revision=2
 
         # 编辑证据 → 应联动生成 revision 3
-        updated_ev = svc.update_evidence(db, ev["id"], _make_evidence_payload(claim="c2"))
+        updated_ev = svc.update_evidence(db, ev["id"], {**_make_evidence_payload(claim="c2"), "expected_edit_token": ev["edit_token"]})
         assert updated_ev["claim"] == "c2"
 
         thesis_after = svc.get_thesis(db, tid)
@@ -240,7 +240,7 @@ class TestEvidenceCascade:
         svc.link_evidence(db, tid, ev["id"], "support", 1, "link")
         # revision=2
 
-        svc.soft_delete_evidence(db, ev["id"])
+        svc.soft_delete_evidence(db, ev["id"], ev["edit_token"])
         thesis_after = svc.get_thesis(db, tid)
         assert thesis_after["thesis"]["current_revision"] == 3
         # 当前聚合状态不含已删除证据
@@ -255,7 +255,7 @@ class TestEvidenceCascade:
         svc.archive_thesis(db, tid, expected_revision=2)  # rev=3
 
         # 编辑证据：不应联动 archived thesis
-        svc.update_evidence(db, ev["id"], _make_evidence_payload(claim="new"))
+        svc.update_evidence(db, ev["id"], {**_make_evidence_payload(claim="new"), "expected_edit_token": ev["edit_token"]})
         thesis_after = svc.get_thesis(db, tid)
         assert thesis_after["thesis"]["current_revision"] == 3  # 未增加
         # archived snapshot 保留旧 claim
@@ -270,7 +270,7 @@ class TestEvidenceCascade:
         svc.link_evidence(db, t1["thesis"]["id"], ev["id"], "support", 1, "l1")  # t1 rev=2
         svc.link_evidence(db, t2["thesis"]["id"], ev["id"], "oppose", 1, "l2")  # t2 rev=2
 
-        svc.update_evidence(db, ev["id"], _make_evidence_payload(claim="updated"))
+        svc.update_evidence(db, ev["id"], {**_make_evidence_payload(claim="updated"), "expected_edit_token": ev["edit_token"]})
         assert svc.get_thesis(db, t1["thesis"]["id"])["thesis"]["current_revision"] == 3
         assert svc.get_thesis(db, t2["thesis"]["id"])["thesis"]["current_revision"] == 3
 
@@ -446,7 +446,7 @@ class TestSnapshotImmutability:
         svc.link_evidence(db, tid, ev["id"], "support", 1, "l")  # rev=2，含证据
 
         # 删除证据 → rev=3，当前不含证据
-        svc.soft_delete_evidence(db, ev["id"])
+        svc.soft_delete_evidence(db, ev["id"], ev["edit_token"])
 
         # rev=2 的 snapshot 仍应包含证据
         rev2 = svc.get_revision(db, tid, 2)
@@ -678,6 +678,6 @@ class TestListQueries:
 
     def test_list_evidence_excludes_deleted(self, db):
         ev = svc.create_evidence(db, _make_evidence_payload())
-        svc.soft_delete_evidence(db, ev["id"])
+        svc.soft_delete_evidence(db, ev["id"], ev["edit_token"])
         result = svc.list_evidence(db)
         assert result["total"] == 0

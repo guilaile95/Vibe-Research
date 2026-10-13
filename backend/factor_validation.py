@@ -192,25 +192,61 @@ def _load_close_series(
     return series
 
 
-def _all_full_market_rows(root: Path, as_of: str) -> dict[str, Any]:
+def _usable_full_market(envelope: dict[str, Any]) -> bool:
+    if envelope.get("status") == "normal":
+        return True
+    if envelope.get("status") != "partial":
+        return False
+    # Only the explicit mixed-date RDP contract is usable. A generic partial
+    # response is not evidence of a complete historical cross-section.
+    coverage = envelope.get("coverage")
+    if not isinstance(coverage, dict):
+        return False
+    current, stale, total = (coverage.get(key) for key in
+                             ("current_count", "stale_count", "universe_count"))
+    return (all(type(value) is int for value in (current, stale, total))
+            and current > 0 and stale > 0 and current + stale == total)
+
+
+def _all_full_market_rows(root: Path, as_of: str, snapshot_id: str | None = None) -> dict[str, Any]:
     """Read one exact-as-of Full Market cross-section through its real contract."""
+    if snapshot_id is None:
+        snapshot_id = rdp.read_manifest(root)["snapshot_id"]
     rows: list[dict[str, Any]] = []
     offset = 0
+    first_provenance = None
     while True:
         page = rdp.query_full_market(
             root=root,
+            snapshot_id=snapshot_id,
             as_of=as_of,
             latest=False,
             limit=rdp._MAX_LIMIT,
             offset=offset,
         )
-        if page.get("status") != "normal":
+        if not _usable_full_market(page):
             return page
-        rows.extend(page.get("rows") or [])
+        if page.get("as_of") != as_of or page.get("latest_date") != as_of:
+            raise rdp.ResearchDataPlaneValidationError("Full Market date does not match factor date")
+        if page.get("snapshot_id") != snapshot_id:
+            raise rdp.ResearchDataPlaneValidationError("Full Market snapshot does not match factor snapshot")
+        provenance = page.get("provenance")
+        if first_provenance is None:
+            first_provenance = provenance
+        elif provenance != first_provenance:
+            raise rdp.ResearchDataPlaneValidationError("Full Market pagination provenance changed")
+        page_rows = page.get("rows")
+        if not isinstance(page_rows, list) or any(not isinstance(row, dict) for row in page_rows):
+            raise rdp.ResearchDataPlaneValidationError("Full Market rows are invalid")
+        rows.extend(page_rows)
         next_offset = page.get("next_offset")
         if next_offset is None:
-            return {**page, "rows": rows, "returned_rows": len(rows)}
-        if next_offset <= offset:
+            combined = {**page, "rows": rows, "returned_rows": len(rows)}
+            # This internal aggregate is no longer the last bounded page. The
+            # public factor report gets its own complete computation receipt.
+            combined.pop("replay_receipt", None)
+            return combined
+        if type(next_offset) is not int or next_offset <= offset:
             raise rdp.ResearchDataPlaneValidationError(
                 "full-market pagination did not advance"
             )
@@ -414,6 +450,7 @@ def evaluate_rdp(
     date_from: str | None = None,
     date_to: str | None = None,
     data_root: str | Path | None = None,
+    snapshot_id: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate one registered factor on a bounded observed cross-section."""
     factor = factor_definition(factor_id)
@@ -431,7 +468,7 @@ def evaluate_rdp(
         "date_to": date_to,
     }
     root = rdp.resolve_root(data_root)
-    manifest = rdp.read_manifest(root)
+    manifest = rdp.read_manifest(root, snapshot_id=snapshot_id)
     requested_from = date_from or str(manifest["coverage_start"])
     requested_to = date_to or str(manifest["coverage_end"])
     dates = _load_factor_dates(root, manifest, date_from, date_to)
@@ -452,8 +489,8 @@ def evaluate_rdp(
     stale_source_rows_total = 0
     excluded_total = 0
     for factor_date in effective_dates:
-        market = _all_full_market_rows(root, factor_date)
-        if market.get("status") != "normal":
+        market = _all_full_market_rows(root, factor_date, manifest["snapshot_id"])
+        if not _usable_full_market(market):
             raise rdp.ResearchDataPlaneValidationError(
                 f"Full Market unavailable at factor date {factor_date}"
             )
@@ -465,6 +502,11 @@ def evaluate_rdp(
         parity_dates_checked += 1
         parity_rows_checked += len(rows)
         exact_rows, stale_source_row_count = _exact_date_rows(rows, factor_date)
+        if market.get("status") == "partial":
+            coverage = market["coverage"]
+            if (len(exact_rows) != coverage["current_count"]
+                    or stale_source_row_count != coverage["stale_count"]):
+                raise rdp.ResearchDataPlaneValidationError("Full Market partial coverage does not match rows")
         source_asof_row_count = len(rows)
         exact_date_universe_count = len(exact_rows)
         source_asof_rows_total += source_asof_row_count
@@ -590,7 +632,7 @@ def evaluate_rdp(
             "observations": observations,
         }
 
-    return {
+    report = {
         "schema_version": SCHEMA_VERSION,
         "status": "normal",
         "research_only": True,
@@ -605,6 +647,7 @@ def evaluate_rdp(
             "source_name": manifest.get("source_name"),
             "license_status": manifest.get("license_status"),
             "artifact_sha256": manifest.get("artifact_sha256"),
+            "snapshot_id": manifest["snapshot_id"],
             "query_contract": FULL_MARKET_CONTRACT,
         },
         "sample": {
@@ -655,6 +698,20 @@ def evaluate_rdp(
         "limitations": list(FACTOR_LIMITATIONS),
         "formal_state_write": {"performed": False, "scope": "research computation only"},
     }
+    replay_parameters = {
+        "factor_id": factor_id, "forward_windows": list(windows),
+        "date_from": requested_from, "date_to": requested_to,
+    }
+    # Preserve the legacy request display while hashing normalized effective dates,
+    # so replaying a receipt also works when the original caller omitted dates.
+    digest_content = {
+        **report, "request": replay_parameters,
+        "sample": {**report["sample"], "requested_date_from": requested_from,
+                   "requested_date_to": requested_to},
+    }
+    return rdp._with_replay_receipt(
+        report, manifest, "evaluate_rdp", replay_parameters, digest_content=digest_content,
+    )
 
 
 def unavailable_report(

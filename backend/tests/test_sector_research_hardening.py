@@ -201,7 +201,7 @@ def test_scope_industry_company_all_and_dedup(monkeypatch):
     def fake_industry(**kwargs):
         return list(industry_raw)
 
-    def fake_company(code, max_pages=3):
+    def fake_company(code, max_pages=3, **kwargs):
         return list(company_raw.get(code, []))
 
     monkeypatch.setattr(srd.astock, "eastmoney_industry_reports", fake_industry)
@@ -879,7 +879,7 @@ def test_company_scope_applies_days_filter(monkeypatch):
     old = (today - timedelta(days=400)).isoformat()
     recent = (today - timedelta(days=10)).isoformat()
 
-    def fake_company(code, max_pages=3):
+    def fake_company(code, max_pages=3, **kwargs):
         return [
             {"title": "旧报", "infoCode": "OLD", "stockCode": code, "publishDate": old},
             {"title": "新报 PCB", "infoCode": "NEW", "stockCode": code, "publishDate": recent},
@@ -908,7 +908,7 @@ def test_all_scope_company_part_applies_days(monkeypatch):
     )
     monkeypatch.setattr(
         srd.astock, "eastmoney_reports",
-        lambda code, max_pages=3: [
+        lambda code, max_pages=3, **kwargs: [
             {"title": "公司旧", "infoCode": "C_OLD", "stockCode": code, "publishDate": old},
             {"title": "公司新 PCB", "infoCode": "C_NEW", "stockCode": code, "publishDate": recent},
         ],
@@ -998,11 +998,11 @@ def test_each_sector_report_discovery_uses_own_config(monkeypatch):
     seen_keywords = {}
     seen_codes = {}
 
-    def fake_industry(days, max_pages, keywords):
+    def fake_industry(days, max_pages, keywords, **kwargs):
         seen_keywords["kw"] = keywords
         return []
 
-    def fake_company(codes, max_pages):
+    def fake_company(codes, max_pages, **kwargs):
         seen_codes["codes"] = codes
         return []
 

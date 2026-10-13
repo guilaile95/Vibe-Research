@@ -1,16 +1,20 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { clearResearchVisits, loadResearchVisits, RESEARCH_SECTIONS } from "@/lib/researchResume";
+import { loadNotesState, NOTES_CHANGED_EVENT } from "@/lib/notes";
 
 export function RecentResearch() {
   const [visits, setVisits] = useState(loadResearchVisits);
+  const [notes, setNotes] = useState(() => loadNotesState().notes);
   useEffect(() => {
-    const refresh = () => setVisits(loadResearchVisits());
+    const refresh = () => { setVisits(loadResearchVisits()); setNotes(loadNotesState().notes); };
     window.addEventListener("storage", refresh);
     window.addEventListener("focus", refresh);
+    window.addEventListener(NOTES_CHANGED_EVENT, refresh);
     return () => {
       window.removeEventListener("storage", refresh);
       window.removeEventListener("focus", refresh);
+      window.removeEventListener(NOTES_CHANGED_EVENT, refresh);
     };
   }, []);
   if (!visits.length) return null;
@@ -23,11 +27,13 @@ export function RecentResearch() {
       <ul className="divide-y divide-border/40">
         {visits.map((visit) => {
           const section = RESEARCH_SECTIONS.find(({ id }) => visit.href.endsWith(`#${id}`));
+          const latestQuestion = notes.find((note) => note.research?.securityCode === visit.code && note.research.nextQuestion)?.research?.nextQuestion;
           return <li key={visit.code} className="py-2">
             <Link to={visit.href} className="block text-sm hover:text-primary" data-testid="resume-research">
               <span className="font-mono">{visit.code}</span><span className="ml-2 text-xs">{section?.label || "候选研究"} →</span>
             </Link>
             <p className="mt-1 text-[11px] text-muted-foreground">上次浏览 <time dateTime={visit.visitedAt}>{new Date(visit.visitedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</time></p>
+            {latestQuestion && <p className="mt-1 text-xs">你留下的待核对问题：{latestQuestion}</p>}
           </li>;
         })}
       </ul>

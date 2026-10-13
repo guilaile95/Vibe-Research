@@ -860,6 +860,8 @@ class TestParity:
                     "planned_quantity": 100,
                     # +08:00 → UTC 08-10T06:45Z，晚于决策提交 08-10T06:00Z
                     "executed_at": "2026-08-10T14:45:00+08:00",
+                    "fee": 0.0,
+                    "other_cost": 0.0,
                 }
             )
             # trade_id 形状：32 位小写 hex，无前缀

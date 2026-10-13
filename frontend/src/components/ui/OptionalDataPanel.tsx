@@ -10,12 +10,13 @@ import {
 } from "lucide-react";
 import type { DisclosureItem, KlineBar, TechnicalIndicators } from "@/lib/api";
 import { GlassCard } from "./GlassCard";
-import { KlineChart } from "./KlineChart";
+import { ResearchKlineChart } from "./ResearchKlineChart";
 import type { PanelId, PanelState, PanelStatus } from "./optionalDataPanelState";
 
 export type { PanelId, PanelStatus, PanelState } from "./optionalDataPanelState";
 
 interface Props {
+  securityCode: string;
   onToggle: (key: PanelId) => void;
   onRetry: (key: PanelId) => void;
   panelStates: Record<PanelId, PanelState>;
@@ -103,6 +104,7 @@ function SubToggle({ icon, title, hint, status, expandKey, expanded, onToggle, o
  * - 切换股票时状态由父组件清空。
  */
 export function OptionalDataPanel({
+  securityCode,
   onToggle,
   onRetry,
   panelStates,
@@ -142,7 +144,7 @@ export function OptionalDataPanel({
         >
           <div className="space-y-2">
             <p className="text-[11px] text-muted-foreground/60">最近 {kline.length} 个交易日 OHLC。</p>
-            <KlineChart bars={kline} indicators={technicalIndicators} />
+            <ResearchKlineChart code={securityCode} bars={kline} indicators={technicalIndicators} />
           </div>
         </PanelContent>
       </SubToggle>

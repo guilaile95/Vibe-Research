@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import threading
 from datetime import datetime, timezone, timedelta
 from typing import Any
@@ -95,7 +96,11 @@ def _read_status_unlocked() -> dict:
     """在已持锁或只读路径下读取状态。"""
     path = _watchlist_path()
     if not os.path.exists(path):
-        return {"status": "not_configured", "data": None, "etag": None}
+        # An older interrupted save may have moved the live file to .bak.
+        # Read that snapshot without consuming or rewriting the recovery copy.
+        path = _bak_path(path)
+        if not os.path.exists(path):
+            return {"status": "not_configured", "data": None, "etag": None}
     try:
         with open(path, encoding="utf-8") as f:
             d = json.load(f)
@@ -126,21 +131,23 @@ def _atomic_write_unlocked(payload: dict) -> None:
     path = _watchlist_path()
     os.makedirs(_CACHE_DIR, exist_ok=True)
     tmp = path + f".tmp.{os.urandom(4).hex()}"
+    backup_tmp = tmp + ".bak"
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False)
-        try:
-            if os.path.exists(path):
-                os.replace(path, _bak_path(path))
-        except OSError:
-            pass
+        if os.path.exists(path):
+            # Never remove the live snapshot before publishing its replacement.
+            # Copy via a temporary file so a failed backup cannot truncate .bak.
+            shutil.copyfile(path, backup_tmp)
+            os.replace(backup_tmp, _bak_path(path))
         os.replace(tmp, path)
     finally:
-        try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except OSError:
-            pass
+        for temporary in (tmp, backup_tmp):
+            try:
+                if os.path.exists(temporary):
+                    os.remove(temporary)
+            except OSError:
+                pass
 
 
 def load_watchlist() -> list[str]:
@@ -181,8 +188,14 @@ def save_watchlist(codes: Any, *, expected_etag: str | None = None) -> dict:
         if expected_etag is not None:
             current = _read_status_unlocked()
             cur_etag = current.get("etag")
-            if cur_etag is not None and cur_etag != expected_etag:
-                raise WatchlistVersionConflictError(cur_etag)
+            # Conditional saves compare the entire observed authority state, including
+            # first creation and deletion/corruption since preview. Legacy callers
+            # without expected_etag retain their existing contract.
+            observed = cur_etag if current["status"] == "valid" else (
+                "NOT_CONFIGURED" if current["status"] == "not_configured" else "CORRUPTED"
+            )
+            if observed != expected_etag or current["status"] == "corrupted":
+                raise WatchlistVersionConflictError(observed)
 
         payload = {
             "schema_version": SCHEMA_VERSION,
@@ -208,10 +221,9 @@ def merge_watchlist(incoming: Any, *, expected_etag: str | None = None) -> dict:
     整个 check / read / merge / backup / write 在同一文件锁内。
     返回并入结果 {"codes", "added", "updated_at", "etag"}。
     """
-    incoming = _normalize_codes(
-        incoming if isinstance(incoming, list) else [],
-        enforce_limit=False,  # 单方可能已超，合并后再强制
-    )
+    # Import is a mutation, not damaged-file recovery: never truncate a draft.
+    # A unique incoming set over the limit cannot fit in any merged result.
+    incoming = _normalize_codes(incoming, enforce_limit=True)
 
     with _LOCK:
         if expected_etag is not None:

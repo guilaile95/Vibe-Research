@@ -310,6 +310,7 @@ def test_a_full_golden_path(env):  # noqa: ARG001 — env 保证 tmp 隔离
 
     # ---- A6. Evidence Mutation After Confirm：不得 bump thesis revision ----
     _put(f"/api/evidence/{ev_support['id']}", {
+        "expected_edit_token": ev_support["edit_token"],
         "evidence_type": "news",
         "claim": "support-evidence-MUTATED",
         "source_title": "source-mutated",
@@ -319,7 +320,7 @@ def test_a_full_golden_path(env):  # noqa: ARG001 — env 保证 tmp 隔离
         "classification": "inference",
         "confidence": "low",
     }, expect=200)
-    _delete(f"/api/evidence/{ev_neutral['id']}?confirm=true", expect=200)  # soft-delete
+    _delete(f"/api/evidence/{ev_neutral['id']}?confirm=true&expected_edit_token={ev_neutral['edit_token']}", expect=200)  # soft-delete
     still = get_thesis(thesis_id)
     assert still["thesis"]["current_revision"] == confirmed_rev  # CONFIRMED_CONTENT_LOCK
 
@@ -361,6 +362,7 @@ def test_a_full_golden_path(env):  # noqa: ARG001 — env 保证 tmp 隔离
 
     # ---- A11. Mutate evidence after delta：历史 snapshot 不变 ----
     _put(f"/api/evidence/{ev_support['id']}", {
+        "expected_edit_token": _get(f"/api/evidence/{ev_support['id']}")["edit_token"],
         "evidence_type": "news",
         "claim": "support-evidence-MUTATED-AGAIN",
         "source_title": "source-again",
@@ -900,6 +902,7 @@ def test_g_revision_timeline(env):  # noqa: ARG001
     confirm_formalization(thesis_id)                                      # 3，无 bump
     confirmed_rev = get_thesis(thesis_id)["thesis"]["current_revision"]
     _put(f"/api/evidence/{ev['id']}", {
+        "expected_edit_token": ev["edit_token"],
         "evidence_type": "news", "claim": "timeline-evidence-mutated",
         "source_title": "s", "source_url": "https://example.com/x",
         "source_date": "2026-08-02", "accessed_at": "2026-08-02T10:00:00+00:00",

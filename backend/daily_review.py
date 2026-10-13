@@ -24,6 +24,7 @@ import astock
 import daily_review_cache
 import daily_review_errors
 import market
+import trade_calendar
 
 _log = logging.getLogger("vibe.daily_review")
 
@@ -245,6 +246,19 @@ def _refresh_failure_state() -> tuple[bool, str | None]:
         return _refresh_failed, _refresh_error
 
 
+def _review_session_current(review: dict, cached_at: float) -> bool:
+    """TTL alone cannot carry a pre-open package across the 09:30 boundary."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    current = trade_calendar.observation_trade_date_at(now)
+    provenance = daily_review_cache.pool_provenance(review)
+    if provenance.get("observation_schema") == astock.LEGACY_POOL_OBSERVATION_SCHEMA:
+        return current is not None and provenance.get("date") == current
+    # Legacy projections have no trustworthy source-date binding. Preserve
+    # their same-session cache behavior without inventing or rewriting a date.
+    inserted = datetime.fromtimestamp(cached_at, timezone.utc).isoformat(timespec="seconds")
+    return current is not None and trade_calendar.observation_trade_date_at(inserted) == current
+
+
 def _cached_review() -> dict | None:
     """返回未过期的缓存包（原对象，调用方须 deepcopy）；未命中返回 None。"""
     hit = _review_cache.get(_REVIEW_CACHE_KEY)
@@ -253,7 +267,7 @@ def _cached_review() -> dict | None:
     ts, val = hit
     if time.time() - ts >= _REVIEW_TTL:
         return None
-    if not isinstance(val, dict):
+    if not isinstance(val, dict) or not _review_session_current(val, ts):
         return None
     return val
 
@@ -263,7 +277,7 @@ def _cached_review_age_seconds() -> float | None:
     if not hit:
         return None
     ts, val = hit
-    if time.time() - ts >= _REVIEW_TTL or not isinstance(val, dict):
+    if time.time() - ts >= _REVIEW_TTL or not isinstance(val, dict) or not _review_session_current(val, ts):
         return None
     return max(0.0, time.time() - ts)
 
@@ -302,10 +316,18 @@ def _should_replace_memory(result: dict) -> bool:
     if daily_review_cache.has_critical_unavailable(result):
         return False
     existing = _cached_review()
+    provenance = daily_review_cache.pool_provenance(result)
+    if (result.get("status") == "partial"
+            and provenance.get("observation_schema") == astock.LEGACY_POOL_OBSERVATION_SCHEMA):
+        disk, _ = daily_review_cache.load_latest_review()
+        if (isinstance(disk, dict) and disk.get("status") == "normal"
+                and not daily_review_cache.qualified_pool_replaces_normal(result, disk)):
+            return False
     if (
         result.get("status") == "partial"
         and existing is not None
         and existing.get("status") == "normal"
+        and not daily_review_cache.qualified_pool_replaces_normal(result, existing)
     ):
         return False
     return True
@@ -334,7 +356,13 @@ def _refresh_accepts_result(new_result: dict) -> tuple[bool, str]:
         return False, "critical_unavailable"
     if status == "partial":
         if _existing_normal_anywhere():
-            return False, "partial_with_existing_normal"
+            memory = _review_cache.get(_REVIEW_CACHE_KEY)
+            disk, _ = daily_review_cache.load_latest_review()
+            normals = [value for value in (memory[1] if memory else None, disk)
+                       if isinstance(value, dict) and value.get("status") == "normal"]
+            if not all(daily_review_cache.qualified_pool_replaces_normal(new_result, old) for old in normals):
+                return False, "partial_with_existing_normal"
+            return True, "qualified_pool_provenance_update"
         return True, "partial_no_prior_normal"
     return False, "invalid_status"
 
@@ -509,6 +537,7 @@ def _build_daily_review() -> dict:
     labeled_warns.append(("breadth", breadth.get("warnings") or []))
 
     # —— 短线情绪 ——
+    emo_raw = None
     try:
         emo_raw = market.get_short_term_emotion()
     except Exception as e:  # noqa: BLE001
@@ -519,19 +548,25 @@ def _build_daily_review() -> dict:
             warnings=[f"{type(e).__name__}: {e}"],
         )
     else:
-        if not isinstance(emo_raw, dict) or emo_raw.get("zt_count") is None:
+        if (not isinstance(emo_raw, dict)
+                or emo_raw.get("status") == "unavailable"
+                or ("status" not in emo_raw and emo_raw.get("zt_count") is None)):
             emotion = _wrap(
                 "unavailable",
                 source="eastmoney_limit_pool",
                 data=None,
-                warnings=["无有效涨跌停池数据"],
+                warnings=(emo_raw.get("warnings") or ["无有效涨跌停池数据"]) if isinstance(emo_raw, dict) else ["无有效涨跌停池数据"],
             )
         else:
             # 只保留约定字段子集（原样数值，不重算比率）
             emotion = _wrap(
-                "normal",
+                "partial" if emo_raw.get("status") == "partial" else "normal",
                 source="eastmoney_limit_pool",
                 data={
+                    **{key: emo_raw[key] for key in (
+                        "observation_schema", "requested_date", "as_of", "source_business_date", "date_basis",
+                        "date_verified", "is_stale", "pool_observations",
+                    ) if key in emo_raw},
                     "date": emo_raw.get("date", ""),
                     "zt_count": emo_raw.get("zt_count"),
                     "dt_count": emo_raw.get("dt_count"),
@@ -545,8 +580,12 @@ def _build_daily_review() -> dict:
                     "yzt_count": emo_raw.get("yzt_count"),
                     "lianban_stocks": emo_raw.get("lianban_stocks") or [],
                 },
-                warnings=[],
+                warnings=list(emo_raw.get("warnings") or []),
             )
+    if isinstance(emo_raw, dict):
+        # Unavailable keeps data=None, but does not erase observed failure/date
+        # provenance. Additive metadata also preserves old saved envelopes.
+        emotion["provenance"] = market._emotion_provenance(emo_raw)
     labeled_warns.append(("emotion", emotion.get("warnings") or []))
 
     # —— 成交额榜（旧兼容）——
@@ -605,7 +644,10 @@ def _build_daily_review() -> dict:
     trade_date = None
     emo_date = None
     if emotion.get("status") == "normal" and isinstance(emotion.get("data"), dict):
-        emo_date = emotion["data"].get("date")
+        # Old saved/legacy projections have no provenance fields. New inferred
+        # query sessions must not silently become the whole review's trade date.
+        if emotion["data"].get("date_verified", True):
+            emo_date = emotion["data"].get("date")
     td, tw = _valid_trade_date(emo_date)
     if tw:
         top_warnings.append(tw)

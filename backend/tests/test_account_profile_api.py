@@ -154,3 +154,15 @@ def test_api_only_writes_tmp_cache_dir(tmp_path):
     dir_files = os.listdir(account_profile.CACHE_DIR)
     tmp_files = [f for f in dir_files if f.startswith("account_profile") and ".tmp." in f]
     assert len(tmp_files) == 0, f"有残留临时文件: {tmp_files}"
+
+
+def test_put_subcent_total_rejected_without_overwriting_confirmed_profile():
+    original = client.put("/api/account-profile", json={
+        "total_assets": 100, "available_cash": 10, "confirm_current": True,
+    })
+    assert original.status_code == 200
+    rejected = client.put("/api/account-profile", json={
+        "total_assets": 0.001, "available_cash": 0, "confirm_current": True,
+    })
+    assert rejected.status_code == 400
+    assert client.get("/api/account-profile").json() == original.json()

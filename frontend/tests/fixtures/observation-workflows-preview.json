@@ -1,0 +1,1168 @@
+{
+  "schema_version": "observation-workflows.v1",
+  "trade_date": "2026-07-31",
+  "calendar_state": "TRADING_DAY",
+  "generated_at": "2026-07-31T08:30:00.000000+00:00",
+  "collector_enabled": false,
+  "scheduler_enabled": false,
+  "external_notifications_enabled": false,
+  "research_only": true,
+  "slots": [
+    {
+      "slot": "09:25",
+      "state": "SAVED",
+      "cutoff_at": "2026-07-31T01:29:00.000000+00:00",
+      "observation": {
+        "cohort": {
+          "all_expected_present": true,
+          "coverage": 1.0,
+          "expected": 2,
+          "median_pct": 1.0000000000000064,
+          "non_negative": 1,
+          "positive": 1,
+          "samples": 2,
+          "strong_ge_3pct": 1
+        },
+        "cohorts": {
+          "watchlist": {
+            "all_expected_present": true,
+            "coverage": 1.0,
+            "expected": 2,
+            "median_pct": 1.0000000000000064,
+            "non_negative": 1,
+            "positive": 1,
+            "samples": 2,
+            "strong_ge_3pct": 1
+          },
+          "yesterday_ladder": {
+            "all_expected_present": true,
+            "coverage": 1.0,
+            "expected": 1,
+            "median_pct": 4.0000000000000036,
+            "non_negative": 1,
+            "positive": 1,
+            "samples": 1,
+            "strong_ge_3pct": 1
+          }
+        },
+        "cutoff_at": "2026-07-31T01:29:00.000000+00:00",
+        "missing": {},
+        "observed_at": "2026-07-31T01:25:00.000000+00:00",
+        "price_basis": "open_vs_previous_close",
+        "research_only": true,
+        "rows": [
+          {
+            "is_limit_up": false,
+            "pct": 4.0000000000000036,
+            "previous_close": 10,
+            "price": 10.4,
+            "provider_at": "2026-07-31T01:25:00.000000+00:00",
+            "source_id": "SYNTHETIC_FIXTURE",
+            "sources": [
+              "watchlist",
+              "yesterday_ladder"
+            ],
+            "symbol": "sh600000",
+            "turnover_yuan": null
+          },
+          {
+            "is_limit_up": false,
+            "pct": -1.9999999999999907,
+            "previous_close": 10,
+            "price": 9.8,
+            "provider_at": "2026-07-31T01:25:00.000000+00:00",
+            "source_id": "SYNTHETIC_FIXTURE",
+            "sources": [
+              "watchlist"
+            ],
+            "symbol": "sz000001",
+            "turnover_yuan": null
+          }
+        ],
+        "schema_version": "observation-workflows.v1",
+        "slot": "09:25",
+        "status": "SAVED",
+        "trade_date": "2026-07-31"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "finished_at": "2026-07-31T01:25:00.000000+00:00",
+          "observation": {
+            "cohort": {
+              "all_expected_present": true,
+              "coverage": 1.0,
+              "expected": 2,
+              "median_pct": 1.0000000000000064,
+              "non_negative": 1,
+              "positive": 1,
+              "samples": 2,
+              "strong_ge_3pct": 1
+            },
+            "cohorts": {
+              "watchlist": {
+                "all_expected_present": true,
+                "coverage": 1.0,
+                "expected": 2,
+                "median_pct": 1.0000000000000064,
+                "non_negative": 1,
+                "positive": 1,
+                "samples": 2,
+                "strong_ge_3pct": 1
+              },
+              "yesterday_ladder": {
+                "all_expected_present": true,
+                "coverage": 1.0,
+                "expected": 1,
+                "median_pct": 4.0000000000000036,
+                "non_negative": 1,
+                "positive": 1,
+                "samples": 1,
+                "strong_ge_3pct": 1
+              }
+            },
+            "cutoff_at": "2026-07-31T01:29:00.000000+00:00",
+            "missing": {},
+            "observed_at": "2026-07-31T01:25:00.000000+00:00",
+            "price_basis": "open_vs_previous_close",
+            "research_only": true,
+            "rows": [
+              {
+                "is_limit_up": false,
+                "pct": 4.0000000000000036,
+                "previous_close": 10,
+                "price": 10.4,
+                "provider_at": "2026-07-31T01:25:00.000000+00:00",
+                "source_id": "SYNTHETIC_FIXTURE",
+                "sources": [
+                  "watchlist",
+                  "yesterday_ladder"
+                ],
+                "symbol": "sh600000",
+                "turnover_yuan": null
+              },
+              {
+                "is_limit_up": false,
+                "pct": -1.9999999999999907,
+                "previous_close": 10,
+                "price": 9.8,
+                "provider_at": "2026-07-31T01:25:00.000000+00:00",
+                "source_id": "SYNTHETIC_FIXTURE",
+                "sources": [
+                  "watchlist"
+                ],
+                "symbol": "sz000001",
+                "turnover_yuan": null
+              }
+            ],
+            "schema_version": "observation-workflows.v1",
+            "slot": "09:25",
+            "status": "SAVED",
+            "trade_date": "2026-07-31"
+          },
+          "reason": null,
+          "started_at": "2026-07-31T01:25:00.000000+00:00",
+          "status": "SAVED"
+        }
+      ],
+      "reason": null
+    },
+    {
+      "slot": "09:35",
+      "state": "SAVED",
+      "cutoff_at": "2026-07-31T01:43:00.000000+00:00",
+      "observation": {
+        "cohort": {
+          "all_expected_present": true,
+          "coverage": 1.0,
+          "expected": 2,
+          "median_pct": 1.0000000000000064,
+          "non_negative": 1,
+          "positive": 1,
+          "samples": 2,
+          "strong_ge_3pct": 1
+        },
+        "cohorts": {
+          "watchlist": {
+            "all_expected_present": true,
+            "coverage": 1.0,
+            "expected": 2,
+            "median_pct": 1.0000000000000064,
+            "non_negative": 1,
+            "positive": 1,
+            "samples": 2,
+            "strong_ge_3pct": 1
+          },
+          "yesterday_ladder": {
+            "all_expected_present": true,
+            "coverage": 1.0,
+            "expected": 1,
+            "median_pct": 4.0000000000000036,
+            "non_negative": 1,
+            "positive": 1,
+            "samples": 1,
+            "strong_ge_3pct": 1
+          }
+        },
+        "cutoff_at": "2026-07-31T01:43:00.000000+00:00",
+        "missing": {},
+        "observed_at": "2026-07-31T01:35:00.000000+00:00",
+        "price_basis": "latest_vs_previous_close",
+        "research_only": true,
+        "rows": [
+          {
+            "is_limit_up": false,
+            "pct": 4.0000000000000036,
+            "previous_close": 10,
+            "price": 10.4,
+            "provider_at": "2026-07-31T01:35:00.000000+00:00",
+            "source_id": "SYNTHETIC_FIXTURE",
+            "sources": [
+              "watchlist",
+              "yesterday_ladder"
+            ],
+            "symbol": "sh600000",
+            "turnover_yuan": null
+          },
+          {
+            "is_limit_up": false,
+            "pct": -1.9999999999999907,
+            "previous_close": 10,
+            "price": 9.8,
+            "provider_at": "2026-07-31T01:35:00.000000+00:00",
+            "source_id": "SYNTHETIC_FIXTURE",
+            "sources": [
+              "watchlist"
+            ],
+            "symbol": "sz000001",
+            "turnover_yuan": null
+          }
+        ],
+        "schema_version": "observation-workflows.v1",
+        "slot": "09:35",
+        "status": "SAVED",
+        "trade_date": "2026-07-31"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "finished_at": "2026-07-31T01:35:00.000000+00:00",
+          "observation": {
+            "cohort": {
+              "all_expected_present": true,
+              "coverage": 1.0,
+              "expected": 2,
+              "median_pct": 1.0000000000000064,
+              "non_negative": 1,
+              "positive": 1,
+              "samples": 2,
+              "strong_ge_3pct": 1
+            },
+            "cohorts": {
+              "watchlist": {
+                "all_expected_present": true,
+                "coverage": 1.0,
+                "expected": 2,
+                "median_pct": 1.0000000000000064,
+                "non_negative": 1,
+                "positive": 1,
+                "samples": 2,
+                "strong_ge_3pct": 1
+              },
+              "yesterday_ladder": {
+                "all_expected_present": true,
+                "coverage": 1.0,
+                "expected": 1,
+                "median_pct": 4.0000000000000036,
+                "non_negative": 1,
+                "positive": 1,
+                "samples": 1,
+                "strong_ge_3pct": 1
+              }
+            },
+            "cutoff_at": "2026-07-31T01:43:00.000000+00:00",
+            "missing": {},
+            "observed_at": "2026-07-31T01:35:00.000000+00:00",
+            "price_basis": "latest_vs_previous_close",
+            "research_only": true,
+            "rows": [
+              {
+                "is_limit_up": false,
+                "pct": 4.0000000000000036,
+                "previous_close": 10,
+                "price": 10.4,
+                "provider_at": "2026-07-31T01:35:00.000000+00:00",
+                "source_id": "SYNTHETIC_FIXTURE",
+                "sources": [
+                  "watchlist",
+                  "yesterday_ladder"
+                ],
+                "symbol": "sh600000",
+                "turnover_yuan": null
+              },
+              {
+                "is_limit_up": false,
+                "pct": -1.9999999999999907,
+                "previous_close": 10,
+                "price": 9.8,
+                "provider_at": "2026-07-31T01:35:00.000000+00:00",
+                "source_id": "SYNTHETIC_FIXTURE",
+                "sources": [
+                  "watchlist"
+                ],
+                "symbol": "sz000001",
+                "turnover_yuan": null
+              }
+            ],
+            "schema_version": "observation-workflows.v1",
+            "slot": "09:35",
+            "status": "SAVED",
+            "trade_date": "2026-07-31"
+          },
+          "reason": null,
+          "started_at": "2026-07-31T01:35:00.000000+00:00",
+          "status": "SAVED"
+        }
+      ],
+      "reason": null
+    },
+    {
+      "slot": "10:00",
+      "state": "SAVED",
+      "cutoff_at": "2026-07-31T02:08:00.000000+00:00",
+      "observation": {
+        "cohort": {
+          "all_expected_present": true,
+          "coverage": 1.0,
+          "expected": 2,
+          "median_pct": 1.0000000000000064,
+          "non_negative": 1,
+          "positive": 1,
+          "samples": 2,
+          "strong_ge_3pct": 1
+        },
+        "cohorts": {
+          "watchlist": {
+            "all_expected_present": true,
+            "coverage": 1.0,
+            "expected": 2,
+            "median_pct": 1.0000000000000064,
+            "non_negative": 1,
+            "positive": 1,
+            "samples": 2,
+            "strong_ge_3pct": 1
+          },
+          "yesterday_ladder": {
+            "all_expected_present": true,
+            "coverage": 1.0,
+            "expected": 1,
+            "median_pct": 4.0000000000000036,
+            "non_negative": 1,
+            "positive": 1,
+            "samples": 1,
+            "strong_ge_3pct": 1
+          }
+        },
+        "cutoff_at": "2026-07-31T02:08:00.000000+00:00",
+        "missing": {},
+        "observed_at": "2026-07-31T02:00:00.000000+00:00",
+        "price_basis": "latest_vs_previous_close",
+        "research_only": true,
+        "rows": [
+          {
+            "is_limit_up": false,
+            "pct": 4.0000000000000036,
+            "previous_close": 10,
+            "price": 10.4,
+            "provider_at": "2026-07-31T02:00:00.000000+00:00",
+            "source_id": "SYNTHETIC_FIXTURE",
+            "sources": [
+              "watchlist",
+              "yesterday_ladder"
+            ],
+            "symbol": "sh600000",
+            "turnover_yuan": null
+          },
+          {
+            "is_limit_up": false,
+            "pct": -1.9999999999999907,
+            "previous_close": 10,
+            "price": 9.8,
+            "provider_at": "2026-07-31T02:00:00.000000+00:00",
+            "source_id": "SYNTHETIC_FIXTURE",
+            "sources": [
+              "watchlist"
+            ],
+            "symbol": "sz000001",
+            "turnover_yuan": null
+          }
+        ],
+        "schema_version": "observation-workflows.v1",
+        "slot": "10:00",
+        "status": "SAVED",
+        "trade_date": "2026-07-31"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "finished_at": "2026-07-31T02:00:00.000000+00:00",
+          "observation": {
+            "cohort": {
+              "all_expected_present": true,
+              "coverage": 1.0,
+              "expected": 2,
+              "median_pct": 1.0000000000000064,
+              "non_negative": 1,
+              "positive": 1,
+              "samples": 2,
+              "strong_ge_3pct": 1
+            },
+            "cohorts": {
+              "watchlist": {
+                "all_expected_present": true,
+                "coverage": 1.0,
+                "expected": 2,
+                "median_pct": 1.0000000000000064,
+                "non_negative": 1,
+                "positive": 1,
+                "samples": 2,
+                "strong_ge_3pct": 1
+              },
+              "yesterday_ladder": {
+                "all_expected_present": true,
+                "coverage": 1.0,
+                "expected": 1,
+                "median_pct": 4.0000000000000036,
+                "non_negative": 1,
+                "positive": 1,
+                "samples": 1,
+                "strong_ge_3pct": 1
+              }
+            },
+            "cutoff_at": "2026-07-31T02:08:00.000000+00:00",
+            "missing": {},
+            "observed_at": "2026-07-31T02:00:00.000000+00:00",
+            "price_basis": "latest_vs_previous_close",
+            "research_only": true,
+            "rows": [
+              {
+                "is_limit_up": false,
+                "pct": 4.0000000000000036,
+                "previous_close": 10,
+                "price": 10.4,
+                "provider_at": "2026-07-31T02:00:00.000000+00:00",
+                "source_id": "SYNTHETIC_FIXTURE",
+                "sources": [
+                  "watchlist",
+                  "yesterday_ladder"
+                ],
+                "symbol": "sh600000",
+                "turnover_yuan": null
+              },
+              {
+                "is_limit_up": false,
+                "pct": -1.9999999999999907,
+                "previous_close": 10,
+                "price": 9.8,
+                "provider_at": "2026-07-31T02:00:00.000000+00:00",
+                "source_id": "SYNTHETIC_FIXTURE",
+                "sources": [
+                  "watchlist"
+                ],
+                "symbol": "sz000001",
+                "turnover_yuan": null
+              }
+            ],
+            "schema_version": "observation-workflows.v1",
+            "slot": "10:00",
+            "status": "SAVED",
+            "trade_date": "2026-07-31"
+          },
+          "reason": null,
+          "started_at": "2026-07-31T02:00:00.000000+00:00",
+          "status": "SAVED"
+        }
+      ],
+      "reason": null
+    },
+    {
+      "slot": "11:30",
+      "state": "SAVED",
+      "cutoff_at": "2026-07-31T03:38:00.000000+00:00",
+      "observation": {
+        "cohort": {
+          "all_expected_present": true,
+          "coverage": 1.0,
+          "expected": 2,
+          "median_pct": 1.0000000000000064,
+          "non_negative": 1,
+          "positive": 1,
+          "samples": 2,
+          "strong_ge_3pct": 1
+        },
+        "cohorts": {
+          "watchlist": {
+            "all_expected_present": true,
+            "coverage": 1.0,
+            "expected": 2,
+            "median_pct": 1.0000000000000064,
+            "non_negative": 1,
+            "positive": 1,
+            "samples": 2,
+            "strong_ge_3pct": 1
+          },
+          "yesterday_ladder": {
+            "all_expected_present": true,
+            "coverage": 1.0,
+            "expected": 1,
+            "median_pct": 4.0000000000000036,
+            "non_negative": 1,
+            "positive": 1,
+            "samples": 1,
+            "strong_ge_3pct": 1
+          }
+        },
+        "cutoff_at": "2026-07-31T03:38:00.000000+00:00",
+        "missing": {},
+        "observed_at": "2026-07-31T03:30:00.000000+00:00",
+        "price_basis": "latest_vs_previous_close",
+        "research_only": true,
+        "rows": [
+          {
+            "is_limit_up": false,
+            "pct": 4.0000000000000036,
+            "previous_close": 10,
+            "price": 10.4,
+            "provider_at": "2026-07-31T03:30:00.000000+00:00",
+            "source_id": "SYNTHETIC_FIXTURE",
+            "sources": [
+              "watchlist",
+              "yesterday_ladder"
+            ],
+            "symbol": "sh600000",
+            "turnover_yuan": null
+          },
+          {
+            "is_limit_up": false,
+            "pct": -1.9999999999999907,
+            "previous_close": 10,
+            "price": 9.8,
+            "provider_at": "2026-07-31T03:30:00.000000+00:00",
+            "source_id": "SYNTHETIC_FIXTURE",
+            "sources": [
+              "watchlist"
+            ],
+            "symbol": "sz000001",
+            "turnover_yuan": null
+          }
+        ],
+        "schema_version": "observation-workflows.v1",
+        "slot": "11:30",
+        "status": "SAVED",
+        "trade_date": "2026-07-31"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "finished_at": "2026-07-31T03:30:00.000000+00:00",
+          "observation": {
+            "cohort": {
+              "all_expected_present": true,
+              "coverage": 1.0,
+              "expected": 2,
+              "median_pct": 1.0000000000000064,
+              "non_negative": 1,
+              "positive": 1,
+              "samples": 2,
+              "strong_ge_3pct": 1
+            },
+            "cohorts": {
+              "watchlist": {
+                "all_expected_present": true,
+                "coverage": 1.0,
+                "expected": 2,
+                "median_pct": 1.0000000000000064,
+                "non_negative": 1,
+                "positive": 1,
+                "samples": 2,
+                "strong_ge_3pct": 1
+              },
+              "yesterday_ladder": {
+                "all_expected_present": true,
+                "coverage": 1.0,
+                "expected": 1,
+                "median_pct": 4.0000000000000036,
+                "non_negative": 1,
+                "positive": 1,
+                "samples": 1,
+                "strong_ge_3pct": 1
+              }
+            },
+            "cutoff_at": "2026-07-31T03:38:00.000000+00:00",
+            "missing": {},
+            "observed_at": "2026-07-31T03:30:00.000000+00:00",
+            "price_basis": "latest_vs_previous_close",
+            "research_only": true,
+            "rows": [
+              {
+                "is_limit_up": false,
+                "pct": 4.0000000000000036,
+                "previous_close": 10,
+                "price": 10.4,
+                "provider_at": "2026-07-31T03:30:00.000000+00:00",
+                "source_id": "SYNTHETIC_FIXTURE",
+                "sources": [
+                  "watchlist",
+                  "yesterday_ladder"
+                ],
+                "symbol": "sh600000",
+                "turnover_yuan": null
+              },
+              {
+                "is_limit_up": false,
+                "pct": -1.9999999999999907,
+                "previous_close": 10,
+                "price": 9.8,
+                "provider_at": "2026-07-31T03:30:00.000000+00:00",
+                "source_id": "SYNTHETIC_FIXTURE",
+                "sources": [
+                  "watchlist"
+                ],
+                "symbol": "sz000001",
+                "turnover_yuan": null
+              }
+            ],
+            "schema_version": "observation-workflows.v1",
+            "slot": "11:30",
+            "status": "SAVED",
+            "trade_date": "2026-07-31"
+          },
+          "reason": null,
+          "started_at": "2026-07-31T03:30:00.000000+00:00",
+          "status": "SAVED"
+        }
+      ],
+      "reason": null
+    },
+    {
+      "slot": "14:00",
+      "state": "SAVED",
+      "cutoff_at": "2026-07-31T06:08:00.000000+00:00",
+      "observation": {
+        "cohort": {
+          "all_expected_present": true,
+          "coverage": 1.0,
+          "expected": 2,
+          "median_pct": 1.0000000000000064,
+          "non_negative": 1,
+          "positive": 1,
+          "samples": 2,
+          "strong_ge_3pct": 1
+        },
+        "cohorts": {
+          "watchlist": {
+            "all_expected_present": true,
+            "coverage": 1.0,
+            "expected": 2,
+            "median_pct": 1.0000000000000064,
+            "non_negative": 1,
+            "positive": 1,
+            "samples": 2,
+            "strong_ge_3pct": 1
+          },
+          "yesterday_ladder": {
+            "all_expected_present": true,
+            "coverage": 1.0,
+            "expected": 1,
+            "median_pct": 4.0000000000000036,
+            "non_negative": 1,
+            "positive": 1,
+            "samples": 1,
+            "strong_ge_3pct": 1
+          }
+        },
+        "cutoff_at": "2026-07-31T06:08:00.000000+00:00",
+        "missing": {},
+        "observed_at": "2026-07-31T06:00:00.000000+00:00",
+        "price_basis": "latest_vs_previous_close",
+        "research_only": true,
+        "rows": [
+          {
+            "is_limit_up": false,
+            "pct": 4.0000000000000036,
+            "previous_close": 10,
+            "price": 10.4,
+            "provider_at": "2026-07-31T06:00:00.000000+00:00",
+            "source_id": "SYNTHETIC_FIXTURE",
+            "sources": [
+              "watchlist",
+              "yesterday_ladder"
+            ],
+            "symbol": "sh600000",
+            "turnover_yuan": null
+          },
+          {
+            "is_limit_up": false,
+            "pct": -1.9999999999999907,
+            "previous_close": 10,
+            "price": 9.8,
+            "provider_at": "2026-07-31T06:00:00.000000+00:00",
+            "source_id": "SYNTHETIC_FIXTURE",
+            "sources": [
+              "watchlist"
+            ],
+            "symbol": "sz000001",
+            "turnover_yuan": null
+          }
+        ],
+        "schema_version": "observation-workflows.v1",
+        "slot": "14:00",
+        "status": "SAVED",
+        "trade_date": "2026-07-31"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "finished_at": "2026-07-31T06:00:00.000000+00:00",
+          "observation": {
+            "cohort": {
+              "all_expected_present": true,
+              "coverage": 1.0,
+              "expected": 2,
+              "median_pct": 1.0000000000000064,
+              "non_negative": 1,
+              "positive": 1,
+              "samples": 2,
+              "strong_ge_3pct": 1
+            },
+            "cohorts": {
+              "watchlist": {
+                "all_expected_present": true,
+                "coverage": 1.0,
+                "expected": 2,
+                "median_pct": 1.0000000000000064,
+                "non_negative": 1,
+                "positive": 1,
+                "samples": 2,
+                "strong_ge_3pct": 1
+              },
+              "yesterday_ladder": {
+                "all_expected_present": true,
+                "coverage": 1.0,
+                "expected": 1,
+                "median_pct": 4.0000000000000036,
+                "non_negative": 1,
+                "positive": 1,
+                "samples": 1,
+                "strong_ge_3pct": 1
+              }
+            },
+            "cutoff_at": "2026-07-31T06:08:00.000000+00:00",
+            "missing": {},
+            "observed_at": "2026-07-31T06:00:00.000000+00:00",
+            "price_basis": "latest_vs_previous_close",
+            "research_only": true,
+            "rows": [
+              {
+                "is_limit_up": false,
+                "pct": 4.0000000000000036,
+                "previous_close": 10,
+                "price": 10.4,
+                "provider_at": "2026-07-31T06:00:00.000000+00:00",
+                "source_id": "SYNTHETIC_FIXTURE",
+                "sources": [
+                  "watchlist",
+                  "yesterday_ladder"
+                ],
+                "symbol": "sh600000",
+                "turnover_yuan": null
+              },
+              {
+                "is_limit_up": false,
+                "pct": -1.9999999999999907,
+                "previous_close": 10,
+                "price": 9.8,
+                "provider_at": "2026-07-31T06:00:00.000000+00:00",
+                "source_id": "SYNTHETIC_FIXTURE",
+                "sources": [
+                  "watchlist"
+                ],
+                "symbol": "sz000001",
+                "turnover_yuan": null
+              }
+            ],
+            "schema_version": "observation-workflows.v1",
+            "slot": "14:00",
+            "status": "SAVED",
+            "trade_date": "2026-07-31"
+          },
+          "reason": null,
+          "started_at": "2026-07-31T06:00:00.000000+00:00",
+          "status": "SAVED"
+        }
+      ],
+      "reason": null
+    },
+    {
+      "slot": "15:00",
+      "state": "SAVED",
+      "cutoff_at": "2026-07-31T07:08:00.000000+00:00",
+      "observation": {
+        "cohort": {
+          "all_expected_present": true,
+          "coverage": 1.0,
+          "expected": 2,
+          "median_pct": 1.0000000000000064,
+          "non_negative": 1,
+          "positive": 1,
+          "samples": 2,
+          "strong_ge_3pct": 1
+        },
+        "cohorts": {
+          "watchlist": {
+            "all_expected_present": true,
+            "coverage": 1.0,
+            "expected": 2,
+            "median_pct": 1.0000000000000064,
+            "non_negative": 1,
+            "positive": 1,
+            "samples": 2,
+            "strong_ge_3pct": 1
+          },
+          "yesterday_ladder": {
+            "all_expected_present": true,
+            "coverage": 1.0,
+            "expected": 1,
+            "median_pct": 4.0000000000000036,
+            "non_negative": 1,
+            "positive": 1,
+            "samples": 1,
+            "strong_ge_3pct": 1
+          }
+        },
+        "cutoff_at": "2026-07-31T07:08:00.000000+00:00",
+        "missing": {},
+        "observed_at": "2026-07-31T07:00:00.000000+00:00",
+        "price_basis": "latest_vs_previous_close",
+        "research_only": true,
+        "rows": [
+          {
+            "is_limit_up": false,
+            "pct": 4.0000000000000036,
+            "previous_close": 10,
+            "price": 10.4,
+            "provider_at": "2026-07-31T07:00:00.000000+00:00",
+            "source_id": "SYNTHETIC_FIXTURE",
+            "sources": [
+              "watchlist",
+              "yesterday_ladder"
+            ],
+            "symbol": "sh600000",
+            "turnover_yuan": null
+          },
+          {
+            "is_limit_up": false,
+            "pct": -1.9999999999999907,
+            "previous_close": 10,
+            "price": 9.8,
+            "provider_at": "2026-07-31T07:00:00.000000+00:00",
+            "source_id": "SYNTHETIC_FIXTURE",
+            "sources": [
+              "watchlist"
+            ],
+            "symbol": "sz000001",
+            "turnover_yuan": null
+          }
+        ],
+        "schema_version": "observation-workflows.v1",
+        "slot": "15:00",
+        "status": "SAVED",
+        "trade_date": "2026-07-31"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "finished_at": "2026-07-31T07:00:00.000000+00:00",
+          "observation": {
+            "cohort": {
+              "all_expected_present": true,
+              "coverage": 1.0,
+              "expected": 2,
+              "median_pct": 1.0000000000000064,
+              "non_negative": 1,
+              "positive": 1,
+              "samples": 2,
+              "strong_ge_3pct": 1
+            },
+            "cohorts": {
+              "watchlist": {
+                "all_expected_present": true,
+                "coverage": 1.0,
+                "expected": 2,
+                "median_pct": 1.0000000000000064,
+                "non_negative": 1,
+                "positive": 1,
+                "samples": 2,
+                "strong_ge_3pct": 1
+              },
+              "yesterday_ladder": {
+                "all_expected_present": true,
+                "coverage": 1.0,
+                "expected": 1,
+                "median_pct": 4.0000000000000036,
+                "non_negative": 1,
+                "positive": 1,
+                "samples": 1,
+                "strong_ge_3pct": 1
+              }
+            },
+            "cutoff_at": "2026-07-31T07:08:00.000000+00:00",
+            "missing": {},
+            "observed_at": "2026-07-31T07:00:00.000000+00:00",
+            "price_basis": "latest_vs_previous_close",
+            "research_only": true,
+            "rows": [
+              {
+                "is_limit_up": false,
+                "pct": 4.0000000000000036,
+                "previous_close": 10,
+                "price": 10.4,
+                "provider_at": "2026-07-31T07:00:00.000000+00:00",
+                "source_id": "SYNTHETIC_FIXTURE",
+                "sources": [
+                  "watchlist",
+                  "yesterday_ladder"
+                ],
+                "symbol": "sh600000",
+                "turnover_yuan": null
+              },
+              {
+                "is_limit_up": false,
+                "pct": -1.9999999999999907,
+                "previous_close": 10,
+                "price": 9.8,
+                "provider_at": "2026-07-31T07:00:00.000000+00:00",
+                "source_id": "SYNTHETIC_FIXTURE",
+                "sources": [
+                  "watchlist"
+                ],
+                "symbol": "sz000001",
+                "turnover_yuan": null
+              }
+            ],
+            "schema_version": "observation-workflows.v1",
+            "slot": "15:00",
+            "status": "SAVED",
+            "trade_date": "2026-07-31"
+          },
+          "reason": null,
+          "started_at": "2026-07-31T07:00:00.000000+00:00",
+          "status": "SAVED"
+        }
+      ],
+      "reason": null
+    }
+  ],
+  "events": [
+    {
+      "id": "267cbc1361b85c5b9f4e8c3a7766b406db023468791a3364612fe9080dc6ccaa",
+      "kind": "RAPID_UP",
+      "move_pct": 2.8846153846153744,
+      "observed_at": "2026-07-31T02:02:10.000000+00:00",
+      "provider_at": "2026-07-31T02:02:10.000000+00:00",
+      "rule_version": "move-180s-1.5pct-cooldown300s.v1",
+      "source_id": "SYNTHETIC_FIXTURE",
+      "sources": [
+        "watchlist",
+        "yesterday_ladder"
+      ],
+      "symbol": "sh600000",
+      "trade_date": "2026-07-31"
+    }
+  ],
+  "event_coverage": {
+    "total": 1,
+    "returned": 1,
+    "has_more": false
+  },
+  "tasks": [
+    {
+      "acknowledged": false,
+      "attempts": 1,
+      "external_delivery": "DISABLED",
+      "finished_at": "2026-07-31T07:40:00.000000+00:00",
+      "id": "2026-07-31:close_digest",
+      "kind": "close_digest",
+      "output": {
+        "advice": null,
+        "dragon_tiger": null,
+        "facts": null,
+        "missing": [
+          "dragon_tiger",
+          "qualified_close_facts"
+        ],
+        "observation_basis": "CURRENT_STORED_CLOSE_RESEARCH",
+        "status": "PARTIAL",
+        "trade_date": "2026-07-31"
+      },
+      "reason": null,
+      "started_at": "2026-07-31T07:40:00.000000+00:00",
+      "status": "PARTIAL",
+      "trade_date": "2026-07-31"
+    },
+    {
+      "acknowledged": false,
+      "attempts": 1,
+      "external_delivery": "DISABLED",
+      "finished_at": "2026-07-31T01:05:00.000000+00:00",
+      "id": "2026-07-31:premarket",
+      "kind": "premarket",
+      "output": {
+        "missing": [],
+        "regulatory_distance": "NOT_EVALUATED",
+        "sections": {
+          "ladder_announcements": {
+            "captured_at": "2026-07-31T01:05:00.000000+00:00",
+            "complete": true,
+            "rows": [
+              {
+                "published_at": "2026-07-31T01:05:00.000000+00:00",
+                "title": "纯合成事实条目",
+                "unit": "%",
+                "value": 1.2
+              }
+            ],
+            "source_id": "SYNTHETIC_FIXTURE",
+            "source_total": 1,
+            "status": "COMPLETE",
+            "trade_date": "2026-07-31"
+          },
+          "new_listings": {
+            "captured_at": "2026-07-31T01:05:00.000000+00:00",
+            "complete": true,
+            "rows": [
+              {
+                "published_at": "2026-07-31T01:05:00.000000+00:00",
+                "title": "纯合成事实条目",
+                "unit": "%",
+                "value": 1.2
+              }
+            ],
+            "source_id": "SYNTHETIC_FIXTURE",
+            "source_total": 1,
+            "status": "COMPLETE",
+            "trade_date": "2026-07-31"
+          },
+          "overseas": {
+            "captured_at": "2026-07-31T01:05:00.000000+00:00",
+            "complete": true,
+            "rows": [
+              {
+                "published_at": "2026-07-31T01:05:00.000000+00:00",
+                "title": "纯合成事实条目",
+                "unit": "%",
+                "value": 1.2
+              }
+            ],
+            "source_id": "SYNTHETIC_FIXTURE",
+            "source_total": 1,
+            "status": "COMPLETE",
+            "trade_date": "2026-07-31"
+          },
+          "suspensions": {
+            "captured_at": "2026-07-31T01:05:00.000000+00:00",
+            "complete": true,
+            "rows": [
+              {
+                "published_at": "2026-07-31T01:05:00.000000+00:00",
+                "title": "纯合成事实条目",
+                "unit": "%",
+                "value": 1.2
+              }
+            ],
+            "source_id": "SYNTHETIC_FIXTURE",
+            "source_total": 1,
+            "status": "COMPLETE",
+            "trade_date": "2026-07-31"
+          }
+        },
+        "status": "COMPLETE",
+        "trade_date": "2026-07-31"
+      },
+      "reason": null,
+      "started_at": "2026-07-31T01:05:00.000000+00:00",
+      "status": "COMPLETE",
+      "trade_date": "2026-07-31"
+    },
+    {
+      "acknowledged": false,
+      "attempts": 1,
+      "external_delivery": "DISABLED",
+      "finished_at": "2026-07-31T08:30:00.000000+00:00",
+      "id": "2026-07-31:verification_due",
+      "kind": "verification_due",
+      "output": {
+        "coverage": {
+          "eligible_plans": 0,
+          "evaluated_plans": 0,
+          "has_more": false,
+          "maximum": 20,
+          "order": "latest_set_date_first"
+        },
+        "items": [],
+        "status": "COMPLETE"
+      },
+      "reason": null,
+      "started_at": "2026-07-31T08:30:00.000000+00:00",
+      "status": "COMPLETE",
+      "trade_date": "2026-07-31"
+    },
+    {
+      "acknowledged": false,
+      "attempts": 1,
+      "external_delivery": "DISABLED",
+      "finished_at": "2026-07-31T08:15:00.000000+00:00",
+      "id": "2026-07-31:watch_changes",
+      "kind": "watch_changes",
+      "output": {
+        "missing": [],
+        "status": "COMPLETE",
+        "symbols": [
+          {
+            "count": 1,
+            "since": "2026-07-31T08:15:00.000000+00:00",
+            "status": "COMPLETE",
+            "symbol": "sh600000"
+          },
+          {
+            "count": 1,
+            "since": "2026-07-31T08:15:00.000000+00:00",
+            "status": "COMPLETE",
+            "symbol": "sz000001"
+          }
+        ],
+        "universe_status": "EXPLICIT_WATCHLIST"
+      },
+      "reason": null,
+      "started_at": "2026-07-31T08:15:00.000000+00:00",
+      "status": "COMPLETE",
+      "trade_date": "2026-07-31"
+    }
+  ],
+  "due": [],
+  "due_coverage": {
+    "eligible_plans": 0,
+    "evaluated_plans": 0,
+    "has_more": false,
+    "order": "latest_set_date_first",
+    "maximum": 20
+  },
+  "schedule": {
+    "premarket": "09:05",
+    "close_digest": "15:40",
+    "watch_changes": "16:15",
+    "verification_due": "16:30"
+  },
+  "synthetic": true,
+  "fixture_label": "纯合成离线演示 · 不写真实归档 · 非实盘验收"
+}

@@ -297,7 +297,7 @@ def test_snapshot_filters_invalid_securities(monkeypatch):
         _row("12345", "五位代码"),           # 非 6 位
         _row("600ABC", "非数字"),            # 非数字
         _row("000001", ""),                  # 空名称
-        _row("000001", "   "),               # 空白名称
+        _row("000003", "   "),               # 空白名称（独立证券）
         _row("000002", "正常股", f2=10.0),
     ]
 
@@ -309,3 +309,10 @@ def test_snapshot_filters_invalid_securities(monkeypatch):
     assert [x["code"] for x in out] == ["600519", "000002"]
     assert all(len(x["code"]) == 6 and x["code"].isdigit() for x in out)
     assert all(x["name"].strip() for x in out)
+
+
+    # A filtered row still represents a raw security. Repeating its identity
+    # cannot count as a second security toward upstream total.
+    rows[4] = _row("000001", "   ")
+    with pytest.raises(RuntimeError, match="overlapping security"):
+        astock.a_share_snapshot()

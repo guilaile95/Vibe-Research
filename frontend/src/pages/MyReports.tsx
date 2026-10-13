@@ -1,3 +1,5 @@
+import { LocalReportOcr } from "@/components/reports/LocalReportOcr";
+import { ReportPageReader } from "@/components/reports/ReportPageReader";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Upload, FileText, Trash2, Download, Loader2, FolderOpen, Search, Pencil, ExternalLink, Save, X } from "lucide-react";
@@ -66,19 +68,32 @@ export function MyReports() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [drag, setDrag] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const uploadBusyRef = useRef(false);
+  const listRequestRef = useRef(0);
 
   const [view, setView] = useState<MyReportsBrowseGroup>("industry");
 
   const [q, setQ] = useState("");
-  const [searching, setSearching] = useState(false);
-  const [results, setResults] = useState<MyReportTextHit[] | null>(null);
+  const searching = Boolean(q.trim());
+  const [searchState, setSearchState] = useState<{
+    query: string; status: "loading" | "success" | "error"; results: MyReportTextHit[];
+  }>({ query: "", status: "loading", results: [] });
+  const [searchRetry, setSearchRetry] = useState(0);
+  const currentSearch = searchState.query === q.trim();
+  const searchLoading = !currentSearch || searchState.status === "loading";
+  const searchFailed = currentSearch && searchState.status === "error";
+  const results = currentSearch && searchState.status === "success" ? searchState.results : [];
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [indexBusy, setIndexBusy] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [edit, setEdit] = useState<EditForm>(EMPTY_EDIT);
   const [editBusy, setEditBusy] = useState(false);
+  const editBusyRef = useRef(false);
+  const editSessionRef = useRef(0);
+  const mountedRef = useRef(false);
   const [editErr, setEditErr] = useState<string | null>(null);
+  const [detachedSaveErr, setDetachedSaveErr] = useState<{ id: string; message: string } | null>(null);
   const [hasLoaded, setHasLoaded] = useState(false);
 
   // URL 查询参数：report（定位高亮）/ sector / institution / year / month。
@@ -106,52 +121,82 @@ export function MyReports() {
   }, [filterSector, filterInstitution, filterYear, filterMonth]);
 
   const load = async () => {
+    const generation = ++listRequestRef.current;
+    const active = () => generation === listRequestRef.current;
     try {
       const data = await api.myReports();
+      if (!active()) return true; // A newer refresh owns the result.
       setReports(data);
       setLoadFailed(false);
       setErr(null);
+      return true;
     } catch (e) {
+      if (!active()) return true;
       setErr(e instanceof ApiError ? e.message : "加载研报列表失败");
       setLoadFailed(true);
+      return false;
     } finally {
-      setHasLoaded(true);
+      if (active()) setHasLoaded(true);
     }
   };
   useEffect(() => {
+    mountedRef.current = true;
     load();
+    return () => {
+      mountedRef.current = false;
+      editSessionRef.current += 1;
+      listRequestRef.current += 1;
+    };
   }, []);
 
   useEffect(() => {
-    if (!q.trim()) {
-      setSearching(false);
-      setResults(null);
-      return;
-    }
-    setSearching(true);
+    const query = q.trim();
+    if (!query) return;
+    const controller = new AbortController();
     let alive = true;
-    api.searchMyReportText(q)
-      .then((r) => { if (alive) setResults(r); })
-      .catch(() => { if (alive) setResults([]); });
-    return () => { alive = false; };
-  }, [q]);
+    setSearchState({ query, status: "loading", results: [] });
+    const timer = window.setTimeout(() => {
+      api.searchMyReportText(query, undefined, 20, controller.signal)
+        .then((results) => { if (alive) setSearchState({ query, status: "success", results }); })
+        .catch(() => { if (alive) setSearchState({ query, status: "error", results: [] }); });
+    }, 250);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [q, searchRetry]);
 
   const refreshAll = async () => {
-    await load();
+    // Successful archive/index mutations also invalidate an unchanged query.
+    // The search effect reads the latest query, even if it changed mid-request.
+    setSearchState((current) => ({ ...current, status: "loading", results: [] }));
+    setSearchRetry((value) => value + 1);
+    return load();
   };
 
   const upload = async (files: FileList | File[]) => {
+    if (uploadBusyRef.current) return;
+    uploadBusyRef.current = true;
     setBusy(true);
     setErr(null);
+    let uploaded = 0;
+    let currentName = "";
     try {
       for (const f of Array.from(files)) {
+        currentName = f.name;
         const b64 = await fileToB64(f);
         await api.uploadReport(f.name, b64);
+        uploaded += 1;
       }
       await refreshAll();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : "上传失败");
+      // Earlier files are already persisted: a later failure must not hide them.
+      const refreshed = uploaded === 0 || await refreshAll();
+      const detail = e instanceof ApiError ? e.message : "上传失败";
+      setErr(`已上传 ${uploaded} 份；「${currentName}」上传失败：${detail}。后续文件未上传。${refreshed ? "" : "列表刷新失败，请刷新页面核对已上传文件，勿重复上传。"}`);
     } finally {
+      uploadBusyRef.current = false;
       setBusy(false);
     }
   };
@@ -210,6 +255,7 @@ export function MyReports() {
   };
 
   const startEdit = (r: MyReport) => {
+    editSessionRef.current += 1;
     setEditingId(r.id);
     setEdit({
       title: r.title ?? "",
@@ -222,8 +268,21 @@ export function MyReports() {
     setEditErr(null);
   };
 
+  const cancelEdit = () => {
+    editSessionRef.current += 1;
+    setEditingId(null);
+    setEditErr(null);
+  };
+
+  const updateEdit = (next: EditForm | ((previous: EditForm) => EditForm)) => {
+    // Edits made while a save is pending belong to a new unsaved draft.
+    editSessionRef.current += 1;
+    setEdit(next);
+    setEditErr(null);
+  };
+
   const toggleSectorKey = (key: string) => {
-    setEdit((prev) => ({
+    updateEdit((prev) => ({
       ...prev,
       sector_keys: prev.sector_keys.includes(key)
         ? prev.sector_keys.filter((k) => k !== key)
@@ -232,8 +291,14 @@ export function MyReports() {
   };
 
   const saveEdit = async (id: string) => {
+    // State alone cannot prevent two invocations before React commits a render.
+    if (editBusyRef.current || !mountedRef.current) return;
+    editBusyRef.current = true;
+    const session = editSessionRef.current;
+    const ownsEditor = () => mountedRef.current && session === editSessionRef.current;
     setEditBusy(true);
     setEditErr(null);
+    setDetachedSaveErr((previous) => previous?.id === id ? null : previous);
     try {
       // 始终发送字符串（含 ""）：后端 "" 清空字段，缺省则保留。
       await api.patchReport(id, {
@@ -244,13 +309,22 @@ export function MyReports() {
         source_url: edit.source_url,
         source_kind: edit.source_kind,
       });
-      setEditingId(null);
-      await refreshAll();
+      if (!mountedRef.current) return;
+      if (ownsEditor()) setEditingId(null);
     } catch (e) {
-      setEditErr(e instanceof ApiError ? e.message : "保存失败");
+      if (!mountedRef.current) return;
+      const detail = e instanceof ApiError ? e.message : "保存失败";
+      if (ownsEditor()) setEditErr(detail);
+      else setDetachedSaveErr({ id, message: `研报「${edit.title || id}」保存失败：${detail}` });
+      return;
     } finally {
-      setEditBusy(false);
+      editBusyRef.current = false;
+      if (mountedRef.current) setEditBusy(false);
     }
+    // The PATCH is settled. Readback owns its own generation and list error state;
+    // an unbounded GET must not hold the mutation lock for subsequent editors.
+    // Start its generation synchronously so older reads cannot overwrite this save.
+    await refreshAll();
   };
 
   const displayTitle = (r: MyReport) => r.title || r.name;
@@ -295,7 +369,7 @@ export function MyReports() {
             </p>
             <div className="mt-1 flex flex-wrap items-center gap-1">
               <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                {r.text_index_status === "SEARCHABLE" ? "正文可检索"
+                {r.text_index_status === "SEARCHABLE" ? (r.text_index_error === "LOCAL_OCR_UNVERIFIED" ? "OCR 可检索 · 未核验" : "正文可检索")
                   : r.text_index_status === "OCR_REQUIRED" ? "扫描件：需要 OCR"
                     : r.text_index_status === "ARCHIVED_NOT_SEARCHABLE" ? "仅归档"
                       : r.text_index_status === "INDEX_ERROR" ? "索引失败"
@@ -328,6 +402,7 @@ export function MyReports() {
                 </a>
               )}
             </div>
+            <LocalReportOcr report={r} onIndexed={refreshAll} />
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {(r.text_index_status === "NOT_INDEXED" || r.text_index_status === "INDEX_ERROR") && (
@@ -370,7 +445,7 @@ export function MyReports() {
                 <span className="text-muted-foreground">标题</span>
                 <input
                   value={edit.title}
-                  onChange={(e) => setEdit({ ...edit, title: e.target.value })}
+                  onChange={(e) => updateEdit({ ...edit, title: e.target.value })}
                   className="mt-0.5 w-full rounded border border-border/50 bg-background px-2 py-1 text-sm"
                   placeholder={r.name}
                 />
@@ -379,7 +454,7 @@ export function MyReports() {
                 <span className="text-muted-foreground">机构</span>
                 <input
                   value={edit.institution}
-                  onChange={(e) => setEdit({ ...edit, institution: e.target.value })}
+                  onChange={(e) => updateEdit({ ...edit, institution: e.target.value })}
                   className="mt-0.5 w-full rounded border border-border/50 bg-background px-2 py-1 text-sm"
                   placeholder="未确认机构"
                 />
@@ -388,7 +463,7 @@ export function MyReports() {
                 <span className="text-muted-foreground">发布日期</span>
                 <input
                   value={edit.publish_date}
-                  onChange={(e) => setEdit({ ...edit, publish_date: e.target.value })}
+                  onChange={(e) => updateEdit({ ...edit, publish_date: e.target.value })}
                   className="mt-0.5 w-full rounded border border-border/50 bg-background px-2 py-1 text-sm"
                   placeholder="YYYY-MM-DD / YYYY-MM / YYYY"
                 />
@@ -397,7 +472,7 @@ export function MyReports() {
                 <span className="text-muted-foreground">来源类型</span>
                 <select
                   value={edit.source_kind}
-                  onChange={(e) => setEdit({ ...edit, source_kind: e.target.value })}
+                  onChange={(e) => updateEdit({ ...edit, source_kind: e.target.value })}
                   className="mt-0.5 w-full rounded border border-border/50 bg-background px-2 py-1 text-sm"
                 >
                   <option value="">（未设置）</option>
@@ -410,7 +485,7 @@ export function MyReports() {
                 <span className="text-muted-foreground">来源链接</span>
                 <input
                   value={edit.source_url}
-                  onChange={(e) => setEdit({ ...edit, source_url: e.target.value })}
+                  onChange={(e) => updateEdit({ ...edit, source_url: e.target.value })}
                   className="mt-0.5 w-full rounded border border-border/50 bg-background px-2 py-1 text-sm"
                   placeholder="https://..."
                 />
@@ -447,7 +522,7 @@ export function MyReports() {
                 <Save className="h-3.5 w-3.5" /> {editBusy ? "保存中…" : "保存"}
               </button>
               <button
-                onClick={() => setEditingId(null)}
+                onClick={cancelEdit}
                 className="inline-flex items-center gap-1 rounded border border-border/50 px-2.5 py-1 text-xs text-muted-foreground hover:border-primary/40"
               >
                 <X className="h-3.5 w-3.5" /> 取消
@@ -504,7 +579,7 @@ export function MyReports() {
     <div>
       <PageHeader
         title="我的研报"
-        subtitle="把自己的研报拖进来归档，自动按行业分类。支持按时间·产业·机构浏览与全文检索。文件只存在本地部署目录、不上传、不进任何仓库。"
+        subtitle="把自己的研报拖进来归档，自动按行业分类。支持按时间·产业·机构浏览与全文检索。原文件保存在部署机器、不进代码仓库；发送 AI 问答时，所选上下文会交给你配置的提供方。"
       />
 
       {/* 上传区 */}
@@ -548,9 +623,10 @@ export function MyReports() {
         </div>
       </GlassCard>
 
-      {err && (
+      {(err || detachedSaveErr) && (
         <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-          {err}
+          {err && <p>{err}</p>}
+          {detachedSaveErr && <p>{detachedSaveErr.message}</p>}
         </div>
       )}
 
@@ -597,20 +673,35 @@ export function MyReports() {
           <Search className="h-4 w-4 text-muted-foreground" />
           <input
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setSearchState({ query: e.target.value.trim(), status: "loading", results: [] });
+            }}
             placeholder="搜索研报正文…"
             className="w-40 rounded border border-border/50 bg-background px-2 py-1 text-sm placeholder:text-muted-foreground/50 sm:w-56"
           />
         </div>
       </div>
 
+      {selectedIds.length > 0 && <ReportPageReader reports={reports.filter(r => selectedIds.includes(r.id))} />}
+
       {/* 搜索结果 */}
       {searching && (
         <div className="mb-4 space-y-2">
           <p className="text-xs text-muted-foreground">
-            搜索「{q}」的结果（{results?.length ?? 0} 条）
+            搜索「{q.trim()}」{!searchLoading && !searchFailed ? `的结果（${results.length} 条）` : ""}
           </p>
-          {results && results.length > 0 ? (
+          {searchLoading ? (
+            <GlassCard><p className="py-6 text-center text-sm text-muted-foreground" role="status">正在搜索研报…</p></GlassCard>
+          ) : searchFailed ? (
+            <GlassCard>
+              <p role="alert" className="text-sm text-destructive">搜索失败，请重试。</p>
+              <button type="button" onClick={() => {
+                setSearchState({ query: q.trim(), status: "loading", results: [] });
+                setSearchRetry((value) => value + 1);
+              }} className="mt-2 text-sm text-primary">重试搜索</button>
+            </GlassCard>
+          ) : results.length > 0 ? (
             <GlassCard>
               <div className="divide-y divide-border/30">
                 {results.map((hit) => (
@@ -619,6 +710,7 @@ export function MyReports() {
                     <p className="text-[11px] text-muted-foreground">
                       report_id={hit.report_id}{hit.page ? ` · 第 ${hit.page} 页` : " · 页码不可用"}
                     </p>
+                    {hit.extraction_kind === "LOCAL_OCR_UNVERIFIED" && <p className="mt-1 text-xs text-warning">本机 OCR 摘录 · 未核验，引用前核对原页</p>}
                     <p className="mt-1 text-sm text-muted-foreground">{hit.snippet}</p>
                   </div>
                 ))}

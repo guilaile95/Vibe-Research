@@ -43,6 +43,7 @@ class EvidenceCreateIn(BaseModel):
 
 
 class EvidenceUpdateIn(BaseModel):
+    expected_edit_token: Annotated[str, Field(strict=True, pattern=r"^evidence-edit\.v1:[0-9a-f]{64}$")]
     model_config = ConfigDict(extra="forbid")
     evidence_type: str
     claim: str
@@ -138,6 +139,8 @@ def _raise_service_error(e: Exception):
     """将服务层异常转换为 HTTP 异常并 raise。"""
     if isinstance(e, svc.ValidationError):
         raise HTTPException(status_code=422, detail=str(e))
+    if isinstance(e, svc.EvidenceEditConflictError):
+        raise HTTPException(status_code=409, detail=str(e))
     if isinstance(e, svc.EvidenceNotFoundError):
         raise HTTPException(status_code=404, detail=str(e))
     if isinstance(e, svc.ThesisNotFoundError):
@@ -235,12 +238,15 @@ def update_evidence(evidence_id: str, body: EvidenceUpdateIn):
 
 
 @router.delete("/evidence/{evidence_id}")
-def delete_evidence(evidence_id: str, confirm: bool = Query(False)):
+def delete_evidence(evidence_id: str, confirm: bool = Query(False),
+                    expected_edit_token: str | None = Query(
+                        None, description="Required with confirm=true; use the edit_token read with this Evidence"
+                    )):
     if not confirm:
         raise HTTPException(status_code=400, detail="删除操作需要 confirm=true 确认")
     db = _resolve_db()
     try:
-        result = svc.soft_delete_evidence(db, evidence_id)
+        result = svc.soft_delete_evidence(db, evidence_id, expected_edit_token)
         return {"data": result}
     except Exception as e:
         _raise_service_error(e)

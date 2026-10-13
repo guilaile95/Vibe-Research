@@ -10,7 +10,7 @@ import hashlib
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import decision_evidence_service
 import portfolio_advice_trace_adapter as adapter
@@ -66,6 +66,8 @@ def archive_signal_ledger(
     advice_result: Mapping[str, Any],
     context_data: Mapping[str, Any] | None = None,
     db_path: str | Path | None = None,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Extract signal entries and outcomes from authoritative advice and archive.
 
@@ -331,6 +333,7 @@ def archive_signal_ledger(
             market_status=market_status,
             source_fingerprint=source_fingerprint,
             db_path=db_path,
+            **({"should_cancel": should_cancel} if should_cancel is not None else {}),
         )
         return {
             "status": "success",
@@ -338,6 +341,8 @@ def archive_signal_ledger(
             "signal_entries_count": len(signal_entries),
             "decision_outcomes_count": len(decision_outcomes),
         }
+    except store.trace_store.DecisionTraceWriteCancelledError:
+        return {"status": "cancelled", "decision_run_id": decision_run_id}
     except Exception as exc:
         logger.warning("Failed to save signal ledger bundle: %s", exc)
         return {

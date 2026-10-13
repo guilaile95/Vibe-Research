@@ -99,7 +99,8 @@ def test_breadth_api_unexpected_error_502(monkeypatch):
     body = r.json()
     detail = body.get("detail", "")
     assert "市场广度异常" in detail
-    assert "unexpected" in detail
+    assert "unexpected" not in detail
+    assert "请稍后重试" in detail
     assert "data" not in body or body.get("data") is None
 
 

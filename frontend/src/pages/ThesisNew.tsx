@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Save, Loader2, Plus, X } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { useUnsavedChanges } from "@/components/ui/UnsavedChangesDialog";
 import { api, ApiError, type CampaignRecord, type CampaignStrategy } from "@/lib/api";
 import { STRATEGY_HORIZON_RANGES, defaultHorizonForStrategy } from "@/lib/campaignThesis";
 import { safeInternalReturnTo } from "@/lib/internalReturnTo";
@@ -20,16 +21,17 @@ interface ArrayEditorProps {
   label: string;
   placeholder?: string;
   items: string[];
+  input: string;
+  onInput: (next: string) => void;
   onChange: (next: string[]) => void;
 }
 
-function ArrayEditor({ label, placeholder, items, onChange }: ArrayEditorProps) {
-  const [input, setInput] = useState("");
+function ArrayEditor({ label, placeholder, items, input, onInput, onChange }: ArrayEditorProps) {
   const add = () => {
     const v = input.trim();
     if (!v) return;
     onChange([...items, v]);
-    setInput("");
+    onInput("");
   };
   return (
     <div>
@@ -37,7 +39,7 @@ function ArrayEditor({ label, placeholder, items, onChange }: ArrayEditorProps) 
       <div className="mt-0.5 flex gap-1.5">
         <input
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => onInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
@@ -87,6 +89,11 @@ function parseCampaignStrategy(value: string | null): CampaignStrategy | null {
 }
 
 export function ThesisNew() {
+  const { search } = useLocation();
+  return <ThesisNewForm key={search} />;
+}
+
+function ThesisNewForm() {
   const nav = useNavigate();
   const [searchParams] = useSearchParams();
   const campaignId = searchParams.get("campaign_id") || "";
@@ -123,6 +130,11 @@ export function ThesisNew() {
     free_notes: "",
   });
   const [busy, setBusy] = useState(false);
+  const saving = useRef(false);
+  const [baseline, setBaseline] = useState(form);
+  const [pendingItems, setPendingItems] = useState({ core_claims: "", catalysts: "", risks: "", invalidation_conditions: "" });
+  const dirty = JSON.stringify(form) !== JSON.stringify(baseline) || Object.values(pendingItems).some(Boolean);
+  const { complete, dialog } = useUnsavedChanges(dirty, busy);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -167,6 +179,14 @@ export function ThesisNew() {
       }
       setCampaign(actual);
       setCampaignStatus("ready");
+      setBaseline((previous) => ({
+        ...previous,
+        subject_type: "stock",
+        subject_id: actual.security_code,
+        strategy: actual.strategy,
+        horizon_min: String(horizon.min),
+        horizon_max: String(horizon.max),
+      }));
       setForm((previous) => {
         return {
           ...previous,
@@ -192,6 +212,7 @@ export function ThesisNew() {
     setForm((p) => ({ ...p, [k]: v }));
 
   const submit = async () => {
+    if (saving.current) return;
     if (campaignContextBlocked) {
       setErr(campaignError || "Campaign 上下文不可用，已禁止 Formal Thesis setup");
       return;
@@ -215,6 +236,7 @@ export function ThesisNew() {
       formalHorizon = { min, max };
     }
 
+    saving.current = true;
     setBusy(true);
     setErr(null);
     let createdId: string | null = null;
@@ -224,10 +246,10 @@ export function ThesisNew() {
         subject_id: subjectId,
         title: form.title.trim(),
         summary: form.summary.trim(),
-        core_claims: form.core_claims,
-        catalysts: form.catalysts,
-        risks: form.risks,
-        invalidation_conditions: form.invalidation_conditions,
+        core_claims: [...form.core_claims, ...pendingItems.core_claims.trim() ? [pendingItems.core_claims.trim()] : []],
+        catalysts: [...form.catalysts, ...pendingItems.catalysts.trim() ? [pendingItems.catalysts.trim()] : []],
+        risks: [...form.risks, ...pendingItems.risks.trim() ? [pendingItems.risks.trim()] : []],
+        invalidation_conditions: [...form.invalidation_conditions, ...pendingItems.invalidation_conditions.trim() ? [pendingItems.invalidation_conditions.trim()] : []],
         change_summary: form.change_summary.trim() || "创建投资逻辑",
       };
       const r = await api.thesisCreate(body);
@@ -264,6 +286,7 @@ export function ThesisNew() {
           return_to: returnTo,
         }).toString()}`
         : "";
+      complete();
       nav(`/thesis/${r.thesis.id}${detailQuery}`);
     } catch (e) {
       if (createdId && campaignContext && campaign) {
@@ -274,17 +297,20 @@ export function ThesisNew() {
           return_to: returnTo,
           setup_error: "1",
         });
+        complete();
         nav(`/thesis/${createdId}?${query.toString()}`);
         return;
       }
       setErr(e instanceof ApiError ? e.message : "保存失败");
     } finally {
+      saving.current = false;
       setBusy(false);
     }
   };
 
   return (
     <div>
+      {dialog}
       <Link to={returnTo} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
         <ArrowLeft className="h-4 w-4" /> {campaignContext ? "返回决策待办" : "投资逻辑"}
       </Link>
@@ -306,6 +332,7 @@ export function ThesisNew() {
       )}
 
       <GlassCard>
+        <fieldset disabled={busy}>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className={labelCls}>
             主体类型 <span className="text-destructive">*</span>
@@ -405,6 +432,8 @@ export function ThesisNew() {
               label="核心论点（core_claims）"
               placeholder="回车添加一条核心论点"
               items={form.core_claims}
+              input={pendingItems.core_claims}
+              onInput={(v) => setPendingItems((p) => ({ ...p, core_claims: v }))}
               onChange={(v) => set("core_claims", v)}
             />
           </div>
@@ -413,6 +442,8 @@ export function ThesisNew() {
               label="催化剂（catalysts）"
               placeholder="回车添加一条催化剂"
               items={form.catalysts}
+              input={pendingItems.catalysts}
+              onInput={(v) => setPendingItems((p) => ({ ...p, catalysts: v }))}
               onChange={(v) => set("catalysts", v)}
             />
           </div>
@@ -421,6 +452,8 @@ export function ThesisNew() {
               label="风险（risks）"
               placeholder="回车添加一条风险"
               items={form.risks}
+              input={pendingItems.risks}
+              onInput={(v) => setPendingItems((p) => ({ ...p, risks: v }))}
               onChange={(v) => set("risks", v)}
             />
           </div>
@@ -429,6 +462,8 @@ export function ThesisNew() {
               label="失效条件（invalidation_conditions）"
               placeholder="回车添加一条失效条件，便于后续客观证伪"
               items={form.invalidation_conditions}
+              input={pendingItems.invalidation_conditions}
+              onInput={(v) => setPendingItems((p) => ({ ...p, invalidation_conditions: v }))}
               onChange={(v) => set("invalidation_conditions", v)}
             />
           </div>
@@ -460,6 +495,7 @@ export function ThesisNew() {
             取消
           </Link>
         </div>
+        </fieldset>
       </GlassCard>
     </div>
   );

@@ -1,0 +1,62 @@
+{
+  "schema_version": "feature-adoption-evidence.v1",
+  "as_of": "2026-10-12",
+  "upstream": {
+    "repository": "simonlin1212/vibe-astock",
+    "commit": "d5bf80d2ed1629f8fa602058093f8d41bb0c7ace",
+    "license": "Apache-2.0",
+    "notice": "docs/third-party/vibe-astock-NOTICE"
+  },
+  "features": [
+    {
+      "id": "A20",
+      "implementation": "new native read-only event pricing adapters, archive replay and Intel tab",
+      "source_ids": [
+        "public_polymarket",
+        "public_kalshi"
+      ],
+      "ui": "/intel?tab=events",
+      "contract": [
+        "exact provider question/event, contract and outcome identity",
+        "dollar vs legacy cent convention",
+        "source and observed timestamps separate",
+        "bounded sample/closed/stale/missing/partial state",
+        "price not objective probability"
+      ]
+    },
+    {
+      "id": "A22",
+      "implementation": "new native industry source adapters, archive replay and Intel tab",
+      "source_ids": [
+        "tw_monthly_revenue",
+        "dram_spot_thermo",
+        "cn_commodity_futures",
+        "hiring_anchor_signal"
+      ],
+      "ui": "/intel?tab=industry",
+      "contract": [
+        "Taiwan TWD report month and same-series prior-year denominator; comparable YoY unknown without scope/revision proof",
+        "DRAM exact-grade absence visible; secondary-source USD/chip convention qualified, non-HBM",
+        "commodity continuous identity/exchange/CNY per tonne; delivery/roll unknown, no invented return",
+        "ATS-board-listing dedup and source update/publication dates; count not capacity or hires"
+      ]
+    }
+  ],
+  "http": "GET /api/public-research?source_id=<fixed enum>",
+  "producer": "backend/public_research_archive.py:collect; injected bounded transport required, no automatic live client",
+  "archive": "existing FactLake ProviderObservation raw-byte immutable receipts, bounded snapshot replay",
+  "offline_acceptance": {
+    "backend": "51 passed; zero guarded network attempts",
+    "frontend": "29 passed",
+    "typecheck": "passed",
+    "golden": "strict registered app.app API equality; six synthetic raw provider files",
+    "actual_page_build": "passed",
+    "browser_runtime": "NOT_RUN locally; CI-only desktop/mobile harness authored"
+  },
+  "shared_dependency": "9e452fba bounded read_payload (local cherry-pick 30f5532 is dependency only, do not duplicate at integration)",
+  "live_provider": "NOT_EVALUATED",
+  "collector": "OFF",
+  "model_calls": "NONE",
+  "day1": "NOT_STARTED_BY_THIS_WORK",
+  "source_publication": "integrator only"
+}

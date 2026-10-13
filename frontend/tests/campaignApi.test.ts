@@ -350,3 +350,14 @@ test("listCampaigns builds query params and unwraps list", async () => {
   assert.equal(result.length, 1);
   assert.equal(result[0].campaign_id, DRAFT_CAMPAIGN.campaign_id);
 });
+
+test("Campaign AI consent preview is model-free and generation serializes exact confirmation identity", async () => {
+  reset();
+  await api.previewCampaignAIDraftConsent("campaign-one");
+  assert.match(lastRequest().url, /campaign-one\/ai-draft\/consent-preview$/);
+  assert.equal(lastRequest().body, null);
+  reset();
+  const llm = { provider: "api", model: "synthetic", baseURL: "https://model.example/v1", apiKey: "synthetic" };
+  await api.generateCampaignAIDraft("campaign-one", llm, "a".repeat(64));
+  assert.deepEqual(JSON.parse(lastRequest().body!), { llm, confirm_private_context: true, expected_context_fingerprint: "a".repeat(64) });
+});

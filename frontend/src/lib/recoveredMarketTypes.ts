@@ -61,11 +61,32 @@ export type ScreenerConditionResult = {
   evidence: Record<string, unknown>;
 };
 
+export type ScreenerStockCoverage = {
+  status: "available" | "empty" | "unavailable";
+  returned_rows: number | null;
+  start: string | null;
+  end: string | null;
+  snapshot_id: string | null;
+  artifact_sha256: string | null;
+  cutoff: string | null;
+};
+
+export type ScreenerBatchCoverage = {
+  requested_count: number;
+  with_data_count: number;
+  empty_count: number;
+  failed_count: number;
+  fully_evaluable_count: number;
+  missing_condition_count: number;
+  unavailable_count: number;
+};
+
 export type ScreenerStockResult = {
   code: string;
   bucket: "matched" | "rejected" | "unavailable" | string;
   matched: boolean | null;
   technical_status: string;
+  data_coverage?: ScreenerStockCoverage;
   trade_date: string | null;
   condition_results: ScreenerConditionResult[];
   limitations: string[];
@@ -90,7 +111,7 @@ export type ScreenerResearchData = {
   dataset_id: string;
   provider_id: string;
   adjustment: string;
-  status: "normal" | "unavailable";
+  status: "normal" | "partial" | "unavailable";
   fetched_at: string | null;
   as_of: string | null;
   coverage: ScreenerResearchCoverage | null;
@@ -106,6 +127,7 @@ export type ScreenerEvaluateResult = {
   rejected: ScreenerStockResult[];
   unavailable: ScreenerStockResult[];
   research_data: ScreenerResearchData;
+  batch_coverage?: ScreenerBatchCoverage;
   limitations: string[];
   schema_version: string;
 };
@@ -140,6 +162,7 @@ export type FullMarketFilter = {
 };
 
 export type FullMarketRow = {
+  status?: "normal" | "stale";
   code: string;
   latest_date: string | null;
   latest_close: number | null;
@@ -154,11 +177,13 @@ export type FullMarketRow = {
   current_volume: number | null;
   volume_ratio_20d: number | null;
   observations_count: number;
-  metric_status: Partial<Record<Exclude<FullMarketMetric, "code" | "latest_date">, "normal" | "INSUFFICIENT_HISTORY">>;
+  metric_status: Partial<Record<Exclude<FullMarketMetric, "code" | "latest_date">, "normal" | "INSUFFICIENT_HISTORY" | "STALE">>;
   [key: string]: unknown;
 };
 
 export type FullMarketBreadth = {
+  current_count?: number;
+  stale_count?: number;
   breadth: number | null;
   above_count: number;
   evaluable_count: number;
@@ -171,7 +196,7 @@ export type FullMarketResult = {
   dataset_id: string;
   provider_id: string;
   adjustment: string;
-  status: "normal" | "unavailable";
+  status: "normal" | "partial" | "unavailable";
   fetched_at: string | null;
   as_of: string | null;
   latest_date: string | null;
@@ -181,6 +206,8 @@ export type FullMarketResult = {
     row_count: number;
     code_count: number;
     universe_count: number;
+    current_count?: number;
+    stale_count?: number;
   } | null;
   provenance: {
     source_kind: string | null;

@@ -215,3 +215,30 @@ def test_http_route_validates_code_and_keeps_read_only_envelope(monkeypatch):
 
     assert client.get("/api/stock-relative-context?code=000001").json() == payload
     assert client.get("/api/stock-relative-context?code=ABC").status_code == 422
+
+
+@pytest.mark.parametrize("selected", ["000001", "000003"])
+def test_partial_rdp_keeps_current_metrics_and_rejects_stale_selected_row(selected):
+    read = _reader([
+        _row("000001", .1, .2, .3),
+        _row("000002", .2, .3, .4),
+        _row("000003", .99, .99, .99, latest_date="2026-09-10"),
+    ])
+
+    def partial(**kwargs):
+        return {**read(**kwargs), "status": "partial"}
+
+    result = context.build_stock_relative_context(
+        selected, snapshot_reader=_snapshot, rdp_reader=partial,
+    )
+    assert result["status"] == "partial"
+    assert any("stale" in warning for warning in result["warnings"])
+    for period in result["periods"].values():
+        assert period["market_valid_count"] == period["market_total_count"] == 2
+        assert period["industry_valid_count"] == 2
+        assert period["industry_member_count"] == 3
+        if selected == "000003":
+            assert period["stock_return_pct"] is None
+            assert period["vs_market_pct_points"] is None
+        else:
+            assert period["stock_return_pct"] is not None

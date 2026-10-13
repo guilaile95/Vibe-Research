@@ -1,0 +1,54 @@
+{
+  "2026-07-31": {
+    "schema_version": "short-term-theme-research-archive-v1",
+    "trade_date": "2026-07-31",
+    "status": "unavailable",
+    "reason_codes": [
+      "ARCHIVE_NOT_CONNECTED"
+    ],
+    "message": "题材归档未连接；不会自动启动采集或请求供应商。",
+    "projection": null,
+    "archive_only": true,
+    "ingestion_enabled": false,
+    "point_in_time_claim": "NONE"
+  },
+  "2026-10-08": {
+    "schema_version": "short-term-theme-research-archive-v1",
+    "trade_date": "2026-10-08",
+    "status": "unavailable",
+    "reason_codes": [
+      "ARCHIVE_NOT_CONNECTED"
+    ],
+    "message": "题材归档未连接；不会自动启动采集或请求供应商。",
+    "projection": null,
+    "archive_only": true,
+    "ingestion_enabled": false,
+    "point_in_time_claim": "NONE"
+  },
+  "2026-07-30": {
+    "schema_version": "short-term-theme-research-archive-v1",
+    "trade_date": "2026-07-30",
+    "status": "unavailable",
+    "reason_codes": [
+      "ARCHIVE_NOT_CONNECTED"
+    ],
+    "message": "题材归档未连接；不会自动启动采集或请求供应商。",
+    "projection": null,
+    "archive_only": true,
+    "ingestion_enabled": false,
+    "point_in_time_claim": "NONE"
+  },
+  "2026-07-29": {
+    "schema_version": "short-term-theme-research-archive-v1",
+    "trade_date": "2026-07-29",
+    "status": "unavailable",
+    "reason_codes": [
+      "ARCHIVE_NOT_CONNECTED"
+    ],
+    "message": "题材归档未连接；不会自动启动采集或请求供应商。",
+    "projection": null,
+    "archive_only": true,
+    "ingestion_enabled": false,
+    "point_in_time_claim": "NONE"
+  }
+}

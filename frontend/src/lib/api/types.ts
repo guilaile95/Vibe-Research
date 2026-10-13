@@ -34,6 +34,7 @@ export type MyReportTextIndexStatus =
   | "INDEX_ERROR";
 
 export interface MyReportTextHit {
+  extraction_kind?: "LOCAL_OCR_UNVERIFIED" | "DOCUMENT_TEXT";
   report_id: string;
   title: string;
   name: string;
@@ -47,7 +48,17 @@ export interface MyReportTextHit {
 
 export type ReportChatSource = Pick<MyReportTextHit, "report_id" | "title" | "page">;
 
+export type ReportPageSelection = Omit<ReportPageReadRequest, "selected_report_ids">;
+export interface ReportPageContextMeta extends ReportPageSelection {
+  full_report_read: false;
+  requested: number[];
+  coverage: Record<ReportPageReadStatus, number[]>;
+  returned_chars: number;
+  items: Omit<ReportPageReadResult["items"][number], "text">[];
+}
+
 export interface ReportChatCoverage {
+  page_context?: ReportPageContextMeta;
   selected_count: number;
   matched_report_count: number;
   included_report_count: number;
@@ -115,6 +126,9 @@ export type SectorReportsDiscoveryResult = {
   total_discovered?: number;
   returned?: number;
   truncated?: boolean;
+  /** Older servers omit coverage; absence must not be interpreted as complete. */
+  status?: ReportSourceStatus;
+  source_coverage?: (ReportSourceCoverage & { source_key?: string; status?: ReportSourceStatus })[];
 };
 
 
@@ -490,10 +504,12 @@ export interface IntelDigestLatestResult {
 
 
 export interface Quote {
-  name: string; price: number; last_close: number; change_pct: number;
-  pe_ttm: number; pb: number; mcap_yi: number; turnover_pct: number;
-  limit_up: number; limit_down: number;
-  amount_wan?: number;
+  name: string; price: number; last_close: number | null; change_pct: number | null;
+  pe_ttm: number | null; pb: number | null; mcap_yi: number | null; turnover_pct: number | null;
+  limit_up: number | null; limit_down: number | null;
+  amount_wan?: number | null;
+  data_time?: string | null;
+  trade_date?: string | null;
 }
 
 
@@ -503,12 +519,40 @@ export interface Valuation {
   eps_26e: number | null; eps_27e: number | null; pe_26e: number | null;
   cagr_pct: number | null; peg: number | null; digest_years: number | null;
   analyst_count: number; forecast_note?: string;
+  quote_source?: string | null;
+  quote_data_time?: string | null;
+  quote_trade_date?: string | null;
 }
 
 
 export interface Report {
   title: string; publishDate: string; orgSName: string;
   emRatingName?: string; indvInduName?: string; pdfUrl?: string | null;
+}
+
+export type ReportSourceStatus = "normal" | "partial" | "unavailable";
+
+export type ReportSourceCoverageReason = "REQUEST_LIMIT" | "UNKNOWN_TOTAL" | "TOTAL_CHANGED"
+  | "EMPTY_BEFORE_EXPECTED" | "SOURCE_ERROR" | "MALFORMED_RESPONSE";
+
+/** Completeness is only about the provider's requested page window, never full history. */
+export interface ReportSourceCoverage {
+  scope: "provider_report_page_window";
+  requested_pages: number;
+  reported_total_pages: number | null;
+  expected_pages: number | null;
+  attempted_pages: number;
+  received_pages: number;
+  returned_rows: number;
+  reason: ReportSourceCoverageReason | null;
+  historical_complete: false;
+}
+
+/** Coverage-aware sibling of the legacy reports array API. */
+export interface ReportListResult {
+  data: Report[];
+  status: ReportSourceStatus;
+  source_coverage: ReportSourceCoverage | null;
 }
 
 
@@ -605,13 +649,13 @@ export interface FinancialPeriod {
   period: string | null;
   period_end: string | null;
   report_date: string | null;
-  revenue: string | null; revenue_yoy: string | null;
-  net_profit: string | null; net_profit_yoy: string | null;
-  deduct_net_profit: string | null; deduct_net_profit_yoy: string | null;
-  eps: string | null; bvps: string | null; roe: string | null;
-  gross_margin: string | null; net_margin: string | null; op_cf_ps: string | null;
-  current_ratio: string | null; quick_ratio: string | null;
-  debt_to_equity_ratio: string | null; debt_ratio: string | null;
+  revenue: string | number | null; revenue_yoy: string | number | null;
+  net_profit: string | number | null; net_profit_yoy: string | number | null;
+  deduct_net_profit: string | number | null; deduct_net_profit_yoy: string | number | null;
+  eps: string | number | null; bvps: string | number | null; roe: string | number | null;
+  gross_margin: string | number | null; net_margin: string | number | null; op_cf_ps: string | number | null;
+  current_ratio: string | number | null; quick_ratio: string | number | null;
+  debt_to_equity_ratio: string | number | null; debt_ratio: string | number | null;
   revenue_amount: number | null; net_profit_amount: number | null;
   parent_holder_net_profit_amount: number | null;
   operating_cash_flow: number | null; capital_expenditure: number | null;
@@ -685,12 +729,21 @@ export interface LianbanStock {
 
 export interface ShortTermEmotion {
   date: string;
-  zt_count: number; dt_count: number; zb_count: number;
-  max_boards: number; lianban_count: number;
+  zt_count: number | null; dt_count: number | null; zb_count: number | null;
+  max_boards: number | null; lianban_count: number | null;
   ladder: EmotionTier[];
   lianban_stocks: LianbanStock[];
   seal_rate: number | null; break_rate: number | null; promotion_rate: number | null;
-  yzt_count: number;
+  yzt_count: number | null;
+  status?: "normal" | "partial" | "unavailable";
+  requested_date?: string;
+  as_of?: string;
+  source_business_date?: string | null;
+  date_basis?: "provider_business_date" | "requested_session_inferred" | "unverified";
+  date_verified?: boolean;
+  is_stale?: boolean;
+  warnings?: string[];
+  pool_observations?: Record<string, Record<string, unknown>>;
 }
 
 /** 与 ShortTermEmotion 同构，供每日复盘聚合包使用 */
@@ -1015,7 +1068,16 @@ export interface Industry {
   key: string; name: string; accent: string; total: number; items: RadarItem[];
 }
 
+export interface RadarSourceCoverage {
+  scope: "cached_fetch_all_configured_sources";
+  state: "normal" | "partial" | "unavailable" | "unknown";
+  expected_sources: number | null; attempted_sources: number | null;
+  succeeded_sources: number | null; failed_sources: number | null;
+}
+
 export interface RadarData {
+  status?: "normal" | "partial" | "unavailable";
+  source_coverage?: RadarSourceCoverage;
   generated_at: string | null; recent_days: number; industries: Industry[];
   stats: { industries: number; total_sources: number; failed_sources?: number };
 }
@@ -1485,10 +1547,26 @@ export interface DataHealthDetailResult {
 
 
 
+export interface DailyReviewInputBasis {
+  schema_version: "daily-review-input-basis.v1";
+  context_schema_version: "daily-review-ai-context-v0.1";
+  review_schema_version: string | null;
+  trade_date: string;
+  source_review_generated_at: string;
+  source_data_cutoff: string | null;
+  review_status: "normal" | "partial" | "unavailable" | "unknown";
+  component_statuses: Record<string, "normal" | "partial" | "unavailable" | "unknown">;
+  omitted_component_count: number;
+  warning_count: number;
+  unknown_count: number;
+  context_sha256: string;
+}
+
 export interface DailyReviewAiPayload {
   markdown: string;
   source_review_generated_at: string;
   source_data_cutoff: string | null;
+  input_basis?: DailyReviewInputBasis;
 }
 
 
@@ -1515,15 +1593,15 @@ export interface AiGeneratedResultMetadata {
 
 
 // 资金面 / 筹码 / 信号（v3.3 并入，均为「用户查的那只股」的公开数据）
-export interface MarginRow { date: string; rzye: number; rzmre: number; rzche: number; rqye: number; rqmcl: number; rzrqye: number }
+export interface MarginRow { date: string; rzye: number | null; rzmre: number | null; rzche: number | null; rqye: number | null; rqmcl: number | null; rzrqye: number | null }
 
 export interface BlockTradeRow { date: string; price: number; close: number; premium_pct: number; vol: number; amount: number; buyer: string; seller: string }
 
-export interface HolderRow { date: string; holder_num: number; change_ratio: number; avg_shares: number }
+export interface HolderRow { date: string; holder_num: number | null; change_ratio: number | null; avg_shares: number | null }
 
-export interface DividendRow { date: string; bonus_rmb: number; transfer_ratio: number; bonus_ratio: number | null; plan: string }
+export interface DividendRow { date: string; bonus_rmb: number | null; bonus_rmb_unit?: "CNY/10_shares"; transfer_ratio: number; bonus_ratio: number | null; plan: string }
 
-export interface FundFlowRow { date: string; main_net: number; small_net: number; mid_net: number; large_net: number; super_net: number }
+export interface FundFlowRow { date: string; main_net: number | null; small_net: number | null; mid_net: number | null; large_net: number | null; super_net: number | null }
 
 export interface DtSeat { name: string; buy_amt: number; sell_amt: number; net: number }
 
@@ -1604,7 +1682,19 @@ export interface HkCashflow {
 // 产业信号 · GPU 租金（GET /api/signals/gpu-rent）
 // ---------------------------------------------------------------------------
 
+export interface GpuSourceHealth {
+  retrieved_at?: number | null;
+  sample_asof_ts?: number | null;
+  sample_freshness?: "fresh" | "stale" | "unavailable";
+  source_observed_at?: number | null;
+  source_freshness?: "unknown";
+  exporter_health?: "unknown";
+  completeness?: "unknown";
+}
+
 export interface GpuSpot {
+  health?: GpuSourceHealth;
+  count_health?: GpuSourceHealth;
   gpu: string; median?: number; asof_ts?: number;
   available_gpus?: number | null; total_gpus?: number | null;
   unavailable?: boolean; note?: string; err?: string;
@@ -2089,9 +2179,18 @@ export interface DailyReviewAnalyzeRequest {
 }
 
 
+export interface ChatToolResult {
+  call_id: string;
+  tool: string;
+  status: "success" | "partial" | "empty" | "error";
+  truncated: boolean;
+}
+
 export interface NdjsonStreamHandlers {
+  onLeadContext?: (context: import("../leadAnalysisContext.ts").LeadAnalysisContext) => void;
   onDelta?: (text: string) => void;
-  onTool?: (tool: string, args: Record<string, unknown>) => void;
+  onTool?: (tool: string, args: Record<string, unknown>, callId?: string) => void;
+  onToolResult?: (result: ChatToolResult) => void;
   onSources?: (items: ReportChatSource[], coverage?: ReportChatCoverage) => void;
 }
 
@@ -2116,6 +2215,7 @@ export interface NdjsonProtocolState extends NdjsonStreamResult {
 // ============================================================================
 
 export interface EvidenceRecord {
+  edit_token: string;
   id: string;
   subject_type: "stock" | "sector" | "theme";
   subject_id: string;
@@ -2280,6 +2380,7 @@ export interface EvidenceCreateInput {
 
 /** PUT /api/evidence/{id} - 更新证据请求 */
 export interface EvidenceUpdateInput {
+  expected_edit_token: string;
   evidence_type: "news" | "announcement" | "report" | "research_note" | "financial_filing" | "other";
   claim: string;
   source_title: string;
@@ -2406,11 +2507,10 @@ export interface TradeRecord {
   quantity_completion_pct: number | null;
 }
 
-export interface TradeCreateInput {
+interface TradeCreateCommon {
   code: string;
   name: string;
   operation: TradeOperation;
-  execution_status: TradeExecutionStatus;
 
   planned_price?: number | null;
   planned_quantity?: number | null;
@@ -2419,8 +2519,6 @@ export interface TradeCreateInput {
   actual_quantity?: number;
   executed_at?: string | null;
 
-  fee?: number;
-  other_cost?: number;
   unexecuted_reason?: string | null;
   note?: string | null;
 
@@ -2434,6 +2532,12 @@ export interface TradeCreateInput {
     revision_number: number;
   };
 }
+
+// Executed writes require explicit costs; 0 confirms that the cost is zero.
+export type TradeCreateInput = TradeCreateCommon & (
+  | { execution_status: "full" | "partial"; fee: number; other_cost: number }
+  | { execution_status: "not_executed"; fee?: number | null; other_cost?: number | null }
+);
 
 export interface TradeAttributionCandidate {
   decision_id: string;
@@ -2880,6 +2984,8 @@ export interface AttributionTotals {
 }
 
 export interface AttributionResult {
+  // Existing backend provenance field; older saved payloads may omit it.
+  selected_trade_count?: number;
   as_of_date: string;
   date_from: string | null;
   date_to: string | null;
@@ -4020,4 +4126,18 @@ export interface NativeIntelAiSentimentResponse {
   reasoning?: string;
   status: string;
   cached?: boolean;
+}
+
+export interface ReportPageReadRequest {
+  report_id: string; selected_report_ids: string[]; expected_file_sha256: string;
+  page_from: number; page_to: number;
+}
+export type ReportPageReadStatus = "readable" | "omitted" | "invalid" | "unreadable" | "error";
+export interface ReportPageReadResult {
+  extraction?: { status: string; engine: string; language: string; source_sha256: string; pages: { page_number: number; image_sha256: string; text_sha256: string; mean_word_confidence: number | null }[] } | null;
+  report_id: string; file_sha256: string; scope: "INDEXED_PAGE_TEXT_ONLY"; full_report_read: false;
+  requested: number[]; returned_chars: number; complete_requested_text: boolean;
+  coverage: Record<ReportPageReadStatus, number[]>;
+  items: { page: number; status: ReportPageReadStatus; reason: string; text?: string;
+    returned_chars?: number; indexed_chars?: number; truncated?: boolean }[];
 }

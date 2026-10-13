@@ -1,7 +1,7 @@
 """A股全栈数据层 —— 移植自 a-stock-data 工具包（五层数据源，自包含）。
 
 分级依赖：
-  - 行情（腾讯）        : 仅需标准库 urllib —— 永远可用
+  - 行情（腾讯）        : 仅需标准库 urllib，依赖上游可用性
   - 研报（东财）+ PDF   : 仅需 requests —— 轻量必装
   - 一致预期/新闻/公告  : akshare（惰性导入，缺失时优雅报错）
   - K线/财务/F10        : mootdx（惰性导入，缺失时优雅报错）
@@ -18,18 +18,20 @@ import re
 import threading
 import time
 import urllib.request
-from datetime import datetime, timedelta
+
+import push2_guard
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
 
 def get_prefix(code: str) -> str:
-    """6 位代码 → 交易所前缀。5 开头是沪市基金/ETF（51/56/58 等），深市基金 15/16 开头走默认 sz。"""
+    """6 位代码 → 交易所前缀；北交所 92 / 历史 4、8 号段优先于沪 B 股 9。沪深 ETF 规则保留。"""
+    if code.startswith(("4", "8", "92")):
+        return "bj"
     if code.startswith(("6", "9", "5")):
         return "sh"
-    if code.startswith("8"):
-        return "bj"
     return "sz"
 
 
@@ -58,16 +60,32 @@ def _parse_gtimg(data: str) -> dict[str, dict]:
         if len(vals) < 53:
             continue
         code = key[2:]
+        if not re.fullmatch(r"(?:sh|sz|bj)[0-9]{6}", key) or vals[2] != code or not vals[1].strip():
+            continue
 
-        def num(i: int) -> float:
+        def num(i: int) -> float | None:
             try:
-                return float(vals[i]) if vals[i] else 0.0
+                value = float(vals[i])
+                return value if math.isfinite(value) else None
             except (ValueError, IndexError):
-                return 0.0
+                return None
+
+        price = num(3)
+        if price is None or price <= 0:
+            continue
+        data_time = None
+        try:
+            if re.fullmatch(r"[0-9]{14}", vals[30]):
+                data_time = datetime.strptime(vals[30], "%Y%m%d%H%M%S").replace(
+                    tzinfo=timezone(timedelta(hours=8))).isoformat()
+        except ValueError:
+            pass
 
         result[code] = {
             "name": vals[1],
-            "price": num(3),
+            "price": price,
+            "data_time": data_time,
+            "trade_date": data_time[:10] if data_time else None,
             "last_close": num(4),
             "open": num(5),
             "change_amt": num(31),
@@ -92,7 +110,8 @@ def _parse_gtimg(data: str) -> dict[str, dict]:
 def tencent_quote(codes: list[str]) -> dict[str, dict]:
     """批量个股实时行情：现价 / 涨跌 / PE / PB / 市值 / 换手 / 涨跌停。"""
     prefixed = [f"{get_prefix(c)}{c}" for c in codes]
-    return _parse_gtimg(_fetch_gtimg(prefixed))
+    parsed = _parse_gtimg(_fetch_gtimg(prefixed))
+    return {code: parsed[code] for code in codes if code in parsed}
 
 
 # A股大盘指数（前缀规则与个股不同，固定带前缀代码）
@@ -126,56 +145,119 @@ def _report_session():
     return s
 
 
-def eastmoney_reports(code: str, max_pages: int = 3) -> list[dict]:
-    """按个股代码拉研报列表（qType=0）。"""
+def _report_page_window(params: dict, max_pages: int, *, with_coverage: bool):
+    """Bounded provider pages; never infer row totals from requested page size."""
+    if type(max_pages) is not int or not 1 <= max_pages <= 10:
+        raise ValueError("max_pages must be between 1 and 10")
     session = _report_session()
-    out: list[dict] = []
+    rows, attempted, received = [], 0, 0
+    total = None
+    reason = None
     for page in range(1, max_pages + 1):
-        params = {
-            "industryCode": "*", "pageSize": "100", "industry": "*",
-            "rating": "*", "ratingChange": "*",
-            "beginTime": "2000-01-01", "endTime": "2030-01-01",
-            "pageNo": str(page), "fields": "", "qType": "0",
-            "orgCode": "", "code": code, "rcode": "",
-            "p": str(page), "pageNum": str(page), "pageNumber": str(page),
-        }
-        r = session.get(_REPORT_API, params=params, timeout=30)
-        d = r.json()
-        rows = d.get("data") or []
-        if not rows:
+        attempted += 1
+        try:
+            page_params = {**params, "pageNo": str(page)}
+            if params.get("qType") == "0":
+                page_params.update({"p": str(page), "pageNum": str(page), "pageNumber": str(page)})
+            response = session.get(_REPORT_API, params=page_params, timeout=30)
+            if response.status_code != 200:
+                raise ValueError("report source unavailable")
+            payload = response.json()
+            if (not isinstance(payload, dict) or not isinstance(payload.get("data"), list)
+                    or any(not isinstance(row, dict) or not isinstance(row.get("title"), str)
+                           or not row["title"].strip() for row in payload["data"])):
+                raise ValueError("report source malformed response")
+            page_rows = payload["data"]
+            raw_total = payload.get("TotalPage")
+            page_total = (int(raw_total) if type(raw_total) is int and raw_total >= 0
+                          or isinstance(raw_total, str) and raw_total.isascii() and raw_total.isdigit()
+                          else None)
+            if page == 1:
+                total = page_total
+            elif page_total != total:
+                reason = "TOTAL_CHANGED"
+            received += 1
+            rows.extend(page_rows)
+            if page_total == 0 and page_rows:
+                reason = "TOTAL_CHANGED"
+            if not page_rows:
+                if total is not None and total >= page and total > 1:
+                    reason = "EMPTY_BEFORE_EXPECTED"
+                break
+            if (reason == "TOTAL_CHANGED" or (total is not None and page >= max(1, total))
+                    or total is None and params.get("qType") == "0"):
+                # The company reader historically stopped after page one when
+                # TotalPage was absent. Disclose unknown coverage, do not add fetches.
+                break
+        except Exception as exc:
+            if not with_coverage:
+                raise
+            reason = ("MALFORMED_RESPONSE" if isinstance(exc, ValueError)
+                      and str(exc) == "report source malformed response" else "SOURCE_ERROR")
             break
-        out.extend(rows)
-        if page >= (d.get("TotalPage", 1) or 1):
-            break
-        time.sleep(0.3)
-    return out
+        if page < max_pages:
+            time.sleep(0.3)
+    if reason is None:
+        reason = "UNKNOWN_TOTAL" if total is None else "REQUEST_LIMIT" if total > max_pages else None
+    if not with_coverage:
+        if reason in {"TOTAL_CHANGED", "EMPTY_BEFORE_EXPECTED"}:
+            raise ValueError("report source incomplete response")
+        return rows
+    return {
+        "rows": rows,
+        "status": ("normal" if reason is None else "partial" if rows else "unavailable"),
+        "source_coverage": {
+            "scope": "provider_report_page_window", "requested_pages": max_pages,
+            "reported_total_pages": total,
+            "expected_pages": min(max_pages, max(1, total)) if total is not None else None,
+            "attempted_pages": attempted, "received_pages": received,
+            "returned_rows": len(rows), "reason": reason, "historical_complete": False,
+        },
+    }
 
 
-def eastmoney_industry_reports(keywords: list[str] | None = None, days: int = 90, max_pages: int = 3) -> list[dict]:
-    """按行业拉研报（qType=1）——适合产业链 / 主题级检索。keywords 在标题上过滤。"""
+def eastmoney_reports(code: str, max_pages: int = 3, *, with_coverage: bool = False):
+    """Company report metadata; opt in to honest bounded-page coverage."""
+    return _report_page_window({
+        "industryCode": "*", "pageSize": "100", "industry": "*",
+        "rating": "*", "ratingChange": "*", "beginTime": "2000-01-01",
+        "endTime": "2030-01-01", "fields": "", "qType": "0",
+        "orgCode": "", "code": code, "rcode": "",
+    }, max_pages, with_coverage=with_coverage)
+
+
+def eastmoney_industry_reports(keywords: list[str] | None = None, days: int = 90,
+                              max_pages: int = 3, *, with_coverage: bool = False):
+    """Industry report metadata; source counts precede title filtering."""
     from datetime import date, timedelta
-
-    session = _report_session()
     end = date.today()
-    begin = end - timedelta(days=days)
-    out: list[dict] = []
-    for page in range(1, max_pages + 1):
-        params = {
-            "industryCode": "*", "pageSize": "100", "industry": "*",
-            "rating": "*", "ratingChange": "*",
-            "beginTime": begin.isoformat(), "endTime": end.isoformat(),
-            "pageNo": str(page), "fields": "", "qType": "1",
-            "orgCode": "", "code": "", "rcode": "",
-        }
-        r = session.get(_REPORT_API, params=params, timeout=30)
-        rows = r.json().get("data") or []
-        if not rows:
-            break
-        out.extend(rows)
-        time.sleep(0.3)
+    result = _report_page_window({
+        "industryCode": "*", "pageSize": "100", "industry": "*",
+        "rating": "*", "ratingChange": "*",
+        "beginTime": (end - timedelta(days=days)).isoformat(), "endTime": end.isoformat(),
+        "fields": "", "qType": "1", "orgCode": "", "code": "", "rcode": "",
+    }, max_pages, with_coverage=with_coverage)
     if keywords:
-        out = [r for r in out if any(k in r.get("title", "") for k in keywords)]
-    return out
+        rows = result["rows"] if with_coverage else result
+        filtered = [r for r in rows if any(k in r["title"] for k in keywords)]
+        if with_coverage:
+            result = {**result, "rows": filtered}
+        else:
+            result = filtered
+    return result
+
+
+def report_window_compat(result, requested_pages: int) -> dict:
+    """Legacy injected list readers carry unknown coverage, never full coverage."""
+    if isinstance(result, dict):
+        return result
+    if not isinstance(result, list):
+        raise ValueError("report source malformed response")
+    return {"rows": result, "status": "partial" if result else "unavailable",
+            "source_coverage": {"scope": "provider_report_page_window",
+                "requested_pages": requested_pages, "reported_total_pages": None,
+                "expected_pages": None, "attempted_pages": 0, "received_pages": 0,
+                "returned_rows": len(result), "reason": "UNKNOWN_TOTAL", "historical_complete": False}}
 
 
 def pdf_url(info_code: str) -> str:
@@ -201,11 +283,46 @@ def profit_forecast(code: str) -> list[dict]:
     return df.to_dict("records") if df is not None and not df.empty else []
 
 
-def stock_news(code: str, limit: int = 20) -> list[dict]:
-    """个股新闻（东财）。"""
+def stock_news(code: str, limit: int = 20, *, strict: bool = False,
+               with_coverage: bool = False) -> list[dict] | dict:
+    """News rows; opt-in coverage counts this provider response, not all history."""
+    def finish(rows, provider_rows):
+        if not with_coverage:
+            return rows
+        return {"rows": rows, "source_coverage": {
+            "scope": "provider_response_before_requested_limit",
+            "provider_response_rows": provider_rows, "returned_rows": len(rows),
+            "omitted_rows": provider_rows - len(rows) if provider_rows is not None else None,
+            "requested_limit": limit, "total_history_rows": None,
+        }}
+
     ak = _akshare()
     df = ak.stock_news_em(symbol=code)
-    return df.head(limit).to_dict("records") if df is not None and not df.empty else []
+    if not strict:
+        if df is None:
+            return finish([], None)
+        return finish(df.head(limit).to_dict("records") if not df.empty else [], len(df.index))
+
+    # akshare already depends on pandas; keep the import lazy for other providers.
+    from pandas import DataFrame
+
+    if isinstance(df, list):
+        rows = df[:limit]
+    elif isinstance(df, DataFrame):
+        if len(df.index) and "新闻标题" not in df.columns:
+            raise ValueError("news provider response missing title column")
+        rows = df.head(limit).to_dict("records")
+    else:
+        raise ValueError("news provider response missing records")
+    if any(
+        not isinstance(row, dict)
+        or not isinstance(row.get("新闻标题"), str)
+        or not row["新闻标题"].strip()
+        or any(key in row and not isinstance(row[key], str) for key in ("发布时间", "文章来源", "新闻链接"))
+        for row in rows
+    ):
+        raise ValueError("news provider response contains malformed rows")
+    return finish(rows, len(df))
 
 
 def individual_info(code: str) -> dict:
@@ -368,12 +485,17 @@ def _mootdx_client():
 
 
 def kline(code: str, category: int = 4, offset: int = 60) -> list[dict]:
-    """K线：category 4=日 5=周 6=月 11=60分钟。
+    """HiThink daily first, mootdx next, bounded unadjusted Tencent fallback.
 
-    日线在配置 HiThink credential 时优先使用已资格认定的 direct API；
-    未配置、身份不覆盖、传输失败或契约失败时保留既有 mootdx 路径。
-    周/月/60 分钟不在本次 HiThink cutover 范围内。
+    Tencent only covers existing SH/SZ day/week/month HTTP routes. BSE and
+    60-minute failures remain explicit; financial/F10 mootdx paths are unchanged.
     """
+    if not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code):
+        raise ValueError("kline requires a six-digit security code")
+    if type(category) is not int or category not in (4, 5, 6, 11):
+        raise ValueError("unsupported kline category")
+    if type(offset) is not int or not 1 <= offset <= 2000:
+        raise ValueError("kline offset must be an integer between 1 and 2000")
     if category == 4:
         try:
             import hithink_finance_client as hithink
@@ -392,9 +514,23 @@ def kline(code: str, category: int = 4, offset: int = 60) -> list[dict]:
             raise hithink.HiThinkNotConfiguredError(
                 "HiThink is required for current BSE daily bars"
             )
-    client = _mootdx_client()
-    df = client.bars(symbol=code, category=category, offset=offset)
-    return df.to_dict("records") if df is not None and not df.empty else []
+    # Current BSE identifiers are unsupported by mootdx's exchange routing,
+    # and Tencent does not provide qualified BSE historical coverage.
+    if code.startswith("92"):
+        raise RuntimeError("No qualified BSE provider for this K-line period")
+    try:
+        client = _mootdx_client()
+        df = client.bars(symbol=code, category=category, offset=offset)
+        rows = df.to_dict("records") if df is not None and not df.empty else []
+        if rows:
+            return rows
+    except Exception:
+        pass
+    if category not in (4, 5, 6) or get_prefix(code) == "bj":
+        raise RuntimeError("No qualified fallback for this K-line route")
+    import tencent_kline
+
+    return tencent_kline.unadjusted_bars(code, {4: "day", 5: "week", 6: "month"}[category], offset)
 
 
 def finance(code: str) -> dict:
@@ -439,10 +575,18 @@ def financials(code: str, *, include_health: bool = False) -> dict:
     summary_rows = df.to_dict("records")
 
     def present(value):
-        if value in (False, "false", "", None):
+        if isinstance(value, bool) or value is None or value in ("false", ""):
             return None
         if isinstance(value, float) and not math.isfinite(value):
             return None
+        if isinstance(value, str):
+            if value.strip().lower() in ("", "false", "null", "none"):
+                return None
+            try:
+                if not math.isfinite(float(value)):
+                    return None
+            except ValueError:
+                pass  # Summary values may include source units, e.g. 100亿 or 8%.
         return value
 
     def summary(row: dict) -> dict:
@@ -490,7 +634,9 @@ def financials(code: str, *, include_health: bool = False) -> dict:
             if metric in bucket:
                 raise ValueError(f"{source} contains duplicate period metric")
             value = raw.get("value")
-            if value in (False, "false", "", None):
+            if isinstance(value, bool) or value is None or (
+                isinstance(value, str) and value.strip().lower() in ("false", "", "null", "none")
+            ):
                 bucket[metric] = None
                 continue
             try:
@@ -670,6 +816,10 @@ def full_valuation(code: str, *, valuation_reader=None) -> dict:
 
     out = {
         "name": q["name"], "code": code, "price": price,
+        # These timestamps describe the Tencent quote only, not fundamentals or forecasts.
+        "quote_source": "tencent",
+        "quote_data_time": q.get("data_time"),
+        "quote_trade_date": q.get("trade_date"),
         "mcap_yi": mcap_yi,
         "pe_ttm": pe_ttm,
         "pb": pb,
@@ -793,15 +943,33 @@ def em_get(url: str, params: dict | None = None, headers: dict | None = None, ti
             if deadline is not None and delay >= _snapshot_remaining(deadline):
                 raise RuntimeError("a_share_snapshot: refresh time budget exhausted")
             time.sleep(delay)
+        guarded = push2_guard.applies(url)
+        if guarded:
+            push2_guard.reserve()
         if deadline is not None:
-            # requests 的连接/读取超时不等于整体 deadline；返回后仍须核对预算。
+            # Include persisted budget lock waits before allowing network I/O.
             remaining = _snapshot_remaining(deadline)
             timeout = (min(timeout, remaining / 2), min(timeout, remaining / 2))
         try:
             _em_mode[0] = "direct"
             response = _em_session(True).get(url, params=params, headers=headers, timeout=timeout)
+        except Exception as exc:
+            if guarded and _is_transient_network_error(exc):
+                push2_guard.record("failure")
+            raise
         finally:
             _em_last_call[0] = time.monotonic()
+        if guarded:
+            status = getattr(response, "status_code", 200)
+            if status in (403, 429):
+                push2_guard.record("refusal")
+                response.close()
+                raise push2_guard.Push2Blocked("Push2 source refused the request; cooldown started")
+            if isinstance(status, int) and status >= 500:
+                push2_guard.record("failure")
+                response.close()
+                raise RuntimeError("Push2 upstream server error")
+            push2_guard.record("success")
         if deadline is not None:
             _snapshot_remaining(deadline)
         return response
@@ -811,10 +979,13 @@ def em_get(url: str, params: dict | None = None, headers: dict | None = None, ti
 
 def _is_transient_network_error(exc: BaseException) -> bool:
     """判断是否为可重试的瞬时网络错误（不含 JSON/结构/业务解析错误）。"""
+    if isinstance(exc, push2_guard.Push2Blocked):
+        return False
     # 按类型名兼容未 import 的异常类
     transient_names = {
         "ProxyError",
         "ConnectionError",
+        "ConnectionResetError",
         "ConnectTimeout",
         "ReadTimeout",
         "Timeout",
@@ -887,6 +1058,7 @@ def _em_get_page_with_retries(
 # 原始池含个股 code/name，由 market.py 聚合为短线情绪指标，也可输出连板股清单。
 # ---------------------------------------------------------------------------
 _ZTB_UT = "7eea3edcaed734bea9cbfc24409ed989"
+LEGACY_POOL_OBSERVATION_SCHEMA = "legacy-market-pool-observation-v1"
 
 
 def em_zt_topic_pool(endpoint: str, date: str, sort: str = "fbt:asc") -> list[dict]:
@@ -894,15 +1066,150 @@ def em_zt_topic_pool(endpoint: str, date: str, sort: str = "fbt:asc") -> list[di
     endpoint: getTopicZTPool(涨停) / getTopicZBPool(炸板) / getTopicDTPool(跌停) / getYesterdayZTPool(昨涨停)
     date: YYYYMMDD 交易日。非交易日 / 参数错 → []。
     池内每项字段含 lbc(连板数) / zbc(炸板次数) / hybk(行业) 等。"""
+    try:
+        r = _em_zt_topic_response(endpoint, date, sort)
+        return (r.json().get("data") or {}).get("pool") or []
+    except Exception:
+        return []
+
+
+def _em_zt_topic_response(endpoint: str, date: str, sort: str):
+    """Shared transport only; the legacy list wrapper keeps its original contract."""
     url = f"https://push2ex.eastmoney.com/{endpoint}"
     params = {"ut": _ZTB_UT, "dpt": "wz.ztzt", "Pageindex": 0,
               "pagesize": 10000, "sort": sort, "date": date}
     headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
+    return em_get(url, params=params, headers=headers, timeout=10)
+
+
+def _pool_date(value) -> str | None:
+    """Strict provider date, matching existing adapter conventions (not its authority)."""
+    if type(value) is int:
+        value = str(value)
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if re.fullmatch(r"[0-9]{8}", value):
+        value = f"{value[:4]}-{value[4:6]}-{value[6:]}"
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+        return None
     try:
-        r = em_get(url, params=params, headers=headers, timeout=10)
-        return (r.json().get("data") or {}).get("pool") or []
+        return datetime.strptime(value, "%Y-%m-%d").date().isoformat()
+    except ValueError:
+        return None
+
+
+def em_zt_topic_observation(endpoint: str, date: str, sort: str = "fbt:asc", *,
+                            as_of: str) -> dict:
+    """Qualified legacy pool observation, not a BK-11/final or legal-zero producer.
+
+    qdate is the provider's latest session, including for historical requests;
+    it must never be treated as a historical row date. Explicit [] is retained
+    as observed_empty, but cannot independently establish a complete-market zero.
+    """
+    import trade_calendar
+
+    want = _pool_date(date)
+    result = {
+        "observation_schema": LEGACY_POOL_OBSERVATION_SCHEMA,
+        "endpoint": endpoint, "requested_trade_date": want,
+        "as_of": as_of, "fetched_at": None, "status": "unavailable",
+        "reason_codes": [], "rows": [], "count": None,
+        "observed_row_count": None, "observed_empty": False,
+        "source_business_date": None, "provider_latest_trade_date": None,
+        "date_basis": "unverified", "date_verified": False,
+        "completeness_verified": False, "http_status": None, "provider_reported_dates": [],
+    }
+
+    def reject(reason):
+        result["reason_codes"] = [reason]
+        return result
+
+    if endpoint not in {"getTopicZTPool", "getTopicZBPool", "getTopicDTPool", "getYesterdayZTPool"} or want is None:
+        return reject("INVALID_REQUEST")
+    # Reuse the official local 09:30 observation policy, never infer sessions
+    # from nonempty responses or modify BK-11 calendar authority.
+    observation_date = trade_calendar.observation_trade_date_at(as_of)
+    sessions = trade_calendar._load_calendar()
+    if observation_date is None or sessions is None:
+        return reject("TRADING_CALENDAR_UNAVAILABLE")
+    if want not in sessions or want > observation_date:
+        return reject("NON_TRADING_OR_UNAVAILABLE_DATE")
+    try:
+        response = _em_zt_topic_response(endpoint, want.replace("-", ""), sort)
     except Exception:
-        return []
+        return reject("TRANSPORT_ERROR")
+    result["fetched_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    code = getattr(response, "status_code", None)
+    if type(code) is int and 100 <= code < 600:
+        result["http_status"] = code
+    if type(code) is not int or not 200 <= code < 300:
+        return reject("HTTP_ERROR")
+    try:
+        payload = response.json()
+    except Exception:
+        return reject("PARSE_ERROR")
+    if not isinstance(payload, dict):
+        return reject("INVALID_RESPONSE")
+    # Explicit success is required. Missing/malformed rc is not zero.
+    if type(payload.get("rc")) is not int or payload["rc"] != 0:
+        return reject("BUSINESS_STATUS_UNAVAILABLE")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return reject("DATA_UNAVAILABLE")
+    # Treat all provided qdate candidates as latest-market-date metadata.
+    latest = []
+    for obj in (payload, data):
+        if obj.get("qdate") is not None:
+            parsed = _pool_date(obj["qdate"])
+            if parsed is None:
+                return reject("INVALID_PROVIDER_DATE")
+            latest.append(parsed)
+    if len(set(latest)) > 1:
+        return reject("CONFLICTING_PROVIDER_DATE")
+    if latest:
+        result["provider_latest_trade_date"] = latest[0]
+        if want > latest[0]:
+            return reject("SOURCE_SESSION_UNAVAILABLE")
+    business_dates = []
+    for obj in (payload, data):
+        for key in ("trade_date", "date"):
+            if obj.get(key) is not None:
+                parsed = _pool_date(obj[key])
+                if parsed is None:
+                    return reject("INVALID_BUSINESS_DATE")
+                business_dates.append(parsed)
+    result["provider_reported_dates"] = business_dates
+    if any(d != want for d in business_dates):
+        return reject("BUSINESS_DATE_MISMATCH")
+    # These generic date fields are consistency evidence only: no pinned
+    # four-pool provider contract establishes them as row business dates.
+    result["date_basis"] = "requested_session_inferred"
+    if "pool" not in data or data["pool"] is None:
+        return reject("POOL_UNAVAILABLE")
+    pool = data["pool"]
+    if not isinstance(pool, list):
+        return reject("INVALID_POOL")
+    result["observed_row_count"] = len(pool)
+    result["observed_empty"] = not pool
+    if not pool:
+        result.update(status="partial", reason_codes=["OBSERVED_EMPTY_UNVERIFIED"])
+        return result
+    # Invalid/duplicate rows cannot silently shrink a count or fabricate ladder
+    # facts. No universe filtering: this is the legacy provider pool contract.
+    seen = set()
+    for row in pool:
+        if not isinstance(row, dict) or not isinstance(row.get("c"), str) or not re.fullmatch(r"[0-9]{6}", row["c"]):
+            return reject("INVALID_POOL_ROW")
+        if row["c"] in seen:
+            return reject("DUPLICATE_POOL_ROW")
+        seen.add(row["c"])
+        if endpoint == "getTopicZTPool" and (type(row.get("lbc")) is not int or row["lbc"] < 1):
+            return reject("INVALID_BOARD_COUNT")
+    result.update(rows=pool, count=len(pool), status="partial")
+    # Count is observed rows, not independently certified whole-market coverage.
+    result["reason_codes"] = ["DATE_BINDING_UNVERIFIED"]
+    return result
 
 
 def _numf(v):
@@ -1059,13 +1366,8 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
     数据源：东财 ``/api/qt/clist/get``（经 ``em_get`` 串行限流）。
     失败不伪装成空市场：网络 / JSON / 结构异常抛出 ``RuntimeError``。
 
-    分页说明：
-    - 上游可能强制限制每页最多 100 条，即使请求 ``pz`` 更大；
-    - 在已知 ``total`` 且尚未取完时，**不得**因本页条数 < page_size 而提前结束
-      （否则只拿到第一页 100 条）；
-    - 已知 total 时仅完整抓取成功；提前空页报错，未知 total 时空页终止；
-    - 仅当 total 未知/为 0 时，才用「本页短于 page_size」作为取尽信号。
-    - 按 code 去重，保留首次出现顺序；缺 code 记录跳过。
+    每页必须有一致的非负整数 total，原始行数必须精确匹配。
+    重复证券或重叠页面整批失败；过滤行仍计入原始总数，不要求全部是 A 股。
     """
     if page_size < 1:
         raise ValueError("page_size must be >= 1")
@@ -1074,7 +1376,8 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
     out: list[dict] = []
     seen_codes: set[str] = set()
     fetched_raw = 0  # 原始 diff 条数（过滤/去重前），与上游 total 对齐
-    total: int | None = None  # None=尚未解析；0=未知/缺失
+    total: int | None = None
+    seen_raw_ids: set[tuple[str, str]] = set()
     host = _A_SHARE_CLIST_HOSTS[0]
     pn = 1
     prev_page_fingerprint: tuple[str, ...] | None = None
@@ -1142,21 +1445,26 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
                 f"a_share_snapshot page {pn}: data is not a dict ({type(data).__name__})"
             )
 
+        raw_total = data.get("total")
+        # bool is an int subclass; floats (including 3.0) are not count evidence.
+        if isinstance(raw_total, bool) or not (
+            isinstance(raw_total, int)
+            or isinstance(raw_total, str) and re.fullmatch(r"[0-9]+", raw_total)
+        ):
+            raise RuntimeError(f"a_share_snapshot: invalid total {raw_total!r}")
+        page_total = int(raw_total)
+        if page_total < 0:
+            raise RuntimeError(f"a_share_snapshot: invalid total {raw_total!r}")
         if total is None:
-            raw_total = data.get("total")
-            if raw_total is None:
-                total = 0  # 未知：仅靠空页/短页（在无可靠 total 时）结束
-            else:
-                try:
-                    total = int(raw_total)
-                except (TypeError, ValueError) as e:
-                    raise RuntimeError(
-                        f"a_share_snapshot: invalid total {raw_total!r}"
-                    ) from e
-                if total < 0:
-                    raise RuntimeError(
-                        f"a_share_snapshot: invalid total {raw_total!r}"
-                    )
+            total = page_total
+        elif page_total != total:
+            raise RuntimeError(f"a_share_snapshot page {pn}: total changed")
+
+        raw_diff = data.get("diff")
+        if isinstance(raw_diff, (list, dict)):
+            raw_values = raw_diff.values() if isinstance(raw_diff, dict) else raw_diff
+            if any(not isinstance(item, dict) for item in raw_values):
+                raise RuntimeError(f"a_share_snapshot page {pn}: invalid diff row")
 
         try:
             rows = _normalize_clist_diff(data.get("diff"))
@@ -1171,7 +1479,7 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
             )
 
         if not rows:
-            # 空页结束分页；退出时核对已知 total，拒绝提前结束的部分结果
+            # Empty pages still require exact final count; never publish partials.
             break
 
         # 重复页保护（同一批 code 指纹且无新增唯一股票）
@@ -1189,32 +1497,25 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
         prev_page_fingerprint = fingerprint
 
         fetched_raw += len(rows)
-        new_unique = 0
         for item in rows:
+            raw_code = str(item.get("f12") or "").strip()
+            if raw_code:
+                identity = (str(item.get("f13") or ""), raw_code)
+                if identity in seen_raw_ids:
+                    raise RuntimeError(f"a_share_snapshot page {pn}: overlapping security")
+                seen_raw_ids.add(identity)
             mapped = _map_a_share_row(item)
             if mapped is None:
                 continue
             code = mapped["code"]
             if code in seen_codes:
-                continue
+                raise RuntimeError(f"a_share_snapshot page {pn}: overlapping security")
             seen_codes.add(code)
             out.append(mapped)
-            new_unique += 1
 
-        if pn > 1 and new_unique == 0:
-            raise RuntimeError(
-                f"a_share_snapshot page {pn}: no new unique codes "
-                f"(fetched_raw={fetched_raw}, unique={len(out)}, total={total})"
-            )
-
-        # 终止：已达到上游 total（按原始条数，避免过滤导致永远 < total）
-        if total > 0 and fetched_raw >= total:
-            break
-
-
-        # total 未知时：本页短于请求页大小 → 视为末页
-        # total 已知且未取完：即使上游强制每页 100 < page_size，也必须继续翻页
-        if total <= 0 and len(rows) < page_size:
+        if fetched_raw > total:
+            raise RuntimeError("a_share_snapshot: raw count exceeds total")
+        if fetched_raw == total:
             break
 
         pn += 1
@@ -1226,7 +1527,7 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
         )
 
     _snapshot_remaining(deadline)
-    if total and fetched_raw < total:
+    if fetched_raw != total:
         raise RuntimeError(
             f"a_share_snapshot: incomplete data (fetched_raw={fetched_raw}, total={total})"
         )
@@ -1458,6 +1759,16 @@ def eastmoney_datacenter(report_name: str, columns: str = "ALL", filter_str: str
     return []
 
 
+def _capital_number(value) -> float | None:
+    """Scoped margin/holder numbers: unknown is not zero; keep finite numeric strings."""
+    if isinstance(value, bool):
+        return None
+    try:
+        return _optional_float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+
+
 def margin_trading(code: str, page_size: int = 30) -> list[dict]:
     """融资融券明细（日级）：融资余额 / 融资买入 / 融券余额 / 两融合计。"""
     data = eastmoney_datacenter(
@@ -1465,9 +1776,9 @@ def margin_trading(code: str, page_size: int = 30) -> list[dict]:
         page_size=page_size, sort_columns="DATE", sort_types="-1")
     return [{
         "date": str(r.get("DATE", ""))[:10],
-        "rzye": r.get("RZYE", 0), "rzmre": r.get("RZMRE", 0), "rzche": r.get("RZCHE", 0),
-        "rqye": r.get("RQYE", 0), "rqmcl": r.get("RQMCL", 0),
-        "rzrqye": r.get("RZRQYE", 0),
+        "rzye": _capital_number(r.get("RZYE")), "rzmre": _capital_number(r.get("RZMRE")), "rzche": _capital_number(r.get("RZCHE")),
+        "rqye": _capital_number(r.get("RQYE")), "rqmcl": _capital_number(r.get("RQMCL")),
+        "rzrqye": _capital_number(r.get("RZRQYE")),
     } for r in data]
 
 
@@ -1497,14 +1808,14 @@ def holder_num_change(code: str, page_size: int = 10) -> list[dict]:
         page_size=page_size, sort_columns="END_DATE", sort_types="-1")
     return [{
         "date": str(r.get("END_DATE", ""))[:10],
-        "holder_num": r.get("HOLDER_NUM", 0),
-        "change_ratio": r.get("HOLDER_NUM_RATIO", 0),
-        "avg_shares": r.get("AVG_FREE_SHARES", 0),
+        "holder_num": _capital_number(r.get("HOLDER_NUM")),
+        "change_ratio": _capital_number(r.get("HOLDER_NUM_RATIO")),
+        "avg_shares": _capital_number(r.get("AVG_FREE_SHARES")),
     } for r in data]
 
 
 def dividend_history(code: str, page_size: int = 20, *, strict: bool = False) -> list[dict]:
-    """分红送转历史：每股派息（税前）/ 每10股转增 / 每10股送股 / 进度。
+    """分红送转历史：每10股派息（税前，人民币元）/ 每10股转增 / 每10股送股 / 进度。
 
     ``strict`` 仅供需要区分“真实空结果”和“源失败”的只读组合层使用；
     默认保持既有调用方的空结果降级语义。
@@ -1514,7 +1825,8 @@ def dividend_history(code: str, page_size: int = 20, *, strict: bool = False) ->
         page_size=page_size, sort_columns="EX_DIVIDEND_DATE", sort_types="-1", strict=strict)
     return [{
         "date": str(r.get("EX_DIVIDEND_DATE", ""))[:10],
-        "bonus_rmb": r.get("PRETAX_BONUS_RMB", 0),
+        "bonus_rmb": r.get("PRETAX_BONUS_RMB"),
+        "bonus_rmb_unit": "CNY/10_shares",
         "transfer_ratio": r.get("TRANSFER_RATIO", 0),
         "bonus_ratio": r.get("BONUS_RATIO", 0),
         "plan": r.get("ASSIGN_PROGRESS", ""),
@@ -1536,18 +1848,29 @@ def stock_fund_flow_120d(code: str) -> list[dict]:
                    params=params, headers=headers, timeout=15).json()
     except Exception:
         return []
+    return _parse_fund_flow_rows(d)
+
+
+def _parse_fund_flow_rows(payload: dict) -> list[dict]:
+    """Shared history/delayed-source parsing; missing amounts are not zero."""
     rows = []
-    for line in d.get("data", {}).get("klines", []):
+    for line in (payload.get("data") or {}).get("klines") or []:
+        if not isinstance(line, str):
+            continue
         p = line.split(",")
+        if len(p) < 6:
+            # Keep a dated, truncated observation instead of silently filling its
+            # place with an older trading day when consumers form a window.
+            try:
+                datetime.strptime(p[0], "%Y-%m-%d")
+            except ValueError:
+                continue
+            p.extend([""] * (6 - len(p)))
         if len(p) >= 6:
-            def _f(x):
-                try:
-                    return float(x) if x not in ("-", "") else 0.0
-                except ValueError:
-                    return 0.0
             rows.append({
-                "date": p[0], "main_net": _f(p[1]), "small_net": _f(p[2]),
-                "mid_net": _f(p[3]), "large_net": _f(p[4]), "super_net": _f(p[5]),
+                "date": p[0], "main_net": _optional_float(p[1]), "small_net": _optional_float(p[2]),
+                "mid_net": _optional_float(p[3]), "large_net": _optional_float(p[4]),
+                "super_net": _optional_float(p[5]),
             })
     return rows
 
@@ -1747,32 +2070,56 @@ def hot_concepts(code: str, *, strict: bool = False) -> list[dict]:
 
 
 def investor_qa(code: str, page_size: int = 30) -> list[dict]:
-    """互动易问答（巨潮）：投资者提问 + 公司回复（answer=None 表示未回复）。"""
+    """CNInfo question page, not exchange-wide or complete historical coverage.
+
+    Only an explicit rows=[] for a resolved company is a successful empty page.
+    Missing company matches, HTTP/JSON/schema failures must not poison the cache.
+    pubDate is Unix milliseconds; answer=None means unanswered/unknown.
+    """
     import requests
 
     try:
         r1 = requests.post("https://irm.cninfo.com.cn/newircs/index/queryKeyboardInfo",
                            data={"keyWord": code}, headers={"User-Agent": UA}, timeout=10)
-        d1 = r1.json().get("data") or []
-        if not d1:
-            return []
-        org_id = d1[0].get("secid")
+        r1.raise_for_status()
+        lookup = r1.json()
+        if not isinstance(lookup, dict) or not isinstance(lookup.get("data"), list):
+            raise ValueError("invalid company lookup")
+        matches = lookup["data"]
+        if not matches or any(not isinstance(item, dict) for item in matches):
+            raise ValueError("company lookup unavailable")
+        org_id = matches[0].get("secid")
+        if not isinstance(org_id, str) or not org_id.strip():
+            raise ValueError("missing company identity")
         params = {"_t": 1, "stockcode": code, "orgId": org_id, "pageSize": page_size,
                   "pageNum": 1, "keyWord": "", "startDay": "", "endDay": ""}
-        rows = requests.post("https://irm.cninfo.com.cn/newircs/company/question",
-                             params=params, headers={"User-Agent": UA}, timeout=10).json().get("rows") or []
-    except Exception:
-        return []
-    out = []
-    for it in rows:
-        ts = it.get("pubDate")
-        out.append({
-            "company": it.get("companyShortName"),
-            "question": it.get("mainContent"), "answer": it.get("attachedContent"),
-            "answerer": it.get("attachedAuthor"),
-            "ask_time": datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M") if ts else "",
-        })
-    return out
+        response = requests.post("https://irm.cninfo.com.cn/newircs/company/question",
+                                 params=params, headers={"User-Agent": UA}, timeout=10)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
+            raise ValueError("invalid question page")
+        out = []
+        for item in payload["rows"]:
+            if not isinstance(item, dict) or not isinstance(item.get("mainContent"), str):
+                raise ValueError("invalid question row")
+            for field in ("companyShortName", "attachedContent", "attachedAuthor"):
+                if item.get(field) is not None and not isinstance(item[field], str):
+                    raise ValueError("invalid optional question field")
+            ts = item.get("pubDate")
+            if ts not in (None, 0, "", False) and (isinstance(ts, bool) or not isinstance(ts, (int, float)) or not math.isfinite(ts)):
+                raise ValueError("invalid question time")
+            out.append({
+                "company": item.get("companyShortName"),
+                "question": item["mainContent"], "answer": item.get("attachedContent"),
+                "answerer": item.get("attachedAuthor"),
+                "ask_time": datetime.fromtimestamp(ts / 1000, tz=timezone(timedelta(hours=8))).strftime(
+                    "%Y-%m-%d %H:%M") if ts else "",
+            })
+        return out
+    except Exception as exc:
+        # Also reaches AI tools: never expose URLs, provider payloads or credentials.
+        raise RuntimeError("投资者互动数据暂不可用；不能据此判断没有问答。") from exc
 
 
 def industry_comparison(top_n: int = 20) -> dict:

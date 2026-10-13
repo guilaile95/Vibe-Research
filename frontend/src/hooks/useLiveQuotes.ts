@@ -1,8 +1,7 @@
-// 自选股实时行情轮询。
+// 自选股行情快照轮询；请求频率不代表供应商数据更新频率。
 //
 // 几个刻意的选择：
-// - **3 秒一档**：A 股 level-1 行情本身就是 3 秒一笔快照，拉得再快也是同一份数据，
-//   纯粹浪费请求。这就是「能拿到的最快频率」。
+// - 请求结束后等待 3 秒再拉取；供应商可能返回延迟或旧快照。
 // - **递归 setTimeout 而不是 setInterval**：单次请求实测 ~750ms，网络一慢 setInterval
 //   会让请求首尾叠在一起。改成「上一次结束后再等 N 秒」，永远不会堆叠。
 // - **非交易时段自动暂停**：收盘后数据不再变化，继续轮询既无意义又给上游添压。
@@ -12,8 +11,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Quote } from "@/lib/api";
+import { validQuoteRows, quoteSnapshotStates, quoteSnapshotTime, type QuoteSnapshotState } from "@/lib/quoteSnapshot";
 
-export const LIVE_INTERVAL_MS = 3000;   // A 股 level-1 快照粒度
+export const LIVE_INTERVAL_MS = 3000;   // 正常请求完成后的等待时间，不是源更新承诺
 const MAX_BACKOFF_MS = 30_000;
 
 /** 取当前的北京时间。
@@ -43,8 +43,10 @@ export function isTradingHours(): boolean {
 export interface LiveQuotesState {
   quotes: Record<string, Quote>;
   loading: boolean;
-  /** 上次成功取到数据的时间戳（ms），从未成功则为 null */
+  /** 显示的报价中最早的有效供应商时间；任一时间未知则 null，不代表完整覆盖。 */
   updatedAt: number | null;
+  requestCompletedAt: number | null;
+  snapshots: Record<string, QuoteSnapshotState>;
   /** 轮询是否真的在跑（开关开着 ≠ 在跑：非交易时段 / 页面切走都会暂停） */
   polling: boolean;
   error: string | null;
@@ -55,7 +57,8 @@ export interface LiveQuotesState {
 export function useLiveQuotes(codes: string[], enabled: boolean): LiveQuotesState {
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [loading, setLoading] = useState(false);
-  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [requestCompletedAt, setRequestCompletedAt] = useState<number | null>(null);
+  const [failedCodes, setFailedCodes] = useState<string[]>([]);
   const [polling, setPolling] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -68,10 +71,13 @@ export function useLiveQuotes(codes: string[], enabled: boolean): LiveQuotesStat
   const staleRef = useRef(false);          // 请求飞行途中自选变过 / 有请求被跳过
   const fetchRef = useRef<(() => Promise<boolean>) | null>(null);
 
-  const fetchOnce = useCallback(async (): Promise<boolean> => {
+  const fetchOnce = useCallback(async (origin: "initial" | "manual" | "automatic" = "initial"): Promise<boolean> => {
     const cs = codesRef.current;
     if (!cs.length) {
       setQuotes({});
+      setFailedCodes([]);
+      setError(null);
+      setRequestCompletedAt(null);
       return true;
     }
     if (inFlightRef.current) {
@@ -86,19 +92,28 @@ export function useLiveQuotes(codes: string[], enabled: boolean): LiveQuotesStat
     setLoading(true);
     try {
       const data = await api.quote(requested);
-      setQuotes(data);
-      setUpdatedAt(Date.now());
-      setError(null);
+      const active = cs.filter(code => codesRef.current.includes(code));
+      const accepted = validQuoteRows(data, active);
+      setQuotes(accepted);
+      setFailedCodes([]);
+      setError(active.length && Object.keys(accepted).length < active.length
+        ? `行情未完整获取（${Object.keys(accepted).length}/${active.length}），缺失标的不显示报价`
+        : null);
       failuresRef.current = 0;
       return true;
     } catch {
       failuresRef.current += 1;
-      // 第一次失败先不打扰用户（可能只是一次网络抖动），连续失败才提示
-      if (failuresRef.current >= 2) setError("行情获取失败，正在重试…");
+      const active = cs.filter(code => codesRef.current.includes(code));
+      setFailedCodes(active);
+      // 保留的价格只能以明确旧快照展示；不把首次失败隐藏，也不承诺未排程的重试。
+      if (active.length) setError(origin === "automatic"
+        ? "自动行情获取失败，已有报价仅为旧快照"
+        : "行情刷新失败，可点刷新重试；已有报价仅为旧快照");
       return false;
     } finally {
       inFlightRef.current = false;
       setLoading(false);
+      setRequestCompletedAt(codesRef.current.length ? Date.now() : null);
       // 这一趟拉的是不是已经过期的名单？过期就立刻补一次（只补一次，不会滚雪球：
       // 补拉时 staleRef 已复位，只有再次发生变动才会再补）。
       const changed = codesRef.current.join(",") !== requested;
@@ -111,7 +126,7 @@ export function useLiveQuotes(codes: string[], enabled: boolean): LiveQuotesStat
   fetchRef.current = fetchOnce;
 
   const refresh = useCallback(() => {
-    void fetchOnce();
+    void fetchOnce("manual");
   }, [fetchOnce]);
 
   // 首次进入 / 自选变化：立即拉一次（与开关无关，页面总要有数据）
@@ -127,6 +142,10 @@ export function useLiveQuotes(codes: string[], enabled: boolean): LiveQuotesStat
     // mount→unmount→mount 必然触发，生产环境里切换开关同样会）。
     // 所以每次 await 之后都要重新检查 cancelled，且定时器句柄不跨 effect 共享。
     let cancelled = false;
+    // 请求锁只防止重叠请求；整拍也要有归属，避免可见性事件重复排下一拍。
+    // Scheduler ownership adapted from simonlin1212/Vibe-Research (MIT; root LICENSE),
+    // commit d643728e79b955dfdcdcd8b0dd362bd7c90c35c8, desktop/src/verticals/finance/lib/pollLoop.ts.
+    let running = false;
     let timer: number | null = null;
 
     const clear = () => {
@@ -139,7 +158,8 @@ export function useLiveQuotes(codes: string[], enabled: boolean): LiveQuotesStat
     const shouldRun = () => enabled && !document.hidden && isTradingHours() && codesRef.current.length > 0;
 
     const loop = async () => {
-      if (cancelled) return;
+      if (cancelled || running) return;
+      clear();
       if (!shouldRun()) {
         setPolling(false);
         // 没在跑也要保持一个心跳，好在开盘 / 页面切回来时自动恢复
@@ -147,7 +167,13 @@ export function useLiveQuotes(codes: string[], enabled: boolean): LiveQuotesStat
         return;
       }
       setPolling(true);
-      const ok = await fetchOnce();
+      running = true;
+      let ok: boolean;
+      try {
+        ok = await fetchOnce("automatic");
+      } finally {
+        running = false;
+      }
       if (cancelled) return;          // 请求期间被卸载/切换：到此为止，别再排下一拍
       const wait = ok
         ? LIVE_INTERVAL_MS
@@ -177,5 +203,7 @@ export function useLiveQuotes(codes: string[], enabled: boolean): LiveQuotesStat
     };
   }, [enabled, fetchOnce]);
 
-  return { quotes, loading, updatedAt, polling, error, refresh };
+  const displayedQuotes = validQuoteRows(quotes, codes);
+  const snapshots = quoteSnapshotStates(displayedQuotes, codes, failedCodes, Date.now());
+  return { quotes: displayedQuotes, loading, updatedAt: quoteSnapshotTime(snapshots), requestCompletedAt, snapshots, polling, error, refresh };
 }

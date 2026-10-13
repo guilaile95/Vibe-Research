@@ -27,7 +27,7 @@ def test_market_cloud_public_errors_do_not_expose_provider_details(
     def fail(*args, **kwargs):
         raise exception(raw)
 
-    target = "get_a_share_snapshot" if failure_stage == "snapshot" else "get_market_cloud"
+    target = "get_a_share_snapshot_observation" if failure_stage == "snapshot" else "get_market_cloud"
     monkeypatch.setattr(app_module.market, target, fail)
     response = client.get("/api/market/cloud")
     assert response.status_code == status

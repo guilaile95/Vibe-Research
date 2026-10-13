@@ -15,6 +15,7 @@ router = APIRouter(prefix="/api/signals/factor-validation", tags=["factor-valida
 class FactorValidationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    snapshot_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     factor_id: str = Field(min_length=1, max_length=80)
     forward_windows: list[int] = Field(default_factory=lambda: list(fv.FORWARD_WINDOWS), min_length=1, max_length=2)
     date_from: str | None = None

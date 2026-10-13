@@ -29,8 +29,8 @@ def _stock(code, name, *, f3=1.0, f21=1e10, f100="电子", **extra):
 def _install_snapshot(monkeypatch, stocks):
     """mock get_a_share_snapshot 返回指定股票列表。"""
     def fake_snapshot():
-        return [astock._map_a_share_row(s) for s in stocks]
-    monkeypatch.setattr(market, "get_a_share_snapshot", fake_snapshot)
+        return {"rows": [astock._map_a_share_row(s) for s in stocks], "fetched_at": "2026-09-30 10:00:00"}
+    monkeypatch.setattr(market, "get_a_share_snapshot_observation", fake_snapshot)
 
 
 # ── 1. 行业分组 + 流通市值面积 ────────────────────────────────────────
@@ -191,3 +191,86 @@ def test_market_cloud_industry_up_down_counts(monkeypatch):
     assert ind["up_count"] == 2
     assert ind["down_count"] == 1
     assert ind["avg_change_pct"] == pytest.approx(0.5)  # (2+1-1+0)/4
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_cloud_cache_provenance_preserves_original_observation(monkeypatch, partial):
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    clock = SimpleNamespace(seconds=1000., instant=datetime(2026, 9, 30, 1, 29, tzinfo=timezone.utc))
+    monkeypatch.setattr(market, "time", SimpleNamespace(time=lambda: clock.seconds))
+    monkeypatch.setattr(market, "datetime", SimpleNamespace(now=lambda tz: clock.instant.astimezone(tz)))
+    monkeypatch.setattr(market, "_CACHE", {})
+    rows = [_stock("600001", "有效股")]
+    if partial:
+        rows.append(_stock("600002", "缺字段", f21=None))
+    calls = []
+    monkeypatch.setattr(astock, "a_share_snapshot", lambda: calls.append(1) or [astock._map_a_share_row(row) for row in rows])
+    first = market.get_market_cloud()
+    clock.seconds += 120
+    clock.instant += timedelta(minutes=2)
+    cached = market.get_market_cloud()
+    assert calls == [1]
+    assert first["is_cached"] is False
+    assert cached["is_cached"] is True
+    assert cached["is_stale"] is False
+    assert first["status"] == cached["status"] == ("partial" if partial else "normal")
+    assert first["warnings"] == cached["warnings"]
+    assert first["source"] == cached["source"] == "eastmoney_push2"
+    assert first["fetched_at"] == cached["fetched_at"] == "2026-09-30 09:29:00"
+    assert first["observed_at"] == cached["observed_at"] == "2026-09-30T01:29:00+00:00"
+    assert cached["market_time_unknown"] is True
+    assert cached["data_time"] is cached["trade_date"] is None
+    # Returned cache metadata and rows cannot corrupt the stored observation.
+    cached["data"]["industries"].clear()
+    assert market.get_market_cloud()["data"]["industries"]
+    clock.seconds += market._TTL
+    clock.instant += timedelta(seconds=market._TTL)
+    refreshed = market.get_market_cloud()
+    assert refreshed["is_cached"] is False
+    assert refreshed["observed_at"] != first["observed_at"]
+    assert calls == [1, 1]
+
+
+def test_cloud_unavailable_does_not_invent_fetch_or_cache_metadata(monkeypatch):
+    def fail():
+        raise RuntimeError("offline fixture")
+    monkeypatch.setattr(market, "get_a_share_snapshot_observation", fail)
+    result = market.get_market_cloud()
+    assert result["status"] == "unavailable"
+    assert result["fetched_at"] is result["observed_at"] is result["is_cached"] is None
+    assert result["market_time_unknown"] is True
+
+
+def test_cloud_legacy_observation_cache_information_remains_unknown(monkeypatch):
+    _install_snapshot(monkeypatch, [_stock("600001", "有效股")])
+    result = market.get_market_cloud()
+    assert result["status"] == "normal"
+    assert result["is_cached"] is None
+    assert result["observed_at"] is None
+    assert result["market_time_unknown"] is True
+
+
+def test_cloud_api_serializes_provenance_without_retimestamping(monkeypatch):
+    from fastapi.testclient import TestClient
+    import app
+
+    observation = {
+        "rows": [astock._map_a_share_row(_stock("600001", "有效股"))],
+        "fetched_at": "2026-09-27 09:29:00",
+        "observed_at": "2026-09-27T01:29:00+00:00",
+        "is_cached": True,
+        "trade_date": None,
+        "data_time": None,
+    }
+    monkeypatch.setattr(market, "get_a_share_snapshot_observation", lambda: observation)
+    response = TestClient(app.app).get("/api/market/cloud?scope=all&period=today")
+    assert response.status_code == 200
+    envelope = response.json()["data"]
+    assert envelope["is_cached"] is True
+    assert envelope["is_stale"] is False
+    assert envelope["market_time_unknown"] is True
+    assert envelope["fetched_at"] == observation["fetched_at"]
+    assert envelope["observed_at"] == observation["observed_at"]
+    assert envelope["source"] == "eastmoney_push2"

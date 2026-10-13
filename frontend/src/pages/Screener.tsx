@@ -105,7 +105,9 @@ function FullMarketResultTable({ result }: { result: FullMarketResult }) {
   const metric = (row: FullMarketResult["rows"][number], key: FullMarketValueMetric) => {
     const value = row[key];
     const status = row.metric_status?.[key];
-    return status === "INSUFFICIENT_HISTORY" ? "历史不足" : formatFullMarketMetric(key, value);
+    if (status === "INSUFFICIENT_HISTORY") return "历史不足";
+    const formatted = formatFullMarketMetric(key, value);
+    return status === "STALE" || row.status === "stale" ? `${formatted}（过期）` : formatted;
   };
   return (
     <GlassCard className="overflow-hidden p-0" data-testid="full-market-results">
@@ -137,7 +139,7 @@ function FullMarketResultTable({ result }: { result: FullMarketResult }) {
                     <Link className="font-mono hover:text-primary hover:underline" to={`/stock-data?code=${row.code}`}>{row.code}</Link>
                     <Link className="ml-2 text-[10px] text-primary hover:underline" to={candidateWorkspaceHref(row.code)}>候选研究</Link>
                   </td>
-                  <td className="px-4 py-2">{row.latest_date || "—"}</td>
+                  <td className="px-4 py-2">{row.latest_date || "—"}{row.status === "stale" && <span className="ml-1 text-amber-600">过期快照</span>}</td>
                   <td className="px-4 py-2">{metric(row, "latest_close")}</td>
                   <td className="px-4 py-2">{metric(row, "return_5d")}</td>
                   <td className="px-4 py-2">{metric(row, "return_20d")}</td>
@@ -187,6 +189,13 @@ function ResultGroup({ title, items }: { title: string; items: ScreenerStockResu
                 <span className="ml-auto text-xs text-muted-foreground">{item.technical_status}</span>
               </summary>
               <div className="mt-3 space-y-2 text-xs text-muted-foreground">
+                {item.data_coverage ? (
+                  <p data-testid={`screener-sample-${item.code}`}>
+                    本股样本：{item.data_coverage.returned_rows ?? "未知"} 行 · {item.data_coverage.start || "未知"} 至 {item.data_coverage.end || "未知"}
+                    {item.data_coverage.status === "empty" ? " · 未返回数据" : item.data_coverage.status === "unavailable" ? " · 读取失败" : ""}
+                    <span className="block break-all">快照：{item.data_coverage.snapshot_id || "未知"} · 查询截止：{item.data_coverage.cutoff || "未知"}</span>
+                  </p>
+                ) : <p>本股样本覆盖未提供</p>}
                 {item.limitations?.map((line) => <p key={line}>{line}</p>)}
                 {item.condition_results?.map((condition) => (
                   <div key={condition.id} className="rounded-lg border border-border/50 px-3 py-2">
@@ -635,22 +644,28 @@ export function Screener() {
             <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
               <span>研究数据来源</span>
               <span className={result.research_data.status === "normal" ? "text-emerald-600" : "text-destructive"}>
-                {result.research_data.status === "normal" ? "可用" : "不可评估"}
+                {result.research_data.status === "normal" ? "全部请求已读到样本" : result.research_data.status === "partial" ? "部分请求读到样本" : "请求样本不可用"}
               </span>
             </div>
             <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-4">
               <span>Dataset：{result.research_data.dataset_id}</span>
               <span>Provider：{result.research_data.provider_id}</span>
               <span>调整：{result.research_data.adjustment}</span>
-              <span>As of：{result.research_data.as_of || "未知"}</span>
+              <span>数据集截止：{result.research_data.as_of || "未知"}</span>
             </div>
             {result.research_data.coverage ? (
               <p className="text-xs text-muted-foreground">
-                覆盖：{String(result.research_data.coverage.start || "未知")} 至 {String(result.research_data.coverage.end || "未知")} · {String(result.research_data.coverage.row_count || 0)} 行 · {String(result.research_data.coverage.code_count || 0)} 个代码
+                整份数据集覆盖（非本次请求）：{String(result.research_data.coverage.start || "未知")} 至 {String(result.research_data.coverage.end || "未知")} · {String(result.research_data.coverage.row_count || 0)} 行 · {String(result.research_data.coverage.code_count || 0)} 个代码
               </p>
             ) : (
-              <p className="text-xs text-destructive">无本地研究数据，当前结果不可评估。</p>
+              <p className="text-xs text-destructive">无法确认统一数据集来源，请核对各股样本状态。</p>
             )}
+            {result.batch_coverage ? (
+              <p className="text-xs text-muted-foreground" data-testid="screener-batch-coverage">
+                本次请求 {result.batch_coverage.requested_count} 股 · 读到样本 {result.batch_coverage.with_data_count} 股 · 空样本 {result.batch_coverage.empty_count} 股 · 读取失败 {result.batch_coverage.failed_count} 股
+                <span className="block">全部条件可评估 {result.batch_coverage.fully_evaluable_count} 股 · 有缺失条件 {result.batch_coverage.missing_condition_count} 股 · 整股不可评估 {result.batch_coverage.unavailable_count} 股</span>
+              </p>
+            ) : <p className="text-xs text-muted-foreground">本次请求覆盖未提供</p>}
             <p className="text-xs text-muted-foreground">
               Artifact：{String(result.research_data.provenance.artifact_sha256 || result.research_data.provenance.source_name || "未提供")}
             </p>
@@ -670,16 +685,16 @@ export function Screener() {
           <GlassCard className="space-y-3 p-4" data-testid="full-market-summary">
             <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
               <span>全市场筛选数据</span>
-              <span className={fullMarketResult.status === "normal" ? "text-emerald-600" : "text-destructive"}>{fullMarketResult.status === "normal" ? "可用" : "不可用"}</span>
+              <span className={fullMarketResult.status === "normal" ? "text-emerald-600" : "text-destructive"}>{fullMarketResult.status === "normal" ? "可用" : fullMarketResult.status === "partial" ? "部分可用（含过期快照）" : "不可用"}</span>
               <span className="text-xs text-muted-foreground">As of：{fullMarketResult.as_of || "未知"}</span>
             </div>
             {fullMarketResult.coverage ? (
-              <p className="text-xs text-muted-foreground">覆盖：{fullMarketResult.coverage.start} 至 {fullMarketResult.coverage.end} · {fullMarketResult.coverage.row_count} 行 · {fullMarketResult.coverage.code_count} 个代码 · 当前横截面 {fullMarketResult.coverage.universe_count} 个代码</p>
+              <p className="text-xs text-muted-foreground">覆盖：{fullMarketResult.coverage.start} 至 {fullMarketResult.coverage.end} · {fullMarketResult.coverage.row_count} 行 · {fullMarketResult.coverage.code_count} 个代码 · 横截面 {fullMarketResult.coverage.universe_count} 个代码{fullMarketResult.coverage.current_count != null ? ` · 当期 ${fullMarketResult.coverage.current_count} · 过期 ${fullMarketResult.coverage.stale_count ?? 0}` : ""}</p>
             ) : <p className="text-xs text-destructive">本地研究数据不可用，全市场筛选不可用；没有逐票请求回退。</p>}
             <div className="grid gap-2 text-xs sm:grid-cols-2">
               {(["ma20", "ma60"] as const).map((key) => {
                 const breadth = fullMarketResult.breadth[key];
-                return <span key={key}>Breadth {key.toUpperCase()}：{breadth.breadth == null ? "不可评估" : `${(breadth.breadth * 100).toFixed(1)}%`} · 可评估 {breadth.evaluable_count} · 历史不足 {breadth.insufficient_count}</span>;
+                return <span key={key}>Breadth {key.toUpperCase()}：{breadth.breadth == null ? "不可评估" : `${(breadth.breadth * 100).toFixed(1)}%`} · 可评估 {breadth.evaluable_count} · 历史不足 {breadth.insufficient_count}{breadth.stale_count != null ? ` · 过期排除 ${breadth.stale_count}` : ""}</span>;
               })}
             </div>
             <p className="text-xs text-muted-foreground">Artifact：{fullMarketResult.provenance.artifact_sha256 || "未提供"} · Source：{fullMarketResult.provenance.source_name || fullMarketResult.provenance.source_kind || "未知"}</p>

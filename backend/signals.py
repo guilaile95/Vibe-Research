@@ -49,9 +49,9 @@ SEED_FILE = os.path.join(HERE, "data", "signals_gpu_seed.json")
 SCHEMA = 4  # 缓存结构版本：结构变更时 +1，旧缓存/旧快照自动作废重抓
 
 HOW_TO_READ = [
-    "现货卡显示的就是走势曲线的最新一点——同一数据源、同一算法，两处数字必然一致；口径为 Vast 可租挂单按机型档位分组统计后聚合的中位价（含平台费，非逐张挂单的精确中位）。统计站数据有小时级延迟，卡上标注了观测时点。",
+    "现货卡显示的就是走势曲线的最新一点——同一数据源、同一算法，两处数字必然一致；口径为 Vast 可租挂单按机型档位分组统计后聚合的中位价（含平台费，非逐张挂单的精确中位）。卡上时间为统计查询采样时点，不代表上游采集时间；上游采集健康和完整性尚未验证。",
     "远期合约按 Ornn 跨平台指数的「整月平均」结算——与「此刻」的现货价是两个市场、两种时间口径，数字不能直接对减。",
-    "撮合市场报价分散、盘中波动大，看中位数不看单一挂单；某型号暂无统计序列是市场状态，不是数据故障。",
+    "撮合市场报价分散、盘中波动大，看中位数不看单一挂单；某型号暂无统计序列可能是市场状态或数据缺失，不能据此判定没有市场。",
     "前沿卡紧与旧卡松可以同时为真（B200 与 H100 价差长期数倍），只看一根线别下全市场结论。",
 ]
 
@@ -71,6 +71,33 @@ HIST_BASE = ("https://500.farm/vastai/grafana.v2/api/datasources/proxy/uid/"
 HIST_QUERY = ('quantile(0.5, vastai_v2_ondemand_price_median_dollars'
               '{gpu_name="%s", rented="no"})')
 HIST_DAYS = 365
+# Query-range samples are daily; tolerate one extra daily interval. This checks
+# query sample recency only, never the exporter's retained snapshot age.
+HISTORY_MAX_SAMPLE_AGE = 2 * 86400
+COUNT_MAX_SAMPLE_AGE = 2 * 3600
+
+
+def _farm_health(sample_ts: int | None, *, retrieved_at: int | None,
+                 max_age: int, now: int | None = None) -> dict:
+    now = int(time.time()) if now is None else now
+    freshness = "unavailable" if sample_ts is None else (
+        "stale" if now - sample_ts > max_age else "fresh")
+    return {"retrieved_at": retrieved_at, "sample_asof_ts": sample_ts,
+            "sample_freshness": freshness,
+            "source_observed_at": None, "source_freshness": "unknown",
+            "exporter_health": "unknown", "completeness": "unknown"}
+
+
+def _farm_result(payload: dict) -> list:
+    # Prometheus error envelopes can arrive with HTTP 200. Missing data is not
+    # an empty market, and upstream error strings must not leak URLs/secrets.
+    if not isinstance(payload, dict) or payload.get("status") not in (None, "success"):
+        raise ValueError("统计查询失败")
+    data = payload.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("result"), list):
+        raise ValueError("统计查询响应格式异常")
+    return data["result"]
+
 HIST_SOURCE = ("500.farm 对 Vast.ai 可租挂单的逐日中位统计（按机型档位分组统计后聚合，"
                "含平台费；曲线为每日定时采样，现货卡即其最新一点）")
 
@@ -102,45 +129,78 @@ def _farm_history(gpu: str) -> dict:
            + urllib.parse.urlencode({
                "query": HIST_QUERY % gpu,
                "start": now - HIST_DAYS * 86400, "end": now, "step": 86400}))
-    result = _get_json(url, headers=_KALSHI_UA, timeout=60).get("data", {}).get("result") or []
+    result = _farm_result(_get_json(url, headers=_KALSHI_UA, timeout=60))
+    retrieved_at = int(time.time())
     if not result:
         return {"gpu": gpu, "unavailable": True,
-                "note": "统计站暂无该型号的历史序列（市场状态或型号名变更）"}
+                "health": _farm_health(None, retrieved_at=retrieved_at,
+                                       max_age=HISTORY_MAX_SAMPLE_AGE),
+                "note": "统计站暂无该型号的历史序列（市场状态、型号名变更或数据缺失）"}
+    if len(result) != 1 or not isinstance(result[0], dict):
+        raise ValueError("统计查询响应序列异常")
     points = []
-    for ts, val in result[0].get("values") or []:
+    dropped = 0
+    for sample in result[0].get("values") or []:
         try:
-            price = float(val)
-        except (TypeError, ValueError):
+            ts, val = sample
+            stamp, price = float(ts), float(val)
+            if (isinstance(ts, bool) or not math.isfinite(stamp) or stamp < 0
+                    or stamp > retrieved_at + 300 or not stamp.is_integer()
+                    or not math.isfinite(price) or price < 0):
+                raise ValueError
+        except (TypeError, ValueError, OverflowError):
+            dropped += 1
             continue
-        # Prometheus 在切片空窗时会给 "NaN"/"Inf"——非有限值一旦进缓存，
-        # FastAPI 的 JSON 序列化会整个拒绝，refresh 和后续 GET 全部报错
-        if not math.isfinite(price):
-            continue
-        points.append([int(ts), round(price, 2)])
+        points.append([int(stamp), round(price, 2)])
     if not points:
         raise ValueError("返回了序列但无一个点可解析（上游契约可能已变）")
-    return {"gpu": gpu, "n_points": len(points), "points": points,
-            "latest": points[-1][1]}
+    if any(b[0] <= a[0] for a, b in zip(points, points[1:])):
+        raise ValueError("统计序列时间重复或乱序")
+    health = _farm_health(points[-1][0], retrieved_at=retrieved_at,
+                          max_age=HISTORY_MAX_SAMPLE_AGE)
+    # This describes the requested sampling window, not market-universe coverage.
+    partial = (dropped > 0 or points[0][0] > now - HIST_DAYS * 86400 + 86400
+               or points[-1][0] < now - 86400
+               or any(b[0] - a[0] > 86400 for a, b in zip(points, points[1:])))
+    health.update(history_coverage="partial" if partial else "sampled_window",
+                  dropped_samples=dropped)
+    row = {"gpu": gpu, "n_points": len(points), "points": points,
+           "latest": points[-1][1], "health": health}
+    if health["sample_freshness"] == "stale":
+        row.update(stale=True, observed_at=time.strftime(
+            "%Y-%m-%d %H:%M", time.localtime(points[-1][0])))
+    return row
 
 
 def _farm_count(gpu: str) -> dict | None:
-    """当前市场挂单卡数：{available: 可租, total: 全市场}。
-
-    装饰性规模读数（不是信号本体）：拉取失败返回 None，UI 上该字段自然缺席即可见，
-    不单独进 errors。一次查询按 rented label 分组同时拿 no（可租）与 any（全部）。
-    """
+    """Counts with query sample times, never inferred exporter collection times."""
     url = (HIST_BASE + "/query?"
            + urllib.parse.urlencode({"query": f'sum by (rented) (vastai_v2_gpu_count{{gpu_name="{gpu}"}})'}))
-    result = _get_json(url, headers=_KALSHI_UA, timeout=30).get("data", {}).get("result") or []
-    by_rented = {}
+    result = _farm_result(_get_json(url, headers=_KALSHI_UA, timeout=30))
+    now = int(time.time())
+    by_rented, timestamps = {}, {}
     for r in result:
-        try:
-            by_rented[(r.get("metric") or {}).get("rented")] = int(float(r["value"][1]))
-        except (KeyError, TypeError, ValueError):
+        label = (r.get("metric") or {}).get("rented")
+        if label not in ("no", "any"):
             continue
-    if "no" not in by_rented and "any" not in by_rented:
+        try:
+            ts, value = map(float, r["value"])
+            if (not math.isfinite(value) or value < 0 or not value.is_integer()
+                    or not math.isfinite(ts) or ts < 0 or ts > now + 300
+                    or not ts.is_integer() or label in by_rented):
+                raise ValueError
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise ValueError("挂单卡数响应格式异常") from None
+        by_rented[label], timestamps[label] = int(value), int(ts)
+    if not by_rented:
         return None
-    return {"available": by_rented.get("no"), "total": by_rented.get("any")}
+    if "no" in by_rented and "any" in by_rented and by_rented["no"] > by_rented["any"]:
+        raise ValueError("可租卡数超过总卡数")
+    health = _farm_health(min(timestamps.values()), retrieved_at=now,
+                          max_age=COUNT_MAX_SAMPLE_AGE)
+    health["sample_timestamps"] = timestamps
+    return {"available": by_rented.get("no"), "total": by_rented.get("any"),
+            "health": health}
 
 
 def _spot_from_history(hist_row: dict, count: dict | None) -> dict:
@@ -149,7 +209,7 @@ def _spot_from_history(hist_row: dict, count: dict | None) -> dict:
     历史行的 stale / 错误状态原样传染给现货——它们本来就是同一份数据。
     """
     base = {"gpu": hist_row.get("gpu")}
-    for key in ("stale", "fetch_error", "observed_at"):
+    for key in ("stale", "fetch_error", "observed_at", "health"):
         if hist_row.get(key) is not None:
             base[key] = hist_row[key]
     if hist_row.get("err"):
@@ -158,6 +218,8 @@ def _spot_from_history(hist_row: dict, count: dict | None) -> dict:
         return {**base, "unavailable": True,
                 "note": hist_row.get("note") or "暂无统计序列（市场状态，非故障）"}
     ts, price = hist_row["points"][-1]
+    if count and count.get("health"):
+        base["count_health"] = count["health"]
     return {**base, "median": price, "asof_ts": ts,
             "available_gpus": (count or {}).get("available"),
             "total_gpus": (count or {}).get("total")}
@@ -420,7 +482,13 @@ def _merge_section(fresh_fn, key_name: str, previous_row: dict | None,
     返回 (row, fresh_ok)。
     """
     try:
-        return fresh_fn(), True
+        row = fresh_fn()
+        if previous_row and previous_row.get("points") and row.get("unavailable"):
+            raise ValueError("统计序列缺失，无法判定市场状态，保留旧数据")
+        if (previous_row and previous_row.get("points") and row.get("points")
+                and row["points"][-1][0] < previous_row["points"][-1][0]):
+            raise ValueError("统计查询终点早于已有快照，保留旧数据")
+        return row, True
     except Exception as e:  # noqa: BLE001 — 网络/契约错误都走同一条回填路径
         errors.append(f"{label}: {e}")
         if isinstance(previous_row, dict) and not previous_row.get("err"):
@@ -454,6 +522,8 @@ def _fetch_gpu_rent_locked() -> dict:
     old_hist = {g.get("gpu"): g for g in previous.get("history", {}).get("gpus", [])
                 if isinstance(g, dict) and not g.get("err")}
 
+    old_spot = {g.get("gpu"): g for g in previous.get("spot", {}).get("gpus", [])}
+    section_status = {}
     spot_gpus, hist_gpus = [], []
     for gpu in SPOT_GPUS:
         row, ok = _merge_section(lambda g=gpu: _farm_history(g), "gpu",
@@ -462,17 +532,38 @@ def _fetch_gpu_rent_locked() -> dict:
             row.setdefault("observed_at", prev_generated)
         if row.get("err"):
             row["gpu"] = gpu
+        section_status[gpu] = ("error" if row.get("err") else "stale" if row.get("stale")
+                               else "unavailable" if row.get("unavailable")
+                               else "partial" if row.get("health", {}).get("history_coverage") == "partial"
+                               else "retrieved")
         hist_gpus.append(row)
         fresh_ok = fresh_ok or ok
 
-        # 现货 = 曲线最新点（同一份数据派生）；挂单卡数是装饰性读数，失败置 None
+        # 现货 = 曲线最新点；卡数失败时保留旧值，并明确标记取数/采样状态。
         count = None
+        count_status = "unavailable"
         if ok:
             try:
                 count = _farm_count(gpu)
-            except Exception:  # noqa: BLE001 — 规模读数缺席在 UI 上可见，不拦主流程
+                count_status = "retrieved" if count is not None else "unavailable"
+            except Exception:  # noqa: BLE001 — 卡数失败状态独立，不拦主流程
                 count = None
-        spot_gpus.append(_spot_from_history(row, count))
+                count_status = "error"
+        section_status[f"{gpu}_count"] = (count.get("health", {}).get("sample_freshness")
+                                                if count is not None else count_status)
+        if section_status[f"{gpu}_count"] == "fresh":
+            section_status[f"{gpu}_count"] = "retrieved"
+        spot = _spot_from_history(row, count)
+        if count is None:
+            old = old_spot.get(gpu, {})
+            for field in ("available_gpus", "total_gpus"):
+                if old.get(field) is not None:
+                    spot[field] = old[field]
+            spot["count_health"] = {**old.get("count_health", _farm_health(
+                None, retrieved_at=None, max_age=COUNT_MAX_SAMPLE_AGE)),
+                "fetch_status": count_status, "sample_freshness": "stale" if
+                any(old.get(k) is not None for k in ("available_gpus", "total_gpus")) else "unavailable"}
+        spot_gpus.append(spot)
 
     old_fw = previous.get("forward")
     forward, ok = _merge_section(_kalshi_forward, "source",
@@ -486,9 +577,16 @@ def _fetch_gpu_rent_locked() -> dict:
     if forward.get("candle_failures"):
         errors.append(f"Kalshi 远期: {forward['candle_failures']} 档合约日 K 拉取失败（该档按缺档跳过）")
 
+    section_status["forward"] = ("error" if forward.get("err") else "stale" if forward.get("stale")
+                                 else "partial" if forward.get("settled_error") or forward.get("candle_failures")
+                                 else "retrieved")
     data = {
         **_base_payload(),
-        "generated_at": time.strftime("%Y-%m-%d %H:%M"),
+        "refresh_status": "failed" if not fresh_ok else "partial" if any(
+            v != "retrieved" for v in section_status.values()) else "retrieved",
+        "section_status": section_status,
+        "generated_at_kind": "response_assembly_time",
+        "generated_at": time.strftime("%Y-%m-%d %H:%M") if fresh_ok else prev_generated,
         "spot": {"gpus": spot_gpus},
         "history": {"gpus": hist_gpus, "days": HIST_DAYS},
         "forward": forward,
@@ -534,7 +632,33 @@ def load_cache() -> dict | None:
     旧文案，措辞修正后若原样返回，UI 与 AI 工具会展示与当前实现矛盾的口径描述。
     """
     data = _load_json_checked(CACHE_FILE) or _load_json_checked(SEED_FILE)
-    return {**data, **_base_payload()} if data else None
+    if not data:
+        return None
+    # A cached/seed response ages even when nobody presses refresh. Old schema-4
+    # records lack provenance; never backfill source observation from generated_at.
+    for row in data.get("history", {}).get("gpus", []):
+        points = row.get("points") or []
+        old = row.get("health") or {}
+        row["health"] = {**old, **_farm_health(
+            points[-1][0] if points else None, retrieved_at=old.get("retrieved_at"),
+            max_age=HISTORY_MAX_SAMPLE_AGE)}
+        if row["health"]["sample_freshness"] == "stale":
+            row["stale"] = True
+    by_gpu = {r.get("gpu"): r for r in data.get("history", {}).get("gpus", [])}
+    for row in data.get("spot", {}).get("gpus", []):
+        history = by_gpu.get(row.get("gpu"), {})
+        if history.get("health"):
+            row["health"] = history["health"]
+        if history.get("stale"):
+            row["stale"] = True
+        old = row.get("count_health") or {}
+        row["count_health"] = {**old, **_farm_health(
+            old.get("sample_asof_ts"), retrieved_at=old.get("retrieved_at"),
+            max_age=COUNT_MAX_SAMPLE_AGE)}
+        if old.get("fetch_status") in ("unavailable", "error") and any(
+                row.get(k) is not None for k in ("available_gpus", "total_gpus")):
+            row["count_health"]["sample_freshness"] = "stale"
+    return {**data, **_base_payload()}
 
 
 def skeleton() -> dict:

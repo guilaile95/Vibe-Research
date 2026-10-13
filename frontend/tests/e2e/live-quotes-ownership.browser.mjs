@@ -1,0 +1,267 @@
+/** CI-only full-app synthetic quote scheduler and snapshot acceptance. Build first.
+ * E2E_LIVE_QUOTES_OUTPUT_DIR is required. No backend, quote provider or model.
+ * The app interval is fixed: exercise failure backoff, not a nonexistent setting.
+ * Provider times and failure states are fixture provenance, never valuation authority.
+ */
+import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright';
+import { preview } from 'vite';
+
+const root = fileURLToPath(new URL('../..', import.meta.url));
+assert.ok(process.env.E2E_LIVE_QUOTES_OUTPUT_DIR, 'Set E2E_LIVE_QUOTES_OUTPUT_DIR');
+const output = resolve(process.env.E2E_LIVE_QUOTES_OUTPUT_DIR);
+mkdirSync(output, { recursive: true });
+const results = { suite: 'live-quotes-ownership', transport: 'synthetic held responses; no backend/provider/model',
+  boundary: 'scheduler ownership and quote snapshot provenance; no real-provider freshness or valuation claim', cases: [], status: 'running' };
+const record = () => writeFileSync(join(output, 'results.json'), JSON.stringify(results, null, 2));
+record();
+let browser, server;
+try {
+  assert.ok(existsSync(join(root, 'dist/index.html')), 'Run npm run build first');
+  server = await preview({ root, configFile: false, preview: { host: '127.0.0.1', port: 0, strictPort: true } });
+  const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
+  browser = await chromium.launch({ headless: true });
+  for (const width of [1440, 390]) {
+    const context = await browser.newContext({ viewport: { width, height: 900 }, serviceWorkers: 'block' });
+    await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+    const page = await context.newPage(); page.setDefaultTimeout(10000);
+    const errors = [], external = [], requests = [], pending = new Set();
+    let currentCase = 'initial-readiness';
+    const defaultQuotes = {
+      '600519': { name: 'Synthetic quote', price: 1300, change_pct: 2.5, amount_wan: 20000, data_time: '2026-10-12T09:59:00+08:00', trade_date: '2026-10-12' },
+      '000001': { name: 'Older synthetic quote', price: 10, change_pct: -1, amount_wan: 0, data_time: '2026-10-09T15:00:00+08:00', trade_date: '2026-10-09' },
+    };
+    page.on('pageerror', error => errors.push(error.message));
+    await page.clock.install({ time: new Date('2026-10-12T01:59:59Z') });
+    await context.addInitScript(() => {
+      localStorage.setItem('vr-watchlist-live', 'off');
+      let hidden = false;
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => hidden ? 'hidden' : 'visible' });
+      const nativeSet = window.setTimeout.bind(window), nativeClear = window.clearTimeout.bind(window);
+      const timers = new Map();
+      // Observe real bundled Watchlist timers, without changing scheduling.
+      // Fail-closed assertions below also ensure this observes the current bundle.
+      window.setTimeout = (callback, ms, ...args) => {
+        const owned = /\/Watchlist-[^/\s]+\.js/.test(new Error().stack || '')
+          && [3000, 6000, 10000, 12000, 24000, 30000].includes(ms);
+        let id;
+        id = nativeSet((...values) => { timers.delete(id); callback(...values); }, ms, ...args);
+        if (owned) timers.set(id, ms);
+        return id;
+      };
+      window.clearTimeout = id => { timers.delete(id); nativeClear(id); };
+      window.__quoteAcceptance = {
+        timers: () => [...timers.values()],
+        visible: value => { hidden = !value; document.dispatchEvent(new Event('visibilitychange')); },
+      };
+    });
+    await context.route('**/*', async route => {
+      const request = route.request(), url = new URL(request.url());
+      if (request.method() === 'GET' && request.resourceType() === 'stylesheet'
+          && url.href === 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap') {
+        return route.fulfill({ contentType: 'text/css', body: '/* Offline system font fallback. */' });
+      }
+      if (url.origin !== origin) { external.push(request.url()); return route.abort(); }
+      if (!url.pathname.startsWith('/api/')) return route.continue();
+      if (request.method() !== 'GET') { errors.push(`Unexpected mutation: ${request.method()} ${url.pathname}`); return route.abort(); }
+      if (url.pathname === '/api/watchlist') return route.fulfill({ json: { data: {
+        status: 'valid', data: { codes: ['600519', '000001'], updated_at: '2026-10-12 10:00:00' }, etag: '1111111111111111',
+      } } });
+      if (url.pathname === '/api/watchlist/anomalies') return route.fulfill({ json: { data: { items: [], unavailable_codes: [] } } });
+      if (url.pathname === '/api/native-intel/watchlist-context') return route.fulfill({ json: { data: {
+        status: 'ok', codes: ['600519', '000001'], degraded: [], securities: [], usage_boundary: 'observation_only_not_an_investment_authority',
+      } } });
+      if (url.pathname === '/api/quote') {
+        let release;
+        const gate = new Promise(done => { release = done; });
+        const hold = { release, status: 200, data: defaultQuotes, codes: url.searchParams.get('codes') };
+        requests.push(hold); pending.add(hold);
+        const timeout = setTimeout(() => { errors.push('Unreleased synthetic quote hold expired'); release(); }, 20000);
+        try {
+          await gate;
+          await route.fulfill({ status: hold.status, json: hold.status === 200
+            ? { data: hold.data }
+            : { detail: 'SYNTHETIC_QUOTE_FAILURE' } });
+        } catch (error) { errors.push(`Quote route: ${error.message}`); }
+        finally { clearTimeout(timeout); pending.delete(hold); }
+        return;
+      }
+      return route.fulfill({ json: { data: {} } });
+    });
+    const until = async predicate => {
+      const deadline = Date.now() + 10000;
+      while (!predicate()) { assert.ok(Date.now() < deadline, `Timed out: ${currentCase}`); await new Promise(done => setTimeout(done, 10)); }
+    };
+    const count = async expected => { await until(() => requests.length >= expected); assert.equal(requests.length, expected); };
+    const settle = async (index, status = 200, data = defaultQuotes) => {
+      requests[index].data = data;
+      requests[index].status = status; requests[index].release(); await until(() => !pending.has(requests[index]));
+    };
+    const timers = async expected => {
+      await page.waitForFunction(value => JSON.stringify(window.__quoteAcceptance.timers()) === JSON.stringify(value), expected);
+      assert.deepEqual(await page.evaluate(() => window.__quoteAcceptance.timers()), expected);
+    };
+    const visibilityBurst = () => page.evaluate(() => {
+      for (let i = 0; i < 8; i++) { window.__quoteAcceptance.visible(false); window.__quoteAcceptance.visible(true); }
+    });
+    const rowStatus = async (code, expected) => {
+      await page.waitForFunction(({ code, expected }) => document.querySelector(`[data-testid="quote-status-${code}"]`)?.textContent === expected, { code, expected });
+      assert.equal(await page.getByTestId(`quote-status-${code}`).textContent(), expected);
+    };
+    const providerLabel = time => new Date(time).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) + ' 北京时间';
+    const oldProviderLabel = providerLabel(defaultQuotes['000001'].data_time);
+    const recentProviderLabel = providerLabel(defaultQuotes['600519'].data_time);
+    const checkStatusLayout = async () => {
+      const geometry = await page.getByTestId('quote-refresh-layout').evaluate(group => {
+        const metadata = group.querySelector('[data-testid="quote-provenance"]');
+        const button = group.querySelector('button[aria-label="刷新行情与异动"]');
+        const box = element => {
+          const r = element.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height,
+            scrollWidth: element.scrollWidth, clientWidth: element.clientWidth };
+        };
+        return {
+          viewport: innerWidth, documentWidth: document.documentElement.scrollWidth,
+          group: box(group), metadata: box(metadata), button: box(button),
+          display: getComputedStyle(metadata).display, wrap: getComputedStyle(metadata).flexWrap,
+          items: [...metadata.querySelectorAll('.quote-status-item')].map(item => ({ ...box(item), error: item.classList.contains('quote-status-error') })),
+          labels: [...metadata.querySelectorAll('.quote-status-label')].map(label => getComputedStyle(label).display),
+        };
+      });
+      assert.ok(geometry.documentWidth <= geometry.viewport + 1, 'Watchlist must not overflow horizontally');
+      assert.ok(geometry.group.left >= -1 && geometry.group.right <= geometry.viewport + 1, 'status group remains within viewport');
+      assert.ok(geometry.button.width >= 44 && geometry.button.height >= 44, 'refresh target remains at least 44 by 44');
+      assert.ok(geometry.metadata.right <= geometry.button.left - 8, 'refresh has a separate nonoverlapping column');
+      assert.ok(geometry.items.length >= 5, 'all quote provenance fields are inspected');
+      for (const item of geometry.items) {
+        assert.ok(item.left >= geometry.metadata.left - 1 && item.right <= geometry.metadata.right + 1, 'status block remains inside metadata');
+        assert.ok(item.scrollWidth <= item.clientWidth + 1, 'status text is not horizontally clipped');
+      }
+      if (width === 390) {
+        assert.equal(geometry.display, 'grid');
+        assert.ok(geometry.labels.every(display => display === 'block'), 'mobile source/receipt labels stack over values');
+        for (const [index, item] of geometry.items.entries()) {
+          assert.ok(item.width >= 180 && item.width >= geometry.metadata.width - 1, 'mobile status uses a readable full-width block, not a narrow vertical strip');
+          assert.ok(item.height <= 100, 'fixture status text must not become a tall character column');
+          if (index) assert.ok(item.top >= geometry.items[index - 1].bottom + 4, 'mobile status blocks stack without overlap');
+        }
+      } else {
+        assert.equal(geometry.display, 'flex'); assert.equal(geometry.wrap, 'wrap');
+        assert.ok(geometry.labels.every(display => display === 'inline'), 'desktop labels stay compact');
+        const regular = geometry.items.filter(item => !item.error);
+        assert.ok(regular.some((item, index) => regular.slice(index + 1).some(next => Math.abs(item.top - next.top) < 1)), 'desktop status shares rows rather than becoming a mobile-only column');
+      }
+      return geometry;
+    };
+    const checkpoint = async name => {
+      // The SPA cleanup checkpoint intentionally has no Watchlist. Every other
+      // actual-app checkpoint must satisfy both semantics above and geometry here.
+      const layout = name === 'spa-unmount-pending-cleanup' ? null : await checkStatusLayout();
+      await page.screenshot({ path: join(output, `${width}-${name}.png`), fullPage: true });
+      if (layout) await page.getByTestId('quote-refresh-layout').screenshot({ path: join(output, `${width}-${name}-status.png`) });
+      results.cases.push({ width, name, quoteRequests: requests.length, timers: await page.evaluate(() => window.__quoteAcceptance.timers()), layout }); record();
+    };
+    try {
+      await page.goto(`${origin}/watchlist`, { waitUntil: 'domcontentloaded' });
+      currentCase = 'initial-quote-request';
+      await count(1); await settle(0);
+      currentCase = 'initial-quote-render';
+      await page.getByText('Synthetic quote', { exact: true }).first().waitFor();
+      await page.getByRole('button', { name: '自动刷新', exact: true }).waitFor();
+      // React's lazy-route Suspense reveal uses a timer. Keep the installed clock
+      // running through concrete app readiness, then freeze while polling is off.
+      // The one-second future boundary is required by pauseAt; no quote timer
+      // exists yet, so every tested interval still starts from a paused clock.
+      await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 1000)));
+      await timers([]);
+      currentCase = 'mixed-provider-times';
+      await rowStatus('600519', `快照 · 行情时间 ${recentProviderLabel}`);
+      await rowStatus('000001', `快照 · 行情时间 ${oldProviderLabel}`);
+      await page.getByText(`已显示快照最早行情时间 ${oldProviderLabel}`, { exact: true }).waitFor();
+      await page.getByText('快照覆盖 2/2', { exact: true }).waitFor();
+      await page.getByText(/上次请求完成.*不是行情时间/).waitFor();
+      await checkpoint(currentCase);
+      currentCase = 'enable-first-poll';
+      await page.getByRole('button', { name: '自动刷新', exact: true }).click();
+      await count(2);
+      currentCase = 'held-visibility-single-owner';
+      await visibilityBurst(); await page.clock.runFor(9000);
+      assert.equal(requests.length, 2); await timers([]);
+      // A held request must not advance the displayed provider time.
+      await rowStatus('000001', `快照 · 行情时间 ${oldProviderLabel}`);
+      await settle(1); await timers([3000]); await checkpoint(currentCase);
+
+      currentCase = 'backoff-interval-change';
+      await page.clock.runFor(3000); await count(3); await visibilityBurst();
+      await settle(2, 503); await timers([6000]);
+      await rowStatus('600519', `旧快照 · 刷新失败 · 行情时间 ${recentProviderLabel}`);
+      await rowStatus('000001', `旧快照 · 刷新失败 · 行情时间 ${oldProviderLabel}`);
+      await page.getByText('自动行情获取失败，已有报价仅为旧快照', { exact: true }).waitFor();
+      await page.getByText('自动刷新 · 常规请求间隔 3 秒，失败时退避', { exact: true }).waitFor();
+      await page.getByText(`已显示快照最早行情时间 ${oldProviderLabel}`, { exact: true }).waitFor();
+      await checkpoint('first-failure-stale-provenance');
+      await page.clock.runFor(5999); assert.equal(requests.length, 3);
+      await page.clock.runFor(1); await count(4); await settle(3); await timers([3000]);
+      await rowStatus('600519', `快照 · 行情时间 ${recentProviderLabel}`);
+      await rowStatus('000001', `快照 · 行情时间 ${oldProviderLabel}`);
+      await page.getByText('自动行情获取失败，已有报价仅为旧快照', { exact: true }).waitFor({ state: 'detached' });
+      // Recovery clears failed-request staleness, not the old provider timestamp.
+      await page.getByText(`已显示快照最早行情时间 ${oldProviderLabel}`, { exact: true }).waitFor();
+      await checkpoint(currentCase);
+
+      currentCase = 'hidden-heartbeat-restart';
+      await page.evaluate(() => window.__quoteAcceptance.visible(false));
+      await page.clock.runFor(3000); await timers([10000]); assert.equal(requests.length, 4);
+      await page.evaluate(() => window.__quoteAcceptance.visible(true));
+      await count(5); await timers([]); await settle(4); await timers([3000]); await checkpoint(currentCase);
+
+      currentCase = 'disable-pending-cleanup';
+      await page.clock.runFor(3000); await count(6);
+      await page.getByRole('button', { name: '自动刷新', exact: true }).click();
+      await settle(5, 200, { '600519': defaultQuotes['600519'] }); await timers([]);
+      await rowStatus('000001', '行情未获取');
+      await page.getByText('快照覆盖 1/2', { exact: true }).waitFor();
+      await page.getByText('自动刷新已关闭', { exact: true }).waitFor();
+      await page.getByText('行情未完整获取（1/2），缺失标的不显示报价', { exact: true }).waitFor();
+      await checkpoint('partial-missing-symbol');
+      await page.clock.runFor(30000); assert.equal(requests.length, 6);
+      await page.getByRole('button', { name: '自动刷新', exact: true }).click();
+      await count(7); await settle(6, 200, { ...defaultQuotes, '600519': { ...defaultQuotes['600519'], data_time: null, trade_date: null } }); await timers([3000]);
+      await rowStatus('600519', '快照 · 行情时间未知');
+      await rowStatus('000001', `快照 · 行情时间 ${oldProviderLabel}`);
+      await page.getByText('汇总行情时间未知', { exact: true }).waitFor();
+      await page.getByText('快照覆盖 2/2', { exact: true }).waitFor();
+      await checkpoint(currentCase);
+
+      currentCase = 'spa-unmount-pending-cleanup';
+      await page.clock.runFor(3000); await count(8);
+      // Actual router transition preserves the document; a reload would hide leaked loops.
+      await page.evaluate(() => { history.pushState({}, '', '/settings'); dispatchEvent(new PopStateEvent('popstate')); });
+      await page.getByRole('button', { name: '自动刷新', exact: true }).waitFor({ state: 'detached' });
+      await settle(7); await timers([]); await visibilityBurst();
+      await page.clock.runFor(30000); assert.equal(requests.length, 8); await timers([]); await checkpoint(currentCase);
+      assert.deepEqual(errors, []); assert.deepEqual(external, []);
+      writeFileSync(join(output, `${width}-requests.json`), JSON.stringify({ codes: requests.map(r => r.codes), errors, external }, null, 2));
+    } catch (error) {
+      results.failure = { width, currentCase, message: error.message, errors, external, quoteRequests: requests.length };
+      await page.screenshot({ path: join(output, `${width}-failure.png`), fullPage: true }).catch(() => {});
+      writeFileSync(join(output, `${width}-failure.html`), await page.content().catch(() => 'Page unavailable'));
+      throw error;
+    } finally {
+      for (const hold of pending) hold.release();
+      await context.tracing.stop({ path: join(output, `${width}-trace.zip`) }).catch(() => {});
+      await context.close();
+    }
+  }
+  results.status = 'passed';
+} catch (error) { results.status = 'failed'; results.error = error.stack; throw error; }
+finally {
+  record();
+  await browser?.close();
+  if (server) await new Promise(done => server.httpServer.close(done));
+}
+console.log('live quote scheduler and snapshot full-app acceptance: PASS');

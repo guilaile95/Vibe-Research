@@ -3,14 +3,23 @@
 // 纯类型定义见 ./api/types.ts；本文件仅保留运行时客户端。
 
 export type * from "./api/types.ts";
+import { storageSetChecked, storageRemoveChecked } from "./storage.ts";
 
 import type { MarketCloudEnvelope } from "./marketCloud.ts";
+import type { EvidenceReadiness } from "./evidenceReadiness.ts";
+import type { CohortIdentity } from "./cohortIdentity.ts";
+import type { SealQualityArchive } from "./sealQuality.ts";
 import { parseReportChatCoverage } from "./reportChatCoverage.ts";
+import { parseReportListResult } from "./reportSourceCoverage.ts";
+import { parseLeadAnalysisContext } from "./leadAnalysisContext.ts";
+import { parseChatToolResult } from "./chatToolStatus.ts";
 import type {
   CurrentThesisDelta,
   ThesisDeltaCreatePayload,
   ThesisDeltaListResult,
   MyReport,
+  ReportPageReadRequest,
+  ReportPageReadResult,
   MyReportTextHit,
   MyReportTextIndexPreview,
   MyReportTextIndexBatchResult,
@@ -27,6 +36,7 @@ import type {
   Quote,
   Valuation,
   Report,
+  ReportListResult,
   ValPercentile,
   Announcement,
   Financials,
@@ -211,12 +221,8 @@ export function loadAccessKey(): string {
 
 
 export function saveAccessKey(key: string) {
-  try {
-    if (key) localStorage.setItem(ACCESS_KEY, key);
-    else localStorage.removeItem(ACCESS_KEY);
-  } catch {
-    /* 隐私模式等场景 localStorage 不可用 */
-  }
+  if (key) storageSetChecked(ACCESS_KEY, key);
+  else storageRemoveChecked(ACCESS_KEY);
 }
 
 
@@ -358,7 +364,24 @@ export function applyNdjsonLine(
       state.errorMessage = "后端响应完成顺序异常";
       return;
     }
-    handlers.onTool?.(String(event.tool || ""), event.args || {});
+    handlers.onTool?.(String(event.tool || ""), event.args || {},
+      typeof event.call_id === "string" ? event.call_id : undefined);
+  } else if (event.type === "tool_result") {
+    const result = parseChatToolResult(event);
+    if (state.sawDone || !result) {
+      state.sawError = true;
+      state.errorMessage = "后端工具结果格式或完成顺序错误";
+      return;
+    }
+    handlers.onToolResult?.(result);
+  } else if (event.type === "lead_context") {
+    const context = parseLeadAnalysisContext(event.context);
+    if (state.sawDone || !context) {
+      state.sawError = true;
+      state.errorMessage = "线索分析来源格式错误";
+      return;
+    }
+    handlers.onLeadContext?.(context);
   } else if (event.type === "sources") {
     if (state.sawDone || !Array.isArray(event.items) || event.items.length > 8) {
       state.sawError = true;
@@ -381,6 +404,15 @@ export function applyNdjsonLine(
       state.sawError = true;
       state.errorMessage = "后端研报覆盖信息格式错误";
       return;
+    }
+    if (coverage?.page_context) {
+      const pages = coverage.page_context.coverage.readable;
+      if (items.length !== pages.length || new Set(items.map(item => item.page)).size !== pages.length ||
+        items.some(item => item.report_id !== coverage.page_context!.report_id || item.page === null || !pages.includes(item.page))) {
+        state.sawError = true;
+        state.errorMessage = "指定页引用与覆盖范围不一致";
+        return;
+      }
     }
     handlers.onSources?.(items, coverage);
   } else if (event.type === "done") {
@@ -633,6 +665,16 @@ export const api = {
       `/market/bk11-history?days=${days}`,
       signal ? { signal } : undefined,
     ),
+  /** 只读已连接归档；不创建归档、不启动采集、不请求供应商。 */
+  evidenceReadiness: (tradeDate: string, signal?: AbortSignal) =>
+    get<EvidenceReadiness>(`/market/evidence-readiness?trade_date=${encodeURIComponent(tradeDate)}`, signal ? { signal } : undefined),
+  cohortIdentity: (tradeDate: string, signal?: AbortSignal) =>
+    get<CohortIdentity>(`/market/cohort-identity?trade_date=${encodeURIComponent(tradeDate)}`, signal ? { signal } : undefined),
+  sealQuality: (tradeDate: string, signal?: AbortSignal) =>
+    get<SealQualityArchive>(
+      `/market/seal-quality?trade_date=${encodeURIComponent(tradeDate)}`,
+      signal ? { signal } : undefined,
+    ),
   /** 顶部风险分析（影子模式，第一版）：按股票代码分析，signal 恒 unknown、不参与最终结论。 */
   topRisk: (code: string, days = 120) =>
     get<TopRiskAnalysis>(
@@ -863,6 +905,12 @@ export const api = {
   announcements: (code: string) => get<Announcement[]>(`/announcements?code=${code}`),
   quote: (codes: string) => get<Record<string, Quote>>(`/quote?codes=${codes}`),
   reports: (code: string) => get<Report[]>(`/reports?code=${code}`),
+  reportsWithCoverage: async (code: string): Promise<ReportListResult> => {
+    const payload = await get<unknown>(`/reports?code=${encodeURIComponent(code)}`, { unwrapData: false });
+    const result = parseReportListResult(payload);
+    if (!result) throw new ApiError("研报响应格式异常，请稍后重试", 502);
+    return result;
+  },
   news: (code: string) => get<NewsItem[]>(`/news?code=${code}`),
   margin: (code: string) => get<MarginRow[]>(`/margin?code=${code}`),
   blockTrade: (code: string) => get<BlockTradeRow[]>(`/block-trade?code=${code}`),
@@ -887,6 +935,7 @@ export const api = {
   info: (code: string) => get<Record<string, string | number>>(`/info?code=${code}`),
   /** 巨潮公告全文列表（需 akshare，备用源）；依赖缺失抛 501。 */
   disclosure: (code: string) => get<DisclosureItem[]>(`/disclosure?code=${code}`),
+  readReportPages: (body: ReportPageReadRequest, signal?: AbortSignal) => request<ReportPageReadResult>("/myreports/page-read", "POST", body, { signal }),
   myReports: () => get<MyReport[]>("/myreports"),
   uploadReport: (name: string, contentB64: string, meta?: {
     title?: string; institution?: string; publish_date?: string;
@@ -903,10 +952,10 @@ export const api = {
     }),
   deleteReport: (id: string) => request<{ ok: boolean }>(`/myreports/${id}`, "DELETE"),
   // 注意：get()/request() 已自动加 /api 前缀，这里只传 /myreports/... 即可，禁止重复 /api。
-  searchMyReportText: (q: string, reportIds?: string[], limit = 20) => {
+  searchMyReportText: (q: string, reportIds?: string[], limit = 20, signal?: AbortSignal) => {
     const params = new URLSearchParams({ q, limit: String(limit) });
     for (const reportId of reportIds ?? []) params.append("report_ids", reportId);
-    return get<MyReportTextHit[]>(`/myreports/fulltext-search?${params.toString()}`);
+    return get<MyReportTextHit[]>(`/myreports/fulltext-search?${params.toString()}`, { signal });
   },
   previewMyReportTextIndex: (reportIds?: string[]) => {
     const params = new URLSearchParams();
@@ -914,6 +963,10 @@ export const api = {
     const query = params.toString();
     return get<MyReportTextIndexPreview>(`/myreports/text-index/preview${query ? `?${query}` : ""}`);
   },
+  localOcrCapability: (signal?: AbortSignal) => get<unknown>("/local-ocr/capability", { signal }),
+  ocrReportIdentity: (id: string, signal?: AbortSignal) => get<unknown>(`/local-ocr/reports/${encodeURIComponent(id)}/identity`, { signal }),
+  ocrMyReport: (id: string, expected_file_sha256: string, language: "eng" | "chi_sim+eng", signal?: AbortSignal) =>
+    request<unknown>(`/local-ocr/reports/${encodeURIComponent(id)}`, "POST", { expected_file_sha256, language, confirm_local_processing: true }, { signal }),
   indexMyReportText: (id: string) =>
     request<MyReport>(`/myreports/${id}/text-index`, "POST", {}),
   batchIndexMyReportText: (reportIds: string[]) =>
@@ -989,6 +1042,7 @@ export const api = {
     subject_id?: string;
     limit?: number;
     offset?: number;
+    signal?: AbortSignal;
   }) => {
     const q = new URLSearchParams();
     if (params?.subject_type) q.set("subject_type", params.subject_type);
@@ -996,15 +1050,15 @@ export const api = {
     if (params?.limit != null) q.set("limit", String(params.limit));
     if (params?.offset != null) q.set("offset", String(params.offset));
     const qs = q.toString();
-    return get<EvidenceListResult>(`/evidence${qs ? `?${qs}` : ""}`);
+    return get<EvidenceListResult>(`/evidence${qs ? `?${qs}` : ""}`, params?.signal ? { signal: params.signal } : undefined);
   },
   evidenceCreate: (body: EvidenceCreateInput) =>
     request<EvidenceRecord>("/evidence", "POST", body),
   evidenceGet: (id: string) => get<EvidenceRecord>(`/evidence/${id}`),
   evidenceUpdate: (id: string, body: EvidenceUpdateInput) =>
     request<EvidenceRecord>(`/evidence/${id}`, "PUT", body),
-  evidenceDelete: (id: string) =>
-    request<EvidenceRecord>(`/evidence/${id}?confirm=true`, "DELETE"),
+  evidenceDelete: (id: string, expectedEditToken: string) =>
+    request<EvidenceRecord>(`/evidence/${id}?confirm=true&expected_edit_token=${encodeURIComponent(expectedEditToken)}`, "DELETE"),
   evidenceTemporalAuthority: (id: string, evaluationAsOf?: string) => {
     const qs = evaluationAsOf ? `?evaluation_as_of=${encodeURIComponent(evaluationAsOf)}` : "";
     return get<EvidenceTemporalAuthority>(`/evidence/${encodeURIComponent(id)}/temporal-authority${qs}`);
@@ -1265,8 +1319,10 @@ export const api = {
   getResearchContinuity: (campaignId: string) => getResearchContinuity(campaignId),
   getResearchContinuityBatch: (campaignIds: string[]) => getResearchContinuityBatch(campaignIds),
   getResearchEventCalendar: (params?: ResearchEventCalendarQuery) => getResearchEventCalendar(params),
-  generateCampaignAIDraft: (campaignId: string, llm: StreamLlmConfig) =>
-    generateCampaignAIDraft(campaignId, llm),
+  previewCampaignAIDraftConsent: (campaignId: string, signal?: AbortSignal) =>
+    request<{ campaign_id: string; context_fingerprint: string; scope: string }>(`/campaigns/${encodeURIComponent(campaignId)}/ai-draft/consent-preview`, "POST", undefined, { signal }),
+  generateCampaignAIDraft: (campaignId: string, llm: StreamLlmConfig, fingerprint: string, signal?: AbortSignal) =>
+    generateCampaignAIDraft(campaignId, llm, fingerprint, signal),
   previewDecisionProposal: (campaignId: string, body: DecisionProposalDraftInput) =>
     previewDecisionProposal(campaignId, body),
   commitDecisionProposal: (
@@ -1657,11 +1713,14 @@ export async function getResearchEventCalendar(
 export async function generateCampaignAIDraft(
   campaignId: string,
   llm: StreamLlmConfig,
+  fingerprint: string,
+  signal?: AbortSignal,
 ): Promise<CampaignAIDraftGenerateResult> {
   return request<CampaignAIDraftGenerateResult>(
     `/campaigns/${encodeURIComponent(campaignId)}/ai-draft/generate`,
     "POST",
-    { llm },
+    { llm, confirm_private_context: true, expected_context_fingerprint: fingerprint },
+    { signal },
   );
 }
 

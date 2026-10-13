@@ -224,3 +224,128 @@ def test_cached_refetches_after_ttl_expiry(monkeypatch):
     result2 = app._cached("ep", "code", 10, fetch)
     assert result2 == {"data": 2}
     assert call_count == 2
+
+
+def test_overlapping_misses_share_one_result_or_error_then_allow_retry(monkeypatch):
+    import concurrent.futures
+    import pytest
+    from concurrent.futures import ThreadPoolExecutor
+
+    original_future = concurrent.futures.Future
+    for fails in (False, True):
+        waiting = threading.Barrier(4)
+        started, release = threading.Event(), threading.Event()
+        cache = TTLCache()
+        calls = []
+
+        class ObservedFuture(original_future):
+            def result(self, timeout=None):
+                waiting.wait(timeout=5)
+                return super().result(timeout=timeout)
+
+        monkeypatch.setattr(concurrent.futures, "Future", ObservedFuture)
+
+        def fetch():
+            calls.append(True)
+            started.set()
+            assert release.wait(timeout=5)
+            if fails:
+                raise RuntimeError("synthetic source failure")
+            return {"value": 0}
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            owner = pool.submit(cache.get_or_fetch, "same", 30, fetch)
+            assert started.wait(timeout=5)
+            followers = [pool.submit(cache.get_or_fetch, "same", 30, fetch) for _ in range(3)]
+            try:
+                waiting.wait(timeout=5)
+            finally:
+                release.set()
+            for future in [owner, *followers]:
+                if fails:
+                    with pytest.raises(RuntimeError, match="synthetic source failure"):
+                        future.result(timeout=5)
+                else:
+                    assert future.result(timeout=5) == {"value": 0}
+        assert len(calls) == 1
+        assert cache._flights == {}
+        if fails:
+            assert cache.get("same", 30) is _CACHE_MISS
+            assert cache.get_or_fetch("same", 30, lambda: "retried") == "retried"
+
+
+def test_distinct_keys_fetch_in_parallel_without_global_io_lock():
+    from concurrent.futures import ThreadPoolExecutor
+    cache = TTLCache()
+    both_started = threading.Barrier(2)
+
+    def fetch(value):
+        both_started.wait(timeout=5)
+        return value
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(cache.get_or_fetch, "a", 30, lambda: fetch("a"))
+        second = pool.submit(cache.get_or_fetch, "b", 30, lambda: fetch("b"))
+        assert first.result(timeout=5) == "a"
+        assert second.result(timeout=5) == "b"
+    assert cache._flights == {}
+
+
+def test_waiter_timeout_does_not_start_duplicate_or_cancel_owner():
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+    import pytest
+    cache = TTLCache()
+    started, release = threading.Event(), threading.Event()
+    calls = []
+
+    def fetch():
+        calls.append(True)
+        started.set()
+        assert release.wait(timeout=5)
+        return "complete"
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        owner = pool.submit(cache.get_or_fetch, "same", 30, fetch)
+        assert started.wait(timeout=5)
+        try:
+            with pytest.raises(TimeoutError):
+                cache.get_or_fetch("same", 30, fetch, wait_timeout=0)
+            assert len(calls) == 1
+        finally:
+            release.set()
+        assert owner.result(timeout=5) == "complete"
+    assert cache._flights == {}
+    assert cache.get("same", 30) == "complete"
+
+
+def test_single_flight_ttl_starts_after_fetch_completion(monkeypatch):
+    clock = _install_clock(monkeypatch)
+    cache = TTLCache()
+    calls = []
+
+    def slow_fetch():
+        calls.append(True)
+        clock.advance(40)
+        return 0
+
+    assert cache.get_or_fetch("k", 10, slow_fetch) == 0
+    clock.advance(9)
+    assert cache.get_or_fetch("k", 10, slow_fetch) == 0
+    assert len(calls) == 1
+    clock.advance(1)
+    assert cache.get_or_fetch("k", 10, slow_fetch) == 0
+    assert len(calls) == 2
+
+
+def test_single_flight_false_values_still_cache_and_registry_is_not_retained():
+    cache = TTLCache(max_entries=2)
+    for index, value in enumerate([None, False, 0, [], {}]):
+        calls = []
+        def fetch():
+            calls.append(True)
+            return value
+        assert cache.get_or_fetch(index, 30, fetch) == value
+        assert cache.get_or_fetch(index, 30, fetch) == value
+        assert len(calls) == 1
+        assert cache._flights == {}
+        assert len(cache._data) <= 2

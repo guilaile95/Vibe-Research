@@ -198,3 +198,106 @@ class TestCorruptedDB:
             f.write(b"corrupted data")
         with pytest.raises(store.TradeLedgerCorruptedError):
             store.list_records(db_path)
+
+
+@pytest.fixture
+def retained_store_connections(monkeypatch):
+    """Keep actual handles alive so GC cannot conceal a store ownership leak."""
+    connections = []
+    for name in ("_connect", "_connect_readonly"):
+        original = getattr(store, name)
+        def capture(*args, _original=original, **kwargs):
+            connection = _original(*args, **kwargs)
+            connections.append(connection)
+            return connection
+        monkeypatch.setattr(store, name, capture)
+    yield connections
+    # Cleanup only after the assertion; never make a leaking store pass.
+    for connection in connections:
+        connection.close()
+
+
+def _assert_connections_closed(connections):
+    assert connections, "The regression must exercise actual SQLite connections"
+    for connection in connections:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
+
+
+@pytest.mark.parametrize("operation", ["insert", "get", "list", "void"])
+def test_owned_connections_close_after_success(
+    db_path, sample_record, retained_store_connections, operation,
+):
+    store.insert_record(db_path, sample_record)
+    if operation == "get":
+        assert store.get_record(db_path, sample_record["trade_id"])["code"] == "600519"
+    elif operation == "list":
+        assert len(store.list_records(db_path)) == 1
+    elif operation == "void":
+        assert store.void_record_atomic(db_path, sample_record["trade_id"], "fixture")["voided_at"]
+    _assert_connections_closed(retained_store_connections)
+
+
+@pytest.mark.parametrize("operation", ["get", "list", "void"])
+def test_owned_connections_close_when_table_is_absent(
+    db_path, retained_store_connections, operation,
+):
+    connection = sqlite3.connect(db_path)
+    connection.close()
+    if operation == "get":
+        assert store.get_record(db_path, "missing") is None
+    elif operation == "list":
+        assert store.list_records(db_path) == []
+    else:
+        with pytest.raises(store.TradeNotFoundError):
+            store.void_record_atomic(db_path, "missing", "fixture")
+    _assert_connections_closed(retained_store_connections)
+
+
+@pytest.mark.parametrize("operation", ["duplicate", "missing", "already_voided"])
+def test_owned_connections_close_after_write_error(
+    db_path, sample_record, retained_store_connections, operation,
+):
+    store.insert_record(db_path, sample_record)
+    if operation == "duplicate":
+        with pytest.raises(store.TradeLedgerCorruptedError):
+            store.insert_record(db_path, sample_record)
+    elif operation == "missing":
+        with pytest.raises(store.TradeNotFoundError):
+            store.void_record_atomic(db_path, "missing", "fixture")
+    else:
+        store.void_record_atomic(db_path, sample_record["trade_id"], "first")
+        with pytest.raises(store.TradeAlreadyVoidedError):
+            store.void_record_atomic(db_path, sample_record["trade_id"], "second")
+    _assert_connections_closed(retained_store_connections)
+    # Failed duplicate and void attempts retain the original committed record.
+    record = store.get_record(db_path, sample_record["trade_id"])
+    assert record["code"] == sample_record["code"]
+    assert record["void_reason"] == ("first" if operation == "already_voided" else None)
+    _assert_connections_closed(retained_store_connections)
+
+
+def test_owned_connection_closes_after_rolling_back_partial_write(
+    db_path, sample_record, retained_store_connections, monkeypatch,
+):
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("CREATE TABLE rollback_probe (value TEXT)")
+        connection.commit()
+    finally:
+        connection.close()
+    original = store._ensure_table
+    def fail_after_write(connection):
+        original(connection)
+        connection.execute("INSERT INTO rollback_probe VALUES ('must roll back')")
+        raise RuntimeError("injected failure after transaction write")
+    monkeypatch.setattr(store, "_ensure_table", fail_after_write)
+    with pytest.raises(RuntimeError, match="injected failure"):
+        store.insert_record(db_path, sample_record)
+    _assert_connections_closed(retained_store_connections)
+    connection = sqlite3.connect(db_path)
+    try:
+        assert connection.execute("SELECT * FROM rollback_probe").fetchall() == []
+        assert connection.execute("SELECT * FROM trade_records").fetchall() == []
+    finally:
+        connection.close()

@@ -8,6 +8,7 @@ production frontend remain real.
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 import sys
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -149,7 +150,15 @@ astock.dividend_history = _fixture_dividend
 astock.announcements = _fixture_announcements
 decision_inbox_runtime_assembler.assemble_current_decision_inbox = _fixture_inbox
 
+@asynccontextmanager
+async def isolated_calendar_lifespan(_app):
+    # This read-only fixture uses deterministic event providers, not production
+    # schedulers (which could fetch unrelated feeds while browser tests run).
+    yield
+
+
 app = app_module.app
+app.router.lifespan_context = isolated_calendar_lifespan
 
 
 @app.middleware("http")

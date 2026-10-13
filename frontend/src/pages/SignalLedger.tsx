@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import {
   Activity,
@@ -49,7 +49,10 @@ export default function SignalLedger() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [filterError, setFilterError] = useState<string | null>(null);
 
+  const requestRef = useRef(0);
   const fetchData = async (currentFilters: SignalLedgerFilters) => {
+    const generation = ++requestRef.current;
+    const active = () => generation === requestRef.current;
     setLoading(true);
     setErrorMsg(null);
     try {
@@ -57,6 +60,7 @@ export default function SignalLedger() {
       if (targetRunId) {
         // Run detail mode
         const detail = await api.getRunSignalLedger(targetRunId);
+        if (!active()) return;
         setRunRecord(detail.run);
         setSignalEntries(detail.signal_entries);
         setDecisionOutcomes(detail.decision_outcomes);
@@ -70,21 +74,24 @@ export default function SignalLedger() {
           severity: currentFilters.severity || undefined,
           limit: 100,
         });
+        if (!active()) return;
         setSignalEntries(queryRes.items);
       }
     } catch (err) {
+      if (!active()) return;
       if (err instanceof ApiError) {
         setErrorMsg(err.message);
       } else {
         setErrorMsg("加载信号账本失败，请稍后重试");
       }
     } finally {
-      setLoading(false);
+      if (active()) setLoading(false);
     }
   };
 
   useEffect(() => {
     fetchData(filters);
+    return () => { requestRef.current += 1; };
   }, []);
 
   const handleFilterSubmit = (e: React.FormEvent) => {
@@ -200,6 +207,8 @@ export default function SignalLedger() {
               onClick={() => {
                 const cleared: SignalLedgerFilters = { decision_run_id: "", stage: "", code: "", severity: "" };
                 setFilters(cleared);
+                setFilterError(null);
+                setSignalEntries([]);
                 setSearchParams(new URLSearchParams());
                 fetchData(cleared);
               }}
@@ -324,7 +333,7 @@ export default function SignalLedger() {
             <RefreshCw className="w-8 h-8 text-indigo-500 animate-spin mx-auto mb-3" />
             <p className="text-sm text-gray-500">正在加载信号流水...</p>
           </div>
-        ) : signalEntries.length === 0 ? (
+        ) : errorMsg ? null : signalEntries.length === 0 ? (
           <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-12 text-center">
             <FileCode className="w-10 h-10 text-gray-400 mx-auto mb-3" />
             <p className="text-sm text-gray-500 font-medium">暂无信号记录</p>

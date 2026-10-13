@@ -33,8 +33,9 @@ its named scope and ends when its completion comment restores the freeze.
 Issue [#162](https://github.com/guilaile95/Vibe-Research/issues/162) is the Product Reality contract.
 Real-use observation is not a feature-development lane, and tests or demos cannot fabricate Day 1.
 
-Actions that still require separate Owner authorization are defined in `AGENTS.md`, including stable
-push/merge, Ready transition where applicable, force operations and destructive cleanup.
+Delivery authority and operations requiring separate authorization are defined only in
+[`AGENTS.md`](../AGENTS.md). Apply the Owner's current scope and explicit stopping point; this map
+does not grant merge, runtime-switch or cleanup authority.
 
 ## CI and delivery truth
 
@@ -48,7 +49,7 @@ Before accepting a change:
 2. run the smallest sufficient targeted checks;
 3. run the required exact-head CI/integration gate;
 4. independently compare the evidence with the task acceptance criteria;
-5. keep the PR Draft and unmerged unless the Owner separately authorizes the transition.
+5. follow the task-specific delivery boundary in `AGENTS.md` and the Owner's current instruction; when Draft-only is specified, keep it Draft and unmerged.
 
 Historical Draft PRs remain context only. Do not revive, merge, close or delete them merely to make the
 repository look tidy; perform a separate verified archive pass when explicitly authorized.

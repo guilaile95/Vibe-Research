@@ -40,6 +40,7 @@ import copy
 from typing import Any, Callable, Mapping
 
 import campaign_service
+import push2_guard
 import campaign_critical_data_runtime as cdr
 import decision_assurance_projection as ra
 import decision_commit_runtime as dc_runtime
@@ -401,6 +402,7 @@ def _project_campaign_item(
     as_of: str,
     lake: FactLake | None,
     ports: RuntimePorts,
+    network_deadline: float | None = None,
 ) -> Mapping[str, Any]:
     definition = _require_mapping(
         ports.dependency_resolver(
@@ -422,6 +424,7 @@ def _project_campaign_item(
                 as_of=as_of,
                 ports=cdr.critical_data_ports_from(ports),
                 lake=lake,
+                network_deadline=network_deadline,
             ),
             "CCD projection",
         )
@@ -605,6 +608,7 @@ def _holding_setup_item(
 # 公共 API
 # ---------------------------------------------------------------------------
 
+@push2_guard.read_only()
 def assemble_current_decision_inbox(
     *,
     as_of: str | None = None,
@@ -635,6 +639,9 @@ def assemble_current_decision_inbox(
         for item in derived.get("items", [])
     )
     lake = ports.lake_provider() if has_campaigns else None
+    # Share network waiting across campaigns. Keep the composition order and
+    # evaluate every local authority even after this deadline is exhausted.
+    network_deadline = cdr.network_capability_deadline()
     holding_setup_items: list[Mapping[str, Any]] = []
     campaign_items: list[Mapping[str, Any]] = []
     for item in derived.get("items", []):
@@ -653,6 +660,7 @@ def assemble_current_decision_inbox(
                     as_of=snapshot_as_of,
                     lake=lake,
                     ports=ports,
+                    network_deadline=network_deadline,
                 )
             )
 

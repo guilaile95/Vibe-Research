@@ -203,3 +203,24 @@ def test_full_valuation_mcap_payload_has_no_buy_sell(monkeypatch):
     assert "SELL" not in blob
     assert out["mcap_yi"] == pytest.approx(_MCAP_YI)
     _assert_provenance(out)
+
+
+@pytest.mark.parametrize("data_time,trade_date", [
+    ("2026-09-29T15:00:00+08:00", "2026-09-29"), (None, None),
+])
+def test_quote_provenance_survives_tool_serialization_without_dating_forecasts(monkeypatch, data_time, trade_date):
+    import ai_tools
+    import chat
+
+    quote = _quote()
+    quote["000001"].update(data_time=data_time, trade_date=trade_date)
+    _offline(monkeypatch, quote)
+    result = ai_tools.exec_tool("query_valuation", {"code": "000001"})
+    serialized, _, _ = chat._serialize_tool_result(result)
+    out = json.loads(serialized)["data"]
+    assert out["quote_source"] == "tencent"
+    assert out["quote_data_time"] == data_time
+    assert out["quote_trade_date"] == trade_date
+    assert "data_time" not in out and "trade_date" not in out
+    assert out["eps_26e"] is None
+    _assert_provenance(out)

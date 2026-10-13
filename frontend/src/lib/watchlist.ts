@@ -107,25 +107,48 @@ export async function migrateLocalWatchlistOnce(
   };
 }
 
+function validCodes(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length <= 50
+    && value.every(code => typeof code === "string" && /^\d{6}$/.test(code))
+    && new Set(value).size === value.length;
+}
+function validEtag(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{16}$/.test(value);
+}
+function assertWatchStatus(value: WatchlistStatus): void {
+  if (!value || typeof value !== "object") throw new Error("自选读取响应无效，请重新读取");
+  if (value.status === "valid") {
+    if (!value.data || !validCodes(value.data.codes) || !validEtag(value.etag))
+      throw new Error("自选代码或版本响应无效，请重新读取");
+  } else if (!["not_configured", "corrupted"].includes(value.status) || value.data !== null || value.etag !== null) {
+    throw new Error("自选状态响应无效，请重新读取");
+  }
+}
+
 /** 权威加载：先尝试迁移，再读后端。 */
 export async function loadWatchAuthoritative(): Promise<{
   codes: string[];
   etag: string | null;
   status: WatchlistStatus["status"];
   migrated: boolean;
+  migrationError?: string;
 }> {
   let st = await getWatchlist();
+  assertWatchStatus(st);
   let migrated = false;
+  let migrationError: string | undefined;
   if (hasLocalDraft()) {
     try {
       const m = await migrateLocalWatchlistOnce(
         st.status === "valid" ? st.etag : undefined,
       );
       migrated = m.migrated;
-      st = await getWatchlist();
-    } catch {
+    } catch (error) {
       // 迁移失败时仍返回后端状态；草稿保留供用户重试
+      migrationError = error instanceof Error ? error.message : "本地草稿导入失败，请重试";
     }
+    // A failed read after a successful import is not a retained-draft failure.
+    if (migrated) { st = await getWatchlist(); assertWatchStatus(st); }
   }
   if (st.status === "valid") {
     return {
@@ -133,9 +156,10 @@ export async function loadWatchAuthoritative(): Promise<{
       etag: st.etag,
       status: st.status,
       migrated,
+      migrationError,
     };
   }
-  return { codes: [], etag: null, status: st.status, migrated };
+  return { codes: [], etag: null, status: st.status, migrated, migrationError };
 }
 
 /** 后端权威保存（无 localStorage 双写）。 */
@@ -143,7 +167,13 @@ export async function saveWatchAuthoritative(
   codes: string[],
   expectedEtag?: string | null,
 ): Promise<{ codes: string[]; etag: string }> {
-  const r = await saveWatchlist(codes, expectedEtag ?? undefined);
+  const intended = Array.from(new Set(codes));
+  if (!validCodes(intended)) throw new Error("自选保存输入无效");
+  const r = await saveWatchlist(intended, expectedEtag ?? undefined);
+  if (!r || !validCodes(r.codes) || !validEtag(r.etag)
+      || JSON.stringify(r.codes) !== JSON.stringify(intended)) {
+    throw new Error("自选保存回执无效，尚未确认成功；输入已保留，请重新读取后预览");
+  }
   clearLocalDraft();
   return { codes: r.codes, etag: r.etag };
 }

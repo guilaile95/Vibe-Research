@@ -1,0 +1,26 @@
+{
+  "data": {
+    "schema": "platform_settings.v1",
+    "sec_contact": {
+      "source": "none",
+      "configured": false,
+      "revision": "absent",
+      "editable": true
+    },
+    "update": {
+      "repository": "guilaile95/Vibe-Research",
+      "current": "0.1.3",
+      "mode": "manual_only",
+      "status": "not_checked",
+      "checked_at": null,
+      "latest": null
+    },
+    "platforms": {
+      "windows": "existing_launcher",
+      "linux": "existing_user_space_launcher",
+      "macos": "unsupported_launcher"
+    },
+    "sec_provider": "not_connected",
+    "can_check_update": true
+  }
+}

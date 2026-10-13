@@ -71,6 +71,8 @@ def _create_trade(qty=50, price=10.0, code="600519"):
         "actual_price": price,
         "actual_quantity": qty,
         "executed_at": "2026-08-05T10:00:00Z",
+        "fee": 0.0,
+        "other_cost": 0.0,
     })
     assert r.status_code == 200, r.text
     return r.json()["data"]

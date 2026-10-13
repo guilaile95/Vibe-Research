@@ -274,6 +274,7 @@ async function run() {
 
     // ---- F. trade propagation to both surfaces ---------------------------
     await jsonRequest(backend, "/api/trades", "POST", {
+      fee: 0, other_cost: 0,
       code: "600519",
       name: "贵州茅台",
       operation: "buy",
@@ -386,6 +387,7 @@ ai_result_service.save_portfolio_advice(
     assert.equal(freshAdvice.payload.holdings[0].code, "600519");
 
     await jsonRequest(backend, "/api/trades", "POST", {
+      fee: 0, other_cost: 0,
       code: "600519", name: "贵州茅台", operation: "buy", execution_status: "full",
       actual_price: 10, actual_quantity: 20, executed_at: "2026-08-06T10:00:00Z",
     });

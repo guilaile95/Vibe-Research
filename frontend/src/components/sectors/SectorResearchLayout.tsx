@@ -20,27 +20,32 @@ import { cn } from "@/lib/utils";
  * 统一板块研究工作台壳：
  * 返回 · 标题 · 定位 · Tag 导航（真实 URL）· 内容区 · 来源区
  *
- * 同步层（getSectorMeta）仅渲染外壳（标题 / Tag 导航 / AI 上下文 / 最新资料），
- * 不进首屏 bundle；研究正文块（含来源池）在 useEffect 内按需动态加载，进入具体板块
- * 时才拉取该板块内容。加载期间内容区显示骨架，不阻塞外壳、导航与「最新资料」。
+ * 同步元数据仅提供路由外壳；展示文案、正文和 AI 上下文以当前板块的
+ * 按需加载内容为准。加载期间保留 slug 导航与「最新资料」。
  */
 export function SectorResearchLayout() {
   const { key, tag: tagParam } = useParams();
   const meta = getSectorMeta(key);
 
-  const [workspace, setWorkspace] = useState<SectorResearchWorkspace | null>(null);
-  const [contentLoading, setContentLoading] = useState(true);
+  const [content, setContent] = useState<
+    | { key: string; status: "loading" | "error" }
+    | { key: string; status: "ready"; workspace: SectorResearchWorkspace }
+    | null
+  >(null);
 
   useEffect(() => {
     if (!meta) return;
     let alive = true;
-    setContentLoading(true);
-    loadSectorResearchWorkspace(key)
+    const requestedKey = meta.key;
+    setContent({ key: requestedKey, status: "loading" });
+    void loadSectorResearchWorkspace(requestedKey)
       .then((ws) => {
-        if (alive) setWorkspace(ws ?? null);
+        if (alive) setContent(ws?.key === requestedKey
+          ? { key: requestedKey, status: "ready", workspace: ws }
+          : { key: requestedKey, status: "error" });
       })
-      .finally(() => {
-        if (alive) setContentLoading(false);
+      .catch(() => {
+        if (alive) setContent({ key: requestedKey, status: "error" });
       });
     return () => {
       alive = false;
@@ -66,20 +71,23 @@ export function SectorResearchLayout() {
     return <Navigate to={`/sectors/${meta.key}/${safe}`} replace />;
   }
 
-  const activeMetaTag = meta.tags.find((t) => t.slug === resolved.tagSlug);
-
-  const aiContext = [
-    `板块：${meta.fullName}`,
-    `定位：${meta.tagline}`,
-    `研究栏目：${meta.tags.map((t) => t.label).join("、")}`,
-    `当前栏目：${activeMetaTag?.label ?? resolved.tagSlug}`,
-    `内容状态：${activeMetaTag?.status === "placeholder" ? "框架占位，尚无正式研究正文" : activeMetaTag?.status ?? "draft"}`,
-    "说明：仅根据当前页面已展示的栏目名称与占位说明回答，不要编造未展示的数字、研报结论或产业判断。",
-  ].join("\n");
-
-  // 正文块 + 来源池：等待按需加载完成；外壳（标题/导航/最新资料）始终同步渲染。
+  // Reject previous-board data during render, before the new effect starts.
+  const current = content?.key === meta.key ? content : null;
+  const workspace = current?.status === "ready" && current.workspace.key === meta.key
+    ? current.workspace : undefined;
+  const display = workspace ?? meta;
+  const tags = workspace?.tags ?? meta.tags.map((t) => ({ slug: t.slug, label: t.slug }));
   const activeTag = workspace ? getTagBySlug(workspace, resolved.tagSlug) : undefined;
   const sources = workspace?.sources ?? [];
+
+  const aiContext = activeTag ? [
+    `板块：${display.fullName}`,
+    `定位：${display.tagline}`,
+    `研究栏目：${tags.map((t) => t.label).join("、")}`,
+    `当前栏目：${activeTag.label}`,
+    `内容状态：${activeTag.status === "placeholder" ? "框架占位，尚无正式研究正文" : activeTag.status}`,
+    "说明：仅根据当前页面已展示的栏目名称与占位说明回答，不要编造未展示的数字、研报结论或产业判断。",
+  ].join("\n") : "";
 
   return (
     <div className="min-w-0">
@@ -91,10 +99,10 @@ export function SectorResearchLayout() {
       </Link>
 
       <PageHeader
-        title={meta.fullName}
-        subtitle={meta.tagline}
+        title={display.fullName}
+        subtitle={display.tagline}
         actions={
-          <AskAiButton
+          activeTag && <AskAiButton
             context={aiContext}
             label="问 AI"
             suggestions={[
@@ -111,7 +119,7 @@ export function SectorResearchLayout() {
         aria-label="研究栏目"
         className="-mx-1 mb-5 flex gap-2 overflow-x-auto px-1 pb-1"
       >
-        {meta.tags.map((t) => {
+        {tags.map((t) => {
           const active = t.slug === resolved.tagSlug;
           return (
             <Link
@@ -134,9 +142,14 @@ export function SectorResearchLayout() {
 
       <SectorMarketContext sectorKey={meta.key} />
 
-      {contentLoading || !activeTag ? (
+      {!current || current.status === "loading" ? (
         <div className="flex min-h-[12rem] items-center justify-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> 加载研究内容…
+        </div>
+      ) : !activeTag ? (
+        <div role="alert" className="rounded-lg border border-border p-4 text-sm text-muted-foreground">
+          <p>研究内容加载失败，请刷新页面重试。</p>
+          <button type="button" onClick={() => window.location.reload()} className="mt-2 text-primary">刷新页面</button>
         </div>
       ) : (
         <SectorResearchContent tag={activeTag} sources={sources} />

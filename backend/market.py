@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import time
+import copy
 from collections import Counter
 from concurrent.futures import Future
 from datetime import datetime, timezone, timedelta
@@ -15,6 +16,8 @@ from threading import Lock
 import astock
 import daily_review_errors
 import gstock
+import push2_guard
+import trade_calendar
 
 BEIJING = timezone(timedelta(hours=8))
 _CACHE: dict = {}
@@ -80,6 +83,28 @@ def _speculation_label(zt_count: int | None) -> str | None:
     return "冰点"
 
 
+
+def _usable_qualified_pools(observations: object) -> bool:
+    """A provenance qualification is cacheable; missing/failed data is not."""
+    if not isinstance(observations, dict) or set(observations) != {"zt", "zb", "dt", "yzt"}:
+        return False
+    return all(
+        isinstance(obs, dict) and obs.get("status") == "partial"
+        and obs.get("reason_codes") == ["DATE_BINDING_UNVERIFIED"]
+        and type(obs.get("count")) is int and obs["count"] > 0
+        and obs.get("observed_row_count") == obs["count"]
+        and obs.get("observed_empty") is False
+        for obs in observations.values()
+    )
+
+
+def _emotion_provenance(emotion: dict) -> dict:
+    return {key: emotion.get(key) for key in (
+        "observation_schema", "status", "requested_date", "date", "as_of", "source_business_date",
+        "date_basis", "date_verified", "is_stale", "pool_observations",
+    )}
+
+
 def _sentiment() -> dict:
     """市场情绪：涨跌家数来自全 A 快照广度；涨跌停来自东财涨停池。
 
@@ -122,6 +147,9 @@ def _sentiment() -> dict:
         emotion = {}
         emotion_warns.append(f"涨跌停池数据不可用：{type(e).__name__}: {e}")
 
+    if emotion.get("status") in ("partial", "unavailable"):
+        emotion_warns.extend(emotion.get("warnings") or ["涨跌停池数据不完整"])
+
     b_status = breadth_payload.get("status") if isinstance(breadth_payload, dict) else None
     b_warns = list(breadth_payload.get("warnings") or []) if isinstance(breadth_payload, dict) else []
     b_data = breadth_payload.get("data") if isinstance(breadth_payload, dict) else None
@@ -156,6 +184,8 @@ def _sentiment() -> dict:
             "stock_count": None, "valid_count": None,
             "up_3pct_count": None, "down_3pct_count": None, "total_amount": None,
             "date": date,
+            "breadth_status": b_status,
+            "emotion_provenance": _emotion_provenance(emotion),
             "limit_count_source": "eastmoney_limit_pool",
         }
 
@@ -185,6 +215,7 @@ def _sentiment() -> dict:
     # 广度 normal 但情绪池缺失 → partial
     emotion_ok = (
         bool(emotion)
+        and emotion.get("status", "normal") == "normal"
         and emotion.get("zt_count") is not None
         and emotion.get("dt_count") is not None
     )
@@ -216,6 +247,8 @@ def _sentiment() -> dict:
         "down_3pct_count": down_3pct if isinstance(down_3pct, (int, float)) else None,
         "total_amount": total_amount if isinstance(total_amount, (int, float)) else None,
         "date": date,
+        "breadth_status": b_status,
+        "emotion_provenance": _emotion_provenance(emotion),
         "limit_count_source": "eastmoney_limit_pool",
     }
 
@@ -242,35 +275,82 @@ def _sectors() -> list[dict]:
 
 def get_overview() -> dict:
     """市场情绪 + 板块资金（含缓存）。资金轮动由前端从 sectors 头尾取。"""
+    session = trade_calendar.observation_trade_date_at(datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    hit = _CACHE.get("overview")
+    if hit and len(hit) == 3 and hit[2] == session and time.time() - hit[0] < _TTL:
+        return hit[1]
+
     def build():
+        if push2_guard.is_read_only():
+            raise push2_guard.Push2Blocked("Push2 overview refresh is unavailable in read-only context")
         return {
             "sentiment": _sentiment(),
-            "sectors": _sectors(),
+            "sectors": _cached("sectors", _sectors),
             "updated": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
         }
-    return _cached("overview", build, valid=lambda v: bool(v.get("sentiment") or v.get("sectors")))
+    # Qualified-success partial aggregates remain reusable in read-only views.
+    # Real partial/failure must not suppress retries; status is never upgraded.
+    result = build()
+    sentiment = result.get("sentiment") or {}
+    provenance = sentiment.get("emotion_provenance") or {}
+    qualified_success = (
+        sentiment.get("status") == "partial" and sentiment.get("breadth_status") == "normal"
+        and _usable_qualified_pools(provenance.get("pool_observations"))
+    )
+    if session is not None and (sentiment.get("status") == "normal" or qualified_success):
+        _CACHE["overview"] = (time.time(), result, session)
+    return result
 
 
-def _emotion() -> dict:
-    """短线情绪：连板梯队 / 最高连板 / 炸板率 / 封板率 / 晋级率 / 涨跌停家数 + 连板股清单。
-
-    数据源＝东财涨停板四池（push2ex）。
-    """
-    # 定位最近交易日：从今天往前回溯，第一日有涨停池即取（非交易日/盘前返空则继续回溯）。
-    today = datetime.now(BEIJING).date()
-    resolved, zt = "", []
-    for back in range(8):
-        d = (today - timedelta(days=back)).strftime("%Y%m%d")
-        zt = astock.em_zt_topic_pool("getTopicZTPool", d, "fbt:asc")
-        if zt:
-            resolved = d
-            break
-    if not resolved:
-        return {}
-
-    zb = astock.em_zt_topic_pool("getTopicZBPool", resolved, "fbt:asc")    # 炸板池
-    dt = astock.em_zt_topic_pool("getTopicDTPool", resolved, "fund:asc")   # 跌停池
-    yzt = astock.em_zt_topic_pool("getYesterdayZTPool", resolved, "zs:desc")  # 昨涨停池
+def _emotion(as_of: str | None = None) -> dict:
+    """Legacy research metrics with per-pool missingness and date provenance."""
+    as_of = as_of or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    instant = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    requested_date = instant.astimezone(BEIJING).date().isoformat()
+    resolved = trade_calendar.observation_trade_date_at(as_of)
+    base = {
+        "observation_schema": astock.LEGACY_POOL_OBSERVATION_SCHEMA,
+        "date": resolved or "", "requested_date": requested_date,
+        "as_of": as_of, "source_business_date": None,
+        "date_basis": "unverified", "date_verified": False,
+        "status": "unavailable", "warnings": [], "is_stale": False,
+        "zt_count": None, "dt_count": None, "zb_count": None,
+        "max_boards": None, "lianban_count": None, "yzt_count": None,
+        "ladder": [], "lianban_stocks": [],
+        "seal_rate": None, "break_rate": None, "promotion_rate": None,
+        "pool_observations": {},
+    }
+    if resolved is None:
+        base["warnings"] = ["交易日历不可用，短线情绪日期无法确认。"]
+        return base
+    specs = {"zt": ("getTopicZTPool", "fbt:asc"), "zb": ("getTopicZBPool", "fbt:asc"),
+             "dt": ("getTopicDTPool", "fund:asc"), "yzt": ("getYesterdayZTPool", "zs:desc")}
+    observations = {
+        key: astock.em_zt_topic_observation(endpoint, resolved.replace("-", ""), sort, as_of=as_of)
+        for key, (endpoint, sort) in specs.items()
+    }
+    base["pool_observations"] = {key: {k: v for k, v in obs.items() if k != "rows"}
+                                 for key, obs in observations.items()}
+    counts = {key: obs["count"] for key, obs in observations.items()}
+    base.update({f"{key}_count": value for key, value in counts.items()})
+    usable = any(value is not None for value in counts.values())
+    base["status"] = ("normal" if all(obs["status"] == "normal" for obs in observations.values())
+                      else "partial" if usable or any(obs["observed_empty"] for obs in observations.values())
+                      else "unavailable")
+    verified = all(obs["date_verified"] and obs["status"] != "unavailable" for obs in observations.values())
+    base.update(date_verified=verified, source_business_date=resolved if verified else None,
+                date_basis="provider_business_date" if verified else "requested_session_inferred")
+    labels = {"zt": "涨停", "zb": "炸板", "dt": "跌停", "yzt": "昨涨停"}
+    for key, obs in observations.items():
+        if obs["status"] == "unavailable":
+            base["warnings"].append(f"{labels[key]}池数据不可用，相关指标未知。")
+        elif obs["observed_empty"]:
+            base["warnings"].append(f"{labels[key]}池返回空列表，尚不能确认完整零值。")
+    if not verified:
+        base["warnings"].append("日期按请求交易日推定，来源未完整确认池内数据所属日期。")
+    zt = observations["zt"]["rows"]
+    if counts["zt"] is None:
+        return base
 
     boards = [_num(p.get("lbc")) or 1 for p in zt]      # 每只连板数（缺省按 1 板）
     lianban = [b for b in boards if b >= 2]             # 2 板及以上（连板）
@@ -292,32 +372,27 @@ def _emotion() -> dict:
         key=lambda x: (-x["boards"], -(x["amount"] or 0)),
     )
 
-    zt_count, zb_count, yzt_count = len(zt), len(zb), len(yzt)
-    attempts = zt_count + zb_count                       # 尝试涨停 = 封住 + 炸板
-    seal_rate = round(zt_count / attempts, 3) if attempts else None      # 封板率
-    break_rate = round(zb_count / attempts, 3) if attempts else None     # 炸板率
-    # 晋级率＝今日 2 板+（＝昨涨停今又停）÷ 昨日涨停家数
-    promotion_rate = round(len(lianban) / yzt_count, 3) if yzt_count else None
-
-    return {
-        "date": f"{resolved[:4]}-{resolved[4:6]}-{resolved[6:]}",
-        "zt_count": zt_count,
-        "dt_count": len(dt),
-        "zb_count": zb_count,
-        "max_boards": max(boards) if boards else 0,
-        "lianban_count": len(lianban),
-        "ladder": ladder,
-        "lianban_stocks": lianban_stocks,
-        "seal_rate": seal_rate,
-        "break_rate": break_rate,
-        "promotion_rate": promotion_rate,
-        "yzt_count": yzt_count,
-    }
+    zt_count, zb_count, yzt_count = counts["zt"], counts["zb"], counts["yzt"]
+    attempts = zt_count + zb_count if zb_count is not None else None
+    base.update({
+        "max_boards": max(boards) if boards else None,
+        "lianban_count": len(lianban), "ladder": ladder, "lianban_stocks": lianban_stocks,
+        "seal_rate": round(zt_count / attempts, 3) if attempts else None,
+        "break_rate": round(zb_count / attempts, 3) if attempts else None,
+        "promotion_rate": round(len(lianban) / yzt_count, 3) if yzt_count else None,
+    })
+    return base
 
 
 def get_short_term_emotion() -> dict:
-    """短线情绪（含缓存，5 分钟）。"""
-    return _cached("emotion", _emotion)
+    """Cache usable observations without upgrading their status; retry failures."""
+    as_of = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    session = trade_calendar.observation_trade_date_at(as_of)
+    key = "emotion"
+    hit = _CACHE.get(key)
+    if hit and hit[1].get("date") != session:
+        _CACHE.pop(key, None)
+    return _cached(key, lambda: _emotion(as_of), valid=lambda v: _usable_qualified_pools(v.get("pool_observations")))
 
 
 def get_turnover_top() -> dict:
@@ -346,7 +421,7 @@ _A_SHARE_SNAPSHOT_FLIGHT: Future | None = None
 _A_SHARE_SNAPSHOT_WAIT_SECONDS = 125  # 略长于上游 120 秒协作预算
 
 
-def get_a_share_snapshot() -> list[dict]:
+def get_a_share_snapshot_observation() -> dict:
     """全 A 股行情快照（共享缓存，TTL 同模块 5 分钟）。
 
     调用 ``astock.a_share_snapshot()``；空列表不缓存；异常向上抛出，不伪装成空市场。
@@ -358,7 +433,14 @@ def get_a_share_snapshot() -> list[dict]:
     with _A_SHARE_SNAPSHOT_LOCK:
         hit = _CACHE.get("a_share_snapshot")
         if hit and time.time() - hit[0] < _TTL:
-            return hit[1]
+            cached = copy.deepcopy(hit[1])
+            cached["is_cached"] = True
+            return cached
+        # Read-only projections may reuse a completed observation, but must not
+        # lead/join a refresh whose persisted request budget can change underneath.
+        # Check before creating a shared flight so normal callers remain independent.
+        if push2_guard.is_read_only():
+            raise push2_guard.Push2Blocked("Push2 snapshot refresh is unavailable in read-only context")
         flight = _A_SHARE_SNAPSHOT_FLIGHT
         leader = flight is None
         if leader:
@@ -366,15 +448,26 @@ def get_a_share_snapshot() -> list[dict]:
             _A_SHARE_SNAPSHOT_FLIGHT = flight
 
     if not leader:
-        return flight.result(timeout=_A_SHARE_SNAPSHOT_WAIT_SECONDS)
+        return copy.deepcopy(flight.result(timeout=_A_SHARE_SNAPSHOT_WAIT_SECONDS))
 
     try:
         snapshot = astock.a_share_snapshot()
+        # The source provides no authoritative market time. Retain the actual
+        # completed fetch instant separately; never re-stamp cache reads.
+        observed = datetime.now(BEIJING)
+        envelope = {
+            "rows": copy.deepcopy(snapshot),
+            "is_cached": False,
+            "fetched_at": observed.strftime("%Y-%m-%d %H:%M:%S"),
+            "observed_at": observed.astimezone(timezone.utc).isoformat(),
+            "trade_date": None,
+            "data_time": None,
+        }
         if snapshot:
             with _A_SHARE_SNAPSHOT_LOCK:
-                _CACHE["a_share_snapshot"] = (time.time(), snapshot)
-        flight.set_result(snapshot)
-        return snapshot
+                _CACHE["a_share_snapshot"] = (time.time(), envelope)
+        flight.set_result(envelope)
+        return copy.deepcopy(envelope)
     except BaseException as exc:
         # 领先者中断也须唤醒本轮等待者，不留下永远 pending 的 Future。
         flight.set_exception(exc)
@@ -382,6 +475,11 @@ def get_a_share_snapshot() -> list[dict]:
     finally:
         with _A_SHARE_SNAPSHOT_LOCK:
             _A_SHARE_SNAPSHOT_FLIGHT = None
+
+
+def get_a_share_snapshot() -> list[dict]:
+    """Legacy rows API; each caller receives an isolated copy of the observation."""
+    return get_a_share_snapshot_observation()["rows"]
 
 
 def _stock_subset(s: dict, *, amount_required: bool) -> dict:
@@ -550,14 +648,15 @@ def _breadth_envelope(
     data: dict | None,
     warnings: list[str] | None = None,
     is_stale: bool = False,
+    observation: dict | None = None,
 ) -> dict:
     """市场广度统一状态信封（get_market_breadth 唯一出口形状）。"""
     return {
         "status": status,
         "source": _SOURCE,
-        "trade_date": None,
-        "data_time": None,
-        "fetched_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S"),
+        "trade_date": (observation or {}).get("trade_date"),
+        "data_time": (observation or {}).get("data_time"),
+        "fetched_at": (observation or {}).get("fetched_at"),
         "is_stale": is_stale,
         "warnings": list(warnings or []),
         "data": data,
@@ -599,12 +698,13 @@ def get_market_breadth() -> dict:
     - unavailable：空快照或获取/计算失败（data=None，不伪造全 0）
     """
     try:
-        snapshot = get_a_share_snapshot()
+        observation = get_a_share_snapshot_observation()
+        snapshot = observation["rows"]
     except Exception as e:  # noqa: BLE001 — 外部数据边界，转 unavailable
         return _breadth_envelope(
             "unavailable",
             data=None,
-            warnings=[f"全市场快照获取失败：{type(e).__name__}: {e}"],
+            warnings=["全市场快照暂不可用"],
             is_stale=False,
         )
 
@@ -622,7 +722,7 @@ def get_market_breadth() -> dict:
         return _breadth_envelope(
             "unavailable",
             data=None,
-            warnings=[f"全市场快照获取失败：{type(e).__name__}: {e}"],
+            warnings=["全市场快照暂不可用"],
             is_stale=False,
         )
 
@@ -641,12 +741,14 @@ def get_market_breadth() -> dict:
         return _breadth_envelope(
             "partial",
             data=breadth,
+            observation=observation,
             warnings=base_warns + partial_warns,
             is_stale=False,
         )
     return _breadth_envelope(
         "normal",
         data=breadth,
+        observation=observation,
         warnings=base_warns,
         is_stale=False,
     )
@@ -669,7 +771,10 @@ def get_cached_board_ranking(board_type: str) -> dict:
         raise ValueError(f"不支持的板块类型：{board_type}")
 
     def fetch():
-        return astock.board_ranking(board_type, top_n=_BOARD_CACHE_TOP_N)
+        result = astock.board_ranking(board_type, top_n=_BOARD_CACHE_TOP_N)
+        if isinstance(result, dict):
+            result = {**result, "fetched_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S")}
+        return result
 
     # valid：total>0 且有 ranked 才缓存；空/全不可用下次重试
     def _valid(raw) -> bool:
@@ -756,12 +861,14 @@ def get_board_ranking(board_type: str = "industry", top_n: int = 20) -> dict:
         return _breadth_envelope(
             "partial",
             data=data,
+            observation=raw,
             warnings=base_warns + [f"有 {unknown_count} 个板块缺少有效涨跌幅"],
             is_stale=False,
         )
     return _breadth_envelope(
         "normal",
         data=data,
+        observation=raw,
         warnings=base_warns,
         is_stale=False,
     )
@@ -789,6 +896,22 @@ def _filter_by_scope(snapshot: list[dict], scope: str) -> list[dict]:
     return snapshot
 
 
+def _market_cloud_envelope(status: str, **kwargs) -> dict:
+    """Add orthogonal provenance without changing the legacy breadth contract.
+
+    Cache reuse is not a stale signal. Missing provider market time remains
+    unknown even when the fetch itself completed successfully.
+    """
+    envelope = _breadth_envelope(status, **kwargs)
+    observation = kwargs.get("observation") or {}
+    envelope.update({
+        "is_cached": observation.get("is_cached"),
+        "observed_at": observation.get("observed_at"),
+        "market_time_unknown": not bool(envelope["trade_date"] and envelope["data_time"]),
+    })
+    return envelope
+
+
 def get_market_cloud(scope: str = "all", period: str = "today") -> dict:
     """市场云图状态信封：全 A 股按行业分组，面积=流通市值，颜色=涨跌幅。
 
@@ -802,9 +925,10 @@ def get_market_cloud(scope: str = "all", period: str = "today") -> dict:
         raise ValueError(f"不支持的周期：{period}（V1 仅支持 today）")
 
     try:
-        snapshot = get_a_share_snapshot()
+        observation = get_a_share_snapshot_observation()
+        snapshot = observation["rows"]
     except Exception:  # noqa: BLE001
-        return _breadth_envelope(
+        return _market_cloud_envelope(
             "unavailable",
             data=None,
             warnings=["全市场快照获取失败，市场热力暂不可用，请稍后重试。"],
@@ -812,7 +936,7 @@ def get_market_cloud(scope: str = "all", period: str = "today") -> dict:
         )
 
     if not isinstance(snapshot, list) or not snapshot:
-        return _breadth_envelope(
+        return _market_cloud_envelope(
             "unavailable",
             data=None,
             warnings=["全市场快照为空"],
@@ -840,7 +964,7 @@ def get_market_cloud(scope: str = "all", period: str = "today") -> dict:
                 missing_pct += 1
 
     if not valid:
-        return _breadth_envelope(
+        return _market_cloud_envelope(
             "unavailable",
             data=None,
             warnings=["无有效股票数据（缺流通市值或涨跌幅）"],
@@ -907,5 +1031,5 @@ def get_market_cloud(scope: str = "all", period: str = "today") -> dict:
         warnings.append(f"有 {len(no_industry)} 只股票无行业归属，未进入云图")
 
     if warnings:
-        return _breadth_envelope("partial", data=data, warnings=warnings, is_stale=False)
-    return _breadth_envelope("normal", data=data, warnings=[], is_stale=False)
+        return _market_cloud_envelope("partial", data=data, warnings=warnings, is_stale=False, observation=observation)
+    return _market_cloud_envelope("normal", data=data, warnings=[], is_stale=False, observation=observation)

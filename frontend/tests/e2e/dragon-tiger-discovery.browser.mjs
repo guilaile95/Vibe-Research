@@ -8,7 +8,7 @@
  */
 import { chromium } from "playwright";
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -248,9 +248,13 @@ async function main() {
       await tab.waitFor({ state: "visible", timeout: 15000 });
     }
     await page.getByTestId("dragon-tiger-tab").click();
-    if (await page.getByTestId("dragon-tiger-tab").getAttribute("aria-selected") !== "true") {
-      throw new Error("Dragon-Tiger tab did not become selected");
-    }
+    await page.waitForFunction(() => {
+      const tab = document.querySelector('[data-testid="dragon-tiger-tab"]');
+      const panel = document.querySelector('[data-testid="dragon-tiger-discovery-panel"]');
+      const load = panel?.querySelector('[data-testid="load-dragon-tiger-discovery"]');
+      return tab?.getAttribute("aria-selected") === "true" &&
+        panel?.getClientRects().length > 0 && load instanceof HTMLButtonElement && !load.disabled;
+    }, null, { timeout: 15000 });
     const normal = await requestPayload(page, "load-dragon-tiger-discovery");
     if (normal.schema_version !== "dragon_tiger_discovery.v0.1" || normal.status !== "NORMAL" || normal.trade_date !== "2026-09-09") {
       throw new Error(`unexpected normal envelope: ${JSON.stringify(normal)}`);
@@ -335,6 +339,14 @@ async function main() {
     if (consoleErrors.length) throw new Error(`browser console errors: ${consoleErrors.join(" | ")}`);
     console.log(`[E2E] normal=${normal.status} rows=${normal.rows.length}; overlap=${overlap.status}; empty=${empty.status}; screenshots=${screenshotDir}`);
     console.log("[E2E] Dragon-Tiger market discovery source-to-sink browser acceptance OK");
+  } catch (error) {
+    await page.screenshot({ path: path.join(screenshotDir, "failure.png"), fullPage: true }).catch(() => {});
+    await writeFile(path.join(screenshotDir, "failure.html"), await page.content()).catch(() => {});
+    await writeFile(path.join(screenshotDir, "failure.json"), JSON.stringify({
+      error: String(error), url: page.url(), apiRequests, consoleErrors,
+      selected: await page.getByTestId("dragon-tiger-tab").getAttribute("aria-selected").catch(() => null),
+    }, null, 2)).catch(() => {});
+    throw error;
   } finally {
     await page.close().catch(() => {});
     await browser.close().catch(() => {});

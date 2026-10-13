@@ -6,6 +6,7 @@ from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from starlette.concurrency import run_in_threadpool
 
 import trade_ledger_service as svc
 import trade_ledger_store as store
@@ -49,7 +50,7 @@ async def create_trade(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="请求体必须是 JSON")
     try:
-        record = svc.create_trade(data)
+        record = await run_in_threadpool(svc.create_trade, data)
     except svc.TradeValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except svc.AdviceNotFoundError:
@@ -105,7 +106,8 @@ async def list_trades(
         raise HTTPException(status_code=422, detail="date_from 不能大于 date_to")
 
     try:
-        records = svc.list_trades(
+        records = await run_in_threadpool(
+            svc.list_trades,
             code=code,
             operation=operation,
             execution_status=execution_status,
@@ -126,7 +128,7 @@ async def list_trades(
 @router.get("/trades/{trade_id}")
 async def get_trade(trade_id: str):
     try:
-        record = svc.get_trade(trade_id)
+        record = await run_in_threadpool(svc.get_trade, trade_id)
     except store.TradeLedgerCorruptedError:
         raise HTTPException(status_code=500, detail="交易流水数据损坏，已停止读写")
 
@@ -147,7 +149,7 @@ async def void_trade(trade_id: str, request: Request):
     if not reason or not isinstance(reason, str) or not reason.strip():
         raise HTTPException(status_code=422, detail="reason 必填")
     try:
-        record = svc.void_trade(trade_id, reason.strip())
+        record = await run_in_threadpool(svc.void_trade, trade_id, reason.strip())
     except (svc.TradeNotFoundError, store.TradeNotFoundError):
         raise HTTPException(status_code=404, detail="交易记录不存在")
     except (svc.TradeAlreadyVoidedError, store.TradeAlreadyVoidedError):

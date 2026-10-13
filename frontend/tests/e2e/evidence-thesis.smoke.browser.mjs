@@ -266,6 +266,7 @@ function createApiMockState() {
           updated_at: now,
           deleted: 0,
           deleted_at: null,
+          edit_token: "evidence-edit.v1:" + "a".repeat(64),
         };
         evidences.set(id, rec);
         return ok({ data: rec });
@@ -295,7 +296,9 @@ function createApiMockState() {
         if (method === "GET") return ok({ data: rec });
         if (method === "PUT") {
           const body = JSON.parse(request.postData() || "{}");
-          Object.assign(rec, body, { updated_at: nowIso() });
+          if (body.expected_edit_token !== rec.edit_token) return err(409, "Evidence changed");
+          const { expected_edit_token, ...changes } = body;
+          Object.assign(rec, changes, { updated_at: nowIso(), edit_token: "evidence-edit.v1:" + (rec.edit_token.endsWith("a") ? "b" : "a").repeat(64) });
           // cascade：编辑证据 → 所有关联非 archived thesis 生成 revision
           cascadeEvidenceChange(eid, "update");
           return ok({ data: rec });
@@ -303,6 +306,7 @@ function createApiMockState() {
         if (method === "DELETE") {
           const confirmFlag = u.searchParams.get("confirm");
           if (confirmFlag !== "true") return err(400, "请确认删除操作");
+          if (u.searchParams.get("expected_edit_token") !== rec.edit_token) return err(409, "Evidence changed");
           rec.deleted = 1;
           rec.deleted_at = nowIso();
           // cascade：软删除证据 → 所有关联非 archived thesis 生成 revision

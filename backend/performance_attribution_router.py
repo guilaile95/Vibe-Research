@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 import performance_attribution_service as _svc
 
@@ -38,21 +38,18 @@ class SnapshotRequest(BaseModel):
     price_map: dict[str, float] | None = None
 
 
-def _validate_price_map(price_map: dict[str, float] | None) -> dict[str, float] | None:
-    if price_map is None:
-        return None
-    out: dict[str, float] = {}
-    for code, price in price_map.items():
-        if not re.fullmatch(r"\d{6}", str(code)):
-            raise HTTPException(status_code=422, detail=f"非法 price_map 代码：{code}")
+    @field_validator("price_map", mode="before")
+    @classmethod
+    def validate_original_price_map(cls, value):
+        # A normal float field coerces JSON true to 1.0; reject invalid quotes
+        # before that information is lost, using the service's same contract.
         try:
-            val = float(price)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=422, detail=f"非法 price_map 价格：{price}")
-        if not (val > 0):
-            raise HTTPException(status_code=422, detail=f"price_map 价格须为正数：{code}")
-        out[str(code)] = val
-    return out
+            return _svc.validate_price_map(value)
+        except ValueError as exc:
+            # Pydantic's error payload retains the raw input. JSON overflow or
+            # NaN would then crash FastAPI's JSON error serialization; return
+            # only our safe validation detail, never the original quote map.
+            raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
 @router.get("")
@@ -75,10 +72,9 @@ def create_snapshot(body: SnapshotRequest):
     """Compute attribution and freeze it as a snapshot."""
     date_from = _validate_date(body.date_from, "date_from")
     date_to = _validate_date(body.date_to, "date_to")
-    price_map = _validate_price_map(body.price_map)
     try:
         result = _svc.compute_attribution(
-            date_from=date_from, date_to=date_to, price_map=price_map
+            date_from=date_from, date_to=date_to, price_map=body.price_map
         )
         snapshot = _svc.save_attribution_snapshot(result)
     except ValueError as exc:

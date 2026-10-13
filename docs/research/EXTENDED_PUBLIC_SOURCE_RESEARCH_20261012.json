@@ -1,0 +1,110 @@
+{
+  "schema_version": "feature-adoption-evidence.v1",
+  "as_of": "2026-10-12",
+  "upstream_commit": "d5bf80d2ed1629f8fa602058093f8d41bb0c7ace",
+  "features": [
+    {
+      "id": "A12",
+      "upstream_endpoint": "em_market_trend",
+      "source_id": "em_market_trend",
+      "reference": "https://github.com/simonlin1212/vibe-astock/blob/d5bf80d2ed1629f8fa602058093f8d41bb0c7ace/.agents/skills/data-access/scripts/sources/eastmoney.py",
+      "reference_blob": "f3dc5e17bcc75c77de1f5a5bcca8b1845f311aec",
+      "status": "OFFLINE_IMPLEMENTED_REVIEWED_SOURCE_CONTRACT",
+      "source_equivalence": "bounded native contract adoption"
+    },
+    {
+      "id": "A12",
+      "upstream_endpoint": "index_valuation",
+      "source_id": "index_valuation",
+      "reference": "https://github.com/simonlin1212/vibe-astock/blob/d5bf80d2ed1629f8fa602058093f8d41bb0c7ace/.agents/skills/data-access/scripts/sources/astock_ported.py",
+      "reference_blob": "f12c82cf1af9d05a93014882394786767b42a5f0",
+      "status": "OFFLINE_IMPLEMENTED_REVIEWED_SOURCE_CONTRACT",
+      "source_equivalence": "bounded native contract adoption"
+    },
+    {
+      "id": "A12",
+      "upstream_endpoint": "chinabond_yield_curve",
+      "source_id": "chinabond_yield_curve",
+      "reference": "https://github.com/simonlin1212/vibe-astock/blob/d5bf80d2ed1629f8fa602058093f8d41bb0c7ace/.agents/skills/data-access/scripts/sources/astock_defaults.py",
+      "reference_blob": "d685adc7f7fd5d70f10623cbd5b798da80c42c47",
+      "status": "OFFLINE_IMPLEMENTED_REVIEWED_SOURCE_CONTRACT",
+      "source_equivalence": "bounded native contract adoption"
+    },
+    {
+      "id": "A25",
+      "upstream_endpoint": "fetch_quote",
+      "source_id": "cn_quote_ref",
+      "reference": "https://github.com/simonlin1212/vibe-astock/blob/d5bf80d2ed1629f8fa602058093f8d41bb0c7ace/.agents/skills/data-access/scripts/fetch_quote.py",
+      "reference_blob": "d73f04c5591b1be1690768acbe4c7513b92c972e",
+      "status": "OFFLINE_IMPLEMENTED_REVIEWED_SOURCE_CONTRACT",
+      "source_equivalence": "qualified raw price/reference subset; native valuation fields remain distinct; no fallback equivalence claim"
+    },
+    {
+      "id": "A25",
+      "upstream_endpoint": "fetch_financials",
+      "source_id": "cn_financials_ytd",
+      "reference": "https://github.com/simonlin1212/vibe-astock/blob/d5bf80d2ed1629f8fa602058093f8d41bb0c7ace/.agents/skills/data-access/scripts/fetch_financials.py",
+      "reference_blob": "66c1a522768fedb1d52df9ada2db565dc17386a5",
+      "status": "OFFLINE_IMPLEMENTED_REVIEWED_SOURCE_CONTRACT",
+      "source_equivalence": "qualified alternate raw source"
+    },
+    {
+      "id": "A25",
+      "upstream_endpoint": "fetch_estimates",
+      "source_id": "cn_consensus",
+      "reference": "https://github.com/simonlin1212/vibe-astock/blob/d5bf80d2ed1629f8fa602058093f8d41bb0c7ace/.agents/skills/data-access/scripts/fetch_estimates.py",
+      "reference_blob": "385fe9054ed01a4d9b7f082af44a129cb6431905",
+      "status": "OFFLINE_IMPLEMENTED_REVIEWED_SOURCE_CONTRACT",
+      "source_equivalence": "bounded native contract adoption"
+    },
+    {
+      "id": "A25",
+      "upstream_endpoint": "global_quote_ref",
+      "source_id": "global_quote_ref",
+      "reference": "https://github.com/simonlin1212/vibe-astock/blob/d5bf80d2ed1629f8fa602058093f8d41bb0c7ace/.agents/skills/data-access/scripts/sources/global_research.py",
+      "reference_blob": "715782a3480f110002f473dd88002d85e36e6d43",
+      "status": "OFFLINE_IMPLEMENTED_REVIEWED_SOURCE_CONTRACT",
+      "source_equivalence": "bounded native contract adoption"
+    },
+    {
+      "id": "A25",
+      "upstream_endpoint": "global_financials_pit",
+      "source_id": "global_financials_pit",
+      "reference": "https://github.com/simonlin1212/vibe-astock/blob/d5bf80d2ed1629f8fa602058093f8d41bb0c7ace/.agents/skills/data-access/scripts/sources/global_research.py",
+      "reference_blob": "715782a3480f110002f473dd88002d85e36e6d43",
+      "status": "OFFLINE_IMPLEMENTED_REVIEWED_SOURCE_CONTRACT",
+      "source_equivalence": "bounded native contract adoption"
+    },
+    {
+      "id": "A25",
+      "upstream_endpoint": "yahoo_consensus",
+      "source_id": "yahoo_consensus",
+      "reference": "https://github.com/simonlin1212/vibe-astock/blob/d5bf80d2ed1629f8fa602058093f8d41bb0c7ace/.agents/skills/data-access/scripts/sources/yahoo.py",
+      "reference_blob": "3ee17ff9cc3e86d733204a52b170fa9b22ad0c8f",
+      "status": "OFFLINE_IMPLEMENTED_REVIEWED_SOURCE_CONTRACT",
+      "source_equivalence": "bounded native contract adoption"
+    }
+  ],
+  "point_in_time_claim": "NONE",
+  "financial_amount_scale": "PROVIDER_RAW_SCALE_UNVERIFIED",
+  "provider_activation": false,
+  "live_provider_evidence": "NOT_EVALUATED",
+  "model_evidence": "NOT_EVALUATED",
+  "license": "Apache-2.0",
+  "license_file": "docs/third-party/vibe-astock-LICENSE",
+  "notice_file": "docs/third-party/vibe-astock-NOTICE",
+  "provider_terms": "PROVIDER_TERMS_NOT_VERIFIED",
+  "tests": [
+    "backend/tests/test_extended_public_research.py",
+    "frontend/tests/extended-public-research.test.ts"
+  ],
+  "golden": "frontend/tests/fixtures/extended-public-research.golden.json",
+  "source_review_accepted_through": "25207c77e600f3902056f6adae90f649da1a9bf5",
+  "browser_evidence": "CI_PENDING_SEPARATE_MOUNTED_PAGE_ACCEPTANCE",
+  "checks": {
+    "guarded_backend": 85,
+    "frontend_combined": 71,
+    "outbound_attempts": 0,
+    "frontend_build": "PASS"
+  }
+}

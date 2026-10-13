@@ -6,6 +6,8 @@
 - reflection：空输入、超长截断。
 - 路由：/api/debate 与 /api/reflect 的参数与配置校验。
 """
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -114,7 +116,7 @@ def test_dossier_spec_marks_rate_limited_sources_serial():
     ([], True), ({}, True), (None, True), ([{}, {}], True),
     ({"period": "近5年", "metrics": {"pe_ttm": {"current": 19.6}}}, False),
     ({"name": "贵州茅台", "price": 1297.41}, False),
-    ({"unit": "元", "recent": [{"date": "2026-07-24"}]}, False),
+    ({"unit": "元", "recent": [{"date": "2026-07-24"}]}, True),  # 日期元信息本身不是观测值
 ])
 def test_payload_empty_sees_through_wrappers(value, empty):
     assert debate._payload_empty(value) is empty
@@ -210,7 +212,7 @@ def test_reflection_rejects_empty():
 
 def test_reflection_truncates_long_source(monkeypatch):
     monkeypatch.setattr(chat, "_call_llm_stream", lambda *a, **k: None)
-    monkeypatch.setattr(chat, "_iter_sse_deltas", lambda resp: iter([{"content": "ok"}]))
+    monkeypatch.setattr(chat, "_iter_sse_deltas", lambda resp, **kwargs: iter([{"content": "ok"}]))
     evs = list(reflection.run_reflection_stream(_LLM, "字" * (reflection.MAX_SOURCE_CHARS + 500)))
     assert evs[0]["type"] == "status" and "截取" in evs[0]["message"]
     assert evs[-1]["type"] == "done" and evs[-1]["truncated"] is True
@@ -239,3 +241,109 @@ def test_reflect_route_rejects_empty_source():
 def test_reflect_route_requires_llm_config():
     r = client.post("/api/reflect", json={"source": "一段分析", "llm": {**_LLM, "baseURL": ""}})
     assert r.status_code == 400
+
+
+@pytest.mark.parametrize("payload,status", [
+    ({"price": 12.3, "change_pct": 0}, "success"),
+    ({"main_net": 0, "has_event": False}, "success"),
+    ({"status": "partial", "rows": [{"main_net": 0}], "unknown": None}, "partial"),
+    ({"status": "stale", "price": 12.3, "trade_date": "2026-09-01"}, "partial"),
+    ({"rows": [{"price": 12.3}], "error": "PRIVATE provider URL"}, "partial"),
+    ({"spot": {"price": 12.3}, "forward": {"err": "PRIVATE", "unavailable": True}}, "partial"),
+    ({"period": "5y", "metrics": {}}, "empty"),
+    ({"total_blocks": 0, "blocks": [], "hot_concepts": []}, "empty"),
+    ({"data": [], "source": "fixture", "trade_date": "2026-09-01"}, "empty"),
+    ({"status": "partial", "data": []}, "error"),
+    ({"error": "PRIVATE provider URL"}, "error"),
+    ({"price": float("nan")}, "error"),
+])
+def test_debate_source_to_dossier_to_prompt_preserves_outcome(monkeypatch, payload, status):
+    """A successful fetch attempt is not evidence of complete or even usable data."""
+    spec = ("query_quote", {}, "行情", True, False)
+    monkeypatch.setattr(debate, "_DOSSIER_SPEC", [spec])
+    monkeypatch.setattr(tools, "exec_tool", lambda *args: payload)
+    captured = []
+
+    def model(_cfg, messages, **_kwargs):
+        captured.append(messages)
+        yield {"type": "delta", "text": "仅讨论证据与待验证问题"}
+
+    monkeypatch.setattr(chat, "stream_messages", model)
+    section = debate._fetch_section(spec, "600519")
+    assert section["status"] == status
+    assert section["ok"] is (status == "success")
+    events = list(debate.run_debate_stream(_LLM, "600519"))
+    progress = next(event for event in events if event["type"] == "dossier_progress")
+    assert progress["status"] == status and progress["ok"] == section["ok"]
+    assert "PRIVATE" not in str(events)
+    if status in {"success", "partial"}:
+        assert len(captured) == 3
+        dossier = next(event for event in events if event["type"] == "dossier")
+        assert dossier["missing"] == []
+        assert dossier["partial"] == (["行情"] if status == "partial" else [])
+        for messages in captured:
+            prompt = messages[0]["content"]
+            assert section["body"] in prompt
+            assert "PRIVATE" not in prompt
+            assert "未知值不能默认成零" in prompt
+        body = json.loads(section["body"])
+        assert body["status"] == status
+        if status == "partial":
+            assert body["limitations"]
+    else:
+        assert not captured
+        assert events[-1]["type"] == "error"
+
+
+@pytest.mark.parametrize("parallel", [True, False])
+def test_debate_optional_source_failure_is_a_gap_not_no_record(monkeypatch, parallel):
+    spec = ("query_lockup", {}, "解禁", parallel, True)
+    monkeypatch.setattr(debate, "_DOSSIER_SPEC", [spec])
+
+    def unavailable(*_args):
+        raise RuntimeError("PRIVATE provider URL credential")
+
+    monkeypatch.setattr(tools, "exec_tool", unavailable)
+    dossier = debate.build_dossier("600519")
+    assert dossier["missing"] == ["解禁"] and dossier["partial"] == []
+    assert dossier["sections"] == []
+    assert "PRIVATE" not in debate.dossier_text(dossier)
+
+
+def test_debate_truncation_stays_bounded_valid_json_and_visible(monkeypatch):
+    payload = {"source": "fixture", "trade_date": "2026-09-29",
+               "rows": [{"price": 12.3, "title": '\\"中文' * 1000} for _ in range(100)]}
+    monkeypatch.setattr(debate, "_DOSSIER_SPEC", [("query_quote", {}, "行情", True, False)])
+    monkeypatch.setattr(tools, "exec_tool", lambda *args: payload)
+    dossier = debate.build_dossier("600519")
+    section = dossier["sections"][0]
+    assert dossier["partial"] == ["行情"] and dossier["missing"] == []
+    assert section["status"] == "partial" and section["truncated"] and not section["ok"]
+    assert len(section["body"]) <= debate._SECTION_CAP
+    body = json.loads(section["body"])
+    assert body["status"] == "partial" and body["truncated"]
+    assert body["data"]["source"] == "fixture"
+    assert body["data"]["trade_date"] == "2026-09-29"
+    assert body["data"]["rows"][0]["price"] == 12.3
+    assert any("遗漏" in limitation for limitation in body["limitations"])
+    assert section["body"] in debate.dossier_text(dossier)
+
+
+def test_debate_serialization_failure_does_not_become_optional_empty(monkeypatch):
+    monkeypatch.setattr(debate, "_DOSSIER_SPEC", [("query_news", {}, "新闻", True, True)])
+    monkeypatch.setattr(tools, "exec_tool", lambda *args: {"K" * 7000: 12})
+    dossier = debate.build_dossier("600519")
+    assert dossier["sections"] == [] and dossier["missing"] == ["新闻"]
+
+
+def test_debate_model_failure_is_public_safe_and_terminal(monkeypatch):
+    monkeypatch.setattr(tools, "exec_tool", lambda *args: {"price": 12.3})
+
+    def failure(*_args, **_kwargs):
+        raise RuntimeError("PRIVATE ProxyError https://provider.invalid?key=secret")
+
+    monkeypatch.setattr(chat, "stream_messages", failure)
+    events = list(debate.run_debate_stream(_LLM, "600519"))
+    assert "PRIVATE" not in str(events) and "provider.invalid" not in str(events)
+    assert len([event for event in events if event["type"] == "stage_done"]) == 3
+    assert events[-1]["type"] == "done" and events[-1]["stages"] == []

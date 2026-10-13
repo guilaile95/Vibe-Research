@@ -1,0 +1,1758 @@
+{
+  "daily": {
+    "preview": {
+      "schema_version": "shortline-segmented-review.v1",
+      "mode": "daily",
+      "trade_date": "2026-07-31",
+      "bundle_id": "974eb7d02331cecf34571d16f90fa9e4c94548a2bf78940be256286e35af8385",
+      "days": [
+        "2026-07-31"
+      ],
+      "selection_mode": "CURRENT_STORED_POSTHOC",
+      "point_in_time_claim": "NONE",
+      "canonical_authority": false,
+      "max_model_calls": 6,
+      "model_calls_performed": 0,
+      "sections": [
+        {
+          "id": "sentiment",
+          "label": "情绪",
+          "evidence_count": 2,
+          "gaps": [],
+          "omitted_count": 0,
+          "source_identities": [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ],
+          "origins": [
+            "UNCLASSIFIED"
+          ]
+        },
+        {
+          "id": "capital",
+          "label": "资金",
+          "evidence_count": 4,
+          "gaps": [],
+          "omitted_count": 0,
+          "source_identities": [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ],
+          "origins": [
+            "UNCLASSIFIED"
+          ]
+        },
+        {
+          "id": "theme",
+          "label": "题材",
+          "evidence_count": 2,
+          "gaps": [],
+          "omitted_count": 0,
+          "source_identities": [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ],
+          "origins": [
+            "UNCLASSIFIED"
+          ]
+        },
+        {
+          "id": "dragon_tiger",
+          "label": "龙虎榜",
+          "evidence_count": 2,
+          "gaps": [],
+          "omitted_count": 0,
+          "source_identities": [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ],
+          "origins": [
+            "UNCLASSIFIED"
+          ]
+        },
+        {
+          "id": "leader",
+          "label": "龙头",
+          "evidence_count": 2,
+          "gaps": [],
+          "omitted_count": 0,
+          "source_identities": [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ],
+          "origins": [
+            "UNCLASSIFIED"
+          ]
+        }
+      ],
+      "available": true,
+      "limitations": [
+        "仅使用现有归档，生成不会采集行情。",
+        "当前存档的事后研究，不证明复盘当时可知。",
+        "每段独立调用；缺证据跳过，不自动重试。",
+        "私人交易统计不进入模型材料。"
+      ]
+    },
+    "events": [
+      {
+        "type": "basis",
+        "bundle_id": "974eb7d02331cecf34571d16f90fa9e4c94548a2bf78940be256286e35af8385",
+        "mode": "daily",
+        "trade_date": "2026-07-31",
+        "max_model_calls": 6
+      },
+      {
+        "type": "stage",
+        "id": "sentiment",
+        "label": "情绪",
+        "call": 1
+      },
+      {
+        "type": "delta",
+        "id": "sentiment",
+        "text": "需要继续观察[ev-49d773d847e6b974]"
+      },
+      {
+        "type": "stage_done",
+        "stage": {
+          "id": "sentiment",
+          "label": "情绪",
+          "status": "generated",
+          "text": "需要继续观察[ev-49d773d847e6b974]",
+          "audit": {
+            "status": "no_detected_issue_not_verified",
+            "reason_codes": [],
+            "unknown_reference_count": 0,
+            "arithmetic_warning_count": 0,
+            "unbound_number_count": 0,
+            "fact_verification": "NOT_PERFORMED"
+          },
+          "reason_codes": [],
+          "evidence_ids": [
+            "ev-49d773d847e6b974",
+            "ev-8a9b04c130e38f18"
+          ],
+          "bundle_id": "974eb7d02331cecf34571d16f90fa9e4c94548a2bf78940be256286e35af8385"
+        }
+      },
+      {
+        "type": "stage",
+        "id": "capital",
+        "label": "资金",
+        "call": 2
+      },
+      {
+        "type": "delta",
+        "id": "capital",
+        "text": "需要继续观察[ev-579fa3843e0f7580]"
+      },
+      {
+        "type": "stage_done",
+        "stage": {
+          "id": "capital",
+          "label": "资金",
+          "status": "generated",
+          "text": "需要继续观察[ev-579fa3843e0f7580]",
+          "audit": {
+            "status": "no_detected_issue_not_verified",
+            "reason_codes": [],
+            "unknown_reference_count": 0,
+            "arithmetic_warning_count": 0,
+            "unbound_number_count": 0,
+            "fact_verification": "NOT_PERFORMED"
+          },
+          "reason_codes": [],
+          "evidence_ids": [
+            "ev-579fa3843e0f7580",
+            "ev-db67528dc79d22c0",
+            "ev-aab7759acc5c7591",
+            "ev-d41a9b289aec8419"
+          ],
+          "bundle_id": "974eb7d02331cecf34571d16f90fa9e4c94548a2bf78940be256286e35af8385"
+        }
+      },
+      {
+        "type": "stage",
+        "id": "theme",
+        "label": "题材",
+        "call": 3
+      },
+      {
+        "type": "delta",
+        "id": "theme",
+        "text": "需要继续观察[ev-b860843309e63927]"
+      },
+      {
+        "type": "stage_done",
+        "stage": {
+          "id": "theme",
+          "label": "题材",
+          "status": "generated",
+          "text": "需要继续观察[ev-b860843309e63927]",
+          "audit": {
+            "status": "no_detected_issue_not_verified",
+            "reason_codes": [],
+            "unknown_reference_count": 0,
+            "arithmetic_warning_count": 0,
+            "unbound_number_count": 0,
+            "fact_verification": "NOT_PERFORMED"
+          },
+          "reason_codes": [],
+          "evidence_ids": [
+            "ev-b860843309e63927",
+            "ev-738ff5c28f26daec"
+          ],
+          "bundle_id": "974eb7d02331cecf34571d16f90fa9e4c94548a2bf78940be256286e35af8385"
+        }
+      },
+      {
+        "type": "stage",
+        "id": "dragon_tiger",
+        "label": "龙虎榜",
+        "call": 4
+      },
+      {
+        "type": "delta",
+        "id": "dragon_tiger",
+        "text": "需要继续观察[ev-dae24c2dc03c93a8]"
+      },
+      {
+        "type": "stage_done",
+        "stage": {
+          "id": "dragon_tiger",
+          "label": "龙虎榜",
+          "status": "generated",
+          "text": "需要继续观察[ev-dae24c2dc03c93a8]",
+          "audit": {
+            "status": "no_detected_issue_not_verified",
+            "reason_codes": [],
+            "unknown_reference_count": 0,
+            "arithmetic_warning_count": 0,
+            "unbound_number_count": 0,
+            "fact_verification": "NOT_PERFORMED"
+          },
+          "reason_codes": [],
+          "evidence_ids": [
+            "ev-dae24c2dc03c93a8",
+            "ev-91ff2557629c6d0b"
+          ],
+          "bundle_id": "974eb7d02331cecf34571d16f90fa9e4c94548a2bf78940be256286e35af8385"
+        }
+      },
+      {
+        "type": "stage",
+        "id": "leader",
+        "label": "龙头",
+        "call": 5
+      },
+      {
+        "type": "delta",
+        "id": "leader",
+        "text": "需要继续观察[ev-119973760212e053]"
+      },
+      {
+        "type": "stage_done",
+        "stage": {
+          "id": "leader",
+          "label": "龙头",
+          "status": "generated",
+          "text": "需要继续观察[ev-119973760212e053]",
+          "audit": {
+            "status": "no_detected_issue_not_verified",
+            "reason_codes": [],
+            "unknown_reference_count": 0,
+            "arithmetic_warning_count": 0,
+            "unbound_number_count": 0,
+            "fact_verification": "NOT_PERFORMED"
+          },
+          "reason_codes": [],
+          "evidence_ids": [
+            "ev-119973760212e053",
+            "ev-dcfc9bac1cba7fc4"
+          ],
+          "bundle_id": "974eb7d02331cecf34571d16f90fa9e4c94548a2bf78940be256286e35af8385"
+        }
+      },
+      {
+        "type": "stage",
+        "id": "summary",
+        "label": "汇总",
+        "call": 6
+      },
+      {
+        "type": "delta",
+        "id": "summary",
+        "text": "需要继续观察[ev-49d773d847e6b974]"
+      },
+      {
+        "type": "stage_done",
+        "stage": {
+          "id": "summary",
+          "label": "汇总",
+          "status": "generated",
+          "text": "需要继续观察[ev-49d773d847e6b974]",
+          "audit": {
+            "status": "no_detected_issue_not_verified",
+            "reason_codes": [],
+            "unknown_reference_count": 0,
+            "arithmetic_warning_count": 0,
+            "unbound_number_count": 0,
+            "fact_verification": "NOT_PERFORMED"
+          },
+          "reason_codes": [],
+          "evidence_ids": [
+            "ev-49d773d847e6b974",
+            "ev-8a9b04c130e38f18",
+            "ev-579fa3843e0f7580",
+            "ev-db67528dc79d22c0",
+            "ev-aab7759acc5c7591",
+            "ev-d41a9b289aec8419",
+            "ev-b860843309e63927",
+            "ev-738ff5c28f26daec",
+            "ev-dae24c2dc03c93a8",
+            "ev-91ff2557629c6d0b",
+            "ev-119973760212e053",
+            "ev-dcfc9bac1cba7fc4"
+          ],
+          "bundle_id": "974eb7d02331cecf34571d16f90fa9e4c94548a2bf78940be256286e35af8385"
+        }
+      },
+      {
+        "type": "done",
+        "generation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bundle_id": "974eb7d02331cecf34571d16f90fa9e4c94548a2bf78940be256286e35af8385",
+        "status": "generated_unverified",
+        "model_calls": 6
+      }
+    ],
+    "version": {
+      "bundle": {
+        "bundle_id": "974eb7d02331cecf34571d16f90fa9e4c94548a2bf78940be256286e35af8385",
+        "canonical_authority": false,
+        "days": [
+          "2026-07-31"
+        ],
+        "mode": "daily",
+        "point_in_time_claim": "NONE",
+        "schema_version": "shortline-segmented-review.v1",
+        "sections": [
+          {
+            "evidence": [
+              {
+                "id": "ev-49d773d847e6b974",
+                "origin": "UNCLASSIFIED",
+                "path": "sentiment.count",
+                "source": "sentiment",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": 5
+              },
+              {
+                "id": "ev-8a9b04c130e38f18",
+                "origin": "UNCLASSIFIED",
+                "path": "sentiment.stock_code",
+                "source": "sentiment",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": "600001"
+              }
+            ],
+            "gaps": [],
+            "id": "sentiment",
+            "label": "情绪",
+            "omitted_count": 0
+          },
+          {
+            "evidence": [
+              {
+                "id": "ev-579fa3843e0f7580",
+                "origin": "UNCLASSIFIED",
+                "path": "capital.count",
+                "source": "capital",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": 5
+              },
+              {
+                "id": "ev-db67528dc79d22c0",
+                "origin": "UNCLASSIFIED",
+                "path": "capital.stock_code",
+                "source": "capital",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": "600001"
+              },
+              {
+                "id": "ev-aab7759acc5c7591",
+                "origin": "UNCLASSIFIED",
+                "path": "capital_extra.count",
+                "source": "capital_extra",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": 5
+              },
+              {
+                "id": "ev-d41a9b289aec8419",
+                "origin": "UNCLASSIFIED",
+                "path": "capital_extra.stock_code",
+                "source": "capital_extra",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": "600001"
+              }
+            ],
+            "gaps": [],
+            "id": "capital",
+            "label": "资金",
+            "omitted_count": 0
+          },
+          {
+            "evidence": [
+              {
+                "id": "ev-b860843309e63927",
+                "origin": "UNCLASSIFIED",
+                "path": "theme.count",
+                "source": "theme",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": 5
+              },
+              {
+                "id": "ev-738ff5c28f26daec",
+                "origin": "UNCLASSIFIED",
+                "path": "theme.stock_code",
+                "source": "theme",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": "600001"
+              }
+            ],
+            "gaps": [],
+            "id": "theme",
+            "label": "题材",
+            "omitted_count": 0
+          },
+          {
+            "evidence": [
+              {
+                "id": "ev-dae24c2dc03c93a8",
+                "origin": "UNCLASSIFIED",
+                "path": "dragon_tiger.count",
+                "source": "dragon_tiger",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": 5
+              },
+              {
+                "id": "ev-91ff2557629c6d0b",
+                "origin": "UNCLASSIFIED",
+                "path": "dragon_tiger.stock_code",
+                "source": "dragon_tiger",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": "600001"
+              }
+            ],
+            "gaps": [],
+            "id": "dragon_tiger",
+            "label": "龙虎榜",
+            "omitted_count": 0
+          },
+          {
+            "evidence": [
+              {
+                "id": "ev-119973760212e053",
+                "origin": "UNCLASSIFIED",
+                "path": "leader.count",
+                "source": "leader",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": 5
+              },
+              {
+                "id": "ev-dcfc9bac1cba7fc4",
+                "origin": "UNCLASSIFIED",
+                "path": "leader.stock_code",
+                "source": "leader",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": "600001"
+              }
+            ],
+            "gaps": [],
+            "id": "leader",
+            "label": "龙头",
+            "omitted_count": 0
+          }
+        ],
+        "selection_mode": "CURRENT_STORED_POSTHOC",
+        "trade_date": "2026-07-31"
+      },
+      "created_at": "2026-08-03T00:00:00.000000+00:00",
+      "fact_verification": "NOT_PERFORMED",
+      "generation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "mode": "daily",
+      "model_name": "SYNTHETIC_OFFLINE",
+      "model_provider": "cli-codex",
+      "schema_version": "shortline-segmented-review.v1",
+      "stages": [
+        {
+          "audit": {
+            "arithmetic_warning_count": 0,
+            "fact_verification": "NOT_PERFORMED",
+            "reason_codes": [],
+            "status": "no_detected_issue_not_verified",
+            "unbound_number_count": 0,
+            "unknown_reference_count": 0
+          },
+          "bundle_id": "974eb7d02331cecf34571d16f90fa9e4c94548a2bf78940be256286e35af8385",
+          "evidence_ids": [
+            "ev-49d773d847e6b974",
+            "ev-8a9b04c130e38f18"
+          ],
+          "id": "sentiment",
+          "label": "情绪",
+          "reason_codes": [],
+          "status": "generated",
+          "text": "需要继续观察[ev-49d773d847e6b974]"
+        },
+        {
+          "audit": {
+            "arithmetic_warning_count": 0,
+            "fact_verification": "NOT_PERFORMED",
+            "reason_codes": [],
+            "status": "no_detected_issue_not_verified",
+            "unbound_number_count": 0,
+            "unknown_reference_count": 0
+          },
+          "bundle_id": "974eb7d02331cecf34571d16f90fa9e4c94548a2bf78940be256286e35af8385",
+          "evidence_ids": [
+            "ev-579fa3843e0f7580",
+            "ev-db67528dc79d22c0",
+            "ev-aab7759acc5c7591",
+            "ev-d41a9b289aec8419"
+          ],
+          "id": "capital",
+          "label": "资金",
+          "reason_codes": [],
+          "status": "generated",
+          "text": "需要继续观察[ev-579fa3843e0f7580]"
+        },
+        {
+          "audit": {
+            "arithmetic_warning_count": 0,
+            "fact_verification": "NOT_PERFORMED",
+            "reason_codes": [],
+            "status": "no_detected_issue_not_verified",
+            "unbound_number_count": 0,
+            "unknown_reference_count": 0
+          },
+          "bundle_id": "974eb7d02331cecf34571d16f90fa9e4c94548a2bf78940be256286e35af8385",
+          "evidence_ids": [
+            "ev-b860843309e63927",
+            "ev-738ff5c28f26daec"
+          ],
+          "id": "theme",
+          "label": "题材",
+          "reason_codes": [],
+          "status": "generated",
+          "text": "需要继续观察[ev-b860843309e63927]"
+        },
+        {
+          "audit": {
+            "arithmetic_warning_count": 0,
+            "fact_verification": "NOT_PERFORMED",
+            "reason_codes": [],
+            "status": "no_detected_issue_not_verified",
+            "unbound_number_count": 0,
+            "unknown_reference_count": 0
+          },
+          "bundle_id": "974eb7d02331cecf34571d16f90fa9e4c94548a2bf78940be256286e35af8385",
+          "evidence_ids": [
+            "ev-dae24c2dc03c93a8",
+            "ev-91ff2557629c6d0b"
+          ],
+          "id": "dragon_tiger",
+          "label": "龙虎榜",
+          "reason_codes": [],
+          "status": "generated",
+          "text": "需要继续观察[ev-dae24c2dc03c93a8]"
+        },
+        {
+          "audit": {
+            "arithmetic_warning_count": 0,
+            "fact_verification": "NOT_PERFORMED",
+            "reason_codes": [],
+            "status": "no_detected_issue_not_verified",
+            "unbound_number_count": 0,
+            "unknown_reference_count": 0
+          },
+          "bundle_id": "974eb7d02331cecf34571d16f90fa9e4c94548a2bf78940be256286e35af8385",
+          "evidence_ids": [
+            "ev-119973760212e053",
+            "ev-dcfc9bac1cba7fc4"
+          ],
+          "id": "leader",
+          "label": "龙头",
+          "reason_codes": [],
+          "status": "generated",
+          "text": "需要继续观察[ev-119973760212e053]"
+        },
+        {
+          "audit": {
+            "arithmetic_warning_count": 0,
+            "fact_verification": "NOT_PERFORMED",
+            "reason_codes": [],
+            "status": "no_detected_issue_not_verified",
+            "unbound_number_count": 0,
+            "unknown_reference_count": 0
+          },
+          "bundle_id": "974eb7d02331cecf34571d16f90fa9e4c94548a2bf78940be256286e35af8385",
+          "evidence_ids": [
+            "ev-49d773d847e6b974",
+            "ev-8a9b04c130e38f18",
+            "ev-579fa3843e0f7580",
+            "ev-db67528dc79d22c0",
+            "ev-aab7759acc5c7591",
+            "ev-d41a9b289aec8419",
+            "ev-b860843309e63927",
+            "ev-738ff5c28f26daec",
+            "ev-dae24c2dc03c93a8",
+            "ev-91ff2557629c6d0b",
+            "ev-119973760212e053",
+            "ev-dcfc9bac1cba7fc4"
+          ],
+          "id": "summary",
+          "label": "汇总",
+          "reason_codes": [],
+          "status": "generated",
+          "text": "需要继续观察[ev-49d773d847e6b974]"
+        }
+      ],
+      "status": "generated_unverified",
+      "trade_date": "2026-07-31"
+    },
+    "versions": [
+      {
+        "generation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mode": "daily",
+        "trade_date": "2026-07-31",
+        "created_at": "2026-08-03T00:00:00.000000+00:00",
+        "status": "generated_unverified"
+      }
+    ],
+    "synthetic_model_calls": 6
+  },
+  "weekly": {
+    "preview": {
+      "schema_version": "shortline-segmented-review.v1",
+      "mode": "weekly",
+      "trade_date": "2026-07-31",
+      "bundle_id": "62eeeca12cf2de35c6174e80acc3c8c00e1bda6d653408905a5f27e8e919ffa2",
+      "days": [
+        "2026-07-31"
+      ],
+      "selection_mode": "CURRENT_STORED_POSTHOC",
+      "point_in_time_claim": "NONE",
+      "canonical_authority": false,
+      "max_model_calls": 4,
+      "model_calls_performed": 0,
+      "sections": [
+        {
+          "id": "trend",
+          "label": "情绪走势",
+          "evidence_count": 2,
+          "gaps": [],
+          "omitted_count": 0,
+          "source_identities": [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ],
+          "origins": [
+            "UNCLASSIFIED"
+          ]
+        },
+        {
+          "id": "themes",
+          "label": "题材轮动",
+          "evidence_count": 2,
+          "gaps": [],
+          "omitted_count": 0,
+          "source_identities": [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ],
+          "origins": [
+            "UNCLASSIFIED"
+          ]
+        },
+        {
+          "id": "verify",
+          "label": "验证回看",
+          "evidence_count": 1,
+          "gaps": [],
+          "omitted_count": 0,
+          "source_identities": [
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          ],
+          "origins": [
+            "UNCLASSIFIED"
+          ]
+        }
+      ],
+      "available": true,
+      "limitations": [
+        "仅使用现有归档，生成不会采集行情。",
+        "当前存档的事后研究，不证明复盘当时可知。",
+        "每段独立调用；缺证据跳过，不自动重试。",
+        "私人交易统计不进入模型材料。"
+      ]
+    },
+    "events": [
+      {
+        "type": "basis",
+        "bundle_id": "62eeeca12cf2de35c6174e80acc3c8c00e1bda6d653408905a5f27e8e919ffa2",
+        "mode": "weekly",
+        "trade_date": "2026-07-31",
+        "max_model_calls": 4
+      },
+      {
+        "type": "stage",
+        "id": "trend",
+        "label": "情绪走势",
+        "call": 1
+      },
+      {
+        "type": "delta",
+        "id": "trend",
+        "text": "需要继续观察[ev-49d773d847e6b974]"
+      },
+      {
+        "type": "stage_done",
+        "stage": {
+          "id": "trend",
+          "label": "情绪走势",
+          "status": "generated",
+          "text": "需要继续观察[ev-49d773d847e6b974]",
+          "audit": {
+            "status": "no_detected_issue_not_verified",
+            "reason_codes": [],
+            "unknown_reference_count": 0,
+            "arithmetic_warning_count": 0,
+            "unbound_number_count": 0,
+            "fact_verification": "NOT_PERFORMED"
+          },
+          "reason_codes": [],
+          "evidence_ids": [
+            "ev-49d773d847e6b974",
+            "ev-8a9b04c130e38f18"
+          ],
+          "bundle_id": "62eeeca12cf2de35c6174e80acc3c8c00e1bda6d653408905a5f27e8e919ffa2"
+        }
+      },
+      {
+        "type": "stage",
+        "id": "themes",
+        "label": "题材轮动",
+        "call": 2
+      },
+      {
+        "type": "delta",
+        "id": "themes",
+        "text": "需要继续观察[ev-b860843309e63927]"
+      },
+      {
+        "type": "stage_done",
+        "stage": {
+          "id": "themes",
+          "label": "题材轮动",
+          "status": "generated",
+          "text": "需要继续观察[ev-b860843309e63927]",
+          "audit": {
+            "status": "no_detected_issue_not_verified",
+            "reason_codes": [],
+            "unknown_reference_count": 0,
+            "arithmetic_warning_count": 0,
+            "unbound_number_count": 0,
+            "fact_verification": "NOT_PERFORMED"
+          },
+          "reason_codes": [],
+          "evidence_ids": [
+            "ev-b860843309e63927",
+            "ev-738ff5c28f26daec"
+          ],
+          "bundle_id": "62eeeca12cf2de35c6174e80acc3c8c00e1bda6d653408905a5f27e8e919ffa2"
+        }
+      },
+      {
+        "type": "stage",
+        "id": "verify",
+        "label": "验证回看",
+        "call": 3
+      },
+      {
+        "type": "delta",
+        "id": "verify",
+        "text": "需要继续观察[ev-ac502cfcc3dccab7]"
+      },
+      {
+        "type": "stage_done",
+        "stage": {
+          "id": "verify",
+          "label": "验证回看",
+          "status": "generated",
+          "text": "需要继续观察[ev-ac502cfcc3dccab7]",
+          "audit": {
+            "status": "no_detected_issue_not_verified",
+            "reason_codes": [],
+            "unknown_reference_count": 0,
+            "arithmetic_warning_count": 0,
+            "unbound_number_count": 0,
+            "fact_verification": "NOT_PERFORMED"
+          },
+          "reason_codes": [],
+          "evidence_ids": [
+            "ev-ac502cfcc3dccab7"
+          ],
+          "bundle_id": "62eeeca12cf2de35c6174e80acc3c8c00e1bda6d653408905a5f27e8e919ffa2"
+        }
+      },
+      {
+        "type": "stage",
+        "id": "summary",
+        "label": "汇总",
+        "call": 4
+      },
+      {
+        "type": "delta",
+        "id": "summary",
+        "text": "需要继续观察[ev-49d773d847e6b974]"
+      },
+      {
+        "type": "stage_done",
+        "stage": {
+          "id": "summary",
+          "label": "汇总",
+          "status": "generated",
+          "text": "需要继续观察[ev-49d773d847e6b974]",
+          "audit": {
+            "status": "no_detected_issue_not_verified",
+            "reason_codes": [],
+            "unknown_reference_count": 0,
+            "arithmetic_warning_count": 0,
+            "unbound_number_count": 0,
+            "fact_verification": "NOT_PERFORMED"
+          },
+          "reason_codes": [],
+          "evidence_ids": [
+            "ev-49d773d847e6b974",
+            "ev-8a9b04c130e38f18",
+            "ev-b860843309e63927",
+            "ev-738ff5c28f26daec",
+            "ev-ac502cfcc3dccab7"
+          ],
+          "bundle_id": "62eeeca12cf2de35c6174e80acc3c8c00e1bda6d653408905a5f27e8e919ffa2"
+        }
+      },
+      {
+        "type": "done",
+        "generation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "bundle_id": "62eeeca12cf2de35c6174e80acc3c8c00e1bda6d653408905a5f27e8e919ffa2",
+        "status": "generated_unverified",
+        "model_calls": 4
+      }
+    ],
+    "version": {
+      "bundle": {
+        "bundle_id": "62eeeca12cf2de35c6174e80acc3c8c00e1bda6d653408905a5f27e8e919ffa2",
+        "canonical_authority": false,
+        "days": [
+          "2026-07-31"
+        ],
+        "mode": "weekly",
+        "point_in_time_claim": "NONE",
+        "schema_version": "shortline-segmented-review.v1",
+        "sections": [
+          {
+            "evidence": [
+              {
+                "id": "ev-49d773d847e6b974",
+                "origin": "UNCLASSIFIED",
+                "path": "sentiment.count",
+                "source": "sentiment",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": 5
+              },
+              {
+                "id": "ev-8a9b04c130e38f18",
+                "origin": "UNCLASSIFIED",
+                "path": "sentiment.stock_code",
+                "source": "sentiment",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": "600001"
+              }
+            ],
+            "gaps": [],
+            "id": "trend",
+            "label": "情绪走势",
+            "omitted_count": 0
+          },
+          {
+            "evidence": [
+              {
+                "id": "ev-b860843309e63927",
+                "origin": "UNCLASSIFIED",
+                "path": "theme.count",
+                "source": "theme",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": 5
+              },
+              {
+                "id": "ev-738ff5c28f26daec",
+                "origin": "UNCLASSIFIED",
+                "path": "theme.stock_code",
+                "source": "theme",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": "600001"
+              }
+            ],
+            "gaps": [],
+            "id": "themes",
+            "label": "题材轮动",
+            "omitted_count": 0
+          },
+          {
+            "evidence": [
+              {
+                "id": "ev-ac502cfcc3dccab7",
+                "origin": "UNCLASSIFIED",
+                "path": "verification.decided",
+                "source": "verification",
+                "source_identity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": 2
+              }
+            ],
+            "gaps": [],
+            "id": "verify",
+            "label": "验证回看",
+            "omitted_count": 0
+          }
+        ],
+        "selection_mode": "CURRENT_STORED_POSTHOC",
+        "trade_date": "2026-07-31"
+      },
+      "created_at": "2026-08-03T00:00:00.000000+00:00",
+      "fact_verification": "NOT_PERFORMED",
+      "generation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "mode": "weekly",
+      "model_name": "SYNTHETIC_OFFLINE",
+      "model_provider": "cli-codex",
+      "schema_version": "shortline-segmented-review.v1",
+      "stages": [
+        {
+          "audit": {
+            "arithmetic_warning_count": 0,
+            "fact_verification": "NOT_PERFORMED",
+            "reason_codes": [],
+            "status": "no_detected_issue_not_verified",
+            "unbound_number_count": 0,
+            "unknown_reference_count": 0
+          },
+          "bundle_id": "62eeeca12cf2de35c6174e80acc3c8c00e1bda6d653408905a5f27e8e919ffa2",
+          "evidence_ids": [
+            "ev-49d773d847e6b974",
+            "ev-8a9b04c130e38f18"
+          ],
+          "id": "trend",
+          "label": "情绪走势",
+          "reason_codes": [],
+          "status": "generated",
+          "text": "需要继续观察[ev-49d773d847e6b974]"
+        },
+        {
+          "audit": {
+            "arithmetic_warning_count": 0,
+            "fact_verification": "NOT_PERFORMED",
+            "reason_codes": [],
+            "status": "no_detected_issue_not_verified",
+            "unbound_number_count": 0,
+            "unknown_reference_count": 0
+          },
+          "bundle_id": "62eeeca12cf2de35c6174e80acc3c8c00e1bda6d653408905a5f27e8e919ffa2",
+          "evidence_ids": [
+            "ev-b860843309e63927",
+            "ev-738ff5c28f26daec"
+          ],
+          "id": "themes",
+          "label": "题材轮动",
+          "reason_codes": [],
+          "status": "generated",
+          "text": "需要继续观察[ev-b860843309e63927]"
+        },
+        {
+          "audit": {
+            "arithmetic_warning_count": 0,
+            "fact_verification": "NOT_PERFORMED",
+            "reason_codes": [],
+            "status": "no_detected_issue_not_verified",
+            "unbound_number_count": 0,
+            "unknown_reference_count": 0
+          },
+          "bundle_id": "62eeeca12cf2de35c6174e80acc3c8c00e1bda6d653408905a5f27e8e919ffa2",
+          "evidence_ids": [
+            "ev-ac502cfcc3dccab7"
+          ],
+          "id": "verify",
+          "label": "验证回看",
+          "reason_codes": [],
+          "status": "generated",
+          "text": "需要继续观察[ev-ac502cfcc3dccab7]"
+        },
+        {
+          "audit": {
+            "arithmetic_warning_count": 0,
+            "fact_verification": "NOT_PERFORMED",
+            "reason_codes": [],
+            "status": "no_detected_issue_not_verified",
+            "unbound_number_count": 0,
+            "unknown_reference_count": 0
+          },
+          "bundle_id": "62eeeca12cf2de35c6174e80acc3c8c00e1bda6d653408905a5f27e8e919ffa2",
+          "evidence_ids": [
+            "ev-49d773d847e6b974",
+            "ev-8a9b04c130e38f18",
+            "ev-b860843309e63927",
+            "ev-738ff5c28f26daec",
+            "ev-ac502cfcc3dccab7"
+          ],
+          "id": "summary",
+          "label": "汇总",
+          "reason_codes": [],
+          "status": "generated",
+          "text": "需要继续观察[ev-49d773d847e6b974]"
+        }
+      ],
+      "status": "generated_unverified",
+      "trade_date": "2026-07-31"
+    },
+    "versions": [
+      {
+        "generation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "mode": "weekly",
+        "trade_date": "2026-07-31",
+        "created_at": "2026-08-03T00:00:00.000000+00:00",
+        "status": "generated_unverified"
+      }
+    ],
+    "synthetic_model_calls": 4
+  },
+  "partial": {
+    "preview": {
+      "schema_version": "shortline-segmented-review.v1",
+      "mode": "daily",
+      "trade_date": "2026-07-31",
+      "bundle_id": "cf7584cee657e35731798a5c766dc6856c06af0e01132113e720751674e647a3",
+      "days": [
+        "2026-07-31"
+      ],
+      "selection_mode": "CURRENT_STORED_POSTHOC",
+      "point_in_time_claim": "NONE",
+      "canonical_authority": false,
+      "max_model_calls": 6,
+      "model_calls_performed": 0,
+      "sections": [
+        {
+          "id": "sentiment",
+          "label": "情绪",
+          "evidence_count": 2,
+          "gaps": [],
+          "omitted_count": 0,
+          "source_identities": [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ],
+          "origins": [
+            "UNCLASSIFIED"
+          ]
+        },
+        {
+          "id": "capital",
+          "label": "资金",
+          "evidence_count": 4,
+          "gaps": [],
+          "omitted_count": 0,
+          "source_identities": [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ],
+          "origins": [
+            "UNCLASSIFIED"
+          ]
+        },
+        {
+          "id": "theme",
+          "label": "题材",
+          "evidence_count": 2,
+          "gaps": [],
+          "omitted_count": 0,
+          "source_identities": [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ],
+          "origins": [
+            "UNCLASSIFIED"
+          ]
+        },
+        {
+          "id": "dragon_tiger",
+          "label": "龙虎榜",
+          "evidence_count": 0,
+          "gaps": [
+            "DRAGON_TIGER:MISSING:2026-07-31"
+          ],
+          "omitted_count": 0,
+          "source_identities": [],
+          "origins": []
+        },
+        {
+          "id": "leader",
+          "label": "龙头",
+          "evidence_count": 2,
+          "gaps": [],
+          "omitted_count": 0,
+          "source_identities": [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ],
+          "origins": [
+            "UNCLASSIFIED"
+          ]
+        }
+      ],
+      "available": true,
+      "limitations": [
+        "仅使用现有归档，生成不会采集行情。",
+        "当前存档的事后研究，不证明复盘当时可知。",
+        "每段独立调用；缺证据跳过，不自动重试。",
+        "私人交易统计不进入模型材料。"
+      ]
+    },
+    "events": [
+      {
+        "type": "basis",
+        "bundle_id": "cf7584cee657e35731798a5c766dc6856c06af0e01132113e720751674e647a3",
+        "mode": "daily",
+        "trade_date": "2026-07-31",
+        "max_model_calls": 6
+      },
+      {
+        "type": "stage",
+        "id": "sentiment",
+        "label": "情绪",
+        "call": 1
+      },
+      {
+        "type": "delta",
+        "id": "sentiment",
+        "text": "需要继续观察[ev-49d773d847e6b974]"
+      },
+      {
+        "type": "stage_done",
+        "stage": {
+          "id": "sentiment",
+          "label": "情绪",
+          "status": "generated",
+          "text": "需要继续观察[ev-49d773d847e6b974]",
+          "audit": {
+            "status": "no_detected_issue_not_verified",
+            "reason_codes": [],
+            "unknown_reference_count": 0,
+            "arithmetic_warning_count": 0,
+            "unbound_number_count": 0,
+            "fact_verification": "NOT_PERFORMED"
+          },
+          "reason_codes": [],
+          "evidence_ids": [
+            "ev-49d773d847e6b974",
+            "ev-8a9b04c130e38f18"
+          ],
+          "bundle_id": "cf7584cee657e35731798a5c766dc6856c06af0e01132113e720751674e647a3"
+        }
+      },
+      {
+        "type": "stage",
+        "id": "capital",
+        "label": "资金",
+        "call": 2
+      },
+      {
+        "type": "delta",
+        "id": "capital",
+        "text": "需要继续观察[ev-579fa3843e0f7580]"
+      },
+      {
+        "type": "stage_done",
+        "stage": {
+          "id": "capital",
+          "label": "资金",
+          "status": "generated",
+          "text": "需要继续观察[ev-579fa3843e0f7580]",
+          "audit": {
+            "status": "no_detected_issue_not_verified",
+            "reason_codes": [],
+            "unknown_reference_count": 0,
+            "arithmetic_warning_count": 0,
+            "unbound_number_count": 0,
+            "fact_verification": "NOT_PERFORMED"
+          },
+          "reason_codes": [],
+          "evidence_ids": [
+            "ev-579fa3843e0f7580",
+            "ev-db67528dc79d22c0",
+            "ev-aab7759acc5c7591",
+            "ev-d41a9b289aec8419"
+          ],
+          "bundle_id": "cf7584cee657e35731798a5c766dc6856c06af0e01132113e720751674e647a3"
+        }
+      },
+      {
+        "type": "stage",
+        "id": "theme",
+        "label": "题材",
+        "call": 3
+      },
+      {
+        "type": "delta",
+        "id": "theme",
+        "text": "需要继续观察[ev-b860843309e63927]"
+      },
+      {
+        "type": "stage_done",
+        "stage": {
+          "id": "theme",
+          "label": "题材",
+          "status": "generated",
+          "text": "需要继续观察[ev-b860843309e63927]",
+          "audit": {
+            "status": "no_detected_issue_not_verified",
+            "reason_codes": [],
+            "unknown_reference_count": 0,
+            "arithmetic_warning_count": 0,
+            "unbound_number_count": 0,
+            "fact_verification": "NOT_PERFORMED"
+          },
+          "reason_codes": [],
+          "evidence_ids": [
+            "ev-b860843309e63927",
+            "ev-738ff5c28f26daec"
+          ],
+          "bundle_id": "cf7584cee657e35731798a5c766dc6856c06af0e01132113e720751674e647a3"
+        }
+      },
+      {
+        "type": "stage_done",
+        "stage": {
+          "id": "dragon_tiger",
+          "label": "龙虎榜",
+          "status": "skipped",
+          "text": "",
+          "audit": {
+            "status": "not_run",
+            "reason_codes": [],
+            "unknown_reference_count": 0,
+            "arithmetic_warning_count": 0,
+            "unbound_number_count": 0,
+            "fact_verification": "NOT_PERFORMED"
+          },
+          "reason_codes": [
+            "NO_EVIDENCE"
+          ],
+          "evidence_ids": [],
+          "bundle_id": "cf7584cee657e35731798a5c766dc6856c06af0e01132113e720751674e647a3"
+        }
+      },
+      {
+        "type": "stage",
+        "id": "leader",
+        "label": "龙头",
+        "call": 4
+      },
+      {
+        "type": "delta",
+        "id": "leader",
+        "text": "需要继续观察[ev-119973760212e053]"
+      },
+      {
+        "type": "stage_done",
+        "stage": {
+          "id": "leader",
+          "label": "龙头",
+          "status": "generated",
+          "text": "需要继续观察[ev-119973760212e053]",
+          "audit": {
+            "status": "no_detected_issue_not_verified",
+            "reason_codes": [],
+            "unknown_reference_count": 0,
+            "arithmetic_warning_count": 0,
+            "unbound_number_count": 0,
+            "fact_verification": "NOT_PERFORMED"
+          },
+          "reason_codes": [],
+          "evidence_ids": [
+            "ev-119973760212e053",
+            "ev-dcfc9bac1cba7fc4"
+          ],
+          "bundle_id": "cf7584cee657e35731798a5c766dc6856c06af0e01132113e720751674e647a3"
+        }
+      },
+      {
+        "type": "stage",
+        "id": "summary",
+        "label": "汇总",
+        "call": 5
+      },
+      {
+        "type": "delta",
+        "id": "summary",
+        "text": "需要继续观察[ev-49d773d847e6b974]"
+      },
+      {
+        "type": "stage_done",
+        "stage": {
+          "id": "summary",
+          "label": "汇总",
+          "status": "generated",
+          "text": "需要继续观察[ev-49d773d847e6b974]",
+          "audit": {
+            "status": "no_detected_issue_not_verified",
+            "reason_codes": [],
+            "unknown_reference_count": 0,
+            "arithmetic_warning_count": 0,
+            "unbound_number_count": 0,
+            "fact_verification": "NOT_PERFORMED"
+          },
+          "reason_codes": [],
+          "evidence_ids": [
+            "ev-49d773d847e6b974",
+            "ev-8a9b04c130e38f18",
+            "ev-579fa3843e0f7580",
+            "ev-db67528dc79d22c0",
+            "ev-aab7759acc5c7591",
+            "ev-d41a9b289aec8419",
+            "ev-b860843309e63927",
+            "ev-738ff5c28f26daec",
+            "ev-119973760212e053",
+            "ev-dcfc9bac1cba7fc4"
+          ],
+          "bundle_id": "cf7584cee657e35731798a5c766dc6856c06af0e01132113e720751674e647a3"
+        }
+      },
+      {
+        "type": "done",
+        "generation_id": "cccccccccccccccccccccccccccccccc",
+        "bundle_id": "cf7584cee657e35731798a5c766dc6856c06af0e01132113e720751674e647a3",
+        "status": "generated_unverified",
+        "model_calls": 5
+      }
+    ],
+    "version": {
+      "bundle": {
+        "bundle_id": "cf7584cee657e35731798a5c766dc6856c06af0e01132113e720751674e647a3",
+        "canonical_authority": false,
+        "days": [
+          "2026-07-31"
+        ],
+        "mode": "daily",
+        "point_in_time_claim": "NONE",
+        "schema_version": "shortline-segmented-review.v1",
+        "sections": [
+          {
+            "evidence": [
+              {
+                "id": "ev-49d773d847e6b974",
+                "origin": "UNCLASSIFIED",
+                "path": "sentiment.count",
+                "source": "sentiment",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": 5
+              },
+              {
+                "id": "ev-8a9b04c130e38f18",
+                "origin": "UNCLASSIFIED",
+                "path": "sentiment.stock_code",
+                "source": "sentiment",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": "600001"
+              }
+            ],
+            "gaps": [],
+            "id": "sentiment",
+            "label": "情绪",
+            "omitted_count": 0
+          },
+          {
+            "evidence": [
+              {
+                "id": "ev-579fa3843e0f7580",
+                "origin": "UNCLASSIFIED",
+                "path": "capital.count",
+                "source": "capital",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": 5
+              },
+              {
+                "id": "ev-db67528dc79d22c0",
+                "origin": "UNCLASSIFIED",
+                "path": "capital.stock_code",
+                "source": "capital",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": "600001"
+              },
+              {
+                "id": "ev-aab7759acc5c7591",
+                "origin": "UNCLASSIFIED",
+                "path": "capital_extra.count",
+                "source": "capital_extra",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": 5
+              },
+              {
+                "id": "ev-d41a9b289aec8419",
+                "origin": "UNCLASSIFIED",
+                "path": "capital_extra.stock_code",
+                "source": "capital_extra",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": "600001"
+              }
+            ],
+            "gaps": [],
+            "id": "capital",
+            "label": "资金",
+            "omitted_count": 0
+          },
+          {
+            "evidence": [
+              {
+                "id": "ev-b860843309e63927",
+                "origin": "UNCLASSIFIED",
+                "path": "theme.count",
+                "source": "theme",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": 5
+              },
+              {
+                "id": "ev-738ff5c28f26daec",
+                "origin": "UNCLASSIFIED",
+                "path": "theme.stock_code",
+                "source": "theme",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": "600001"
+              }
+            ],
+            "gaps": [],
+            "id": "theme",
+            "label": "题材",
+            "omitted_count": 0
+          },
+          {
+            "evidence": [],
+            "gaps": [
+              "DRAGON_TIGER:MISSING:2026-07-31"
+            ],
+            "id": "dragon_tiger",
+            "label": "龙虎榜",
+            "omitted_count": 0
+          },
+          {
+            "evidence": [
+              {
+                "id": "ev-119973760212e053",
+                "origin": "UNCLASSIFIED",
+                "path": "leader.count",
+                "source": "leader",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": 5
+              },
+              {
+                "id": "ev-dcfc9bac1cba7fc4",
+                "origin": "UNCLASSIFIED",
+                "path": "leader.stock_code",
+                "source": "leader",
+                "source_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "trade_date": "2026-07-31",
+                "unit": "source_native",
+                "value": "600001"
+              }
+            ],
+            "gaps": [],
+            "id": "leader",
+            "label": "龙头",
+            "omitted_count": 0
+          }
+        ],
+        "selection_mode": "CURRENT_STORED_POSTHOC",
+        "trade_date": "2026-07-31"
+      },
+      "created_at": "2026-08-03T00:00:00.000000+00:00",
+      "fact_verification": "NOT_PERFORMED",
+      "generation_id": "cccccccccccccccccccccccccccccccc",
+      "mode": "daily",
+      "model_name": "SYNTHETIC_OFFLINE",
+      "model_provider": "cli-codex",
+      "schema_version": "shortline-segmented-review.v1",
+      "stages": [
+        {
+          "audit": {
+            "arithmetic_warning_count": 0,
+            "fact_verification": "NOT_PERFORMED",
+            "reason_codes": [],
+            "status": "no_detected_issue_not_verified",
+            "unbound_number_count": 0,
+            "unknown_reference_count": 0
+          },
+          "bundle_id": "cf7584cee657e35731798a5c766dc6856c06af0e01132113e720751674e647a3",
+          "evidence_ids": [
+            "ev-49d773d847e6b974",
+            "ev-8a9b04c130e38f18"
+          ],
+          "id": "sentiment",
+          "label": "情绪",
+          "reason_codes": [],
+          "status": "generated",
+          "text": "需要继续观察[ev-49d773d847e6b974]"
+        },
+        {
+          "audit": {
+            "arithmetic_warning_count": 0,
+            "fact_verification": "NOT_PERFORMED",
+            "reason_codes": [],
+            "status": "no_detected_issue_not_verified",
+            "unbound_number_count": 0,
+            "unknown_reference_count": 0
+          },
+          "bundle_id": "cf7584cee657e35731798a5c766dc6856c06af0e01132113e720751674e647a3",
+          "evidence_ids": [
+            "ev-579fa3843e0f7580",
+            "ev-db67528dc79d22c0",
+            "ev-aab7759acc5c7591",
+            "ev-d41a9b289aec8419"
+          ],
+          "id": "capital",
+          "label": "资金",
+          "reason_codes": [],
+          "status": "generated",
+          "text": "需要继续观察[ev-579fa3843e0f7580]"
+        },
+        {
+          "audit": {
+            "arithmetic_warning_count": 0,
+            "fact_verification": "NOT_PERFORMED",
+            "reason_codes": [],
+            "status": "no_detected_issue_not_verified",
+            "unbound_number_count": 0,
+            "unknown_reference_count": 0
+          },
+          "bundle_id": "cf7584cee657e35731798a5c766dc6856c06af0e01132113e720751674e647a3",
+          "evidence_ids": [
+            "ev-b860843309e63927",
+            "ev-738ff5c28f26daec"
+          ],
+          "id": "theme",
+          "label": "题材",
+          "reason_codes": [],
+          "status": "generated",
+          "text": "需要继续观察[ev-b860843309e63927]"
+        },
+        {
+          "audit": {
+            "arithmetic_warning_count": 0,
+            "fact_verification": "NOT_PERFORMED",
+            "reason_codes": [],
+            "status": "not_run",
+            "unbound_number_count": 0,
+            "unknown_reference_count": 0
+          },
+          "bundle_id": "cf7584cee657e35731798a5c766dc6856c06af0e01132113e720751674e647a3",
+          "evidence_ids": [],
+          "id": "dragon_tiger",
+          "label": "龙虎榜",
+          "reason_codes": [
+            "NO_EVIDENCE"
+          ],
+          "status": "skipped",
+          "text": ""
+        },
+        {
+          "audit": {
+            "arithmetic_warning_count": 0,
+            "fact_verification": "NOT_PERFORMED",
+            "reason_codes": [],
+            "status": "no_detected_issue_not_verified",
+            "unbound_number_count": 0,
+            "unknown_reference_count": 0
+          },
+          "bundle_id": "cf7584cee657e35731798a5c766dc6856c06af0e01132113e720751674e647a3",
+          "evidence_ids": [
+            "ev-119973760212e053",
+            "ev-dcfc9bac1cba7fc4"
+          ],
+          "id": "leader",
+          "label": "龙头",
+          "reason_codes": [],
+          "status": "generated",
+          "text": "需要继续观察[ev-119973760212e053]"
+        },
+        {
+          "audit": {
+            "arithmetic_warning_count": 0,
+            "fact_verification": "NOT_PERFORMED",
+            "reason_codes": [],
+            "status": "no_detected_issue_not_verified",
+            "unbound_number_count": 0,
+            "unknown_reference_count": 0
+          },
+          "bundle_id": "cf7584cee657e35731798a5c766dc6856c06af0e01132113e720751674e647a3",
+          "evidence_ids": [
+            "ev-49d773d847e6b974",
+            "ev-8a9b04c130e38f18",
+            "ev-579fa3843e0f7580",
+            "ev-db67528dc79d22c0",
+            "ev-aab7759acc5c7591",
+            "ev-d41a9b289aec8419",
+            "ev-b860843309e63927",
+            "ev-738ff5c28f26daec",
+            "ev-119973760212e053",
+            "ev-dcfc9bac1cba7fc4"
+          ],
+          "id": "summary",
+          "label": "汇总",
+          "reason_codes": [],
+          "status": "generated",
+          "text": "需要继续观察[ev-49d773d847e6b974]"
+        }
+      ],
+      "status": "generated_unverified",
+      "trade_date": "2026-07-31"
+    },
+    "versions": [
+      {
+        "generation_id": "cccccccccccccccccccccccccccccccc",
+        "mode": "daily",
+        "trade_date": "2026-07-31",
+        "created_at": "2026-08-03T00:00:00.000000+00:00",
+        "status": "generated_unverified"
+      }
+    ],
+    "synthetic_model_calls": 5
+  },
+  "empty": {
+    "preview": {
+      "schema_version": "shortline-segmented-review.v1",
+      "mode": "daily",
+      "trade_date": "2026-07-31",
+      "bundle_id": "1ab6cec1262f4d296e3df1bcfaf447c995405162bcbfaefd22d09bbad9e4b568",
+      "days": [
+        "2026-07-31"
+      ],
+      "selection_mode": "CURRENT_STORED_POSTHOC",
+      "point_in_time_claim": "NONE",
+      "canonical_authority": false,
+      "max_model_calls": 6,
+      "model_calls_performed": 0,
+      "sections": [
+        {
+          "id": "sentiment",
+          "label": "情绪",
+          "evidence_count": 0,
+          "gaps": [
+            "SENTIMENT:MISSING:2026-07-31"
+          ],
+          "omitted_count": 0,
+          "source_identities": [],
+          "origins": []
+        },
+        {
+          "id": "capital",
+          "label": "资金",
+          "evidence_count": 0,
+          "gaps": [
+            "CAPITAL:MISSING:2026-07-31",
+            "CAPITAL_EXTRA:MISSING:2026-07-31"
+          ],
+          "omitted_count": 0,
+          "source_identities": [],
+          "origins": []
+        },
+        {
+          "id": "theme",
+          "label": "题材",
+          "evidence_count": 0,
+          "gaps": [
+            "THEME:MISSING:2026-07-31"
+          ],
+          "omitted_count": 0,
+          "source_identities": [],
+          "origins": []
+        },
+        {
+          "id": "dragon_tiger",
+          "label": "龙虎榜",
+          "evidence_count": 0,
+          "gaps": [
+            "DRAGON_TIGER:MISSING:2026-07-31"
+          ],
+          "omitted_count": 0,
+          "source_identities": [],
+          "origins": []
+        },
+        {
+          "id": "leader",
+          "label": "龙头",
+          "evidence_count": 0,
+          "gaps": [
+            "LEADER:MISSING:2026-07-31"
+          ],
+          "omitted_count": 0,
+          "source_identities": [],
+          "origins": []
+        }
+      ],
+      "available": false,
+      "limitations": [
+        "仅使用现有归档，生成不会采集行情。",
+        "当前存档的事后研究，不证明复盘当时可知。",
+        "每段独立调用；缺证据跳过，不自动重试。",
+        "私人交易统计不进入模型材料。"
+      ]
+    }
+  }
+}

@@ -60,6 +60,7 @@ import { CampaignThesisActivationCard } from "@/components/campaign/CampaignThes
 import { CampaignCommittedDecisionsCard } from "@/components/campaign/CampaignCommittedDecisionsCard";
 import { HardRiskPanel } from "@/components/campaign/HardRiskPanel";
 import { DecisionActionPanel } from "@/components/campaign/DecisionActionPanel";
+import { ObservationWorkflowCard } from "@/components/dailyReview/ObservationWorkflowCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { storageGet, storageSet } from "@/lib/storage";
 
@@ -1410,6 +1411,8 @@ export default function DecisionInbox() {
           暂无数据
         </div>
       )}
+
+      <ObservationWorkflowCard inbox />
 
       {/* 研究事件日历：保持可达但排在待办工作区之后；它独立加载，
           读取失败只在本区域呈现，不代表决策待办整体不可用。 */}

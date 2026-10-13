@@ -604,6 +604,8 @@ class DiscoveryResult:
     discovered: list[dict] = field(default_factory=list)
     filtered: list[dict] = field(default_factory=list)
     error: str | None = None
+    status: str = "normal"
+    source_coverage: list[dict] = field(default_factory=list)
     total_discovered: int = 0
     returned: int = 0
     truncated: bool = False
@@ -641,22 +643,29 @@ def _within_lookback(publish_date: str | None, lookback_days: int, *, today: dat
     return (earliest <= d <= today), False
 
 
-def _fetch_industry_raw(lookback: int, max_pages: int, keywords: list[str]) -> list[dict]:
+def _fetch_industry_raw(lookback: int, max_pages: int, keywords: list[str], *, coverage: list[dict] | None = None) -> list[dict]:
     """拉取行业研报并按关键词过滤标题。"""
-    raw_rows = astock.eastmoney_industry_reports(
-        keywords=None, days=lookback, max_pages=max_pages,
-    )
+    window = astock.report_window_compat(astock.eastmoney_industry_reports(
+        keywords=None, days=lookback, max_pages=max_pages, with_coverage=True,
+    ), max_pages)
+    raw_rows = window["rows"]
+    if coverage is not None:
+        coverage.append({**window["source_coverage"], "source_key": "industry", "status": window["status"]})
     if keywords:
         raw_rows = [r for r in raw_rows if any(k in (r.get("title") or "") for k in keywords)]
     return raw_rows
 
 
-def _fetch_company_raw(company_codes: list[str], max_pages: int) -> list[dict]:
+def _fetch_company_raw(company_codes: list[str], max_pages: int, *, coverage: list[dict] | None = None) -> list[dict]:
     """顺序拉取代表公司研报，按 external_id（info_code）去重。"""
     raw_rows: list[dict] = []
     seen: set[str] = set()
     for code in company_codes:
-        for r in astock.eastmoney_reports(code, max_pages=max_pages):
+        window = astock.report_window_compat(
+            astock.eastmoney_reports(code, max_pages=max_pages, with_coverage=True), max_pages)
+        if coverage is not None:
+            coverage.append({**window["source_coverage"], "source_key": f"company:{code}", "status": window["status"]})
+        for r in window["rows"]:
             info = _first_present(r, "infoCode", "info_code")
             if info and info in seen:
                 continue
@@ -690,7 +699,7 @@ def discover_sector_reports(
     """
     src = get_sector_source(sector_key)
     if src is None:
-        return DiscoveryResult(source_key=sector_key, error=f"未注册的板块：{sector_key}")
+        return DiscoveryResult(source_key=sector_key, status="unavailable", error=f"未注册的板块：{sector_key}")
     lookback = days if days is not None else src.report_lookback_days
     keywords = src.report_keywords
     company_codes = src.representative_company_codes
@@ -698,10 +707,10 @@ def discover_sector_reports(
     result = DiscoveryResult(source_key=sector_key)
     try:
         if scope == "company":
-            raw_rows = _fetch_company_raw(company_codes, max_pages)
+            raw_rows = _fetch_company_raw(company_codes, max_pages, coverage=result.source_coverage)
         elif scope == "all":
-            industry_rows = _fetch_industry_raw(lookback, max_pages, keywords)
-            company_rows = _fetch_company_raw(company_codes, max_pages)
+            industry_rows = _fetch_industry_raw(lookback, max_pages, keywords, coverage=result.source_coverage)
+            company_rows = _fetch_company_raw(company_codes, max_pages, coverage=result.source_coverage)
             seen: set[str] = set()
             raw_rows = []
             for r in industry_rows + company_rows:
@@ -713,7 +722,13 @@ def discover_sector_reports(
                 raw_rows.append(r)
         else:
             # 默认 industry（调用方应对非法 scope 返回 400）
-            raw_rows = _fetch_industry_raw(lookback, max_pages, keywords)
+            raw_rows = _fetch_industry_raw(lookback, max_pages, keywords, coverage=result.source_coverage)
+
+        statuses = [item["status"] for item in result.source_coverage]
+        result.status = ("normal" if statuses and all(s == "normal" for s in statuses) else
+                         "unavailable" if not raw_rows and all(s == "unavailable" for s in statuses) else "partial")
+        if result.status == "unavailable":
+            result.error = "研报来源不可用，请稍后重试"
 
         normalized: list[dict] = []
         for r in raw_rows:
@@ -750,7 +765,8 @@ def discover_sector_reports(
         result.returned = len(primary)
         result.truncated = truncated
     except Exception as e:  # noqa: BL001
-        result.error = str(e)
+        result.status = "unavailable"
+        result.error = "研报来源不可用，请稍后重试"
     return result
 
 

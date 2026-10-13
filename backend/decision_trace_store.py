@@ -13,7 +13,7 @@ import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 SCHEMA_VERSION = "decision_trace_v1"
 _LOCK = threading.Lock()
@@ -214,20 +214,33 @@ def init_db(db_path: str | Path | None = None) -> None:
             raise DecisionTraceCorruptedError() from exc
 
 
+class DecisionTraceWriteCancelledError(RuntimeError):
+    """Cancellation observed before an archive transaction committed."""
+
+
+def _check_write_cancelled(should_cancel: Callable[[], bool] | None) -> None:
+    if should_cancel is not None and should_cancel():
+        raise DecisionTraceWriteCancelledError("生成已停止")
+
+
 def save_decision_run_bundle(
     run_record: Mapping[str, Any],
     evidence_items: list[Mapping[str, Any]],
     explanation_items: list[Mapping[str, Any]],
     db_path: str | Path | None = None,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> None:
     """Save a decision run record and its associated evidence and explanation items atomically.
 
     Supports idempotent re-writing (UPSERT / REPLACE).
     """
+    _check_write_cancelled(should_cancel)
     path = resolve_decision_trace_db_path(db_path)
     init_db(path)
 
     with _LOCK:
+        _check_write_cancelled(should_cancel)
         try:
             conn = _get_write_connection(path)
             try:
@@ -329,6 +342,8 @@ def save_decision_run_bundle(
                                 item.get("created_at", _utc_now()),
                             ),
                         )
+                    # The connection context commits only after this observed-cancel gate.
+                    _check_write_cancelled(should_cancel)
             finally:
                 conn.close()
         except sqlite3.DatabaseError as exc:

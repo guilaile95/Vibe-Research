@@ -227,6 +227,11 @@ async function run() {
     // ---- C. refresh states ---------------------------------------------------
     const stalePayload = JSON.parse(JSON.stringify(seedEnvelope));
     stalePayload.data.errors = ["500.farm H100 SXM: HTTP 503"];
+    // Mixed reasons: an earlier age-only series must not hide a later fetch failure.
+    const b200Hist = stalePayload.data.history.gpus.find((g) => g.gpu === "B200");
+    b200Hist.stale = true;
+    delete b200Hist.fetch_error;
+    b200Hist.observed_at = seed.generated_at;
     const h100Spot = stalePayload.data.spot.gpus.find((g) => g.gpu === "H100 SXM");
     h100Spot.stale = true;
     h100Spot.fetch_error = "HTTP 503";

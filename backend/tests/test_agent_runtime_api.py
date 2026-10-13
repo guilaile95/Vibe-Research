@@ -381,3 +381,74 @@ def test_agent_runtime_http_disconnect_cancels_once_and_exits(monkeypatch):
     asyncio.run(exercise_disconnect())
     _wait_for_watcher_count(baseline)
     assert calls == ["stock-600519"]
+
+
+@pytest.mark.parametrize("kind,error", [
+    ("chatgpt", None), ("api_key", None), ("logged_out", None),
+    ("unknown", "timeout"), ("unknown", "not_found"),
+    ("unknown", "malformed_output"), ("unknown", "nonzero_exit"),
+    ("unknown", "process_error"), ("PRIVATE_SENTINEL", "PRIVATE_SENTINEL"),
+])
+def test_runtime_classification_projection_is_additive_and_safe(kind, error):
+    legacy = {"installed": True, "authenticated": False, "available": False,
+              "status": "probe_failed", "version": "codex-cli 0.149.0"}
+    old = agent_runtime._safe_status_payload(legacy)
+    assert "auth_kind" not in old and "probe_error" not in old
+    result = agent_runtime._safe_status_payload({**legacy, "auth_kind": kind,
+        "probe_error": error, "stderr": "PRIVATE_SENTINEL", "account": "PRIVATE_SENTINEL"})
+    assert {k: v for k, v in result.items() if k not in {"auth_kind", "probe_error"}} == old
+    assert result["auth_kind"] == ("unknown" if kind == "PRIVATE_SENTINEL" else kind)
+    assert result["probe_error"] == ("process_error" if error == "PRIVATE_SENTINEL" else error)
+    assert "PRIVATE_SENTINEL" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("kind,state,error,code", [
+    ("api_key", "not_authenticated", None, 401),
+    ("logged_out", "not_authenticated", None, 401),
+    ("unknown", "probe_failed", "timeout", 503),
+    ("unknown", "probe_failed", "malformed_output", 503),
+    ("unknown", "runtime_unavailable", "not_found", 503),
+])
+def test_runtime_classification_blocks_readiness_without_api_fallback(monkeypatch, kind, state, error, code):
+    monkeypatch.setattr(agent_runtime, "status", lambda: {
+        "installed": error != "not_found", "authenticated": False, "available": False,
+        "status": state, "auth_kind": kind, "probe_error": error,
+    })
+    config = app_module.LLMConfig(provider="cli-codex", model="gpt-5-codex", apiKey="synthetic", baseURL="https://example.invalid")
+    with pytest.raises(app_module.HTTPException) as caught:
+        app_module._require_llm_ready(config)
+    assert caught.value.status_code == code
+    if kind == "api_key":
+        assert "API key" in caught.value.detail
+    if state == "probe_failed":
+        assert "检测未完成" in caught.value.detail
+        assert "请先在设置页登录" not in caught.value.detail
+
+
+def test_runtime_outer_timeout_is_unknown_not_logout(monkeypatch):
+    def timeout(*args, **kwargs):
+        assert kwargs["timeout"] == 4
+        raise agent_runtime.requests.Timeout("PRIVATE_SENTINEL")
+    monkeypatch.setattr(agent_runtime.requests, "get", timeout)
+    result = agent_runtime.status()
+    assert result["status"] == "probe_failed"
+    assert result["auth_kind"] == "unknown"
+    assert result["probe_error"] == "timeout"
+    assert result["available"] is False
+    assert "PRIVATE_SENTINEL" not in json.dumps(result)
+
+
+def test_runtime_inner_timeout_survives_http_projection(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return {"installed": True, "authenticated": False, "available": False,
+                    "status": "probe_failed", "version": "codex-cli 0.149.0",
+                    "auth_kind": "unknown", "probe_error": "timeout", "stderr": "PRIVATE_SENTINEL"}
+    monkeypatch.setattr(agent_runtime.requests, "get", lambda *a, **k: Response())
+    result = client.get("/api/agent-runtime/status").json()
+    assert result["installed"] is True
+    assert result["status"] == "probe_failed"
+    assert result["probe_error"] == "timeout"
+    assert "PRIVATE_SENTINEL" not in json.dumps(result)

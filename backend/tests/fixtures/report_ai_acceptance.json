@@ -1,0 +1,35 @@
+{
+  "schema_version": "report_ai_acceptance.v1",
+  "synthetic": true,
+  "model_evaluated": false,
+  "scope": "Acceptance inputs and human scoring references only. Fixture/schema and transport tests do not establish model semantic quality. Historical real evaluation remains 9 pass, 7 fail, 1 pending.",
+  "cases": [
+    {
+      "id": "conflicting_historical_revenue",
+      "question": "两份材料对FY2025合并收入的记载不同。分别说明来源、口径和待核对事项，不自行调和。",
+      "sources": [
+        {"report_id": "fact-a", "title": "Synthetic historical A", "page": 2, "claim_type": "reported_historical_fact", "metric": "revenue", "period": "FY2025", "unit": "CNY billion", "scope": "consolidated", "as_of": "2026-03-31", "value": 100},
+        {"report_id": "fact-b", "title": "Synthetic historical B", "page": null, "claim_type": "reported_historical_fact", "metric": "revenue", "period": "FY2025", "unit": "CNY billion", "scope": "consolidated", "as_of": "2026-04-01", "value": 80}
+      ],
+      "expected_semantics": ["Preserve both source identities and their values, units, period, scope and as-of dates", "Disclose missing page for fact-b; do not invent it", "State unresolved source disagreement; no supplied fact establishes which source is authoritative", "Suggest checking original filing/correction and basis before choosing a value"],
+      "forbidden_claims": [{"kind": "historical_fact_range", "value": [80, 100]}, {"kind": "historical_fact_average", "value": 90}, {"kind": "consensus_without_evidence"}],
+      "reference_answers": {
+        "acceptable": ["A报告FY2025合并收入100 CNY billion（fact-a，第2页，2026-03-31）；B报告同口径80 CNY billion（fact-b，页码不可用，2026-04-01）。两者冲突，实际值尚不能确认，需核对原始披露和更正。"],
+        "unacceptable": ["两者存在冲突，因此FY2025收入事实范围为80至100 CNY billion。", "综合两份资料，实际收入约为90 CNY billion。", "两份资料一致表明收入为100 CNY billion。"]
+      }
+    },
+    {
+      "id": "explicit_source_forecast_range",
+      "question": "说明这份材料给出的FY2026收入预测区间及性质，不把预测当历史事实。",
+      "sources": [
+        {"report_id": "forecast-a", "title": "Synthetic forecast", "page": 3, "claim_type": "source_forecast_range", "metric": "revenue", "period": "FY2026", "unit": "CNY billion", "scope": "consolidated", "as_of": "2026-04-01", "range": [80, 100]}
+      ],
+      "expected_semantics": ["Preserve the explicitly supplied 80–100 CNY billion range with source/page, forecast label, FY2026 period, scope and as-of date", "Do not reject all numeric ranges merely because the conflict fixture prohibits inventing one", "Do not convert forecast into realized revenue"],
+      "forbidden_claims": [{"kind": "forecast_as_historical_fact"}],
+      "reference_answers": {
+        "acceptable": ["forecast-a第3页在2026-04-01给出的FY2026合并收入预测为80–100 CNY billion；这是来源预测，不是已实现收入。"],
+        "unacceptable": ["FY2026实际合并收入已确定为80–100 CNY billion。"]
+      }
+    }
+  ]
+}

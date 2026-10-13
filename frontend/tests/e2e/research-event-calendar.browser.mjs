@@ -212,6 +212,34 @@ async function main() {
       const dimensions = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
       assert.ok(dimensions.scroll <= dimensions.client + 2, `${viewport.name} overflow: ${JSON.stringify(dimensions)}`);
 
+      // A reversed draft must never become the applied request window.
+      const calendar = page.getByTestId("research-event-calendar");
+      const from = calendar.getByLabel("起始日期（自然日）");
+      const to = calendar.getByLabel("结束日期（自然日）");
+      const initialFrom = await from.inputValue();
+      const initialTo = await to.inputValue();
+      const calendarRequests = [];
+      page.on("request", request => {
+        if (new URL(request.url()).pathname === "/api/research-events") calendarRequests.push(request.url());
+      });
+      await from.fill("2026-12-31");
+      await to.fill("2026-01-01");
+      await calendar.getByRole("button", { name: "应用范围" }).click();
+      await calendar.getByTestId("research-event-window-error").waitFor({ timeout: 3000 });
+      assert.equal(await from.isVisible(), true);
+      assert.equal(await to.isVisible(), true);
+      assert.equal(calendarRequests.length, 0, "invalid range was sent to API");
+      await Promise.all([
+        page.waitForResponse(r => new URL(r.url()).pathname === "/api/research-events"),
+        calendar.getByTestId("research-event-calendar-refresh").click(),
+      ]);
+      assert.ok(calendarRequests.every(url => !url.includes("2026-12-31")), "refresh submitted invalid draft");
+      await from.fill(initialFrom);
+      await to.fill(initialTo);
+      await calendar.getByRole("button", { name: "应用范围" }).click();
+      await calendar.getByTestId("research-event-partial").waitFor();
+      assert.equal(await calendar.getByTestId("research-event-window-error").count(), 0);
+
       if (viewport.name === "desktop-1440") {
         const typeFilter = page.getByLabel("事件类型");
         await typeFilter.selectOption("ANNOUNCEMENT");
@@ -222,10 +250,22 @@ async function main() {
         await announcement.getByText("DATE_ONLY", { exact: false }).waitFor();
         await typeFilter.selectOption("ALL");
         await page.locator('[data-testid="research-event-row"][data-event-type="PERIODIC_REPORT"]').first().waitFor();
-        const contextLink = page.getByTestId("research-event-context-link").first();
-        await contextLink.click();
-        await page.waitForURL(/\/decision-inbox#campaign-/);
-        assert.match(page.url(), /#campaign-/);
+        const eventRow = page.getByTestId("research-event-row").first();
+        const eventId = await eventRow.getAttribute("data-event-id");
+        const sourceEvent = data.events.find((event) => event.event_id === eventId);
+        assert.ok(sourceEvent, "navigation must use the actual event identity");
+        const campaignIds = [...new Set(sourceEvent.campaign_ids)];
+        assert.ok(campaignIds.length > 0);
+        const selectedCampaign = campaignIds.at(-1);
+        const expectedHref = `/decision-inbox#campaign-${encodeURIComponent(selectedCampaign)}`;
+        if (campaignIds.length > 1) {
+          assert.equal(await eventRow.getByTestId("research-event-context-link").getAttribute("href"), `/stock-data?code=${sourceEvent.security_code}`);
+          await eventRow.locator(`a[href="${expectedHref}"]`).click();
+        } else {
+          await eventRow.getByTestId("research-event-context-link").click();
+        }
+        await page.waitForURL((url) => url.pathname + url.hash === expectedHref);
+        assert.equal(new URL(page.url()).pathname + new URL(page.url()).hash, expectedHref);
         await page.goBack({ waitUntil: "domcontentloaded" });
         await page.getByTestId("research-event-calendar").waitFor();
       }

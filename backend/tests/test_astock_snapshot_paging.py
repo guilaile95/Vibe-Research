@@ -1,4 +1,4 @@
-﻿"""a_share_snapshot 分页完整性离线测试（Mock 网络，不打真实东财）。
+"""a_share_snapshot 分页完整性离线测试（Mock 网络，不打真实东财）。
 
 覆盖：上游每页强制 100 条、多页合并、去重、重复页保护、失败不返回半截数据。
 """
@@ -163,7 +163,7 @@ def test_uses_response_total_not_fixed(monkeypatch):
 # 6–7 去重 / 缺 code
 # ---------------------------------------------------------------------------
 
-def test_dedupe_by_code_stable_order(monkeypatch):
+def test_overlapping_pages_rejected(monkeypatch):
     page1 = [_row("600001", "甲"), _row("600002", "乙")]
     page2 = [_row("600002", "乙-重复"), _row("600003", "丙")]
 
@@ -176,9 +176,8 @@ def test_dedupe_by_code_stable_order(monkeypatch):
         return {"data": {"total": 4, "diff": []}}
 
     _install(monkeypatch, handler)
-    out = astock.a_share_snapshot(page_size=2)
-    assert [x["code"] for x in out] == ["600001", "600002", "600003"]
-    assert out[1]["name"] == "乙"  # 首次出现
+    with pytest.raises(RuntimeError, match="overlapping security"):
+        astock.a_share_snapshot(page_size=2)
 
 
 def test_missing_code_skipped(monkeypatch):
@@ -712,3 +711,42 @@ def test_large_page_request_failure_raises_no_partial(monkeypatch):
     monkeypatch.setattr(astock, "_A_SHARE_PAGE_RETRY_BACKOFF", (0, 0, 0))
     with pytest.raises(RuntimeError, match="request failed"):
         astock.a_share_snapshot(page_size=100)
+
+
+@pytest.mark.parametrize("total", [None, True, False, 2.0, 2.5, -1, "2.0"])
+def test_snapshot_requires_exact_integer_total(monkeypatch, total):
+    _install(monkeypatch, lambda *_: {"data": {"total": total, "diff": _codes(2)}})
+    with pytest.raises(RuntimeError, match="invalid total"):
+        astock.a_share_snapshot()
+
+
+@pytest.mark.parametrize("later_total", [3, 5, None, True, 4.0])
+def test_snapshot_total_must_remain_consistent(monkeypatch, later_total):
+    def handler(url, params):
+        pn = int(params["pn"])
+        return {"data": {"total": 4 if pn == 1 else later_total,
+                         "diff": _codes(2, (pn - 1) * 2)}}
+    _install(monkeypatch, handler)
+    market._CACHE.clear()
+    with pytest.raises(RuntimeError, match="total"):
+        market.get_a_share_snapshot()
+    assert "a_share_snapshot" not in market._CACHE
+
+
+def test_snapshot_count_overshoot_rejected(monkeypatch):
+    _install(monkeypatch, lambda *_: {"data": {"total": 1, "diff": _codes(2)}})
+    with pytest.raises(RuntimeError, match="exceeds total"):
+        astock.a_share_snapshot()
+
+
+def test_snapshot_filtered_only_page_is_valid_raw_progress(monkeypatch):
+    pages = [_codes(2), [_row("INDEX1"), _row("INDEX2")], _codes(1, 2)]
+    _install(monkeypatch, lambda _, p: {"data": {"total": "5", "diff": pages[int(p["pn"]) - 1]}})
+    assert len(astock.a_share_snapshot(page_size=2)) == 3
+
+
+def test_snapshot_filtered_overlap_and_malformed_rows_rejected(monkeypatch):
+    for rows in [[_row("INDEX1"), _row("INDEX1")], [_row("600001"), None]]:
+        _install(monkeypatch, lambda *_: {"data": {"total": 2, "diff": rows}})
+        with pytest.raises(RuntimeError, match="overlapping|invalid diff row"):
+            astock.a_share_snapshot()

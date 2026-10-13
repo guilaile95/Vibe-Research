@@ -300,12 +300,32 @@ async function run() {
     assert.notEqual(contextThesisStatus, "UNKNOWN");
     assert.notEqual(contextThesisStatus, "UNAVAILABLE");
 
+    // New explicit consent uses the real backend's model-free receipt. Decline first.
+    const generatePath = `/api/campaigns/${campaign.campaign_id}/ai-draft/generate`;
+    const receiptPath = `/api/campaigns/${campaign.campaign_id}/ai-draft/consent-preview`;
+    const declined = page.waitForEvent("dialog", { timeout: 10000 }).then(async declineDialog => {
+      assert.match(declineDialog.message(), /完整持仓.*全部证券/);
+      assert.match(declineDialog.message(), /账户资金与资产/);
+      assert.ok(declineDialog.message().includes(mockLlm));
+      await declineDialog.dismiss();
+    });
+    await Promise.all([declined, page.getByTestId("generate-ai-draft").click()]);
+    await page.getByTestId("generate-ai-draft").waitFor({ state: "visible" });
+    await page.waitForFunction(() => !document.querySelector('[data-testid="generate-ai-draft"]').disabled);
+    assert.equal(apiTrace.filter(entry => entry === `POST ${generatePath}`).length, 0);
+    assert.equal(apiTrace.filter(entry => entry === `POST ${receiptPath}`).length, 1);
+    const accepted = page.waitForEvent("dialog", { timeout: 10000 }).then(dialog => dialog.accept());
+    accepted.catch(() => {});
     const generationResponsePromise = page.waitForResponse((response) => (
       response.request().method() === "POST"
       && response.url().includes(`/api/campaigns/${campaign.campaign_id}/ai-draft/generate`)
     ), { timeout: 180000 });
-    await page.getByRole("button", { name: "生成 AI 草稿" }).click();
-    const generationResponse = await generationResponsePromise;
+    generationResponsePromise.catch(() => {});
+    const [generationResponse] = await Promise.all([generationResponsePromise, accepted, page.getByTestId("generate-ai-draft").click()]);
+    const consentRequest = generationResponse.request().postDataJSON();
+    assert.equal(consentRequest.confirm_private_context, true);
+    assert.match(consentRequest.expected_context_fingerprint, /^[a-f0-9]{64}$/);
+    assert.deepEqual(Object.keys(consentRequest).sort(), ["confirm_private_context", "expected_context_fingerprint", "llm"]);
     assert.equal(generationResponse.status(), 200, await generationResponse.text());
     const generationBody = await generationResponse.json();
     const generation = generationBody.data;
@@ -319,9 +339,9 @@ async function run() {
     assert.equal(await page.getByLabel("这次判断关注的时间范围").inputValue(), "AI horizon 2-4 weeks");
     assert.equal(await page.getByLabel("这个判断成立依赖什么").inputValue(), "AI assumption one\nAI assumption two");
     assert.equal(await page.getByLabel("出现什么情况说明判断错了").inputValue(), "AI invalidation");
-    assert.match(await page.locator('[data-ai-draft-status="UNCOMMITTED"]').innerText(), /AI DRAFT \/ UNCOMMITTED/);
+    assert.match(await page.locator('[data-ai-draft-status="UNCOMMITTED"]').innerText(), /AI 草稿 \/ 尚未提交/);
 
-    await page.getByRole("button", { name: "Apply again" }).click();
+    await page.getByRole("button", { name: "再次填入" }).click();
     await page.screenshot({ path: join(evidenceDir, "t1b-applied.png"), fullPage: true });
     assert.equal(await page.getByLabel("对这只股票的判断").inputValue(), "SUPPORT");
     assert.equal(await page.getByLabel("当前操作倾向").inputValue(), "WAIT");

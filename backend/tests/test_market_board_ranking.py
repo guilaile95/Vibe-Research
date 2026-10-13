@@ -46,7 +46,7 @@ def _assert_envelope(env: dict):
     assert env["source"] == "eastmoney_push2"
     assert env["trade_date"] is None
     assert env["data_time"] is None
-    assert isinstance(env["fetched_at"], str)
+    assert env["fetched_at"] is None if env["status"] == "unavailable" else isinstance(env["fetched_at"], str)
     assert isinstance(env["warnings"], list)
     assert env["status"] in ("normal", "partial", "unavailable")
 

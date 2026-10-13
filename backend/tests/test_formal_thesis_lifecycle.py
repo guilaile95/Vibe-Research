@@ -156,6 +156,7 @@ def test_preconfirm_evidence_cascade_revisions_have_content_kind(db):
     svc.link_evidence(db, tid, ev["id"], "support", 1)
     svc.update_stance(db, tid, ev["id"], "oppose", 2)
     svc.update_evidence(db, ev["id"], {
+        "expected_edit_token": ev["edit_token"],
         "evidence_type": "news", "claim": "changed", "source_title": "source",
         "source_url": None, "source_date": None, "accessed_at": "2026-01-02T00:00:00+00:00",
         "classification": "inference", "confidence": "medium",
@@ -190,6 +191,7 @@ def test_freeze_preserves_confirmed_evidence_and_rejects_live_drift(db):
     svc.link_evidence(db, tid, evidence["id"], "support", 2)
     svc.confirm_formalization(db, tid, 3)
     svc.update_evidence(db, evidence["id"], {
+        "expected_edit_token": evidence["edit_token"],
         "evidence_type": "news", "claim": "mutated later", "source_title": "source",
         "source_url": None, "source_date": None, "accessed_at": "2026-01-01T00:00:00+00:00",
         "classification": "fact", "confidence": "high",

@@ -24,6 +24,17 @@ visible. Missing data must not become zero, neutral, healthy or invented certain
 The system is not a reliable real-time terminal and does not provide 24/7 protection. Its default mode
 runs when the local application is open.
 
+## AI output and report excerpts need separate acceptance
+
+AI configuration, transport tests and deterministic fixtures do not establish real-model answer
+quality. Missing credentials, unavailable providers or unapproved spending leave that evaluation
+`NOT_EVALUATED`; record the gap and ask for the required setup rather than silently changing providers.
+
+MyReports indexes source documents but supplies bounded excerpts to the model. A citation or report
+count does not prove full-text coverage, OCR fidelity or capture of a later correction. Return to the
+source to verify conclusions. Dated repair status and its exact evidence belong in the
+[delivery snapshot](research/PROJECT_STATUS_20261002.md), not a blanket stable-version guarantee.
+
 ## Account and execution facts remain manual
 
 Vibe does not connect to a broker and does not place, cancel or infer orders. Holdings, cash events and
@@ -33,6 +44,12 @@ an `UNPLANNED` origin.
 
 Estimated amounts are not guaranteed fills and do not silently invent fees, slippage, tax, sellable
 quantity or broker state.
+
+New `full` and `partial` trade writes require explicit finite, nonnegative `fee` and
+`other_cost` values; use `0` only to confirm zero cost. Missing or null costs are rejected
+by the API with 422. `not_executed` rows retain zero-cost normalization. Historical zero
+costs are unchanged: older records may have defaulted missing costs to zero, so their
+original cost knowledge cannot be inferred from the stored value.
 
 ## Native Intel relevance is intentionally simple
 

@@ -118,8 +118,11 @@ export function filterResearchEvents(
   );
 }
 
-export function eventNavigationHref(event: ResearchEventCalendarEvent): string {
-  const campaignId = event.campaign_ids[0];
+export function eventNavigationHref(event: ResearchEventCalendarEvent, selectedCampaignId?: string): string {
+  const ids = [...new Set(event.campaign_ids.filter(Boolean))];
+  const campaignId = selectedCampaignId
+    ? (ids.includes(selectedCampaignId) ? selectedCampaignId : null)
+    : (ids.length === 1 ? ids[0] : null);
   return campaignId
     ? `/decision-inbox#campaign-${encodeURIComponent(campaignId)}`
     : `/stock-data?code=${encodeURIComponent(event.security_code)}`;
@@ -136,4 +139,11 @@ export function shouldApplyResearchEventResponse(
 export function dateInputToday(): string {
   const today = startOfDay(new Date());
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+}
+
+/** Date inputs use ISO calendar dates; empty bounds retain API defaults. */
+export function researchEventWindowError(dateFrom: string, dateTo: string): string {
+  return dateFrom && dateTo && dateFrom > dateTo
+    ? "起始日期不能晚于结束日期，请修改后再应用。"
+    : "";
 }

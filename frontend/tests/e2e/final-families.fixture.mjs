@@ -1,0 +1,67 @@
+import { readFileSync } from "node:fs";
+
+// Actual service-generated empty responses under an intentionally unavailable
+// synthetic calendar. Freeze the page clock before mounting ancillary cards.
+const ancillaryGolden = JSON.parse(readFileSync(new URL("../fixtures/final-families-ancillary.json", import.meta.url), "utf8"));
+const shortlineGolden = JSON.parse(readFileSync(new URL("../fixtures/shortline-research-unavailable.json", import.meta.url), "utf8"));
+const themeGolden = JSON.parse(readFileSync(new URL("../fixtures/theme-research-unavailable.json", import.meta.url), "utf8"));
+const cohortGolden = JSON.parse(readFileSync(new URL("../fixtures/cohort-identity-unavailable.json", import.meta.url), "utf8"));
+const segmentedVersions = JSON.parse(readFileSync(new URL("../fixtures/shortline-review-empty-versions.json", import.meta.url), "utf8"));
+export const ANCILLARY_TRADE_DATE = "2026-10-08";
+export const ANCILLARY_CLOCK = ancillaryGolden.clock;
+
+export const syntheticLlm = { provider: "cli-codex", model: "SYNTHETIC_OFFLINE" };
+export const plan = rounds => rounds >= 2 ? ["bull", "bear", "bull_rebut", "bear_rebut", "referee"] : ["bull", "bear", "referee"];
+export const encode = events => events.map(event => JSON.stringify(event)).join("\n") + "\n";
+export function debateEvents(rounds, mode = "complete") {
+  const stages = plan(rounds).map(stage => ({ stage, content: `SYNTHETIC_${stage}` }));
+  const events = stages.flatMap(({ stage, content }) => [{ type: "stage", stage, label: stage }, { type: "delta", stage, text: content }, { type: "stage_done", stage, label: stage, content }]);
+  if (mode === "bull-eof") return events.slice(0, 3);
+  if (mode === "all-eof") return events;
+  return [...events, { type: "done", code: "600519", stages }];
+}
+export function ancillaryReply(method, path, search = "") {
+  if (method !== "GET") return null;
+  if (path === `/api/observation-workflows/${ANCILLARY_TRADE_DATE}` && search === "") return { data: structuredClone(ancillaryGolden.observations) };
+  if (path === "/api/shortline-review/versions" && search === `?trade_date=${ANCILLARY_TRADE_DATE}&mode=daily`) return structuredClone(segmentedVersions[ANCILLARY_TRADE_DATE]);
+  if (path === `/api/next-day-verification/${ANCILLARY_TRADE_DATE}` && search === "") return { data: structuredClone(ancillaryGolden.journal) };
+  if (path === "/api/market/shortline-research" && search === `?trade_date=${ANCILLARY_TRADE_DATE}`) return { data: structuredClone(shortlineGolden[ANCILLARY_TRADE_DATE]) };
+  if (path === "/api/market/theme-research" && search === `?trade_date=${ANCILLARY_TRADE_DATE}`) return { data: structuredClone(themeGolden[ANCILLARY_TRADE_DATE]) };
+  if (path === "/api/market/cohort-identity" && search === `?trade_date=${ANCILLARY_TRADE_DATE}`) return { data: structuredClone(cohortGolden[ANCILLARY_TRADE_DATE]) };
+  if (path === "/api/market/evidence-readiness" && search === `?trade_date=${ANCILLARY_TRADE_DATE}`) return { data: structuredClone(ancillaryGolden.readiness) };
+  if (path === "/api/market/seal-quality" && search === `?trade_date=${ANCILLARY_TRADE_DATE}`) return { data: structuredClone(ancillaryGolden.seal) };
+  const common = {
+    "/api/daily-review": { data: { schema_version: "daily-review-v0.1", trade_date: "2026-10-08", generated_at: "2026-10-08 16:00:00", status: "normal", warnings: [], data_health: { components: {} }, market_environment: { indices: { status: "normal", data: [] }, global_indices: { status: "normal", data: [] }, breadth: { status: "unavailable", data: {} } }, sector_rotation: { industry: { status: "normal", list: [] }, concept: { status: "normal", list: [] }, region: { status: "normal", list: [] }, highlights: {} }, short_term_emotion: { status: "unavailable", data: {} }, capital_activity: { amount_top: [], high_turnover: [], turnover_top: [] } }, cache_meta: { stale: false, refreshing: false } },
+    "/api/market/northbound": { status: "unavailable", data: null, limitations: [], warnings: [] },
+    "/api/watchlist": { data: { status: "valid", data: { codes: [], updated_at: "synthetic" }, etag: "1111111111111111" } },
+    "/api/native-intel/status": { status: "normal", sources: [], store: { item_count: 0 } },
+    "/api/radar": { data: { industries: [], stats: { total_sources: 0 }, generated_at: null } },
+    "/api/decision-inbox": { data: { schema_version: "decision_inbox_runtime.v0.1", as_of: "2026-10-08T00:00:00Z", evaluation_status: "EVALUATED", canonical: true, reason_codes: [], holding_setup_items: [], campaign_items: [], total_holdings: 0, total_campaign_items: 0 } },
+    "/api/campaigns": { data: [] },
+  };
+  if (!search && Object.hasOwn(common, path)) return common[path];
+  if (path === "/api/market/bk11-history" && search === "?days=5") return { schema_version: "bk11_history.v0.1", status: "empty", window: { requested: 5, snapshot_count: 0 }, trade_date: null, data_time: null, snapshots: [], latest: null, delta: null, summary: null, digest: null, reason_codes: [], warnings: [], limitations: [] };
+  if (path === "/api/market/cloud" && search === "?scope=all&period=today") return { data: { status: "unavailable", data: null, warnings: [], is_stale: false } };
+  if (path === "/api/ai-results/daily_review_ai" && search === "?trade_date=2026-10-08") return { data: null };
+  if (path === "/api/native-intel/items" && search === "?limit=40&order_by=last_seen") return { status: "normal", items: [] };
+  if (path === "/api/native-intel/trending" && search === "?window_hours=24&top_n=20") return { status: "normal", entities: [] };
+  return null;
+}
+export function realRouteAllowed(method, path, scenario) {
+  if (scenario === "report-upload") return path === "/api/myreports" && ["GET", "POST"].includes(method);
+  if (scenario.startsWith("history-")) return method === "GET" && path === "/api/daily-review/history";
+  if (scenario === "calendar-422") return method === "GET" && path === "/api/research-events";
+  return false;
+}
+export function observeHistoryReads() {
+  const nativeFetch = window.fetch.bind(window); window.__historyReads = [];
+  window.fetch = async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input.url, location.href);
+    if (url.pathname !== "/api/daily-review/history") return nativeFetch(input, init);
+    const row = { path: url.pathname + url.search, parsed: false, status: null }; window.__historyReads.push(row);
+    const response = await nativeFetch(input, init); row.status = response.status;
+    const json = response.json.bind(response);
+    response.json = async () => { const body = await json(); row.parsed = true; return body; };
+    return response;
+  };
+}

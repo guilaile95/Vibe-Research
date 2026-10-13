@@ -122,7 +122,7 @@ def _providers(
         }
 
     return discovery.DiscoveryProviders(
-        market_snapshot=lambda: rows,
+        market_snapshot=lambda: {"rows": rows, "observed_at": NOW.isoformat().replace("+00:00", "Z")},
         full_market=lambda: {
             "status": "normal",
             "as_of": "2026-08-28",
@@ -472,3 +472,22 @@ def test_discovery_api_uses_service_contract_without_formal_state_creation(monke
     assert response.status_code == 200
     assert response.json()["schema_version"] == discovery.SCHEMA_VERSION
     assert response.json()["refresh_requested"] is True
+
+
+def test_partial_rdp_preserves_current_rows_and_temporal_guards():
+    base = _providers()
+    envelope = base.full_market()
+    rows = [dict(row) for row in envelope["rows"]]
+    rows[0]["latest_date"] = "2026-08-27"
+    providers = discovery.DiscoveryProviders(
+        market_snapshot=base.market_snapshot,
+        full_market=lambda: {**envelope, "status": "partial", "rows": rows},
+        financials=base.financials, announcements=base.announcements,
+        native_intel=base.native_intel,
+    )
+    _, histories, dataset = discovery._full_market_rows(
+        providers, "2026-08-30T01:00:00Z", "2026-08-28",
+    )
+    assert dataset["status"] == "partial"
+    assert histories[rows[0]["code"]]["_discovery_stale"] is True
+    assert any(not row["_discovery_stale"] for row in histories.values())

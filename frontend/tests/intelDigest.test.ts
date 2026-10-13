@@ -237,6 +237,7 @@ test("orchestrator: transitions phase to 'generating' then 'saving' before saveA
 
   const controller = new AbortController();
   const res = await runIntelDigestGeneration({
+    sourceCoverage: { scope: "cached_fetch_all_configured_sources", state: "normal", expected_sources: 2, attempted_sources: 2, succeeded_sources: 2, failed_sources: 0 },
     industry: mockIndustry,
     signal: controller.signal,
     generationId: 1,
@@ -267,6 +268,7 @@ test("orchestrator: AbortError with accText → cancelled, not saved, saveApi no
   };
 
   const res = await runIntelDigestGeneration({
+    sourceCoverage: { scope: "cached_fetch_all_configured_sources", state: "normal", expected_sources: 2, attempted_sources: 2, succeeded_sources: 2, failed_sources: 0 },
     industry: mockIndustry,
     signal: controller.signal,
     generationId: 1,
@@ -295,6 +297,7 @@ test("orchestrator: save API failure retains generated markdown text and returns
 
   const controller = new AbortController();
   const res = await runIntelDigestGeneration({
+    sourceCoverage: { scope: "cached_fetch_all_configured_sources", state: "normal", expected_sources: 2, attempted_sources: 2, succeeded_sources: 2, failed_sources: 0 },
     industry: mockIndustry,
     signal: controller.signal,
     generationId: 1,
@@ -325,6 +328,7 @@ test("orchestrator: all invalid items → chatStream call count 0, save call cou
   };
 
   const res = await runIntelDigestGeneration({
+    sourceCoverage: { scope: "cached_fetch_all_configured_sources", state: "normal", expected_sources: 2, attempted_sources: 2, succeeded_sources: 2, failed_sources: 0 },
     industry: emptyIndustry,
     signal: new AbortController().signal,
     generationId: 1,
@@ -371,6 +375,7 @@ test("orchestrator: partial materials POST with status=partial (not hard-coded n
   };
 
   const res = await runIntelDigestGeneration({
+    sourceCoverage: { scope: "cached_fetch_all_configured_sources", state: "normal", expected_sources: 2, attempted_sources: 2, succeeded_sources: 2, failed_sources: 0 },
     industry: mixedIndustry,
     signal: new AbortController().signal,
     generationId: 1,
@@ -401,3 +406,40 @@ test("orchestrator: partial materials POST with status=partial (not hard-coded n
   assert.equal(postedStatus, "partial");
   assert.equal(res.materialStatus, "partial");
 });
+
+for (const state of ["partial", "unknown", "unavailable", undefined] as const) {
+  test(`orchestrator: source coverage ${state} survives valid items without a healthy default`, async () => {
+    let modelCalls = 0;
+    const saves: IntelDigestSaveIn[] = [];
+    let prompt = "";
+    const result = await runIntelDigestGeneration({
+      industry: mockIndustry,
+      sourceCoverage: state ? { scope: "cached_fetch_all_configured_sources", state,
+        expected_sources: 2, attempted_sources: state === "unknown" ? null : 2,
+        succeeded_sources: state === "unavailable" ? 0 : state === "unknown" ? null : 1,
+        failed_sources: state === "unavailable" ? 2 : state === "unknown" ? null : 1 } : undefined,
+      signal: new AbortController().signal,
+      generationId: 1, getCurrentGenerationId: () => 1, isMounted: () => true,
+      chatStreamFn: (async (messages: { content: string }[]) => {
+        modelCalls++;
+        prompt = messages[0].content;
+        return { content: "- Synthetic summary with source limits" };
+      }) as any,
+      saveApi: async (payload) => {
+        saves.push(payload);
+        return { digest: null, deduped: false } as IntelDigestSaveResult;
+      },
+    });
+    if (state === "unavailable") {
+      assert.equal(result.status, "unavailable");
+      assert.equal(modelCalls, 0);
+      assert.equal(saves.length, 0);
+    } else {
+      assert.equal(modelCalls, 1);
+      assert.equal(result.materialStatus, "partial");
+      assert.equal(saves[0].status, "partial");
+      assert.match(prompt, /全部配置来源.*不是所选赛道/);
+      assert.match(prompt, state === "partial" ? /1\/2.*不完整/ : /覆盖未知/);
+    }
+  });
+}

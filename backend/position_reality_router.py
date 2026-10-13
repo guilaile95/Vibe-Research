@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 import account_event_store
 import position_reality_service as svc
@@ -47,7 +48,7 @@ def _map_errors(exc: Exception) -> HTTPException:
 async def bootstrap_preview(request: Request):
     try:
         payload = await _parse_json_body(request)
-        result = svc.bootstrap_preview(payload)
+        result = await run_in_threadpool(svc.bootstrap_preview, payload)
     except svc.PositionValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"data": result}
@@ -57,7 +58,7 @@ async def bootstrap_preview(request: Request):
 async def bootstrap_commit(request: Request):
     try:
         payload = await _parse_json_body(request)
-        result = svc.bootstrap_commit(payload)
+        result = await run_in_threadpool(svc.bootstrap_commit, payload)
     except HTTPException:
         # JSON 解析错误（400/422）原样返回，不得经 _map_errors 变成 500（P2-1）
         raise
@@ -70,7 +71,7 @@ async def bootstrap_commit(request: Request):
 async def create_correction(request: Request):
     try:
         payload = await _parse_json_body(request)
-        result = svc.create_correction(payload)
+        result = await run_in_threadpool(svc.create_correction, payload)
     except HTTPException:
         raise
     except Exception as exc:
@@ -81,7 +82,7 @@ async def create_correction(request: Request):
 @router.get("/position/derived")
 async def derived_positions():
     try:
-        result = svc.derive_positions()
+        result = await run_in_threadpool(svc.derive_positions)
     except Exception as exc:
         raise _map_errors(exc)
     return {"data": result}
@@ -100,7 +101,7 @@ async def void_trade_cascade(trade_id: str, request: Request):
     if len(reason.strip()) > _MAX_REASON_LEN:
         raise HTTPException(status_code=422, detail=f"reason 超过最大长度 {_MAX_REASON_LEN}")
     try:
-        result = svc.void_trade_with_cascade(trade_id, reason.strip())
+        result = await run_in_threadpool(svc.void_trade_with_cascade, trade_id, reason.strip())
     except svc.PositionValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except (trade_ledger_service.TradeNotFoundError, trade_ledger_store.TradeNotFoundError) as exc:
@@ -115,7 +116,7 @@ async def void_trade_cascade(trade_id: str, request: Request):
 @router.get("/position/reconciliation")
 async def position_reconciliation():
     try:
-        result = svc.reconcile_positions()
+        result = await run_in_threadpool(svc.reconcile_positions)
     except Exception as exc:
         raise _map_errors(exc)
     return {"data": result}

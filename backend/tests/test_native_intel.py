@@ -289,6 +289,18 @@ def test_interrupted_run_is_failed_on_restart_without_losing_items(tmp_path: Pat
 
 
 def test_native_intel_router_source_to_sink(tmp_path: Path, monkeypatch) -> None:
+    # Exercise successful optional enrichment without allowing this offline
+    # route integration test to contact a real provider.
+    import requests
+
+    hot_concepts = Mock(return_value=[{"concept": "白酒概念", "bk": "QA_CONCEPT", "hit": 3}])
+    concept_blocks = Mock(return_value={"boards": [{"name": "食品饮料"}]})
+    outbound_http = Mock(side_effect=AssertionError("unexpected live HTTP request"))
+    eastmoney_http = Mock(side_effect=AssertionError("unexpected live Eastmoney request"))
+    monkeypatch.setattr(astock, "hot_concepts", hot_concepts)
+    monkeypatch.setattr(astock, "concept_blocks", concept_blocks)
+    monkeypatch.setattr(astock, "em_get", eastmoney_http)
+    monkeypatch.setattr(requests.sessions.Session, "request", outbound_http)
     path = tmp_path / "native-intel.sqlite3"
     sources = [_source("good", "Good"), _source("bad", "Bad")]
     registry = {
@@ -352,6 +364,14 @@ def test_native_intel_router_source_to_sink(tmp_path: Path, monkeypatch) -> None
         getattr(route, "path", None) == "/api/native-intel/refresh"
         and "POST" in getattr(route, "methods", set())
         for route in native_intel_router.router.routes
+    )
+    hot_concepts.assert_called_once_with("600519", strict=True)
+    concept_blocks.assert_called_once_with("600519", strict=True)
+    outbound_http.assert_not_called()
+    eastmoney_http.assert_not_called()
+    assert any(
+        term["term"] == "白酒概念" and term["source_ref"] == "astock.hot_concepts"
+        for term in store.list_entity_terms(path, security_code="600519")
     )
 
 

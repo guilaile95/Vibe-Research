@@ -185,6 +185,43 @@ def test_fetch_daily_bars_rejects_duplicate_and_non_midnight_dates():
         )
 
 
+def test_documented_minimal_daily_envelope_remains_unqualified():
+    # Official HistoricalData documents only timestamp/item at immutable SHA
+    # 3bca7805a4127ece8d81961917e740d2effac6ec, docs/api/a-share/prices.md.
+    # This synthetic fixture uses that shape, not a captured live response.
+    # Request parameters alone must not manufacture response identity or an
+    # unadjusted-price claim. Requalification is needed before accepting it.
+    day = client._milliseconds(date(2026, 8, 21))
+    payload = {
+        "code": 0,
+        "message": "success",
+        "data": {"timestamp": day, "item": [_bar(day)]},
+    }
+    session = _Session(_Response(payload))
+    with pytest.raises(client.HiThinkContractError, match="identity drifted"):
+        client.fetch_daily_bars(
+            "600519", 5, session=session, end_date=date(2026, 8, 24)
+        )
+    assert session.calls[0]["params"]["adjust"] == "none"
+
+
+@pytest.mark.parametrize("field", ["thscode", "interval", "adjust"])
+@pytest.mark.parametrize("value", [None, "", "mismatch", "missing"])
+def test_daily_qualified_echo_fields_cannot_be_omitted_or_inferred(field, value):
+    day = client._milliseconds(date(2026, 8, 21))
+    payload = _payload(_bar(day))
+    if value == "missing":
+        del payload["data"][field]
+    else:
+        payload["data"][field] = value
+    session = _Session(_Response(payload))
+    error = "identity drifted" if field == "thscode" else "interval/adjustment drifted"
+    with pytest.raises(client.HiThinkContractError, match=error):
+        client.fetch_daily_bars(
+            "600519", 5, session=session, end_date=date(2026, 8, 24)
+        )
+
+
 def test_fetch_daily_bars_rejects_successful_empty_result_for_fallback():
     session = _Session(_Response(_payload()))
     with pytest.raises(client.HiThinkContractError, match="unexpectedly empty"):

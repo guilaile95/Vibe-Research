@@ -1,4 +1,5 @@
 """Wave 4 acceptance: real SQLite facts, report cursors and deterministic rules."""
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import sqlite3
 
@@ -38,7 +39,7 @@ def seed(path, when, entries, *, failed=()):
                                 item_count=sum(e[0] == sid for e in entries), db_path=path)
     store.finish_run(run_id, status="partial" if failed else "ok", source_ok=len(sources)-len(failed),
                      source_failed=len(failed), item_seen=len(entries), item_new=len(entries), db_path=path)
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.execute("UPDATE intel_fetch_runs SET started_at=?, finished_at=? WHERE run_id=?",
                      (reports._iso(when), reports._iso(when), run_id))
     return ids
@@ -74,13 +75,13 @@ def test_incremental_success_failure_and_genuine_delta(tmp_path, monkeypatch):
     assert reports.generate_report(str(path), mode="INCREMENTAL", now=NOW+timedelta(minutes=2))["total"] == 0
     seed(path, NOW+timedelta(minutes=3), [("weibo", "same", "机器人新闻", 2), ("rss-a", "new", "新增机器人", None)])
     cursor_before = store.read_report_cursor(first["baseline"]["report_key"], path) if first["baseline"] else second["baseline"]
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         before = conn.execute("SELECT * FROM intel_report_cursors").fetchall()
     with monkeypatch.context() as patch:
         patch.setattr(reports, "_display_order", lambda *_: (_ for _ in ()).throw(RuntimeError("fixture failure")))
         with pytest.raises(RuntimeError):
             reports.generate_report(str(path), mode="INCREMENTAL", now=NOW+timedelta(minutes=4))
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         assert conn.execute("SELECT * FROM intel_report_cursors").fetchall() == before
     third = reports.generate_report(str(path), mode="INCREMENTAL", now=NOW+timedelta(minutes=4))
     assert {i["change_kind"] for i in items(third)} == {"CHANGED", "NEWLY_OBSERVED"}
@@ -197,7 +198,7 @@ def test_new_region_distinguishes_first_local_rss_from_new_on_list(tmp_path):
 def test_cursor_schema_upgrade_preserves_facts(tmp_path):
     path = str(tmp_path / "native_intel.sqlite3")
     seed(path, NOW-timedelta(minutes=1), [("rss-a", "a", "机器人", None)])
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.execute("DROP TABLE intel_report_cursors")
     store.initialize_store(path)
     assert store.count_items(path) == 1
@@ -283,7 +284,7 @@ def test_large_history_reports_and_14_30_day_aggregates(tmp_path):
     ids = seed(path, first, entries)
     # 432,000 short observations, bulk inserted; no network or production DB.
     instants = [first + timedelta(days=d, minutes=15*n) for d in range(60) for n in range(48)]
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.executemany("INSERT INTO intel_fetch_runs (run_id,started_at,finished_at,status,trigger,source_total,source_ok) "
                          "VALUES (?,?,?,'ok','fixture',3,3)",
                          ((reports._iso(t),)*3 for t in instants[1:]))
@@ -347,5 +348,5 @@ def test_analytics_reenable_eligibility_preserves_raw_history(tmp_path, monkeypa
     seed(path, NOW-timedelta(minutes=1), [("weibo", "a", "机器人新闻", 2)])
     assert count("RAW_HISTORY") == count("CURRENT_ELIGIBLE") == 1
     assert reports.generate_report(path, now=NOW, commit=False)["total"] == 1
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         assert conn.execute("SELECT COUNT(*) FROM intel_observations").fetchone()[0] == 2

@@ -207,11 +207,32 @@ class ConditionResultOut(_StrictModel):
     evidence: dict[str, Any] = Field(default_factory=dict)
 
 
+class StockDataCoverageOut(_StrictModel):
+    status: Literal["available", "empty", "unavailable"]
+    returned_rows: int | None
+    start: str | None
+    end: str | None
+    snapshot_id: str | None
+    artifact_sha256: str | None
+    cutoff: str | None
+
+
+class BatchCoverageOut(_StrictModel):
+    requested_count: int
+    with_data_count: int
+    empty_count: int
+    failed_count: int
+    fully_evaluable_count: int
+    missing_condition_count: int
+    unavailable_count: int
+
+
 class StockResultOut(_StrictModel):
     code: str
     bucket: Literal["matched", "rejected", "unavailable"]
     matched: bool | None
     technical_status: str
+    data_coverage: StockDataCoverageOut
     trade_date: str | None
     condition_results: list[ConditionResultOut]
     limitations: list[str] = Field(default_factory=list)
@@ -236,7 +257,7 @@ class ResearchDataSourceOut(_StrictModel):
     dataset_id: str
     provider_id: str
     adjustment: str
-    status: Literal["normal", "unavailable"]
+    status: Literal["normal", "partial", "unavailable"]
     fetched_at: str | None
     as_of: str | None
     coverage: ResearchCoverageOut | None
@@ -252,6 +273,7 @@ class ScreenerEvaluateOut(_StrictModel):
     rejected: list[StockResultOut]
     unavailable: list[StockResultOut]
     research_data: ResearchDataSourceOut
+    batch_coverage: BatchCoverageOut
     limitations: list[str] = Field(default_factory=list)
     schema_version: Literal["screener-v0.1"] = SCHEMA_VERSION
 

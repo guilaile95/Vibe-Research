@@ -63,7 +63,7 @@ export function ResearchBrief({
   const latestUpdate = model.confirmedUpdates[model.confirmedUpdates.length - 1] ?? null;
   return (
     <section
-      className="rounded-lg border border-border/60 bg-background/35 p-4 space-y-4"
+      className="min-w-0 scroll-mt-16 break-words rounded-lg border border-border/60 bg-background/35 p-4 space-y-4 lg:scroll-mt-0"
       data-testid="research-brief"
       data-decision-context={model.contextState}
       data-context-binding={bindingThesisId}
@@ -97,12 +97,12 @@ export function ResearchBrief({
 
       <section data-testid="research-brief-subject">
         <h3 className="text-xs font-semibold">研究哪个标的、采用什么策略、当前处于什么确认状态？</h3>
-        <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-5">
+        <div className="mt-2 grid grid-cols-2 gap-2 text-xs lg:grid-cols-5">
           <div><p className="text-muted-foreground">证券</p><p className="mt-1 font-medium" data-context-security>{model.securityCode}</p></div>
           <div><p className="text-muted-foreground">策略</p><p className="mt-1 font-medium" data-context-strategy>{model.strategyLabel}{model.strategyCode ? `（${model.strategyCode}）` : ""}</p></div>
           <div><p className="text-muted-foreground">当前投资逻辑</p><p className="mt-1 font-medium" data-context-thesis-status>{model.thesisVersionText}</p></div>
           <div><p className="text-muted-foreground">当前确认状态</p><p className="mt-1 font-medium" data-context-effective-state>{model.effectiveState.label}</p></div>
-          <div><p className="text-muted-foreground">预期周期</p><p className="mt-1 font-medium" data-context-horizon>{model.horizonText}</p></div>
+          <div className="col-span-2 lg:col-span-1"><p className="text-muted-foreground">预期周期</p><p className="mt-1 font-medium" data-context-horizon>{model.horizonText}</p></div>
         </div>
         <p className="mt-2 text-xs leading-5 text-muted-foreground">{model.effectiveState.note}</p>
         {model.horizonSource === "CURRENT_THESIS" && (
@@ -117,44 +117,27 @@ export function ResearchBrief({
         )}
       </section>
 
-      <section data-testid="research-brief-view">
-        <h3 className="text-xs font-semibold">最初冻结的观点是什么？（历史原貌）</h3>
-        <p className="mt-1 text-[11px] text-muted-foreground">{model.confirmed.note}</p>
-        {model.confirmed.title && <p className="mt-2 text-sm font-medium">{model.confirmed.title}</p>}
-        {model.confirmed.summary && <p className="mt-1 text-xs">{model.confirmed.summary}</p>}
-        {model.confirmed.claims.length > 0 && (
+      <div role="group" aria-label="先核对判断条件与数据边界" data-testid="research-brief-attention" className="grid min-w-0 gap-3 lg:grid-cols-2">
+      <section data-testid="research-brief-invalidation" className="min-w-0 rounded-lg border border-border/60 bg-muted/20 p-3">
+        <h3 className="text-xs font-semibold">出现什么条件，需要改变当前判断？</h3>
+        <p className="mt-1 text-[11px] text-muted-foreground">{model.invalidation.note}</p>
+        {model.invalidation.conditions.length > 0 && (
           <ul className="mt-2 list-disc space-y-1 pl-4 text-xs">
-            {model.confirmed.claims.map((claim) => <li key={claim}>{claim}</li>)}
+            {model.invalidation.conditions.map((item) => <li key={item}>{item}</li>)}
           </ul>
         )}
       </section>
 
-      <section data-testid="research-brief-updates">
-        <h3 className="text-xs font-semibold">冻结后有哪些已确认变更？</h3>
-        <p className="mt-1 text-[11px] text-muted-foreground">{model.updatesNote}</p>
-        {model.confirmedUpdates.length > 0 && (
-          <ul className="mt-2 space-y-1.5 text-xs">
-            {model.confirmedUpdates.map((update) => (
-              <li key={update.deltaId} className="rounded bg-muted/40 px-2 py-1.5" data-testid="research-brief-update-item">
-                <p>
-                  <span className={stateBadgeCls(update.stateKind)}>{update.stateLabel}</span>
-                  {" · 确认时间："}{update.confirmedAt || "未知"}
-                  {" · 基线版本：v"}{update.baseRevision ?? "?"}
-                </p>
-                <p className="mt-0.5">{update.reason}</p>
-                {update.evidence.length > 0 ? (
-                  <details className="mt-1">
-                    <summary className="cursor-pointer text-muted-foreground">已确认依据（{update.evidence.length}）</summary>
-                    <EvidenceList items={update.evidence} empty="" showStance />
-                  </details>
-                ) : (
-                  <p className="mt-1 text-muted-foreground">该变更没有关联证据快照；不能据此判断变更依据。</p>
-                )}
-              </li>
-            ))}
+      <section data-testid="research-brief-freshness" className="min-w-0 rounded-lg border border-border/60 bg-muted/20 p-3">
+        <h3 className="text-xs font-semibold">材料对应什么时间，还有哪些数据缺口？</h3>
+        <p className="mt-2 text-xs">冻结时间：{model.freshness.frozenAt || "未知"}</p>
+        {model.freshness.gaps.length > 0 && (
+          <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-muted-foreground" data-testid="research-brief-gaps">
+            {model.freshness.gaps.map((gap) => <li key={gap}>{gap}</li>)}
           </ul>
         )}
       </section>
+      </div>
 
       <section data-testid="research-brief-changes">
         <h3 className="text-xs font-semibold">自上次正式检查以来，哪些内容发生了变化？</h3>
@@ -176,7 +159,7 @@ export function ResearchBrief({
                 <p className="mt-0.5 text-muted-foreground">来源：{item.source}{item.detail ? ` · ${item.detail}` : ""}</p>
                 {item.conflictRecords && item.conflictRecords.length > 0 && (
                   <details className="mt-1" data-testid="research-brief-conflict-records">
-                    <summary className="cursor-pointer text-muted-foreground">冲突双方原文（{item.conflictRecords.length} 条）</summary>
+                    <summary className="cursor-pointer rounded text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60">冲突双方原文（{item.conflictRecords.length} 条）</summary>
                     <ul className="mt-1 space-y-1">
                       {item.conflictRecords.map((record) => (
                         <li key={`${record.source}:${record.claim}`} className="rounded bg-background/60 px-2 py-1" data-conflict-stance={record.stance ?? "unknown"}>
@@ -205,6 +188,33 @@ export function ResearchBrief({
         )}
       </section>
 
+      <section data-testid="research-brief-updates">
+        <h3 className="text-xs font-semibold">冻结后有哪些已确认变更？</h3>
+        <p className="mt-1 text-[11px] text-muted-foreground">{model.updatesNote}</p>
+        {model.confirmedUpdates.length > 0 && (
+          <ul className="mt-2 space-y-1.5 text-xs">
+            {model.confirmedUpdates.map((update) => (
+              <li key={update.deltaId} className="rounded bg-muted/40 px-2 py-1.5" data-testid="research-brief-update-item">
+                <p>
+                  <span className={stateBadgeCls(update.stateKind)}>{update.stateLabel}</span>
+                  {" · 确认时间："}{update.confirmedAt || "未知"}
+                  {" · 基线版本：v"}{update.baseRevision ?? "?"}
+                </p>
+                <p className="mt-0.5">{update.reason}</p>
+                {update.evidence.length > 0 ? (
+                  <details className="mt-1">
+                    <summary className="cursor-pointer rounded text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60">已确认依据（{update.evidence.length}）</summary>
+                    <EvidenceList items={update.evidence} empty="" showStance />
+                  </details>
+                ) : (
+                  <p className="mt-1 text-muted-foreground">该变更没有关联证据快照；不能据此判断变更依据。</p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
       <section data-testid="research-brief-evidence">
         <h3 className="text-xs font-semibold">有哪些支持与反对依据，来源是什么？</h3>
         <p className="mt-1 text-[11px] text-muted-foreground">{model.evidence.note}</p>
@@ -225,12 +235,14 @@ export function ResearchBrief({
         )}
       </section>
 
-      <section data-testid="research-brief-invalidation">
-        <h3 className="text-xs font-semibold">出现什么条件，需要改变当前判断？</h3>
-        <p className="mt-1 text-[11px] text-muted-foreground">{model.invalidation.note}</p>
-        {model.invalidation.conditions.length > 0 && (
+      <section data-testid="research-brief-view">
+        <h3 className="text-xs font-semibold">最初冻结的观点是什么？（历史原貌）</h3>
+        <p className="mt-1 text-[11px] text-muted-foreground">{model.confirmed.note}</p>
+        {model.confirmed.title && <p className="mt-2 text-sm font-medium">{model.confirmed.title}</p>}
+        {model.confirmed.summary && <p className="mt-1 text-xs">{model.confirmed.summary}</p>}
+        {model.confirmed.claims.length > 0 && (
           <ul className="mt-2 list-disc space-y-1 pl-4 text-xs">
-            {model.invalidation.conditions.map((item) => <li key={item}>{item}</li>)}
+            {model.confirmed.claims.map((claim) => <li key={claim}>{claim}</li>)}
           </ul>
         )}
       </section>
@@ -256,16 +268,6 @@ export function ResearchBrief({
         <p className="mt-1 text-[11px] text-muted-foreground">
           「预计发生」≠「已实际发生」，「已实际披露」≠「业绩符合预期」；已确认支持 / 削弱 / 证伪只看上方「已确认变更」。预约日已过只代表延迟信号，不是违规或延期认定。
         </p>
-      </section>
-
-      <section data-testid="research-brief-freshness">
-        <h3 className="text-xs font-semibold">材料对应什么时间，还有哪些数据缺口？</h3>
-        <p className="mt-2 text-xs">冻结时间：{model.freshness.frozenAt || "未知"}</p>
-        {model.freshness.gaps.length > 0 && (
-          <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-muted-foreground" data-testid="research-brief-gaps">
-            {model.freshness.gaps.map((gap) => <li key={gap}>{gap}</li>)}
-          </ul>
-        )}
       </section>
     </section>
   );

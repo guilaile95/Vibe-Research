@@ -292,6 +292,7 @@ def test_existing_evidence_crud_is_unaffected(tmp_path: Path):
     db = tmp_path / "evidence.db"
     created = _create_evidence(db)
     updated = evidence_service.update_evidence(db, created["id"], {
+        "expected_edit_token": created["edit_token"],
         **{key: created[key] for key in ("evidence_type", "claim", "source_title", "source_url", "source_date", "classification", "confidence")},
         "accessed_at": created["accessed_at"],
     })

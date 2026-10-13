@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 import app as app_module
 import chat as chat_layer
+import daily_review_context
 import portfolio_advice_service as advice_svc
 
 client = TestClient(app_module.app)
@@ -452,6 +453,7 @@ def test_daily_review_analyze_unchanged_and_no_portfolio_advice(monkeypatch):
             ],
         }
     )
+    prepare.return_value["context_json"] = daily_review_context.render_daily_review_ai_context(prepare.return_value["review"])
     advice_gen = MagicMock(side_effect=AssertionError("must not call portfolio advice"))
 
     def fake_stream(cfg, messages, *, use_tools=False):

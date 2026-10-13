@@ -346,3 +346,43 @@ def test_factor_validation_bounds_history_and_exposes_immature_dates(tmp_path: P
     assert report["sample"]["effective_date_from"] == "2026-02-20"
     assert report["results"]["20"]["immature_factor_dates"] >= 1
     assert report["results"]["20"]["observations"][-1]["status"] == "IMMATURE_FORWARD_WINDOW"
+
+
+def test_partial_full_market_pagination_keeps_complete_exact_date_sample(tmp_path: Path, monkeypatch):
+    root = _import_exact_date_gap_fixture(tmp_path)
+    monkeypatch.setattr(rdp, "_MAX_LIMIT", 1)
+    source = fv._all_full_market_rows(root, "2026-01-10")
+    assert source["status"] == "partial"
+    assert len(source["rows"]) == 3
+    report = fv.evaluate_rdp(
+        factor_id="return_5d", date_from="2026-01-10", date_to="2026-01-10", data_root=root,
+    )
+    observation = report["results"]["5"]["observations"][0]
+    assert observation["exact_date_universe_count"] == 2
+    assert observation["stale_source_row_count"] == 1
+    assert observation["pair_count"] == 2
+
+
+@pytest.mark.parametrize("mutation", ["missing_coverage", "mismatched_counts", "wrong_date", "wrong_artifact"])
+def test_partial_full_market_requires_qualified_coverage_date_and_artifact(tmp_path: Path, monkeypatch, mutation):
+    root = _import_exact_date_gap_fixture(tmp_path)
+    original = rdp.query_full_market
+
+    def mutated(**kwargs):
+        payload = original(**kwargs)
+        assert payload["status"] == "partial"
+        if mutation == "missing_coverage":
+            payload.pop("coverage")
+        elif mutation == "mismatched_counts":
+            payload["coverage"] = {**payload["coverage"], "current_count": 1, "stale_count": 2}
+        elif mutation == "wrong_date":
+            payload["as_of"] = "2026-01-09"
+        else:
+            payload["provenance"] = {**payload["provenance"], "artifact_sha256": "wrong"}
+        return payload
+
+    monkeypatch.setattr(rdp, "query_full_market", mutated)
+    with pytest.raises(rdp.ResearchDataPlaneValidationError):
+        fv.evaluate_rdp(
+            factor_id="return_5d", date_from="2026-01-10", date_to="2026-01-10", data_root=root,
+        )

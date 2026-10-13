@@ -326,3 +326,29 @@ export function requestScopeDetailDisclaimer(source_id: string, calcDisclaimer?:
 export function emptySystemGuideFromItems(items: DataHealthRecord[]): boolean {
   return items.length > 0 && notInitializedCount(items) === items.length;
 }
+
+/** Fetch provenance is independent of quality and authoritative market time. */
+export function marketObservationLabels(record: {
+  status?: string | null;
+  source?: string | null;
+  is_cached?: boolean | null;
+  is_stale?: boolean | null;
+  fetched_at?: string | null;
+  trade_date?: string | null;
+  data_time?: string | null;
+  market_time_unknown?: boolean | null;
+} | null | undefined): string[] {
+  if (!record || record.status === "unavailable") return [];
+  const labels = [
+    `来源：${record.source === "eastmoney_push2" ? "东方财富" : record.source || "未知"}`,
+    cacheTag(record.is_cached),
+    staleTag(record.is_stale || record.status === "stale"),
+    // Keep the full date, including for multi-day observations. This is a fetch
+    // completion time (Beijing), never a quote/trade timestamp.
+    record.fetched_at ? `抓取完成：${record.fetched_at}（北京时间）` : "抓取时间未知",
+    record.market_time_unknown !== true && record.trade_date && record.data_time
+      ? `行情时间：${record.trade_date} ${record.data_time}`
+      : "行情时间未知",
+  ];
+  return labels.filter((label): label is string => label !== null);
+}

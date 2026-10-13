@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { PersonalReviewPanel } from "@/components/personal-review/PersonalReviewPanel";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError, type TradeAttributionCandidate, type TradeAttributionCandidateScan, type TradeRecord, type TradeReconciliationResult } from "@/lib/api";
@@ -75,6 +76,15 @@ export function Trades() {
   });
   const [filterError, setFilterError] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
+  const listMountedRef = useRef(true);
+  const listRequestRef = useRef(0);
+  const listScopeRef = useRef({ filters: appliedFilters, offset });
+  listScopeRef.current = { filters: appliedFilters, offset };
+
+  useEffect(() => {
+    listMountedRef.current = true;
+    return () => { listMountedRef.current = false; listRequestRef.current += 1; };
+  }, []);
 
   // 详情 modal state
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
@@ -114,15 +124,31 @@ export function Trades() {
     setSelectedTradeId(tradeId);
   };
 
-  // 加载数据
-  const loadTrades = useCallback(async () => {
+  // The list owns only reads. Existing transaction handlers call this stable
+  // function after writes, so those refreshes also use the latest applied scope.
+  const selectListScope = (nextFilters: TradeListFilters, nextOffset: number) => {
+    listRequestRef.current += 1;
+    listScopeRef.current = { filters: nextFilters, offset: nextOffset };
     setLoading(true);
     setError(null);
+    setTrades([]);
+  };
+
+  const loadTrades = useCallback(async () => {
+    if (!listMountedRef.current) return;
+    const requestId = ++listRequestRef.current;
+    const scope = listScopeRef.current;
+    const isCurrent = () => listMountedRef.current && requestId === listRequestRef.current
+      && scope.filters === listScopeRef.current.filters && scope.offset === listScopeRef.current.offset;
+    setLoading(true);
+    setError(null);
+    setTrades([]);
     try {
-      const query = buildTradeListQuery(appliedFilters, PAGE_LIMIT, offset);
+      const query = buildTradeListQuery(scope.filters, PAGE_LIMIT, scope.offset);
       const res = await api.listTrades(query);
-      setTrades(res);
+      if (isCurrent()) setTrades(res);
     } catch (e) {
+      if (!isCurrent()) return;
       if (e instanceof ApiError) {
         setError(e.message);
       } else if (e instanceof Error) {
@@ -131,13 +157,13 @@ export function Trades() {
         setError("加载交易流水失败");
       }
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [appliedFilters, offset]);
+  }, []);
 
   useEffect(() => {
-    loadTrades();
-  }, [loadTrades]);
+    void loadTrades();
+  }, [appliedFilters, offset, loadTrades]);
 
   // 加载单条详情
   const loadDetail = useCallback(async (id: string, selection: { tradeId: string }) => {
@@ -311,9 +337,11 @@ export function Trades() {
       setFilterError(err);
       return;
     }
+    const nextFilters = { ...filters };
+    selectListScope(nextFilters, 0);
     setFilterError(null);
     setOffset(0);
-    setAppliedFilters({ ...filters });
+    setAppliedFilters(nextFilters);
   };
 
   const handleFilterReset = () => {
@@ -325,6 +353,7 @@ export function Trades() {
       date_to: "",
       include_voided: false,
     };
+    selectListScope(emptyFilters, 0);
     setFilters(emptyFilters);
     setFilterError(null);
     setOffset(0);
@@ -473,12 +502,14 @@ export function Trades() {
   // 分页
   const handlePrevPage = () => {
     if (offset >= PAGE_LIMIT) {
+      selectListScope(listScopeRef.current.filters, offset - PAGE_LIMIT);
       setOffset(offset - PAGE_LIMIT);
     }
   };
 
   const handleNextPage = () => {
     if (trades.length >= PAGE_LIMIT) {
+      selectListScope(listScopeRef.current.filters, offset + PAGE_LIMIT);
       setOffset(offset + PAGE_LIMIT);
     }
   };
@@ -503,6 +534,8 @@ export function Trades() {
           </button>
         }
       />
+
+      <details><summary className="cursor-pointer text-sm font-medium">个人复查 / 风险 / 模式卡</summary><PersonalReviewPanel refreshKey={successMsg ?? ""} /></details>
 
       {/* 消息提示 */}
       {successMsg && (
@@ -679,6 +712,9 @@ export function Trades() {
                   return (
                     <tr
                       key={item.trade_id}
+                      data-testid="trade-list-row"
+                      data-trade-id={item.trade_id}
+                      data-security-code={item.code}
                       className={cn(
                         "hover:bg-muted/30 transition-colors",
                         isVoided && "opacity-60 bg-muted/10",
@@ -1499,6 +1535,8 @@ export function Trades() {
                     </p>
                   </div>
                 )}
+
+                <PersonalReviewPanel key={detailTrade.trade_id} trade={detailTrade} />
 
                 {detailTrade.note && (
                   <div className="border border-border/40 rounded-lg p-3 bg-muted/10 space-y-1">

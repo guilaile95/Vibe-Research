@@ -14,6 +14,7 @@ import {
   XCircle,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { noRemoteImages } from "@/lib/noRemoteImages";
 import remarkGfm from "remark-gfm";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import {
@@ -35,6 +36,7 @@ import {
   sourceHealthText,
   trendEmptyReason,
   TREND_EMPTY_LABELS,
+  radarCoverageNotice,
 } from "@/lib/marketIntelStatus";
 import { cn } from "@/lib/utils";
 import { selectResearchSourceItems } from "@/lib/marketIntelBrief";
@@ -188,6 +190,8 @@ export default function MarketIntelPanel({ embedded = false, compact = false }: 
   const industries: Industry[] = radar?.industries || [];
   const currentIndustry = industries.find((industry) => industry.key === active) || industries[0];
   const hasRadarData = Boolean(radar?.generated_at);
+  const radarUnavailable = radar?.status === "unavailable";
+  const radarNotice = radar ? radarCoverageNotice(radar.source_coverage) : null;
 
   useEffect(() => {
     if (currentIndustry?.key) void fetchLatestDigest(currentIndustry.key);
@@ -235,6 +239,7 @@ export default function MarketIntelPanel({ embedded = false, compact = false }: 
 
     const result = await runIntelDigestGeneration({
       industry,
+      sourceCoverage: radar?.source_coverage,
       signal: controller.signal,
       generationId,
       getCurrentGenerationId: () => generationIdsRef.current[industry.key] || 0,
@@ -346,11 +351,12 @@ export default function MarketIntelPanel({ embedded = false, compact = false }: 
   const overallStatus = deriveMarketIntelStatus({
     loading,
     hasNativeData,
-    hasRadarData,
+    hasRadarData: hasRadarData && !radarUnavailable,
     nativeStatus,
     nativeError,
     radarError,
     radarFailedSources,
+    radarStatus: radar?.status ?? (radarNotice ? "partial" : undefined),
   });
   const statusLabel = {
     loading: "读取中",
@@ -458,13 +464,13 @@ export default function MarketIntelPanel({ embedded = false, compact = false }: 
 
         {!compact && sourceStats}
 
-        {(nativeError || radarError || radarFailedSources > 0 || nativeStatusNotice || (!loading && !hasRadarData) || (runtime?.sources?.failing ?? 0) > 0) && (
+        {(nativeError || radarError || radarNotice || radarFailedSources > 0 || nativeStatusNotice || (!loading && !hasRadarData) || (runtime?.sources?.failing ?? 0) > 0) && (
           <div className="mt-3 space-y-1 rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-warning" role="alert">
             {nativeError && <p className="flex items-start gap-2"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />公开资讯：{nativeError}。已保留赛道要点和已有历史。</p>}
             {nativeStatusNotice && <p className="flex items-start gap-2"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />公开资讯：{nativeStatusNotice}。</p>}
             {radarError && <p className="flex items-start gap-2"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />赛道摘要：{radarError}。已保留公开资讯和已有摘要。</p>}
-            {radarFailedSources > 0 && <p>赛道来源部分失败：{radarFailedSources} 个来源未成功。已有赛道要点仍可使用。</p>}
-            {!loading && !hasRadarData && !radarError && <p>赛道摘要：当前还没有已生成的赛道资讯，公开资讯仍可使用。</p>}
+            {radarNotice && <p>{radarNotice}</p>}
+            {!loading && !hasRadarData && !radarError && !radarNotice && <p>赛道摘要：当前还没有已生成的赛道资讯，公开资讯仍可使用。</p>}
             {(runtime?.sources?.failing ?? 0) > 0 && <p>失败来源：{runtime!.sources!.failing_names.join("、")}。其他来源结果仍可用。</p>}
           </div>
         )}
@@ -527,7 +533,7 @@ export default function MarketIntelPanel({ embedded = false, compact = false }: 
             <button
               type="button"
               onClick={() => void generateAll()}
-              disabled={bulk.running || refreshing}
+              disabled={bulk.running || refreshing || radarUnavailable}
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
             >
               {bulk.running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
@@ -576,7 +582,7 @@ export default function MarketIntelPanel({ embedded = false, compact = false }: 
                   ) : digest?.phase === "generating" ? (
                     <button type="button" onClick={() => cancelGeneration(currentIndustry.key)} className="inline-flex items-center gap-1 text-xs font-medium text-destructive hover:underline"><XCircle className="h-3.5 w-3.5" />取消生成</button>
                   ) : (digest?.text || digest?.err || digest?.needKey) ? (
-                    <button type="button" onClick={() => void generateDigest(currentIndustry)} disabled={bulk.running || generatingSectorsRef.current.has(currentIndustry.key)} className="text-xs text-muted-foreground hover:text-primary disabled:opacity-50">重新提炼</button>
+                    <button type="button" onClick={() => void generateDigest(currentIndustry)} disabled={bulk.running || radarUnavailable || generatingSectorsRef.current.has(currentIndustry.key)} className="text-xs text-muted-foreground hover:text-primary disabled:opacity-50">重新提炼</button>
                   ) : null}
                 </div>
 
@@ -585,12 +591,12 @@ export default function MarketIntelPanel({ embedded = false, compact = false }: 
                 ) : digest?.phase === "saving" ? (
                   <div className="space-y-2">
                     <p className="flex items-center gap-2 text-sm text-primary"><Loader2 className="h-3.5 w-3.5 animate-spin" />摘要已生成，正在保存到数据库…</p>
-                    {digest.text && <div className="prose prose-sm dark:prose-invert max-w-none text-foreground opacity-80"><ReactMarkdown remarkPlugins={[remarkGfm]}>{digest.text}</ReactMarkdown></div>}
+                    {digest.text && <div className="prose prose-sm dark:prose-invert max-w-none text-foreground opacity-80"><ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>{digest.text}</ReactMarkdown></div>}
                   </div>
                 ) : digest?.text ? (
                   <>
                     {digest.err && <div className="mb-2 flex items-center gap-1.5 rounded bg-destructive/10 p-2 text-xs text-destructive"><AlertCircle className="h-3.5 w-3.5 shrink-0" />{digest.err}</div>}
-                    <div className="prose prose-sm dark:prose-invert max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{digest.text}</ReactMarkdown></div>
+                    <div className="prose prose-sm dark:prose-invert max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>{digest.text}</ReactMarkdown></div>
                     <div className="mt-2"><SaveNoteButton kind="今日要点" title={`${currentIndustry.name} 今日要点`} content={digest.text} /></div>
                   </>
                 ) : digest?.needKey ? (
@@ -598,7 +604,7 @@ export default function MarketIntelPanel({ embedded = false, compact = false }: 
                 ) : digest?.err ? (
                   <p className="text-sm text-destructive">{digest.err}</p>
                 ) : (
-                  <button type="button" onClick={() => void generateDigest(currentIndustry)} className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/25"><Sparkles className="h-4 w-4" />让 AI 提炼今日要点</button>
+                  <button type="button" onClick={() => void generateDigest(currentIndustry)} disabled={radarUnavailable} className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/25"><Sparkles className="h-4 w-4" />让 AI 提炼今日要点</button>
                 )}
               </div>
             )}

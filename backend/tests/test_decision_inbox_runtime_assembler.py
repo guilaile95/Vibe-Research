@@ -1326,3 +1326,132 @@ class TestHardRiskIntegration:
         )
         with pytest.raises(runtime.DecisionInboxRuntimeIntegrityError):
             _assemble(ports)
+
+
+@pytest.mark.parametrize("early_join_return", [False, True])
+def test_inbox_shares_one_network_budget_preserving_all_local_authorities(monkeypatch, early_join_return):
+    import threading
+    import time
+    import push2_guard
+
+    monkeypatch.setattr(critical_data_runtime, "_CAPABILITY_WALL_CLOCK_BUDGET_SECONDS", 0.15)
+    release = threading.Event()
+    finished = threading.Event()
+    observed_context = []
+    hr_calls = []
+    original_join = threading.Thread.join
+    returned_early = []
+
+    def controlled_join(thread, timeout=None):
+        if (early_join_return and timeout is not None and not returned_early
+                and thread.name == "ccd-capability-cap.security.disclosures"):
+            returned_early.append(True)
+            return  # Simulate a timed wait returning before the monotonic deadline.
+        return original_join(thread, timeout)
+
+    monkeypatch.setattr(threading.Thread, "join", controlled_join)
+
+    def delayed_disclosures(_lake, definition):
+        assert push2_guard.is_read_only()
+        release.wait(2)
+        observed_context.append(push2_guard.is_read_only())
+        finished.set()
+        return _disclosures_usable(_lake, definition)
+
+    def hard_risk(definition):
+        hr_calls.append(definition["campaign_id"])
+        return _hr_confirmed(definition)
+
+    campaigns = [_campaign(campaign_id="campaign_" + digit * 32)
+                 for digit in "abc"]
+    ports, calls = _ports(
+        composition_reader=lambda: _composition([_composition_item(campaigns=campaigns)]),
+        disclosures_evaluator=delayed_disclosures,
+        market_sector_evaluator=_market_usable,
+        hard_risk_evaluator=hard_risk,
+    )
+    start = time.monotonic()
+    try:
+        snapshot = _assemble(ports)
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.35, f"campaigns reset network budget: {elapsed:.3f}s"
+        assert len(calls["disclosures"]) == 1
+        assert len(calls["market"]) == 1
+        assert len(calls["price"]) == 3
+        assert hr_calls == [campaign["campaign_id"] for campaign in campaigns]
+        assert len(snapshot["campaign_items"]) == 3
+        for index, item in enumerate(snapshot["campaign_items"]):
+            assert item["hard_risk_state"] == "CONFIRMED"
+            assert item["hard_risk_authority_refs"] == ["hard-risk:fake-confirmed"]
+            assert not item["coverage_complete"]
+            deps = {r["dependency_id"]: r for r in item["critical_data"]["dependency_results"]}
+            disclosure = deps[disclosures_adapter.DEPENDENCY_ID]
+            assert disclosure["state"] == ("ERROR" if index == 0 else "NOT_EVALUATED")
+            assert disclosure["authority_refs"] == [critical_data_runtime.NETWORK_BUDGET_EXHAUSTED_REF]
+            assert deps[price_adapter.DEPENDENCY_ID]["state"] == "USABLE"
+        before = deepcopy(snapshot)
+    finally:
+        release.set()
+    assert finished.wait(1)
+    assert observed_context == [True]
+    assert not push2_guard.is_read_only()
+    assert snapshot == before  # Late successful provider cannot repair this snapshot.
+
+
+def test_inbox_fast_campaigns_keep_complete_network_results():
+    campaigns = [_campaign(campaign_id="campaign_" + digit * 32) for digit in "ab"]
+    ports, calls = _ports(
+        composition_reader=lambda: _composition([_composition_item(campaigns=campaigns)]),
+        disclosures_evaluator=_disclosures_usable,
+        market_sector_evaluator=_market_usable,
+    )
+    result = _assemble(ports)
+    assert len(calls["disclosures"]) == 2
+    for item in result["campaign_items"]:
+        deps = {r["dependency_id"]: r for r in item["critical_data"]["dependency_results"]}
+        assert deps[disclosures_adapter.DEPENDENCY_ID]["state"] == "USABLE"
+        assert critical_data_runtime.NETWORK_BUDGET_EXHAUSTED_REF not in item["critical_data"]["authority_refs"]
+
+
+def test_production_disclosures_transport_is_bounded_across_campaigns(monkeypatch, tmp_path):
+    import threading
+    import time
+    import astock
+
+    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(critical_data_runtime, "_CAPABILITY_WALL_CLOCK_BUDGET_SECONDS", 0.1)
+    release = threading.Event()
+    completed = threading.Event()
+    transport_timeouts = []
+
+    class OfflineSession:
+        def get(self, url, **kwargs):
+            transport_timeouts.append(kwargs["timeout"])
+            release.wait(2)
+            raise TimeoutError("controlled offline provider timeout")
+
+    monkeypatch.setattr(astock, "_em_session", lambda *args: OfflineSession())
+
+    def production_disclosures(lake, definition):
+        try:
+            return critical_data_runtime.production_disclosures_evaluator(lake, definition)
+        finally:
+            completed.set()
+
+    campaigns = [_campaign(campaign_id="campaign_" + digit * 32) for digit in "ab"]
+    ports, _ = _ports(
+        composition_reader=lambda: _composition([_composition_item(campaigns=campaigns)]),
+        disclosures_evaluator=production_disclosures,
+    )
+    start = time.monotonic()
+    try:
+        result = _assemble(ports)
+        assert time.monotonic() - start < 0.3
+        assert transport_timeouts == [20]  # Actual astock path, no external transport.
+        states = [next(dep["state"] for dep in row["critical_data"]["dependency_results"]
+                       if dep["dependency_id"] == disclosures_adapter.DEPENDENCY_ID)
+                  for row in result["campaign_items"]]
+        assert states == ["ERROR", "NOT_EVALUATED"]
+    finally:
+        release.set()
+        assert completed.wait(1)

@@ -124,6 +124,8 @@ class TestBootstrapApi:
             "actual_price": 1500.0,
             "actual_quantity": 100,
             "executed_at": "2026-07-28T09:30:00+08:00",
+            "fee": 0.0,
+            "other_cost": 0.0,
         })
         assert resp.status_code == 200
         resp = client.post("/api/position/bootstrap-commit", json=_BOOTSTRAP_PAYLOAD)
@@ -246,6 +248,8 @@ class TestVoidCascadeApi:
             "actual_price": 10.0,
             "actual_quantity": 100,
             "executed_at": "2026-08-03T09:30:00+08:00",
+            "fee": 0.0,
+            "other_cost": 0.0,
         })
         trade_id = trade_resp.json()["data"]["trade_id"]
         corr_resp = client.post("/api/position/correction", json={
@@ -282,6 +286,8 @@ class TestVoidCascadeApi:
             "actual_price": 10.0,
             "actual_quantity": 100,
             "executed_at": "2026-08-03T09:30:00+08:00",
+            "fee": 0.0,
+            "other_cost": 0.0,
         })
         trade_id = trade_resp.json()["data"]["trade_id"]
         client.post("/api/position/correction", json={
@@ -313,6 +319,8 @@ class TestVoidCascadeApi:
             "actual_price": 10.0,
             "actual_quantity": 100,
             "executed_at": "2026-08-03T09:30:00+08:00",
+            "fee": 0.0,
+            "other_cost": 0.0,
         })
         trade_id = trade_resp.json()["data"]["trade_id"]
         assert client.post(f"/api/position/trades/{trade_id}/void", json={"reason": "首次"}).status_code == 200

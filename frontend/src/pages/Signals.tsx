@@ -41,7 +41,7 @@ function StaleBadge({ observedAt, fetchError }: { observedAt?: string | null; fe
       className="inline-flex items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-[10px] text-warning"
       title={fetchError ? `本轮抓取失败：${fetchError}` : undefined}
     >
-      <History className="h-3 w-3" /> 本轮抓取失败 · 显示 {observedAt || "上次"} 的数据
+      <History className="h-3 w-3" /> {fetchError ? "本轮抓取失败" : "查询采样已过期"} · 显示 {observedAt || "上次"} 的数据
     </span>
   );
 }
@@ -65,7 +65,7 @@ function SpotCard({ g }: { g: GpuSpot }) {
           {g.stale && <StaleBadge observedAt={g.observed_at} fetchError={g.fetch_error} />}
         </div>
         <p className="mt-2 text-sm text-muted-foreground">{g.note || "当前无在租报价"}</p>
-        <p className="mt-1 text-[11px] text-muted-foreground/60">这是市场状态，不是数据故障。</p>
+        <p className="mt-1 text-[11px] text-muted-foreground/60">可能是市场状态或数据缺失，尚不能确认。</p>
       </div>
     );
   }
@@ -85,14 +85,15 @@ function SpotCard({ g }: { g: GpuSpot }) {
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
         <span>
           = 上方曲线最新点
-          {g.asof_ts != null && `（${new Date(g.asof_ts * 1000).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} 观测）`}
+          {g.asof_ts != null && `（${new Date(g.asof_ts * 1000).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} 查询采样）`}
         </span>
         {g.available_gpus != null && g.total_gpus != null && g.total_gpus > 0 && (
           <span>
-            可租 {g.available_gpus} / 共 {g.total_gpus} 张（{Math.round((1 - g.available_gpus / g.total_gpus) * 100)}% 在租）
+            {g.count_health?.sample_freshness !== "fresh" && "历史/未验证卡数："}可租 {g.available_gpus} / 共 {g.total_gpus} 张（{Math.round((1 - g.available_gpus / g.total_gpus) * 100)}% 在租）
           </span>
         )}
       </div>
+      <p className="mt-1 text-[11px] text-muted-foreground/70">上游采集时点、健康和完整性未验证；查询成功不代表源数据已更新。</p>
     </div>
   );
 }
@@ -176,6 +177,8 @@ function GpuRentPanel() {
   const month = months[Math.min(activeMonth, Math.max(months.length - 1, 0))];
   const histGpus = data?.history?.gpus || [];
   const histStale = histGpus.filter((g) => g.stale);
+  // A failed series must stay visible even when an earlier series is only aged.
+  const histStaleObservation = histStale.find((g) => g.fetch_error) || histStale[0];
 
   // 主图：近一年三条日线。刻意不把 Kalshi 远期画进来——它按 Ornn 指数「整月平均」
   // 结算，与 Vast 日中位是两个市场两种口径，拼在一条线上会误导（实测就被看出"冲突"）。
@@ -272,7 +275,7 @@ function GpuRentPanel() {
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs text-muted-foreground">
-          {hasData ? `更新于 ${data!.generated_at}` : "历史 / 现货 / 远期三条腿，都来自零鉴权公开接口"}
+          {hasData ? `响应生成于 ${data!.generated_at}（各项采样时间见下方）` : "历史 / 现货 / 远期三条腿，都来自零鉴权公开接口"}
         </span>
         <button onClick={refresh} disabled={refreshing}
           className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">
@@ -302,7 +305,7 @@ function GpuRentPanel() {
           {/* ① 近一年走势 */}
           <div className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold">
             <LineChart className="h-4 w-4 text-primary" /> 近一年租金走势 · 每日中位价
-            {histStale.length > 0 && <StaleBadge observedAt={histStale[0].observed_at} fetchError={histStale[0].fetch_error} />}
+            {histStaleObservation && <StaleBadge observedAt={histStaleObservation.observed_at} fetchError={histStaleObservation.fetch_error} />}
           </div>
           <p className="mb-2 text-[11px] text-muted-foreground/70">
             {data!.history_source}

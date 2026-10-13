@@ -54,7 +54,9 @@ _PARALLEL_WORKERS = 4
 
 # 判空时要跳过的「元信息」字段：它们描述数据本身，不构成观测值。
 # 少了这一步，`{"period":"近5年","metrics":{}}` 会因为 period 非空而被当成有数据。
-_META_KEYS = {"period", "unit", "note", "code", "generated_at", "tracks", "total_cached"}
+# total_blocks is a summary count, not a stock observation; real zero/false
+# observations (price changes, net flows, etc.) must remain usable facts.
+_META_KEYS = chat._TOOL_EMPTY_METADATA | {"total_blocks"}
 
 # 注意措辞：这类项返回空时，代码分不出「真的没有这类事件」还是「数据源临时不可用」，
 # 所以不能断言「确实没有」——如实说明两种可能，并要求不得臆测。
@@ -62,50 +64,35 @@ NO_RECORD = "（未取到任何记录：可能确实没有此类事件，也可�
 
 
 def _payload_empty(value) -> bool:
-    """判断「有壳无肉」：剥掉元信息字段后没有任何实质观测值。
-
-    只看顶层是不够的——上游失败时工具常返回带外壳的空结果，例如估值分位在两个请求
-    都失败时返回 `{"period":"近5年","metrics":{}}`。若把它当成功，底稿会凭空多出一个
-    空小节、还不进缺口列表，模型就可能对着空壳发挥。
-    """
-    if value is None or value == "" or value == [] or value == {}:
-        return True
-    if isinstance(value, list):
-        return all(_payload_empty(x) for x in value)
-    if isinstance(value, dict):
-        for k, v in value.items():
-            if k in _META_KEYS:
-                continue
-            if isinstance(v, (list, dict)):
-                if not _payload_empty(v):
-                    return False
-            elif isinstance(v, bool):
-                if v:
-                    return False
-            elif isinstance(v, (int, float)):
-                if v:  # 0 视为无内容（如 total_blocks=0）
-                    return False
-            elif v:
-                return False
-        return True
-    return False  # 非空标量
+    """Ignore metadata/summary counts, while preserving genuine zero observations."""
+    return tools.payload_empty(value, metadata_keys=_META_KEYS, zero_is_empty=False)
 
 
 def _fetch_section(spec: tuple[str, dict, str, bool, bool], code: str) -> dict:
-    """跑一项底稿数据，返回 {title, tool, data, ok}。"""
+    """Keep usable partial evidence without presenting it as a complete section."""
     name, extra, title, _par, empty_ok = spec
     args = {"codes": [code]} if name == "query_quote" else {"code": code, **extra}
-    result = tools.exec_tool(name, args)
+    try:
+        result = tools.exec_tool(name, args)
+    except Exception:  # noqa: BLE001 — do not expose provider exceptions
+        result = {"error": chat._TOOL_ERROR}
 
-    if isinstance(result, dict) and result.get("error"):
-        return {"title": title, "tool": name, "data": result, "ok": False}
-    if _payload_empty(result):
-        # 空是合法事实的项照常进底稿，但内容换成明确说明，免得模型把空壳当数据读；
-        # 其余的算没取到，进缺口列表。
-        if empty_ok:
-            return {"title": title, "tool": name, "data": NO_RECORD, "ok": True}
-        return {"title": title, "tool": name, "data": result, "ok": False}
-    return {"title": title, "tool": name, "data": result, "ok": True}
+    body, status, truncated = chat._serialize_tool_result(result, max_chars=_SECTION_CAP)
+    envelope = json.loads(body)
+    if _payload_empty(envelope["data"]):
+        status = "error" if status in {"error", "partial"} else "empty"
+    elif truncated and status == "success":
+        status = "partial"
+    envelope["status"] = status
+    body = json.dumps(envelope, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    no_record = status == "empty" and empty_ok and not truncated
+    return {
+        "title": title, "tool": name,
+        "data": NO_RECORD if no_record else envelope["data"],
+        "body": NO_RECORD if no_record else body,
+        "status": status, "truncated": truncated,
+        "ok": status == "success" or no_record,
+    }
 
 
 def collect_dossier(code: str):
@@ -125,29 +112,31 @@ def collect_dossier(code: str):
             spec = futures[fut]
             try:
                 sec = fut.result()
-            except Exception as e:  # noqa: BLE001 — 单项失败只记缺口
-                sec = {"title": spec[2], "tool": spec[0], "data": {"error": str(e)}, "ok": False}
+            except Exception:  # noqa: BLE001 — 单项失败只记缺口
+                sec = {"title": spec[2], "tool": spec[0], "data": None, "ok": False, "status": "error", "truncated": False}
             done[sec["title"]] = sec
-            yield {"type": "dossier_progress", "title": sec["title"], "ok": sec["ok"],
+            yield {"type": "dossier_progress", "title": sec["title"], "ok": sec["ok"], "status": sec["status"], "truncated": sec["truncated"],
                    "loaded": len(done), "total": total}
 
     for spec in seq:  # 走 em_get 的，保持串行以尊重节流
         try:
             sec = _fetch_section(spec, code)
-        except Exception as e:  # noqa: BLE001
-            sec = {"title": spec[2], "tool": spec[0], "data": {"error": str(e)}, "ok": False}
+        except Exception:  # noqa: BLE001
+            sec = {"title": spec[2], "tool": spec[0], "data": None, "ok": False, "status": "error", "truncated": False}
         done[sec["title"]] = sec
-        yield {"type": "dossier_progress", "title": sec["title"], "ok": sec["ok"],
+        yield {"type": "dossier_progress", "title": sec["title"], "ok": sec["ok"], "status": sec["status"], "truncated": sec["truncated"],
                "loaded": len(done), "total": total}
 
-    sections, missing = [], []
+    sections, missing, partial = [], [], []
     for _n, _e, title, _p, _ok in _DOSSIER_SPEC:  # 按清单顺序还原，保证底稿可读性稳定
         sec = done.get(title)
-        if sec and sec["ok"]:
-            sections.append({"title": sec["title"], "tool": sec["tool"], "data": sec["data"]})
+        if sec and (sec["ok"] or sec["status"] == "partial"):
+            sections.append(sec)
+            if sec["status"] == "partial":
+                partial.append(title)
         else:
             missing.append(title)
-    return {"code": code, "sections": sections, "missing": missing}
+    return {"code": code, "sections": sections, "missing": missing, "partial": partial}
 
 
 def build_dossier(code: str) -> dict:
@@ -162,12 +151,15 @@ def build_dossier(code: str) -> dict:
 
 def dossier_text(dossier: dict) -> str:
     """把底稿渲染成给模型看的纯文本。"""
-    parts = [f"【客观事实底稿 · {dossier['code']}】", "以下全部为接口实时拉取的客观数据，不含任何观点：", ""]
+    parts = [f"【客观事实底稿 · {dossier['code']}】", "以下为本次接口返回的数据；可能缺失、过期或截断，须遵守每项状态、时间和限制，不含观点：", ""]
     for s in dossier["sections"]:
         data = s["data"]
         # 「无记录」这类说明是给模型读的自然语言，别再套一层 JSON 引号
-        body = data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)[:_SECTION_CAP]
+        body = s.get("body") or (data if data == NO_RECORD else
+                                  chat._serialize_tool_result(data, max_chars=_SECTION_CAP)[0])
         parts.append(f"## {s['title']}（来源工具 {s['tool']}）\n{body}\n")
+    if dossier.get("partial"):
+        parts.append(f"## 部分数据与限制\n以下小节保留了可用观测，但数据不完整、过期或已截断，不得把遗漏内容视为不存在：{('、'.join(dossier['partial']))}")
     if dossier["missing"]:
         parts.append(f"## 数据缺口\n以下数据本次未取到，立论时不得臆测：{('、'.join(dossier['missing']))}")
     return "\n".join(parts)
@@ -175,6 +167,7 @@ def dossier_text(dossier: dict) -> str:
 
 _COMMON_RULES = """
 共同规则（必须遵守）：
+- 必须遵守底稿每项 status、truncated、limitations 和日期；部分、过期、截断或空数据不能当成完整或当前事实，未知值不能默认成零。
 - 只能使用底稿里的数据立论。底稿没有的数字一律不许编，需要但缺失的，明确写「该数据缺失」。
 - 每条论点都要标出所依据的具体数据（写清数值），没有数据支撑的直觉判断要标注「无数据支撑」。
 - 不预测股价涨跌与具体价位、不给买卖时机、不给目标价、不给仓位建议、不承诺收益。
@@ -216,7 +209,7 @@ _ROLE_PROMPTS = {
 - **绝对不要**给出结论倾向、买卖建议、目标价、评级或「更认同哪一方」的表述。
 - 你的产出应当让读者自己有能力去继续验证，而不是替读者做决定。
 - 用简洁中文。
-""",
+""" + _COMMON_RULES,
 }
 
 _STAGE_LABEL = {
@@ -263,8 +256,9 @@ def run_debate_stream(cfg: dict, code: str, rounds: int = 1):
         yield {"type": "error", "message": "未能取到任何客观数据，无法开始辩论（请检查代码是否正确、网络是否可达）"}
         return
     yield {"type": "dossier",
-           "sections": [{"title": s["title"], "tool": s["tool"]} for s in dossier["sections"]],
-           "missing": dossier["missing"]}
+           "sections": [{"title": s["title"], "tool": s["tool"], "status": s["status"],
+                         "truncated": s["truncated"]} for s in dossier["sections"]],
+           "missing": dossier["missing"], "partial": dossier["partial"]}
 
     facts = dossier_text(dossier)
     transcript: list[dict] = []
@@ -285,9 +279,10 @@ def run_debate_stream(cfg: dict, code: str, rounds: int = 1):
             # 必须补一个终态事件：前端按 stage_done 把该角色标记为完成，
             # 只发 error 的话这个角色会永远停在「生成中…」，并让「全部完成」判定不成立、
             # 连带后面能正常跑完的角色也存不进沉淀。
-            yield {"type": "error", "stage": stage, "message": f"{_STAGE_LABEL[stage]}生成失败：{e}"}
+            message = chat.public_error_message(e)
+            yield {"type": "error", "stage": stage, "message": f"{_STAGE_LABEL[stage]}生成失败：{message}"}
             yield {"type": "stage_done", "stage": stage, "label": _STAGE_LABEL[stage],
-                   "content": f"（本角色生成失败：{e}）", "failed": True}
+                   "content": f"（本角色生成失败：{message}）", "failed": True}
             continue  # 失败内容不进 transcript——不能把错误信息当论据喂给后面的角色
 
         content = "".join(buf).strip()

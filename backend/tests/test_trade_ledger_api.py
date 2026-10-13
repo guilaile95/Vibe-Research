@@ -69,6 +69,7 @@ class TestCreateTrade:
             "actual_quantity": 100,
             "executed_at": "2026-07-28T09:30:00+08:00",
             "fee": 37.5,
+            "other_cost": 0.0,
         })
         assert resp.status_code == 200
         data = resp.json()["data"]
@@ -90,6 +91,8 @@ class TestCreateTrade:
                 "actual_price": 1500.0,
                 "actual_quantity": 100,
                 "executed_at": "2026-07-28T09:30:00+08:00",
+                "fee": 0.0,
+                "other_cost": 0.0,
             }
             del payload[req]
             resp = client.post("/api/trades", json=payload)
@@ -104,6 +107,8 @@ class TestCreateTrade:
             "actual_price": 100.0,
             "actual_quantity": 100,
             "executed_at": "2026-07-28T09:30:00+08:00",
+            "fee": 0.0,
+            "other_cost": 0.0,
         })
         assert resp.status_code == 200
         body = resp.text
@@ -156,6 +161,8 @@ class TestCreateTradeWithAdviceRef:
                 "trade_date": "2026-07-28",
                 "generated_at": "2026-07-28 09:00:00",
             },
+            "fee": 0.0,
+            "other_cost": 0.0,
         })
         assert resp.status_code == 200
         data = resp.json()["data"]
@@ -181,6 +188,8 @@ class TestCreateTradeWithAdviceRef:
                 "trade_date": "2026-07-28",
                 "generated_at": "2026-07-28 09:00:00",
             },
+            "fee": 0.0,
+            "other_cost": 0.0,
         })
         assert resp.status_code == 404
 
@@ -198,6 +207,8 @@ class TestCreateTradeWithAdviceRef:
                 "trade_date": "2026-07-28",
                 "generated_at": "2026-07-28 10:00:00",
             },
+            "fee": 0.0,
+            "other_cost": 0.0,
         })
         assert resp.status_code == 409
 
@@ -214,6 +225,8 @@ class TestCreateTradeWithAdviceRef:
                 "trade_date": "2026-02-30",
                 "generated_at": "2026-07-28 09:00:00",
             },
+            "fee": 0.0,
+            "other_cost": 0.0,
         })
         assert resp.status_code == 422
 
@@ -245,6 +258,8 @@ class TestCreateTradeWithThesisRef:
                 "thesis_id": thesis_id,
                 "revision_number": 1,
             },
+            "fee": 0.0,
+            "other_cost": 0.0,
         })
         assert resp.status_code == 200
         data = resp.json()["data"]
@@ -264,6 +279,8 @@ class TestCreateTradeWithThesisRef:
                 "thesis_id": "nonexistent-id",
                 "revision_number": 1,
             },
+            "fee": 0.0,
+            "other_cost": 0.0,
         })
         assert resp.status_code == 404
 
@@ -291,6 +308,8 @@ class TestVoidTrade:
             "code": "600519", "name": "X", "operation": "buy",
             "execution_status": "full", "actual_price": 100.0, "actual_quantity": 100,
             "executed_at": "2026-07-28T09:30:00+08:00",
+            "fee": 0.0,
+            "other_cost": 0.0,
         })
         trade_id = create_resp.json()["data"]["trade_id"]
         resp = client.post(f"/api/trades/{trade_id}/void", json={"reason": "录入错误"})
@@ -303,6 +322,8 @@ class TestVoidTrade:
             "code": "600519", "name": "X", "operation": "buy",
             "execution_status": "full", "actual_price": 100.0, "actual_quantity": 100,
             "executed_at": "2026-07-28T09:30:00+08:00",
+            "fee": 0.0,
+            "other_cost": 0.0,
         })
         trade_id = create_resp.json()["data"]["trade_id"]
         client.post(f"/api/trades/{trade_id}/void", json={"reason": "第一次"})
@@ -319,6 +340,8 @@ class TestCorruptedDBFailClosed:
             "code": "600519", "name": "X", "operation": "buy",
             "execution_status": "full", "actual_price": 100.0, "actual_quantity": 100,
             "executed_at": "2026-07-28T09:30:00+08:00",
+            "fee": 0.0,
+            "other_cost": 0.0,
         })
 
         with open(db_path, "wb") as f:

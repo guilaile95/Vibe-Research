@@ -49,7 +49,7 @@ _LAST_SUCCESSFUL: dict[str, Any] | None = None
 
 @dataclass(frozen=True)
 class DiscoveryProviders:
-    market_snapshot: Callable[[], list[dict[str, Any]]]
+    market_snapshot: Callable[[], list[dict[str, Any]] | dict[str, Any]]
     full_market: Callable[[], dict[str, Any]]
     financials: Callable[[str], dict[str, Any]]
     announcements: Callable[[str], list[dict[str, Any]]]
@@ -167,7 +167,7 @@ def _default_native_intel(codes: list[str]) -> dict[str, Any]:
 
 
 DEFAULT_PROVIDERS = DiscoveryProviders(
-    market_snapshot=market.get_a_share_snapshot,
+    market_snapshot=market.get_a_share_snapshot_observation,
     full_market=_default_full_market,
     # Stage 3 needs one bounded financial clue fetch, not the three-statement
     # StockData expansion performed by include_health=True.
@@ -204,7 +204,7 @@ def _full_market_rows(
     try:
         envelope = providers.full_market()
         status = str(envelope.get("status") or "unavailable")
-        if status != "normal":
+        if status not in {"normal", "partial"}:
             raise rdp.ResearchDataPlaneUnavailableError("RDP full-market is unavailable")
         rows: dict[str, dict[str, Any]] = {}
         temporal_reasons: set[str] = set()
@@ -234,7 +234,7 @@ def _full_market_rows(
             rows[str(row["code"])] = row
         provenance = envelope.get("provenance") or {}
         ref = provenance.get("artifact_sha256") or provenance.get("source_name") or "local-rdp"
-        dataset_status = "partial" if temporal_reasons else "normal"
+        dataset_status = "partial" if temporal_reasons or status == "partial" else "normal"
         dataset = _dataset(
             "research_data_plane.full_market",
             dataset_status,
@@ -690,6 +690,9 @@ def run_discovery(
             "limitations": ["全 A 股批量快照不可用；Discovery 不回退为逐股抓取。"],
             "cache": {"hit": False, "age_seconds": 0},
         }
+    observation = snapshot if isinstance(snapshot, dict) else {}
+    if observation:
+        snapshot = observation.get("rows")
     if not isinstance(snapshot, list) or not snapshot:
         return {
             "schema_version": SCHEMA_VERSION,
@@ -707,9 +710,9 @@ def run_discovery(
             "cache": {"hit": False, "age_seconds": 0},
         }
 
-    fetched_at = _iso_now(now) if now is not None else _iso_now()
+    fetched_at = observation.get("observed_at")
     evaluation_date = _beijing_date(now)
-    market_as_of = observation_trade_date_at(fetched_at)
+    market_as_of = observation_trade_date_at(fetched_at) if isinstance(fetched_at, str) else None
 
     core_rows: list[dict[str, Any]] = []
     outside_core: list[dict[str, Any]] = []

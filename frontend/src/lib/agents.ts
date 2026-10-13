@@ -7,10 +7,12 @@ import { streamNdjson, type NdjsonEvent } from "@/lib/ndjson";
 
 export type DebateStage = "bull" | "bear" | "bull_rebut" | "bear_rebut" | "referee";
 
+export type DossierStatus = "success" | "partial" | "empty" | "error";
+
 export interface DebateHandlers {
   onStatus?: (message: string) => void;
-  onDossierProgress?: (title: string, ok: boolean, loaded: number, total: number) => void;
-  onDossierReady?: (sections: { title: string; tool: string }[], missing: string[]) => void;
+  onDossierProgress?: (title: string, ok: boolean, loaded: number, total: number, status?: DossierStatus, truncated?: boolean) => void;
+  onDossierReady?: (sections: { title: string; tool: string; status?: DossierStatus; truncated?: boolean }[], missing: string[], partial?: string[]) => void;
   onStageStart?: (stage: DebateStage, label: string) => void;
   onDelta?: (stage: DebateStage, text: string) => void;
   onStageDone?: (stage: DebateStage, label: string, content: string) => void;
@@ -29,10 +31,10 @@ function dispatchDebate(ev: NdjsonEvent, h: DebateHandlers) {
       h.onStatus?.(ev.message);
       break;
     case "dossier_progress":
-      h.onDossierProgress?.(ev.title, ev.ok, ev.loaded, ev.total);
+      h.onDossierProgress?.(ev.title, ev.ok, ev.loaded, ev.total, ev.status, ev.truncated);
       break;
     case "dossier":
-      h.onDossierReady?.(ev.sections || [], ev.missing || []);
+      h.onDossierReady?.(ev.sections || [], ev.missing || [], ev.partial || []);
       break;
     case "stage":
       h.onStageStart?.(ev.stage, ev.label);
@@ -57,7 +59,35 @@ export async function debateStream(
   signal?: AbortSignal,
 ): Promise<void> {
   const llm = requireLlm();
-  await streamNdjson("/api/debate", { code, rounds, llm }, (ev) => dispatchDebate(ev, handlers), signal);
+  const expected: DebateStage[] = rounds >= 2
+    ? ["bull", "bear", "bull_rebut", "bear_rebut", "referee"]
+    : ["bull", "bear", "referee"];
+  const started = new Set<DebateStage>();
+  const completed = new Map<DebateStage, string>();
+  let ended = false, invalid = false, failed = false;
+  await streamNdjson("/api/debate", { code, rounds, llm }, (ev) => {
+    // A transport EOF is not the Debate protocol's successful terminal event.
+    if (ended) { invalid = true; return; }
+    if (ev.type === "stage") {
+      if (ev.stage !== expected[started.size] || started.has(ev.stage)) invalid = true;
+      started.add(ev.stage);
+    } else if (ev.type === "stage_done") {
+      if (!started.has(ev.stage) || completed.has(ev.stage) || typeof ev.content !== "string") invalid = true;
+      completed.set(ev.stage, ev.content);
+      if (ev.failed) failed = true;
+    } else if (ev.type === "error") {
+      failed = true;
+    } else if (ev.type === "done") {
+      ended = true;
+      if (ev.code !== code || completed.size !== expected.length || !Array.isArray(ev.stages)
+        || ev.stages.length !== expected.length
+        || !expected.every((stage, i) => ev.stages[i]?.stage === stage
+          && completed.has(stage) && ev.stages[i]?.content === completed.get(stage))) invalid = true;
+    }
+    dispatchDebate(ev, handlers);
+  }, signal);
+  signal?.throwIfAborted();
+  if (!ended || invalid || failed) throw new ApiError("辩论未完整结束，请重试；已收到的内容仅供参考", 502);
 }
 
 export interface ReflectHandlers {
@@ -75,10 +105,25 @@ export async function reflectStream(
   signal?: AbortSignal,
 ): Promise<void> {
   const llm = requireLlm();
+  let terminal: { content: string; truncated: boolean } | undefined;
+  let received = "", invalid = false, failed = false;
   await streamNdjson("/api/reflect", { source, title, llm }, (ev) => {
+    if (terminal) { invalid = true; return; }
     if (ev.type === "status") handlers.onStatus?.(ev.message);
-    else if (ev.type === "delta") handlers.onDelta?.(ev.text);
-    else if (ev.type === "done") handlers.onDone?.(ev.content, !!ev.truncated);
-    else if (ev.type === "error") handlers.onError?.(ev.message);
+    else if (ev.type === "delta") {
+      if (typeof ev.text !== "string") { invalid = true; return; }
+      received += ev.text;
+      handlers.onDelta?.(ev.text);
+    } else if (ev.type === "done") {
+      if (typeof ev.content !== "string" || !ev.content.trim()
+        || (received && ev.content !== received.trim()) || typeof ev.truncated !== "boolean") invalid = true;
+      terminal = { content: ev.content, truncated: ev.truncated };
+    } else if (ev.type === "error") {
+      failed = true;
+      handlers.onError?.(ev.message);
+    } else invalid = true;
   }, signal);
+  signal?.throwIfAborted();
+  if (!terminal || invalid || failed) throw new ApiError("反思未完整结束，请重试；已收到的内容仅供参考", 502);
+  handlers.onDone?.(terminal.content, terminal.truncated);
 }
