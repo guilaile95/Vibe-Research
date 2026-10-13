@@ -69,7 +69,8 @@ def build(output):
                       "backend/requirements-linux-py311.lock.txt"}
     explicit = {"frontend/package.json", "frontend/package-lock.json", "frontend/vite.config.ts", "frontend/src/data/sectors.json",
                 "agent-runtime/package.json", "agent-runtime/package-lock.json", "LICENSE",
-                "tools/linux/vibe_linux.py", "docs/LINUX_INSTALL.md"}
+                "tools/linux/vibe_linux.py", "docs/LINUX_INSTALL.md",
+                "docs/third-party/vibe-astock-LICENSE", "docs/third-party/vibe-astock-NOTICE"}
     names = [p for p in tracked if p and (
         (p.startswith("backend/") and p.count("/") == 1 and p.endswith(".py") and p != "backend/conftest.py")
         or p in backend_static or p.startswith("agent-runtime/src/") or p in explicit)]

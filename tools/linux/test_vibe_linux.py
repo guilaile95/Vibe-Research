@@ -4,6 +4,7 @@ from pathlib import Path
 import signal
 import subprocess
 import tempfile
+import tarfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -18,6 +19,40 @@ class LinuxPackageTests(unittest.TestCase):
         manifest = {"release": "test-1", "files": {"backend/app.py": linux.digest(file)}}
         (root / "manifest.json").write_text(json.dumps(manifest))
         return manifest
+
+    def test_built_archive_preserves_adopted_license_and_notice_bytes(self):
+        notices = ("docs/third-party/vibe-astock-LICENSE", "docs/third-party/vibe-astock-NOTICE")
+        originals = {name: (linux.ROOT / name).read_bytes() for name in notices}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "source"
+            names = ["backend/app.py", "frontend/package.json", "frontend/package-lock.json",
+                     "frontend/vite.config.ts", "frontend/src/data/sectors.json",
+                     "agent-runtime/package.json", "agent-runtime/package-lock.json", "LICENSE",
+                     "tools/linux/vibe_linux.py", "docs/LINUX_INSTALL.md", *notices]
+            for name in names:
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(originals.get(name, b"synthetic package input\n"))
+            (root / "frontend/package.json").write_text('{"version":"1.0.0"}', encoding="utf-8")
+            (root / "frontend/node_modules").mkdir()
+            def git_output(args, **kwargs):
+                return "a" * 12 if "rev-parse" in args else "\0".join(names).encode()
+            def frontend_build(args, *, cwd, **kwargs):
+                self.assertEqual(args, ["npm", "run", "build"])
+                (cwd / "dist").mkdir()
+                (cwd / "dist/index.html").write_text("synthetic build", encoding="utf-8")
+            output = Path(temp) / "artifacts"
+            with patch.object(linux, "ROOT", root), patch.object(linux, "prerequisites"), \
+                    patch.object(linux.subprocess, "check_output", side_effect=git_output), \
+                    patch.object(linux, "checked", side_effect=frontend_build):
+                linux.build(output)
+            archive, = output.glob("*.tar.gz")
+            with tarfile.open(archive, "r:gz") as package:
+                prefix = package.getnames()[0].split("/", 1)[0]
+                manifest = json.load(package.extractfile(prefix + "/manifest.json"))
+                for name, expected in originals.items():
+                    self.assertEqual(package.extractfile(prefix + "/" + name).read(), expected)
+                    self.assertEqual(manifest["files"][name], hashlib.sha256(expected).hexdigest())
 
     def test_integrity_rejects_changed_file(self):
         with tempfile.TemporaryDirectory() as temp:
