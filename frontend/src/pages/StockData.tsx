@@ -1,5 +1,6 @@
 import { stockDebateHrefForResult } from "@/lib/debateHandoff";
 import { CompanyResearchPanel } from "@/components/research/CompanyResearchPanel";
+import { CompanyComparisonCard } from "@/components/research/CompanyComparisonCard";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -635,7 +636,10 @@ export function StockData() {
       )}
 
       {(val || (gstock && (gstock.market === "HK" || gstock.market === "US"))) && (
-        <CompanyResearchPanel key={gstock ? `${gstock.market}:${gstock.code}` : `A:${val!.code}`} subject={gstock ? { market: gstock.market as "HK" | "US", symbol: gstock.code } : { market: "A", symbol: val!.code }} />
+        <>
+          <CompanyResearchPanel key={gstock ? `research:${gstock.market}:${gstock.code}` : `research:A:${val!.code}`} subject={gstock ? { market: gstock.market as "HK" | "US", symbol: gstock.code } : { market: "A", symbol: val!.code }} />
+          <CompanyComparisonCard key={gstock ? `comparison:${gstock.market}:${gstock.code}` : `comparison:A:${val!.code}`} subject={gstock ? { market: gstock.market as "HK" | "US", symbol: gstock.code } : { market: "A", symbol: val!.code }} />
+        </>
       )}
       {activeCode && ((gstock && gstock.code === activeCode && ["US", "HK"].includes(gstock.market)) || (val && val.code === activeCode)) &&
         <CompanyArchiveCard key={activeCode} market={gstock?.code === activeCode && ["US", "HK"].includes(gstock.market) ? gstock.market : "A"} symbol={activeCode} />}

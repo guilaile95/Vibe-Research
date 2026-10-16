@@ -517,7 +517,7 @@ def test_history_bounds_and_immutable_pair_reuse(pair):
         assert conn.execute("SELECT count(*) FROM pairs").fetchone()[0] == 1
 
 
-@pytest.mark.parametrize("change", ["cli", "future_cutoff", "ledger", "hash", "partial_output", "owner", "oversize", "pair_oversize", "trigger"])
+@pytest.mark.parametrize("change", ["cli", "future_cutoff", "ledger", "hash", "partial_output", "owner", "oversize", "pair_oversize", "trigger", "hidden_trigger"])
 def test_restore_rejects_corrupt_or_rehashed_contract_violation(pair, client, change):
     record = asyncio.run(collect(pair))[-1]["record"]
     with sqlite3.connect(C.db_path()) as conn:
@@ -539,6 +539,7 @@ def test_restore_rejects_corrupt_or_rehashed_contract_violation(pair, client, ch
         if change == "oversize": conn.execute("UPDATE runs SET payload=?", ("x" * (C.MAX_RECORD_BYTES + 1),))
         if change == "pair_oversize": conn.execute("UPDATE pairs SET payload=?", ("x" * (C.MAX_PAIR_BYTES + 1),))
         if change == "trigger": conn.execute("CREATE TRIGGER bad AFTER INSERT ON runs BEGIN SELECT 1; END")
+        if change == "hidden_trigger": conn.execute("CREATE TRIGGER sqliteevil AFTER INSERT ON runs BEGIN SELECT 1; END")
     assert client.get("/api/company-comparison/runs").status_code == 409
     assert client.get(f"/api/company-comparison/runs/{record['run_id']}").status_code == 409
 
@@ -847,3 +848,47 @@ def test_cleanup_cancellation_still_finalizes_and_releases_slot(pair):
     assert C.list_runs()[0]["output"] is None
     assert C._ACTIVE.acquire(blocking=False)
     C._ACTIVE.release()
+
+
+def test_shared_runtime_stopped_transport_error_preserves_owner_cancellation(pair):
+    stop = threading.Event()
+    async def stopped(cfg, messages, *, limits):
+        stop.set()
+        raise chat.ModelTransportError("synthetic runtime stopped after cleanup")
+        yield  # Make this an async iterator; no provider bytes are accepted.
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(collect(pair, stopped, stop))
+    value = C.list_runs()[0]
+    assert value["status"] == "CANCELLED"
+    assert value["output"] is None and "result_sha256" not in value
+
+
+@pytest.mark.parametrize("cancel_owner", [False, True])
+def test_held_cleanup_distinguishes_owner_cancel_from_timeout(pair, monkeypatch, cancel_owner):
+    monkeypatch.setattr(C, "CLEANUP_SECONDS", .01)
+    stop = threading.Event()
+    calls = []
+    class HeldClose:
+        def __init__(self, messages):
+            self.items = iter([{"type": "delta", "text": R.canonical(good_output(json.loads(messages[-1]["content"])))},
+                               {"type": "done"}])
+        def __aiter__(self): return self
+        async def __anext__(self):
+            try: return next(self.items)
+            except StopIteration: raise StopAsyncIteration from None
+        async def aclose(self):
+            if cancel_owner:
+                stop.set()
+            await anyio.sleep_forever()
+    def factory(cfg, messages, *, limits):
+        calls.append(True)
+        return HeldClose(messages)
+    if cancel_owner:
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(collect(pair, factory, stop))
+    else:
+        assert asyncio.run(collect(pair, factory, stop))[-1]["type"] == "error"
+    value = C.list_runs()[0]
+    assert value["status"] == ("CANCELLED" if cancel_owner else "FAILED")
+    assert value["output"] is None and "result_sha256" not in value
+    assert calls == [True]

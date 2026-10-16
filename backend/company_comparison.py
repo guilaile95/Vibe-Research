@@ -301,7 +301,7 @@ def _safe_path(path):
 
 def _schema(conn):
     expected = {"pairs": _PAIR_SQL, "runs": _RUN_SQL}
-    rows = conn.execute("SELECT type,name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").fetchall()
+    rows = conn.execute("SELECT type,name,sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*'").fetchall()
     if {(r[0], r[1]) for r in rows} != {("table", name) for name in expected}:
         raise ValueError("COMPARISON_SQL_SCHEMA_INVALID")
     for row in rows:
@@ -350,7 +350,7 @@ def _connect(write=False):
         conn.execute("PRAGMA trusted_schema=OFF")
         # Initialize only an empty, newly created store; existing malformed
         # schema has already been rejected through the private snapshot.
-        if not conn.execute("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").fetchone():
+        if not conn.execute("SELECT 1 FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*'").fetchone():
             conn.execute(_PAIR_SQL)
             conn.execute(_RUN_SQL)
         _schema(conn)
@@ -486,6 +486,11 @@ async def generate(bundles, as_of, cfg, cancel_event, *, stream=None):
     except (asyncio.CancelledError, GeneratorExit):
         raise
     except Exception:
+        # The shared API runtime reports a stopped owner as ModelTransportError
+        # after shielded cleanup. Preserve explicit disconnect/cancel ownership
+        # rather than misclassifying that secondary transport error as FAILED.
+        if cancel_event.is_set():
+            raise asyncio.CancelledError() from None
         failed = True
         final_event = {"type": "error", "run_id": run_id,
                        "code": "COMPARISON_INCOMPLETE",
@@ -505,7 +510,8 @@ async def generate(bundles, as_of, cfg, cancel_event, *, stream=None):
                 # completed state behind. Preserve cancellation after this save.
                 if created and not terminal:
                     record.pop("result_sha256", None)
-                    record.update(status="FAILED" if failed else "CANCELLED", finished_at=now(), output=None)
+                    record.update(status="CANCELLED" if cancel_event.is_set() or not failed else "FAILED",
+                                  finished_at=now(), output=None)
                     _terminal(run_id, owner, record["status"], record)
         finally:
             _ACTIVE.release()

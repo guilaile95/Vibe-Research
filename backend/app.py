@@ -76,6 +76,7 @@ import data_health_router
 import runtime_info_router
 import platform_settings
 import company_research_router
+import company_comparison_router
 import trade_ledger_router
 import personal_review_router
 import trade_attribution_router
@@ -422,6 +423,7 @@ app.include_router(runtime_info_router.create_router(__version__))
 app.include_router(platform_settings.router)
 # 交易流水：独立存储与 API
 app.include_router(company_research_router.router)
+app.include_router(company_comparison_router.router)
 app.include_router(trade_ledger_router.router)
 app.include_router(personal_review_router.router)
 # P0-TAR1: explicit Frozen Decision attribution / explicit UNPLANNED origin.

@@ -1,0 +1,1091 @@
+{
+  "fixture_only": true,
+  "authority": "Registered production API with existing synthetic frozen research bundles and offline model stub",
+  "request": {
+    "subjects": [
+      {
+        "market": "US",
+        "symbol": "AAPL",
+        "bundle_id": "00000000000000000000000000000007",
+        "expected_bundle_sha256": "3505a78d3dc088c8f22d7947d33a825077531e8bb7b2c4601223c2459a25cdc1"
+      },
+      {
+        "market": "HK",
+        "symbol": "00700",
+        "bundle_id": "00000000000000000000000000000064",
+        "expected_bundle_sha256": "e01f7f31879e0cd0bf59125f5b3f8ddbefd2a09bf33e8e6bf1fb0441c8da9f7d"
+      }
+    ],
+    "as_of": "2026-09-30",
+    "confirm_model_calls": true,
+    "llm": {
+      "provider": "deepseek",
+      "model": "offline-fixture",
+      "baseURL": "https://fixture.example/v1",
+      "apiKey": "synthetic-only"
+    }
+  },
+  "bundles": [
+    {
+      "archive_cutoff": "2026-09-30",
+      "bundle_id": "00000000000000000000000000000007",
+      "bundle_sha256": "3505a78d3dc088c8f22d7947d33a825077531e8bb7b2c4601223c2459a25cdc1",
+      "captured_at": "2026-10-12T12:00:00.000000Z",
+      "classification": "PUBLIC_ADAPTER_INPUT_UNVERIFIED",
+      "limitations": [
+        "Capture time is not source publication time",
+        "Native adapter returns lack raw HTTP bytes; archived source envelopes retain immutable raw artifact hashes",
+        "Current archived post-hoc evidence, never historical-vintage PIT",
+        "Requested archive cutoff: 2026-09-30",
+        "No portfolio, account or private trade input",
+        "Source availability is not universe completeness"
+      ],
+      "schema_version": "company_research.v1",
+      "sources": [
+        {
+          "captured_at": "2026-10-12T12:00:00.000000Z",
+          "evidence_id": "global_quote_ref",
+          "payload": {
+            "as_of": "2026-09-30",
+            "block": {
+              "archive_age_seconds": 950400.0,
+              "archive_stale": true,
+              "captured_at": "2026-10-01T12:00:00.000000Z",
+              "counters": {},
+              "coverage": "source failure; no normalized economic rows",
+              "evidence": {
+                "locally_received_at": "2026-10-12T12:00:00.000000Z",
+                "normalizer_version": "public-research-adapter.v1",
+                "observation_id": "public-research-00000000000000000000000000000001",
+                "point_in_time_claim": "NONE",
+                "provider_revision": null,
+                "raw_payload_hash": "sha256:bb82c28b0cff0bf20b28c20fdf29d70d27314634eeb0db14c723fb6a052fcde4"
+              },
+              "fixture": true,
+              "guard": "个股与基准来自同一响应；参考日是基准报价日期，不是官方交易日历。交易时段只按当地时钟推断，不能由基准陈旧断言休市。",
+              "label": "港美股报价与基准",
+              "license_status": "PROVIDER_TERMS_NOT_VERIFIED",
+              "market": "US",
+              "normalizer_version": "public-research-adapter.v1",
+              "point_in_time_claim": "NONE",
+              "raw_bytes": 11,
+              "reason_codes": [
+                "HTTP_OR_NORMALIZATION_FAILED"
+              ],
+              "requested_as_of": "2026-09-30",
+              "rows": [],
+              "schema_version": "public-research.v1",
+              "selection_mode": "CURRENT_ARCHIVED_POSTHOC",
+              "source_id": "global_quote_ref",
+              "source_publication_time": null,
+              "source_revision": null,
+              "source_url": "https://qt.gtimg.cn/q=usAAPL,usINX",
+              "status": "unavailable",
+              "subject": "US:AAPL@2026-09-30",
+              "symbol": "AAPL"
+            },
+            "capture_time": "2026-10-01T12:00:00.000000Z",
+            "market": "US",
+            "point_in_time_claim": "NONE",
+            "provider_fetch_performed": false,
+            "qualification": "MISSING_OR_INVALID_ARCHIVE",
+            "reason_codes": [],
+            "schema_version": "company-public-source.v1",
+            "source_artifact_hash": "sha256:bb82c28b0cff0bf20b28c20fdf29d70d27314634eeb0db14c723fb6a052fcde4",
+            "source_id": "global_quote_ref",
+            "source_time": null,
+            "status": "unavailable",
+            "subject": {
+              "market": "US",
+              "symbol": "AAPL"
+            },
+            "symbol": "AAPL"
+          },
+          "payload_sha256": "8b9249be97d7759d45d4c71972688696db5fc944906344016e2a1d942543af24",
+          "scope": "ARCHIVE_INPUT_MISSING_OR_UNQUALIFIED",
+          "source": "immutable_public_source_archive",
+          "source_as_of": null,
+          "stages": [
+            "profile",
+            "valuation"
+          ],
+          "status": "ERROR"
+        },
+        {
+          "captured_at": "2026-10-12T12:00:00.000000Z",
+          "evidence_id": "global_financials_pit",
+          "payload": {
+            "as_of": "2026-09-30",
+            "block": {
+              "archive_age_seconds": 950400.0,
+              "archive_stale": true,
+              "captured_at": "2026-10-01T12:00:00.000000Z",
+              "counters": {
+                "dropped_after_as_of": 1,
+                "dropped_no_notice": 1,
+                "duplicate_rows": 0,
+                "fetched_rows": 3,
+                "unclassified": 0
+              },
+              "coverage": "bounded provider response; missing remains unknown",
+              "evidence": {
+                "locally_received_at": "2026-10-12T12:00:00.000000Z",
+                "normalizer_version": "public-research-adapter.v1",
+                "observation_id": "public-research-00000000000000000000000000000003",
+                "point_in_time_claim": "NONE",
+                "provider_revision": null,
+                "raw_payload_hash": "sha256:e746b5ed589afc872bfa77cc4f5a15ac0cfe6323126e9b14df8736b1c2e2c62f"
+              },
+              "fixture": true,
+              "guard": "当前存储版本按公告日及报告期末筛选；历史值可能重述、旧公告日可能被覆盖，不是历史版本PIT，不证明当时已知。",
+              "label": "港美股公告日筛选财务",
+              "license_status": "PROVIDER_TERMS_NOT_VERIFIED",
+              "market": "US",
+              "normalizer_version": "public-research-adapter.v1",
+              "point_in_time_claim": "NONE",
+              "raw_bytes": 1214,
+              "reason_codes": [
+                "CURRENT_VINTAGE_NOTICE_FILTER_ONLY"
+              ],
+              "requested_as_of": "2026-09-30",
+              "rows": [
+                {
+                  "amount_scale_to_currency_units": null,
+                  "amount_unit": "PROVIDER_RAW_SCALE_UNVERIFIED",
+                  "consolidation_scope": "provider consolidated label",
+                  "currency": "USD",
+                  "end": "2026-06-30",
+                  "eps_basic": -0.25,
+                  "eps_diluted": null,
+                  "eps_unit": "reporting currency per share",
+                  "id": "2025-10-01..2026-06-30",
+                  "market": "US",
+                  "missing": [],
+                  "net_profit_deducted": null,
+                  "net_profit_parent": -20000.0,
+                  "notice_date": "2026-08-10",
+                  "period_code": "004",
+                  "period_days": 273,
+                  "period_kind": "ytd",
+                  "period_months": 9,
+                  "point_in_time_claim": "NONE",
+                  "returned_secucode": "AAPL.O",
+                  "revenue": 1200000.0,
+                  "revision_id": null,
+                  "start": "2025-10-01",
+                  "symbol": "AAPL",
+                  "vintage": "CURRENT_STORED_POSTHOC"
+                }
+              ],
+              "schema_version": "public-research.v1",
+              "selection_mode": "CURRENT_ARCHIVED_POSTHOC",
+              "source_id": "global_financials_pit",
+              "source_publication_time": null,
+              "source_revision": null,
+              "source_url": "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_USF10_FN_GMAININDICATOR&columns=ALL&filter=%28SECURITY_CODE%3D%22AAPL%22%29&pageSize=60&pageNumber=1&sortColumns=REPORT_DATE&sortTypes=-1",
+              "status": "partial",
+              "subject": "US:AAPL@2026-09-30",
+              "symbol": "AAPL"
+            },
+            "capture_time": "2026-10-01T12:00:00.000000Z",
+            "market": "US",
+            "point_in_time_claim": "NONE",
+            "provider_fetch_performed": false,
+            "qualification": "QUALIFIED_CURRENT_ARCHIVED_INPUT",
+            "reason_codes": [],
+            "schema_version": "company-public-source.v1",
+            "source_artifact_hash": "sha256:e746b5ed589afc872bfa77cc4f5a15ac0cfe6323126e9b14df8736b1c2e2c62f",
+            "source_id": "global_financials_pit",
+            "source_time": null,
+            "status": "partial",
+            "subject": {
+              "market": "US",
+              "symbol": "AAPL"
+            },
+            "symbol": "AAPL"
+          },
+          "payload_sha256": "a91e167617075839f41324b5cdacf41cef892acb34adf9bc259be797ec5cf6f2",
+          "scope": "QUALIFIED_CURRENT_ARCHIVED_POSTHOC_NOT_HISTORICAL_PIT",
+          "source": "immutable_public_source_archive",
+          "source_as_of": null,
+          "stages": [
+            "financials",
+            "risk"
+          ],
+          "status": "AVAILABLE"
+        },
+        {
+          "captured_at": "2026-10-12T12:00:00.000000Z",
+          "evidence_id": "yahoo_consensus",
+          "payload": {
+            "as_of": "2026-09-30",
+            "block": {
+              "archive_age_seconds": 950400.0,
+              "archive_stale": true,
+              "captured_at": "2026-10-01T12:00:00.000000Z",
+              "counters": {},
+              "coverage": "bounded provider response; missing remains unknown",
+              "evidence": {
+                "locally_received_at": "2026-10-12T12:00:00.000000Z",
+                "normalizer_version": "public-research-adapter.v1",
+                "observation_id": "public-research-00000000000000000000000000000005",
+                "point_in_time_claim": "NONE",
+                "provider_revision": null,
+                "raw_payload_hash": "sha256:45de212216a90eb1e52ae6729f0a09639bde866d9ad5b173583fdd67da844bd0"
+              },
+              "fixture": true,
+              "guard": "年度分析师预期不是公司承诺或事实；使用报告币种，可能不同于股票报价币种；不提供升级降级评级。",
+              "label": "港美股年度一致预期",
+              "license_status": "PROVIDER_TERMS_NOT_VERIFIED",
+              "market": "US",
+              "normalizer_version": "public-research-adapter.v1",
+              "point_in_time_claim": "NONE",
+              "raw_bytes": 519,
+              "reason_codes": [
+                "PROVIDER_UPDATE_TIME_UNKNOWN",
+                "CONSENSUS_NOT_COMPANY_FACT"
+              ],
+              "requested_as_of": "2026-09-30",
+              "rows": [
+                {
+                  "analyst_count": 5.0,
+                  "currency": "USD",
+                  "eps_avg": -1.0,
+                  "eps_high": 0.0,
+                  "eps_low": -2.0,
+                  "eps_unit": "reporting currency per share",
+                  "fiscal_end": "2026-09-30",
+                  "fiscal_label": "FY2026",
+                  "horizon": "0y",
+                  "id": "0y",
+                  "market": "US",
+                  "missing": [],
+                  "period_kind": "annual_estimate",
+                  "quote_currency": "USD",
+                  "rating": null,
+                  "returned_symbol": "AAPL",
+                  "revenue_estimate": 1000000.0,
+                  "revenue_unit": "reporting currency units",
+                  "revision_id": null,
+                  "source_update_time": null,
+                  "symbol": "AAPL"
+                },
+                {
+                  "analyst_count": 5.0,
+                  "currency": "USD",
+                  "eps_avg": -1.0,
+                  "eps_high": 0.0,
+                  "eps_low": -2.0,
+                  "eps_unit": "reporting currency per share",
+                  "fiscal_end": "2027-09-30",
+                  "fiscal_label": "FY2027",
+                  "horizon": "+1y",
+                  "id": "+1y",
+                  "market": "US",
+                  "missing": [],
+                  "period_kind": "annual_estimate",
+                  "quote_currency": "USD",
+                  "rating": null,
+                  "returned_symbol": "AAPL",
+                  "revenue_estimate": 1000000.0,
+                  "revenue_unit": "reporting currency units",
+                  "revision_id": null,
+                  "source_update_time": null,
+                  "symbol": "AAPL"
+                }
+              ],
+              "schema_version": "public-research.v1",
+              "selection_mode": "CURRENT_ARCHIVED_POSTHOC",
+              "source_id": "yahoo_consensus",
+              "source_publication_time": null,
+              "source_revision": null,
+              "source_url": "https://query2.finance.yahoo.com/v10/finance/quoteSummary/AAPL?modules=earningsTrend,earnings,price",
+              "status": "partial",
+              "subject": "US:AAPL@2026-09-30",
+              "symbol": "AAPL"
+            },
+            "capture_time": "2026-10-01T12:00:00.000000Z",
+            "market": "US",
+            "point_in_time_claim": "NONE",
+            "provider_fetch_performed": false,
+            "qualification": "QUALIFIED_CURRENT_ARCHIVED_INPUT",
+            "reason_codes": [],
+            "schema_version": "company-public-source.v1",
+            "source_artifact_hash": "sha256:45de212216a90eb1e52ae6729f0a09639bde866d9ad5b173583fdd67da844bd0",
+            "source_id": "yahoo_consensus",
+            "source_time": null,
+            "status": "partial",
+            "subject": {
+              "market": "US",
+              "symbol": "AAPL"
+            },
+            "symbol": "AAPL"
+          },
+          "payload_sha256": "3ef8b1c04278a1cc3fac3555cd1a076ae2e38b5164d4abdeaa0dc4b40385a832",
+          "scope": "QUALIFIED_CURRENT_ARCHIVED_POSTHOC_NOT_HISTORICAL_PIT",
+          "source": "immutable_public_source_archive",
+          "source_as_of": null,
+          "stages": [
+            "estimates"
+          ],
+          "status": "AVAILABLE"
+        }
+      ],
+      "subject": {
+        "market": "US",
+        "symbol": "AAPL"
+      }
+    },
+    {
+      "archive_cutoff": "2026-09-30",
+      "bundle_id": "00000000000000000000000000000064",
+      "bundle_sha256": "e01f7f31879e0cd0bf59125f5b3f8ddbefd2a09bf33e8e6bf1fb0441c8da9f7d",
+      "captured_at": "2026-10-12T12:00:00.000000Z",
+      "classification": "PUBLIC_ADAPTER_INPUT_UNVERIFIED",
+      "limitations": [
+        "Capture time is not source publication time",
+        "Native adapter returns lack raw HTTP bytes; archived source envelopes retain immutable raw artifact hashes",
+        "Current archived post-hoc evidence, never historical-vintage PIT",
+        "Requested archive cutoff: 2026-09-30",
+        "No portfolio, account or private trade input",
+        "Source availability is not universe completeness"
+      ],
+      "schema_version": "company_research.v1",
+      "sources": [
+        {
+          "captured_at": "2026-10-12T12:00:00.000000Z",
+          "evidence_id": "global_quote_ref",
+          "payload": {
+            "as_of": "2026-09-30",
+            "block": {
+              "archive_age_seconds": 950400.0,
+              "archive_stale": true,
+              "captured_at": "2026-10-01T12:00:00.000000Z",
+              "counters": {},
+              "coverage": "bounded provider response; missing remains unknown",
+              "evidence": {
+                "locally_received_at": "2026-10-12T12:00:00.000000Z",
+                "normalizer_version": "public-research-adapter.v1",
+                "observation_id": "public-research-00000000000000000000000000000001",
+                "point_in_time_claim": "NONE",
+                "provider_revision": null,
+                "raw_payload_hash": "sha256:d02aeb6206d62140ba269957afd4c4603bb190d561734267313a1c92329ee5d9"
+              },
+              "fixture": true,
+              "guard": "个股与基准来自同一响应；参考日是基准报价日期，不是官方交易日历。交易时段只按当地时钟推断，不能由基准陈旧断言休市。",
+              "label": "港美股报价与基准",
+              "license_status": "PROVIDER_TERMS_NOT_VERIFIED",
+              "market": "HK",
+              "normalizer_version": "public-research-adapter.v1",
+              "point_in_time_claim": "NONE",
+              "raw_bytes": 283,
+              "reason_codes": [
+                "CLOCK_PHASE_NOT_EXCHANGE_CALENDAR",
+                "SNAPSHOT_NOT_HISTORICAL_QUOTE"
+              ],
+              "requested_as_of": "2026-09-30",
+              "rows": [
+                {
+                  "after_requested_date": false,
+                  "benchmark": {
+                    "currency": null,
+                    "key": "hkHSI",
+                    "name": "Synthetic HSI",
+                    "prev_close": 148.0,
+                    "price": 150.0,
+                    "session_date": "2026-09-30",
+                    "source_time": "2026-09-30T08:00:00.000000Z",
+                    "symbol": "HSI",
+                    "timezone": "Asia/Hong_Kong",
+                    "unit": "index points",
+                    "volume": 1000.0
+                  },
+                  "benchmark_age_seconds_at_capture": 100800.0,
+                  "clock_phase": "post_close_by_clock",
+                  "freshness_qualification": "ARCHIVED_SNAPSHOT_NOT_LIVE_FRESHNESS_CERTIFICATION",
+                  "id": "HK:00700",
+                  "market": "HK",
+                  "quote": {
+                    "currency": "HKD",
+                    "key": "r_hk00700",
+                    "name": "Synthetic 00700",
+                    "prev_close": 148.0,
+                    "price": 150.0,
+                    "session_date": "2026-09-30",
+                    "source_time": "2026-09-30T08:00:00.000000Z",
+                    "symbol": "00700",
+                    "timezone": "Asia/Hong_Kong",
+                    "unit": "quote currency per share",
+                    "volume": 1000.0
+                  },
+                  "quote_age_seconds_at_capture": 100800.0,
+                  "reference_session_date": "2026-09-30",
+                  "requested_cutoff": "2026-09-30",
+                  "same_response": true,
+                  "session_calendar_confirmed": false,
+                  "source_stale": false,
+                  "symbol": "00700"
+                }
+              ],
+              "schema_version": "public-research.v1",
+              "selection_mode": "CURRENT_ARCHIVED_POSTHOC",
+              "source_id": "global_quote_ref",
+              "source_publication_time": null,
+              "source_revision": null,
+              "source_url": "https://qt.gtimg.cn/q=r_hk00700,hkHSI",
+              "status": "partial",
+              "subject": "HK:00700@2026-09-30",
+              "symbol": "00700"
+            },
+            "capture_time": "2026-10-01T12:00:00.000000Z",
+            "market": "HK",
+            "point_in_time_claim": "NONE",
+            "provider_fetch_performed": false,
+            "qualification": "QUALIFIED_CURRENT_ARCHIVED_INPUT",
+            "reason_codes": [],
+            "schema_version": "company-public-source.v1",
+            "source_artifact_hash": "sha256:d02aeb6206d62140ba269957afd4c4603bb190d561734267313a1c92329ee5d9",
+            "source_id": "global_quote_ref",
+            "source_time": null,
+            "status": "partial",
+            "subject": {
+              "market": "HK",
+              "symbol": "00700"
+            },
+            "symbol": "00700"
+          },
+          "payload_sha256": "266f8f570eb65034f4ba51661e65decc4133996b5ecb171397ccfc166bf419e3",
+          "scope": "QUALIFIED_CURRENT_ARCHIVED_POSTHOC_NOT_HISTORICAL_PIT",
+          "source": "immutable_public_source_archive",
+          "source_as_of": null,
+          "stages": [
+            "profile",
+            "valuation"
+          ],
+          "status": "AVAILABLE"
+        },
+        {
+          "captured_at": "2026-10-12T12:00:00.000000Z",
+          "evidence_id": "global_financials_pit",
+          "payload": {
+            "as_of": "2026-09-30",
+            "block": {
+              "archive_age_seconds": 950400.0,
+              "archive_stale": true,
+              "captured_at": "2026-10-01T12:00:00.000000Z",
+              "counters": {
+                "dropped_after_as_of": 1,
+                "dropped_no_notice": 1,
+                "duplicate_rows": 0,
+                "fetched_rows": 3,
+                "unclassified": 0
+              },
+              "coverage": "bounded provider response; missing remains unknown",
+              "evidence": {
+                "locally_received_at": "2026-10-12T12:00:00.000000Z",
+                "normalizer_version": "public-research-adapter.v1",
+                "observation_id": "public-research-00000000000000000000000000000003",
+                "point_in_time_claim": "NONE",
+                "provider_revision": null,
+                "raw_payload_hash": "sha256:a0f8da9a18b35e1a3521eba26c53f83799c59da6afb6a9ab7833ad774d5e00ba"
+              },
+              "fixture": true,
+              "guard": "当前存储版本按公告日及报告期末筛选；历史值可能重述、旧公告日可能被覆盖，不是历史版本PIT，不证明当时已知。",
+              "label": "港美股公告日筛选财务",
+              "license_status": "PROVIDER_TERMS_NOT_VERIFIED",
+              "market": "HK",
+              "normalizer_version": "public-research-adapter.v1",
+              "point_in_time_claim": "NONE",
+              "raw_bytes": 1232,
+              "reason_codes": [
+                "CURRENT_VINTAGE_NOTICE_FILTER_ONLY"
+              ],
+              "requested_as_of": "2026-09-30",
+              "rows": [
+                {
+                  "amount_scale_to_currency_units": null,
+                  "amount_unit": "PROVIDER_RAW_SCALE_UNVERIFIED",
+                  "consolidation_scope": "provider consolidated label",
+                  "currency": "CNY",
+                  "end": "2026-06-30",
+                  "eps_basic": -0.25,
+                  "eps_diluted": null,
+                  "eps_unit": "reporting currency per share",
+                  "id": "2025-10-01..2026-06-30",
+                  "market": "HK",
+                  "missing": [],
+                  "net_profit_deducted": null,
+                  "net_profit_parent": -20000.0,
+                  "notice_date": "2026-08-10",
+                  "period_code": "004",
+                  "period_days": 273,
+                  "period_kind": "ytd",
+                  "period_months": 9,
+                  "point_in_time_claim": "NONE",
+                  "returned_secucode": "00700.HK",
+                  "revenue": 1200000.0,
+                  "revision_id": null,
+                  "start": "2025-10-01",
+                  "symbol": "00700",
+                  "vintage": "CURRENT_STORED_POSTHOC"
+                }
+              ],
+              "schema_version": "public-research.v1",
+              "selection_mode": "CURRENT_ARCHIVED_POSTHOC",
+              "source_id": "global_financials_pit",
+              "source_publication_time": null,
+              "source_revision": null,
+              "source_url": "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_HKF10_FN_GMAININDICATOR&columns=ALL&filter=%28SECUCODE%3D%2200700.HK%22%29&pageSize=60&pageNumber=1&sortColumns=REPORT_DATE&sortTypes=-1",
+              "status": "partial",
+              "subject": "HK:00700@2026-09-30",
+              "symbol": "00700"
+            },
+            "capture_time": "2026-10-01T12:00:00.000000Z",
+            "market": "HK",
+            "point_in_time_claim": "NONE",
+            "provider_fetch_performed": false,
+            "qualification": "QUALIFIED_CURRENT_ARCHIVED_INPUT",
+            "reason_codes": [],
+            "schema_version": "company-public-source.v1",
+            "source_artifact_hash": "sha256:a0f8da9a18b35e1a3521eba26c53f83799c59da6afb6a9ab7833ad774d5e00ba",
+            "source_id": "global_financials_pit",
+            "source_time": null,
+            "status": "partial",
+            "subject": {
+              "market": "HK",
+              "symbol": "00700"
+            },
+            "symbol": "00700"
+          },
+          "payload_sha256": "45da1bdbdc28a16da20632e9b42299b6747e24eb523a83ddf02f2ab42269e2c6",
+          "scope": "QUALIFIED_CURRENT_ARCHIVED_POSTHOC_NOT_HISTORICAL_PIT",
+          "source": "immutable_public_source_archive",
+          "source_as_of": null,
+          "stages": [
+            "financials",
+            "risk"
+          ],
+          "status": "AVAILABLE"
+        },
+        {
+          "captured_at": "2026-10-12T12:00:00.000000Z",
+          "evidence_id": "yahoo_consensus",
+          "payload": {
+            "as_of": "2026-09-30",
+            "block": {
+              "archive_age_seconds": 950400.0,
+              "archive_stale": true,
+              "captured_at": "2026-10-01T12:00:00.000000Z",
+              "counters": {},
+              "coverage": "bounded provider response; missing remains unknown",
+              "evidence": {
+                "locally_received_at": "2026-10-12T12:00:00.000000Z",
+                "normalizer_version": "public-research-adapter.v1",
+                "observation_id": "public-research-00000000000000000000000000000005",
+                "point_in_time_claim": "NONE",
+                "provider_revision": null,
+                "raw_payload_hash": "sha256:fd18042ebb4d8182fe41bd530a9e2f57c732e2152a54767bab2f79e7c9cbeecc"
+              },
+              "fixture": true,
+              "guard": "年度分析师预期不是公司承诺或事实；使用报告币种，可能不同于股票报价币种；不提供升级降级评级。",
+              "label": "港美股年度一致预期",
+              "license_status": "PROVIDER_TERMS_NOT_VERIFIED",
+              "market": "HK",
+              "normalizer_version": "public-research-adapter.v1",
+              "point_in_time_claim": "NONE",
+              "raw_bytes": 522,
+              "reason_codes": [
+                "PROVIDER_UPDATE_TIME_UNKNOWN",
+                "CONSENSUS_NOT_COMPANY_FACT"
+              ],
+              "requested_as_of": "2026-09-30",
+              "rows": [
+                {
+                  "analyst_count": 5.0,
+                  "currency": "CNY",
+                  "eps_avg": -1.0,
+                  "eps_high": 0.0,
+                  "eps_low": -2.0,
+                  "eps_unit": "reporting currency per share",
+                  "fiscal_end": "2026-09-30",
+                  "fiscal_label": "FY2026",
+                  "horizon": "0y",
+                  "id": "0y",
+                  "market": "HK",
+                  "missing": [],
+                  "period_kind": "annual_estimate",
+                  "quote_currency": "HKD",
+                  "rating": null,
+                  "returned_symbol": "0700.HK",
+                  "revenue_estimate": 1000000.0,
+                  "revenue_unit": "reporting currency units",
+                  "revision_id": null,
+                  "source_update_time": null,
+                  "symbol": "00700"
+                },
+                {
+                  "analyst_count": 5.0,
+                  "currency": "CNY",
+                  "eps_avg": -1.0,
+                  "eps_high": 0.0,
+                  "eps_low": -2.0,
+                  "eps_unit": "reporting currency per share",
+                  "fiscal_end": "2027-09-30",
+                  "fiscal_label": "FY2027",
+                  "horizon": "+1y",
+                  "id": "+1y",
+                  "market": "HK",
+                  "missing": [],
+                  "period_kind": "annual_estimate",
+                  "quote_currency": "HKD",
+                  "rating": null,
+                  "returned_symbol": "0700.HK",
+                  "revenue_estimate": 1000000.0,
+                  "revenue_unit": "reporting currency units",
+                  "revision_id": null,
+                  "source_update_time": null,
+                  "symbol": "00700"
+                }
+              ],
+              "schema_version": "public-research.v1",
+              "selection_mode": "CURRENT_ARCHIVED_POSTHOC",
+              "source_id": "yahoo_consensus",
+              "source_publication_time": null,
+              "source_revision": null,
+              "source_url": "https://query2.finance.yahoo.com/v10/finance/quoteSummary/0700.HK?modules=earningsTrend,earnings,price",
+              "status": "partial",
+              "subject": "HK:00700@2026-09-30",
+              "symbol": "00700"
+            },
+            "capture_time": "2026-10-01T12:00:00.000000Z",
+            "market": "HK",
+            "point_in_time_claim": "NONE",
+            "provider_fetch_performed": false,
+            "qualification": "QUALIFIED_CURRENT_ARCHIVED_INPUT",
+            "reason_codes": [],
+            "schema_version": "company-public-source.v1",
+            "source_artifact_hash": "sha256:fd18042ebb4d8182fe41bd530a9e2f57c732e2152a54767bab2f79e7c9cbeecc",
+            "source_id": "yahoo_consensus",
+            "source_time": null,
+            "status": "partial",
+            "subject": {
+              "market": "HK",
+              "symbol": "00700"
+            },
+            "symbol": "00700"
+          },
+          "payload_sha256": "a0123c32137c76657d8b6c9da1a7a72926eee0115e887581a5f2bad669494027",
+          "scope": "QUALIFIED_CURRENT_ARCHIVED_POSTHOC_NOT_HISTORICAL_PIT",
+          "source": "immutable_public_source_archive",
+          "source_as_of": null,
+          "stages": [
+            "estimates"
+          ],
+          "status": "AVAILABLE"
+        }
+      ],
+      "subject": {
+        "market": "HK",
+        "symbol": "00700"
+      }
+    }
+  ],
+  "bundle_lists": [
+    [
+      {
+        "market": "US",
+        "symbol": "AAPL",
+        "bundle_id": "00000000000000000000000000000007",
+        "bundle_sha256": "3505a78d3dc088c8f22d7947d33a825077531e8bb7b2c4601223c2459a25cdc1",
+        "archive_cutoff": "2026-09-30",
+        "captured_at": "2026-10-12T12:00:00.000000Z",
+        "available_source_count": 2,
+        "missing_source_count": 1,
+        "limitations": [
+          "Capture time is not source publication time",
+          "Native adapter returns lack raw HTTP bytes; archived source envelopes retain immutable raw artifact hashes",
+          "Current archived post-hoc evidence, never historical-vintage PIT",
+          "Requested archive cutoff: 2026-09-30",
+          "No portfolio, account or private trade input",
+          "Source availability is not universe completeness"
+        ]
+      }
+    ],
+    [
+      {
+        "market": "HK",
+        "symbol": "00700",
+        "bundle_id": "00000000000000000000000000000064",
+        "bundle_sha256": "e01f7f31879e0cd0bf59125f5b3f8ddbefd2a09bf33e8e6bf1fb0441c8da9f7d",
+        "archive_cutoff": "2026-09-30",
+        "captured_at": "2026-10-12T12:00:00.000000Z",
+        "available_source_count": 3,
+        "missing_source_count": 0,
+        "limitations": [
+          "Capture time is not source publication time",
+          "Native adapter returns lack raw HTTP bytes; archived source envelopes retain immutable raw artifact hashes",
+          "Current archived post-hoc evidence, never historical-vintage PIT",
+          "Requested archive cutoff: 2026-09-30",
+          "No portfolio, account or private trade input",
+          "Source availability is not universe completeness"
+        ]
+      }
+    ]
+  ],
+  "events": [
+    {
+      "type": "run_started",
+      "run_id": "00000000000000000000000000000065",
+      "pair_sha256": "101f944dec3a1d8bcdbda688d4156f48e951bd487ab6662f274717926515b37c",
+      "subjects": [
+        {
+          "market": "US",
+          "symbol": "AAPL",
+          "bundle_id": "00000000000000000000000000000007",
+          "expected_bundle_sha256": "3505a78d3dc088c8f22d7947d33a825077531e8bb7b2c4601223c2459a25cdc1"
+        },
+        {
+          "market": "HK",
+          "symbol": "00700",
+          "bundle_id": "00000000000000000000000000000064",
+          "expected_bundle_sha256": "e01f7f31879e0cd0bf59125f5b3f8ddbefd2a09bf33e8e6bf1fb0441c8da9f7d"
+        }
+      ],
+      "as_of": "2026-09-30",
+      "max_model_calls": 1
+    },
+    {
+      "type": "done",
+      "record": {
+        "schema_version": "company_comparison.v1",
+        "run_id": "00000000000000000000000000000065",
+        "pair_sha256": "101f944dec3a1d8bcdbda688d4156f48e951bd487ab6662f274717926515b37c",
+        "subjects": [
+          {
+            "market": "US",
+            "symbol": "AAPL",
+            "bundle_id": "00000000000000000000000000000007",
+            "expected_bundle_sha256": "3505a78d3dc088c8f22d7947d33a825077531e8bb7b2c4601223c2459a25cdc1"
+          },
+          {
+            "market": "HK",
+            "symbol": "00700",
+            "bundle_id": "00000000000000000000000000000064",
+            "expected_bundle_sha256": "e01f7f31879e0cd0bf59125f5b3f8ddbefd2a09bf33e8e6bf1fb0441c8da9f7d"
+          }
+        ],
+        "as_of": "2026-09-30",
+        "evidence": [
+          {
+            "market": "US",
+            "symbol": "AAPL",
+            "sources": [
+              {
+                "evidence_id": "global_quote_ref",
+                "source": "immutable_public_source_archive",
+                "status": "ERROR",
+                "source_as_of": null,
+                "captured_at": "2026-10-12T12:00:00.000000Z",
+                "payload_sha256": "8b9249be97d7759d45d4c71972688696db5fc944906344016e2a1d942543af24",
+                "units": "NOT_VERIFIED",
+                "period": "NOT_VERIFIED",
+                "fixture": true
+              },
+              {
+                "evidence_id": "global_financials_pit",
+                "source": "immutable_public_source_archive",
+                "status": "AVAILABLE",
+                "source_as_of": null,
+                "captured_at": "2026-10-12T12:00:00.000000Z",
+                "payload_sha256": "a91e167617075839f41324b5cdacf41cef892acb34adf9bc259be797ec5cf6f2",
+                "units": "NOT_VERIFIED",
+                "period": "NOT_VERIFIED",
+                "fixture": true
+              },
+              {
+                "evidence_id": "yahoo_consensus",
+                "source": "immutable_public_source_archive",
+                "status": "AVAILABLE",
+                "source_as_of": null,
+                "captured_at": "2026-10-12T12:00:00.000000Z",
+                "payload_sha256": "3ef8b1c04278a1cc3fac3555cd1a076ae2e38b5164d4abdeaa0dc4b40385a832",
+                "units": "NOT_VERIFIED",
+                "period": "NOT_VERIFIED",
+                "fixture": true
+              }
+            ]
+          },
+          {
+            "market": "HK",
+            "symbol": "00700",
+            "sources": [
+              {
+                "evidence_id": "global_quote_ref",
+                "source": "immutable_public_source_archive",
+                "status": "AVAILABLE",
+                "source_as_of": null,
+                "captured_at": "2026-10-12T12:00:00.000000Z",
+                "payload_sha256": "266f8f570eb65034f4ba51661e65decc4133996b5ecb171397ccfc166bf419e3",
+                "units": "NOT_VERIFIED",
+                "period": "NOT_VERIFIED",
+                "fixture": true
+              },
+              {
+                "evidence_id": "global_financials_pit",
+                "source": "immutable_public_source_archive",
+                "status": "AVAILABLE",
+                "source_as_of": null,
+                "captured_at": "2026-10-12T12:00:00.000000Z",
+                "payload_sha256": "45da1bdbdc28a16da20632e9b42299b6747e24eb523a83ddf02f2ab42269e2c6",
+                "units": "NOT_VERIFIED",
+                "period": "NOT_VERIFIED",
+                "fixture": true
+              },
+              {
+                "evidence_id": "yahoo_consensus",
+                "source": "immutable_public_source_archive",
+                "status": "AVAILABLE",
+                "source_as_of": null,
+                "captured_at": "2026-10-12T12:00:00.000000Z",
+                "payload_sha256": "a0123c32137c76657d8b6c9da1a7a72926eee0115e887581a5f2bad669494027",
+                "units": "NOT_VERIFIED",
+                "period": "NOT_VERIFIED",
+                "fixture": true
+              }
+            ]
+          }
+        ],
+        "status": "COMPLETED",
+        "started_at": "2026-10-13T12:00:00.000000Z",
+        "model": {
+          "provider": "deepseek",
+          "name": "offline-fixture"
+        },
+        "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+        "numeric_claim_verification": "NOT_EVALUATED",
+        "comparability": "NOT_ESTABLISHED",
+        "numeric_ranking": "NOT_PERFORMED",
+        "output": {
+          "subjects": [
+            {
+              "caveats": [
+                "Current archived evidence is not historical point in time truth; units remain unverified."
+              ],
+              "citations": [
+                {
+                  "evidence_id": "global_financials_pit",
+                  "market": "US",
+                  "symbol": "AAPL"
+                },
+                {
+                  "evidence_id": "yahoo_consensus",
+                  "market": "US",
+                  "symbol": "AAPL"
+                }
+              ],
+              "market": "US",
+              "missingness": [
+                "Some sources are missing or unqualified."
+              ],
+              "summary": "Synthetic archived company evidence supports a limited qualitative draft.",
+              "symbol": "AAPL"
+            },
+            {
+              "caveats": [
+                "Current archived evidence is not historical point in time truth; units remain unverified."
+              ],
+              "citations": [
+                {
+                  "evidence_id": "global_quote_ref",
+                  "market": "HK",
+                  "symbol": "00700"
+                },
+                {
+                  "evidence_id": "global_financials_pit",
+                  "market": "HK",
+                  "symbol": "00700"
+                },
+                {
+                  "evidence_id": "yahoo_consensus",
+                  "market": "HK",
+                  "symbol": "00700"
+                }
+              ],
+              "market": "HK",
+              "missingness": [],
+              "summary": "Synthetic archived company evidence supports a limited qualitative draft.",
+              "symbol": "00700"
+            }
+          ]
+        },
+        "finished_at": "2026-10-13T12:00:00.000000Z",
+        "result_sha256": "4fd2b36662a8b418b8260f1f73c6e2fba8ac83e2e7910636a3b85efc3e569216"
+      }
+    }
+  ],
+  "record": {
+    "schema_version": "company_comparison.v1",
+    "run_id": "00000000000000000000000000000065",
+    "pair_sha256": "101f944dec3a1d8bcdbda688d4156f48e951bd487ab6662f274717926515b37c",
+    "subjects": [
+      {
+        "market": "US",
+        "symbol": "AAPL",
+        "bundle_id": "00000000000000000000000000000007",
+        "expected_bundle_sha256": "3505a78d3dc088c8f22d7947d33a825077531e8bb7b2c4601223c2459a25cdc1"
+      },
+      {
+        "market": "HK",
+        "symbol": "00700",
+        "bundle_id": "00000000000000000000000000000064",
+        "expected_bundle_sha256": "e01f7f31879e0cd0bf59125f5b3f8ddbefd2a09bf33e8e6bf1fb0441c8da9f7d"
+      }
+    ],
+    "as_of": "2026-09-30",
+    "evidence": [
+      {
+        "market": "US",
+        "symbol": "AAPL",
+        "sources": [
+          {
+            "evidence_id": "global_quote_ref",
+            "source": "immutable_public_source_archive",
+            "status": "ERROR",
+            "source_as_of": null,
+            "captured_at": "2026-10-12T12:00:00.000000Z",
+            "payload_sha256": "8b9249be97d7759d45d4c71972688696db5fc944906344016e2a1d942543af24",
+            "units": "NOT_VERIFIED",
+            "period": "NOT_VERIFIED",
+            "fixture": true
+          },
+          {
+            "evidence_id": "global_financials_pit",
+            "source": "immutable_public_source_archive",
+            "status": "AVAILABLE",
+            "source_as_of": null,
+            "captured_at": "2026-10-12T12:00:00.000000Z",
+            "payload_sha256": "a91e167617075839f41324b5cdacf41cef892acb34adf9bc259be797ec5cf6f2",
+            "units": "NOT_VERIFIED",
+            "period": "NOT_VERIFIED",
+            "fixture": true
+          },
+          {
+            "evidence_id": "yahoo_consensus",
+            "source": "immutable_public_source_archive",
+            "status": "AVAILABLE",
+            "source_as_of": null,
+            "captured_at": "2026-10-12T12:00:00.000000Z",
+            "payload_sha256": "3ef8b1c04278a1cc3fac3555cd1a076ae2e38b5164d4abdeaa0dc4b40385a832",
+            "units": "NOT_VERIFIED",
+            "period": "NOT_VERIFIED",
+            "fixture": true
+          }
+        ]
+      },
+      {
+        "market": "HK",
+        "symbol": "00700",
+        "sources": [
+          {
+            "evidence_id": "global_quote_ref",
+            "source": "immutable_public_source_archive",
+            "status": "AVAILABLE",
+            "source_as_of": null,
+            "captured_at": "2026-10-12T12:00:00.000000Z",
+            "payload_sha256": "266f8f570eb65034f4ba51661e65decc4133996b5ecb171397ccfc166bf419e3",
+            "units": "NOT_VERIFIED",
+            "period": "NOT_VERIFIED",
+            "fixture": true
+          },
+          {
+            "evidence_id": "global_financials_pit",
+            "source": "immutable_public_source_archive",
+            "status": "AVAILABLE",
+            "source_as_of": null,
+            "captured_at": "2026-10-12T12:00:00.000000Z",
+            "payload_sha256": "45da1bdbdc28a16da20632e9b42299b6747e24eb523a83ddf02f2ab42269e2c6",
+            "units": "NOT_VERIFIED",
+            "period": "NOT_VERIFIED",
+            "fixture": true
+          },
+          {
+            "evidence_id": "yahoo_consensus",
+            "source": "immutable_public_source_archive",
+            "status": "AVAILABLE",
+            "source_as_of": null,
+            "captured_at": "2026-10-12T12:00:00.000000Z",
+            "payload_sha256": "a0123c32137c76657d8b6c9da1a7a72926eee0115e887581a5f2bad669494027",
+            "units": "NOT_VERIFIED",
+            "period": "NOT_VERIFIED",
+            "fixture": true
+          }
+        ]
+      }
+    ],
+    "status": "COMPLETED",
+    "started_at": "2026-10-13T12:00:00.000000Z",
+    "model": {
+      "provider": "deepseek",
+      "name": "offline-fixture"
+    },
+    "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+    "numeric_claim_verification": "NOT_EVALUATED",
+    "comparability": "NOT_ESTABLISHED",
+    "numeric_ranking": "NOT_PERFORMED",
+    "output": {
+      "subjects": [
+        {
+          "caveats": [
+            "Current archived evidence is not historical point in time truth; units remain unverified."
+          ],
+          "citations": [
+            {
+              "evidence_id": "global_financials_pit",
+              "market": "US",
+              "symbol": "AAPL"
+            },
+            {
+              "evidence_id": "yahoo_consensus",
+              "market": "US",
+              "symbol": "AAPL"
+            }
+          ],
+          "market": "US",
+          "missingness": [
+            "Some sources are missing or unqualified."
+          ],
+          "summary": "Synthetic archived company evidence supports a limited qualitative draft.",
+          "symbol": "AAPL"
+        },
+        {
+          "caveats": [
+            "Current archived evidence is not historical point in time truth; units remain unverified."
+          ],
+          "citations": [
+            {
+              "evidence_id": "global_quote_ref",
+              "market": "HK",
+              "symbol": "00700"
+            },
+            {
+              "evidence_id": "global_financials_pit",
+              "market": "HK",
+              "symbol": "00700"
+            },
+            {
+              "evidence_id": "yahoo_consensus",
+              "market": "HK",
+              "symbol": "00700"
+            }
+          ],
+          "market": "HK",
+          "missingness": [],
+          "summary": "Synthetic archived company evidence supports a limited qualitative draft.",
+          "symbol": "00700"
+        }
+      ]
+    },
+    "finished_at": "2026-10-13T12:00:00.000000Z",
+    "result_sha256": "4fd2b36662a8b418b8260f1f73c6e2fba8ac83e2e7910636a3b85efc3e569216"
+  }
+}

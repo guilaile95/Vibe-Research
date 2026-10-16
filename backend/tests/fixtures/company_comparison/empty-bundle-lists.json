@@ -1,0 +1,30 @@
+{
+  "fixture_only": true,
+  "authority": "Registered production selector API against an empty temporary private store; no capture or model",
+  "cases": [
+    {
+      "url": "/api/company-comparison/bundles?market=US&symbol=AAPL&as_of=2026-09-30",
+      "query": {
+        "market": "US",
+        "symbol": "AAPL",
+        "as_of": "2026-09-30"
+      },
+      "status_code": 200,
+      "response": {
+        "data": []
+      }
+    },
+    {
+      "url": "/api/company-comparison/bundles?market=HK&symbol=00700&as_of=2026-09-30",
+      "query": {
+        "market": "HK",
+        "symbol": "00700",
+        "as_of": "2026-09-30"
+      },
+      "status_code": 200,
+      "response": {
+        "data": []
+      }
+    }
+  ]
+}
