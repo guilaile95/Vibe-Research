@@ -14,6 +14,7 @@ import time
 import ipaddress
 import json
 import os
+import queue
 import socket
 import threading
 import uuid
@@ -58,6 +59,163 @@ _READ_TIMEOUT = 120
 _TURN_TIMEOUT = (MAX_ROUNDS + 1) * _READ_TIMEOUT  # Preserve each round's slow first-token budget.
 
 
+class ModelTaskBudgetError(ModelTransportError):
+    """A server-owned task limit was exhausted; never continue another stage."""
+
+
+class ModelTaskBudget:
+    """One model-phase budget shared by every dispatch in a task, including tools.
+
+    API tokens are a per-request provider parameter, not an observed bill. CLI
+    counts runtime invocations and local output only, not hosted model calls.
+    """
+    def __init__(self, *, timeout: float, max_calls: int, max_tokens: int, max_chars: int):
+        self.deadline = time.monotonic() + timeout
+        self.max_calls, self.max_tokens, self.max_chars = max_calls, max_tokens, max_chars
+        self.calls = self.output_chars = 0
+        self._failure = None
+        self._lock = threading.Lock()
+
+    def _check_locked(self):
+        if self._failure is None and time.monotonic() >= self.deadline:
+            self._failure = "模型阶段已超时，任务已停止；已收到的内容不构成完整结果"
+        if self._failure:
+            raise ModelTaskBudgetError(self._failure)
+
+    def check(self):
+        with self._lock:
+            self._check_locked()
+
+    def reserve_dispatch(self):
+        with self._lock:
+            self._check_locked()
+            if self.calls >= self.max_calls:
+                self._failure = "模型调用次数已达任务上限，任务已停止"
+                raise ModelTaskBudgetError(self._failure)
+            self.calls += 1
+
+    def consume(self, text):
+        with self._lock:
+            self._check_locked()
+            if self.output_chars + len(text) > self.max_chars:
+                self._failure = "模型输出已达任务上限，任务已停止；已收到的内容不构成完整结果"
+                raise ModelTaskBudgetError(self._failure)
+            self.output_chars += len(text)
+
+
+def daily_review_task_budget():
+    return ModelTaskBudget(timeout=90, max_calls=1, max_tokens=2500, max_chars=12000)
+
+
+def debate_task_budget(stages):
+    return ModelTaskBudget(timeout=180, max_calls=stages, max_tokens=2500, max_chars=12000 * stages)
+
+
+# Retain admission until the actual transport AND cleanup exit. requests DNS,
+# connect and close cannot be forcibly killed safely. A timed-out consumer never
+# releases an occupied slot, preventing repeated requests from leaking workers.
+_TASK_STREAM_SLOTS = threading.BoundedSemaphore(4)
+
+
+def _bounded_task_events(cfg, messages, use_tools):
+    slots = _TASK_STREAM_SLOTS
+    stop = threading.Event()
+    consumer_finished = threading.Event()
+    worker_cfg = {**cfg, "_cancel_event": stop}
+    mailbox = queue.Queue(maxsize=1)
+    resume = threading.Event()
+    completed = False
+
+    def check():
+        _check_active(cfg)
+
+    def put(kind, value):
+        while not consumer_finished.is_set():
+            try:
+                mailbox.put((kind, value), timeout=0.05)
+                return True
+            except queue.Full:
+                pass
+        return False
+
+    def worker():
+        source = _stream_messages(worker_cfg, messages, use_tools=use_tools)
+        try:
+            pending_done = None
+            answered = False
+            for event in source:
+                _check_active(worker_cfg)
+                if pending_done is not None:
+                    raise ModelStreamIncompleteError()
+                if event.get("type") == "error":
+                    raise ModelTransportError("模型服务返回错误，请稍后重试")
+                if event.get("type") == "done":
+                    pending_done = event
+                    continue  # Success is valid only after clean iterator EOF.
+                if event.get("type") == "delta":
+                    answered = answered or bool((event.get("text") or "").strip())
+                if not put("event", event):
+                    return
+                # Preserve yield/cancel ownership before executing tools or
+                # receiving the next chunk; the worker must not run ahead.
+                while not resume.wait(0.05):
+                    _check_active(worker_cfg)
+                resume.clear()
+            _check_active(worker_cfg)
+            if pending_done is None or not answered:
+                raise ModelStreamIncompleteError()
+            put("done", pending_done)
+        except Exception as exc:
+            put("error", exc)
+        finally:
+            try:
+                source.close()
+            finally:
+                slots.release()
+
+    check()
+    if not slots.acquire(blocking=False):
+        raise ModelTransportError("模型任务仍在运行或清理，请稍后重试")
+    try:
+        thread = threading.Thread(target=worker, daemon=True, name="vibe-budgeted-model-task")
+        thread.start()
+    except BaseException:
+        slots.release()
+        raise
+    try:
+        while True:
+            check()
+            try:
+                kind, value = mailbox.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            check()
+            if kind == "error":
+                raise value
+            if kind == "done":
+                completed = True
+                yield value
+                return
+            yield value
+            check()
+            resume.set()
+    finally:
+        consumer_finished.set()
+        if not completed:
+            stop.set()
+        resume.set()
+
+
+def _account_task_delta(cfg, delta):
+    budget = cfg.get("_task_budget")
+    if budget is not None:
+        text = delta.get("content") or ""
+        for call in delta.get("tool_calls") or []:
+            function = call.get("function") or {}
+            text += (call.get("id") or "") + (function.get("name") or "") + (function.get("arguments") or "")
+        budget.consume(text)
+
+
 def public_error_message(error):
     if isinstance(error, (ModelTransportError, agent_runtime.AgentRuntimeError)):
         return str(error)
@@ -65,6 +223,8 @@ def public_error_message(error):
 
 
 def _check_active(cfg):
+    if cfg.get("_task_budget") is not None:
+        cfg["_task_budget"].check()
     if cfg.get("_cancel_event") is not None and cfg["_cancel_event"].is_set():
         raise ModelTransportError("生成已停止")
     if time.monotonic() >= cfg.get("_deadline", float("inf")):
@@ -125,6 +285,8 @@ def _open_stream(cfg, messages, use_tools):
     finally:
         finished.set()
         close()
+        if cfg.get("_task_budget") is not None:
+            watcher.join()  # Budget admission owns even a held response.close().
 
 
 _TOOL_RESULT_CAP = 6000  # 单次工具结果注入上限（控 token）
@@ -428,10 +590,18 @@ def _stream_request(cfg: dict, messages: list, use_tools: bool) -> dict:
 def _call_llm_stream(cfg: dict, messages: list, use_tools: bool):
     request = _stream_request(cfg, messages, use_tools)
     _check_active(cfg)
+    budget = cfg.get("_task_budget")
+    request_timeout = (_CONNECT_TIMEOUT, _READ_TIMEOUT)
+    if budget is not None:
+        request["json"]["max_tokens"] = budget.max_tokens
+        budget.reserve_dispatch()
+        remaining = max(0.001, budget.deadline - time.monotonic())
+        request_timeout = (min(_CONNECT_TIMEOUT, remaining), min(_READ_TIMEOUT, remaining))
+    _check_active(cfg)
     try:
         r = requests.post(
             request.pop("url"), **request,
-            timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT), stream=True,
+            timeout=request_timeout, stream=True,
             allow_redirects=False,
             hooks={"response": _reject_model_redirect},
         )
@@ -670,13 +840,21 @@ def prepare_daily_review_messages(
 
 
 def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
+    if cfg.get("_task_budget") is not None:
+        yield from _bounded_task_events(cfg, messages, use_tools)
+    else:
+        yield from _stream_messages(cfg, messages, use_tools=use_tools)
+
+
+def _stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
     """底层消息流入口：已组装好的 messages 直接发给模型，不注入 SYSTEM_PROMPT。
 
     - use_tools=False：单次流式补全（每日复盘等已注入上下文场景）；支持 API 与 Codex Subscription。
     - use_tools=True：function-calling 循环（通用聊天 API 路径）。
     事件协议与 /api/chat 一致：{type: tool|delta|done|error}。
     """
-    cfg = {**cfg, "_deadline": time.monotonic() + _TURN_TIMEOUT,
+    budget = cfg.get("_task_budget")
+    cfg = {**cfg, "_deadline": budget.deadline if budget is not None else time.monotonic() + _TURN_TIMEOUT,
            "_session": cfg.get("_session") or uuid.uuid4().hex}
     _check_active(cfg)
     provider = str(cfg.get("provider", ""))
@@ -693,18 +871,33 @@ def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
         message = "\n\n".join(instructions) or "请完成当前 Vibe AI 任务。"
         message += "\n\n请仅基于当前任务输入完成本轮，不执行任何正式写入。"
         context = "\n\n".join(context_parts) or "（无任务输入）"
+        if budget is not None:
+            budget.reserve_dispatch()
         events = agent_runtime.stream_chat(
             session=f"ai-{uuid.uuid4().hex}",
             message=message,
             context=context,
             history=[],
             cancel_event=cfg.get("_cancel_event") or threading.Event(),
+            **({"owned_cleanup": True} if budget is not None else {}),
         )
-        for event in events:
-            if event.get("type") == "done":
-                yield {**event, "trace": [], "rounds": 1}
-            else:
-                yield event
+        runtime_finished = False
+        runtime_done = False
+        try:
+            for event in events:
+                _check_active(cfg)
+                if budget is not None and event.get("type") == "delta":
+                    budget.consume(event.get("text") or "")
+                if event.get("type") == "done":
+                    runtime_done = True
+                    yield {**event, "trace": [], "rounds": 1}
+                else:
+                    yield event
+            runtime_finished = runtime_done
+        finally:
+            if budget is not None and not runtime_finished:
+                cfg["_cancel_event"].set()
+            events.close()
         return
     if provider.startswith("cli-"):
         raise RuntimeError("当前订阅接入仅支持 Codex Subscription")
@@ -714,6 +907,7 @@ def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
         with _open_stream(cfg, messages, False) as resp:
             for delta in _iter_sse_deltas(resp, use_tools=False):
                 _check_active(cfg)
+                _account_task_delta(cfg, delta)
                 if delta.get("content"):
                     answered = True
                     yield {"type": "delta", "text": delta["content"]}
@@ -732,6 +926,7 @@ def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
         with _open_stream(cfg, work, True) as resp:
             for delta in _iter_sse_deltas(resp):
                 _check_active(cfg)
+                _account_task_delta(cfg, delta)
                 if delta.get("content"):
                     content_parts.append(delta["content"])
                     yield {"type": "delta", "text": delta["content"]}
@@ -793,6 +988,7 @@ def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
     with _open_stream(cfg, work, False) as resp:
         for delta in _iter_sse_deltas(resp, use_tools=False):
             _check_active(cfg)
+            _account_task_delta(cfg, delta)
             if delta.get("content"):
                 answered = True
                 yield {"type": "delta", "text": delta["content"]}

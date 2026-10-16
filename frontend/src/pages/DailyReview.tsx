@@ -1,4 +1,5 @@
 import { ShortlineReviewCard } from "@/components/dailyReview/ShortlineReviewCard";
+import { AiTaskBudgetNotice } from "@/components/AiTaskBudgetNotice";
 import { DailyReviewAiBasis } from "@/components/dailyReview/DailyReviewAiBasis";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -1123,6 +1124,7 @@ export function DailyReview() {
             </button>
           )}
         </div>
+        <AiTaskBudgetNotice task="daily" />
         {taskStatus === "restoring" && (
           <p className="mt-3 inline-flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" /> 正在恢复已保存的 AI 复盘…

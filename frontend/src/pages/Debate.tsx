@@ -9,6 +9,7 @@ import { Disclaimer } from "@/components/ui/Disclaimer";
 import { debateStream, type DebateStage, type DossierStatus } from "@/lib/agents";
 import { addNote } from "@/lib/notes";
 import { ApiError } from "@/lib/api";
+import { AiTaskBudgetNotice } from "@/components/AiTaskBudgetNotice";
 
 interface StageBox {
   stage: DebateStage;
@@ -178,16 +179,7 @@ export function Debate() {
           )}
         </div>
 
-        {/* 开销提示：辩论比问答重得多，让用户在点下去之前就知道要花多久、调几次模型 */}
-        {!running && !status && (
-          <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground/70">
-            ⏱ {rounds === 2
-              ? "两轮约 3 分钟 · 5 次模型调用 · 约 6 万字进上下文"
-              : "一轮约 100 秒 · 3 次模型调用 · 约 3.5 万字进上下文"}
-            （每个角色都会带上同一份底稿及其限制）。其中拉底稿约 35 秒、走公开数据接口，不消耗 token。
-            省额度可用 Codex Subscription，或选中档 API 模型——模型基于已返回数据组织和表达。
-          </p>
-        )}
+        <AiTaskBudgetNotice task="debate" rounds={rounds} />
 
         {status && <p className="mt-3 text-xs text-muted-foreground">{status}</p>}
         {error && (

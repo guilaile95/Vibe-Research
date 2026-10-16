@@ -2212,6 +2212,8 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
     cfg["_cancel_event"] = disconnect_event
 
     async def gen():
+        cfg["_task_budget"] = chat_layer.daily_review_task_budget()
+
         source = iter(chat_layer.stream_messages(cfg, messages, use_tools=False))
         try:
             parts: list[str] = []
@@ -2221,6 +2223,7 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
             async for ev in iterate_in_threadpool(source):
                 if disconnect_event.is_set():
                     return
+                cfg["_task_budget"].check()
                 if not isinstance(ev, dict):
                     continue
                 event_type = ev.get("type")
@@ -2242,6 +2245,7 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
                     saw_done = True
                     trace = ev.get("trace") if isinstance(ev.get("trace"), list) else []
                     rounds = ev.get("rounds") if isinstance(ev.get("rounds"), int) else 0
+            cfg["_task_budget"].check()
             if not saw_done:
                 raise chat_layer.ModelStreamIncompleteError()
             markdown = "".join(parts)
@@ -2254,21 +2258,22 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
                 review,
                 markdown,
                 cfg,
-                should_cancel=disconnect_event.is_set,
+                should_cancel=lambda: disconnect_event.is_set() or time.monotonic() >= cfg["_task_budget"].deadline,
                 input_basis=input_basis,
             )
             if disconnect_event.is_set():
                 return
+            cfg["_task_budget"].check()
             result = _safe_daily_review_ai_done_result(saved_record)
             yield json.dumps(
                 {"type": "done", "trace": trace, "rounds": rounds, "result": result},
                 ensure_ascii=False,
             ) + "\n"
-        except Exception:  # noqa: BLE001 — fixed safe stream error; old persisted row remains
+        except Exception as exc:  # noqa: BLE001 — sanitized error; old persisted row remains
             if disconnect_event.is_set():
                 return
             yield json.dumps(
-                {"type": "error", "message": "对话失败：每日复盘AI生成或保存失败"},
+                {"type": "error", "message": chat_layer.public_error_message(exc) if isinstance(exc, chat_layer.ModelTaskBudgetError) else "对话失败：每日复盘AI生成或保存失败"},
                 ensure_ascii=False,
             ) + "\n"
         finally:

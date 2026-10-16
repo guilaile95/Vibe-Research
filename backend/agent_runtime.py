@@ -104,13 +104,32 @@ def cancel(session: str) -> bool:
 def stream_chat(
     *, session: str, message: str, context: str, cancel_event: threading.Event,
     history: list[dict[str, str]] | tuple = (),
+    owned_cleanup: bool = False,
 ) -> Iterator[dict]:
     finished = threading.Event()
+    response = None
+    cancel_lock = threading.Lock()
+    cancellation_started = False
+
+    def request_cancel():
+        nonlocal cancellation_started
+        with cancel_lock:
+            if cancellation_started:
+                return
+            cancellation_started = True
+        try:
+            cancel(session)
+        finally:
+            if owned_cleanup and response is not None:
+                try:
+                    response.close()
+                except Exception:
+                    pass  # Cleanup cannot expose loopback transport internals.
 
     def _cancel_when_disconnected() -> None:
         while not finished.wait(timeout=0.1):
             if cancel_event.is_set():
-                cancel(session)
+                request_cancel()
                 return
 
     watcher = threading.Thread(
@@ -151,4 +170,10 @@ def stream_chat(
     except requests.RequestException as exc:
         raise AgentRuntimeError("RUNTIME_UNAVAILABLE", "Codex Subscription Runtime 当前不可用") from exc
     finally:
-        finished.set()
+        try:
+            if owned_cleanup and cancel_event.is_set():
+                request_cancel()
+        finally:
+            finished.set()
+            if owned_cleanup:
+                watcher.join()  # Keep the task admission slot through cleanup.
