@@ -141,3 +141,25 @@ test('CI harness uses real built pages, reports failed evidence and never launch
   assert.doesNotMatch(source, /vite.*adapter|\.route\([^\n]*company-comparison/);
   assert.equal(isDeepStrictEqual(comparisonHistoryGolden.request, comparisonGoldens.complete.request), true);
 });
+
+test('capture retains real viewport evidence and measures complete tall-content coverage', () => {
+  const source = readFileSync(new URL('./e2e/company-comparison.browser.mjs', import.meta.url), 'utf8');
+  assert.match(source, /fullPage: false/);
+  assert.match(source, /name}-card\.png/);
+  assert.match(source, /name}\.html/);
+  assert.match(source, /name}-full-element\.png/);
+  assert.match(source, /name}-tile-/);
+  assert.match(source, /tile\.start <= covered \+ 1/);
+  assert.match(source, /covered >= tile\.total - 1/);
+  assert.match(source, /scroll must advance full-content coverage/);
+  assert.match(source, /main\.scrollBy/);
+  assert.match(source, /nav-drawer-trigger/);
+  assert.match(source, /titleHitDrawer/);
+  assert.match(source, /framing, bounds, clip, tiles, fullElementError/);
+  const pending = source.indexOf('await chooseBundles(); await hold(); await begin(); await held();');
+  const active = source.indexOf("await shot(card(), 'active-generation-cancel-available');");
+  const cancel = source.indexOf('await cancel.click();');
+  assert.ok(pending >= 0 && active > pending && cancel > active);
+  assert.match(source, /cancel\.isEnabled\(\)/);
+  assert.doesNotMatch(source, /setViewportSize|addStyleTag|\.style\.(?:height|overflow|position)\s*=/);
+});

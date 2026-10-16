@@ -92,7 +92,51 @@ try {
     const comparisonCalls = () => fixture.calls.filter(call => call.path.startsWith('/api/company-comparison/') || call.path.startsWith('/api/company-research/'));
     const query = () => page.getByPlaceholder('A 股 6 位代码，或美股/港股/韩股（AAPL / 00700 / 005930.KS）');
     const shot = async (target, name) => {
-      await target.evaluate(element => element.scrollIntoView({ block: 'start', behavior: 'instant' })); await settle();
+      const frame = async (offset = 0) => {
+        const before = await target.evaluate(element => {
+          const box = r => ({ x: r.x, y: r.y, width: r.width, height: r.height, bottom: r.bottom });
+          const main = element.closest('main');
+          const trigger = document.querySelector('[data-testid="nav-drawer-trigger"]');
+          const nav = trigger?.getBoundingClientRect();
+          const visibleNav = nav && nav.width > 0 && nav.height > 0 ? box(nav) : null;
+          const title = element.matches('details') ? element.querySelector(':scope > summary') : element.querySelector('h4');
+          return { target: box(element.getBoundingClientRect()), main: main ? box(main.getBoundingClientRect()) : null,
+            scrollTop: main?.scrollTop ?? scrollY, trigger: visibleNav, title: title ? box(title.getBoundingClientRect()) : null };
+        });
+        await target.evaluate((element, offset) => {
+          const main = element.closest('main');
+          const trigger = document.querySelector('[data-testid="nav-drawer-trigger"]')?.getBoundingClientRect();
+          const safeTop = Math.max(main?.getBoundingClientRect().top ?? 0, trigger && trigger.width > 0 ? trigger.bottom + 12 : 0);
+          if (element === main) return;
+          const delta = element.getBoundingClientRect().top - (safeTop - offset);
+          if (main) main.scrollBy({ top: delta, behavior: 'instant' });
+          else window.scrollBy({ top: delta, behavior: 'instant' });
+        }, offset);
+        await settle();
+        const after = await target.evaluate(element => {
+          const main = element.closest('main'), b = element.getBoundingClientRect();
+          const nav = document.querySelector('[data-testid="nav-drawer-trigger"]')?.getBoundingClientRect();
+          const safeTop = Math.max(0, main?.getBoundingClientRect().top ?? 0, nav && nav.width > 0 ? nav.bottom + 12 : 0);
+          const title = element.matches('details') ? element.querySelector(':scope > summary') : element.querySelector('h4');
+          const t = title?.getBoundingClientRect();
+          const mainBox = main?.getBoundingClientRect();
+          const visibleBottom = Math.min(innerHeight, mainBox?.bottom ?? innerHeight);
+          const hit = t && t.top >= safeTop && t.bottom <= visibleBottom ? document.elementFromPoint(Math.min(innerWidth - 1, t.left + 4), t.top + Math.min(4, t.height / 2)) : null;
+          return { x: b.x, y: b.y, width: b.width, height: b.height, safeTop, scrollTop: main?.scrollTop ?? scrollY,
+            title: t ? { x: t.x, y: t.y, width: t.width, height: t.height, bottom: t.bottom } : null,
+            main: mainBox ? { x: mainBox.x, y: mainBox.y, width: mainBox.width, height: mainBox.height, bottom: mainBox.bottom } : null,
+            visibleBottom, titleHit: hit?.tagName ?? null, titleOwnsHit: !!(title && hit && title.contains(hit)), titleHitDrawer: !!hit?.closest('[data-testid="nav-drawer-trigger"]') };
+        });
+        if (offset === 0 && after.title) {
+          assert.ok(after.title.y >= after.safeTop && after.title.bottom <= after.visibleBottom,
+            'initial title must be visible within scrollport: ' + JSON.stringify(after));
+          assert.ok(after.titleHit && after.titleOwnsHit,
+            'initial title must own a non-null hit target: ' + JSON.stringify(after));
+        }
+        assert.equal(after.titleHitDrawer, false, 'framed title must not be covered by fixed navigation');
+        return { offset, before, after };
+      };
+      const framing = await frame();
       const bounds = await target.boundingBox(); assert.ok(bounds);
       assert.ok(bounds.x >= -1 && bounds.x + bounds.width <= width + 1, 'comparison target must fit horizontally, including its offset');
       const text = await target.innerText();
@@ -108,7 +152,35 @@ try {
       });
       assert.ok(clip.width > 0 && clip.height > 0, 'comparison target must have a visible screenshot crop');
       await page.screenshot({ path: path.join(output, `${width}-${name}-card.png`), clip });
-      captures.push({ width, name, text });
+      // Supplemental locator image is labelled full-element. An overflow ancestor
+      // may still clip it, so measured scrollport tiles below establish full coverage.
+      let fullElementError = null;
+      const tiles = [];
+      if (!await target.evaluate(element => element.matches('main'))) {
+        let covered = 0;
+        for (let index = 0; index < 40; index++) {
+          const framing = await frame(covered);
+          const tile = await target.evaluate(element => {
+            const b = element.getBoundingClientRect(), m = element.closest('main')?.getBoundingClientRect();
+            const nav = document.querySelector('[data-testid="nav-drawer-trigger"]')?.getBoundingClientRect();
+            const x = Math.max(0, b.left, m?.left ?? 0);
+            const y = Math.max(0, b.top, m?.top ?? 0, nav && nav.width > 0 ? nav.bottom + 12 : 0);
+            const bottom = Math.min(innerHeight, b.bottom, m?.bottom ?? innerHeight);
+            return { clip: { x, y, width: Math.min(innerWidth, b.right, m?.right ?? innerWidth) - x, height: bottom - y },
+              start: Math.max(0, y - b.top), end: Math.min(b.height, bottom - b.top), total: b.height };
+          });
+          assert.ok(tile.clip.width > 0 && tile.clip.height > 0, 'full-content tile must be visible');
+          assert.ok(tile.start <= covered + 1, 'tall-report tiles must not skip content');
+          assert.ok(tile.end > covered || tile.end >= tile.total - 1, 'scroll must advance full-content coverage');
+          await page.screenshot({ path: path.join(output, `${width}-${name}-tile-${index + 1}.png`), clip: tile.clip });
+          tiles.push({ ...tile, framing }); covered = tile.end;
+          if (covered >= tile.total - 1) break;
+          assert.ok(index < 39, 'tall-report capture exceeds bounded tile budget');
+        }
+      }
+      try { await target.screenshot({ path: path.join(output, `${width}-${name}-full-element.png`), timeout: 5000 }); }
+      catch (error) { fullElementError = String(error); }
+      captures.push({ width, name, text, framing, bounds, clip, tiles, fullElementError });
     };
     const openCard = async identity => {
       await card().getByText(`两股归档研究对比 · ${identity}`, { exact: true }).waitFor();
@@ -211,7 +283,12 @@ try {
 
     phase = `${width} cancellation rejects late complete delivery; history remains explicit`;
     await chooseBundles(); await hold(); await begin(); await held();
-    await card().getByRole('button', { name: '取消对比', exact: true }).click();
+    const cancel = card().getByRole('button', { name: '取消对比', exact: true });
+    await cancel.waitFor(); assert.equal(await cancel.isEnabled(), true);
+    assert.equal(await generate().isDisabled(), true); assert.equal(await currentResult().count(), 0);
+    await card().getByRole('status').getByText('正在处理当前配对…', { exact: true }).waitFor();
+    await shot(card(), 'active-generation-cancel-available');
+    await cancel.click();
     await card().getByRole('alert').getByText('已取消；未完成报告不保存为完成，已产生的模型费用可能无法撤销', { exact: true }).waitFor();
     await release(); assert.equal(await currentResult().count(), 0); assert.equal(await generate().isDisabled(), false);
     await shot(card(), 'cancelled-late-delivery-ignored');

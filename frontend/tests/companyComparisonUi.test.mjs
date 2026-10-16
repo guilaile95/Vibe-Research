@@ -118,3 +118,34 @@ test('same-render double click starts one call and cancelled old finalizer canno
  assert.equal(h.calls.filter(c=>c.kind==='generate')[1].signal.aborted,false);
  second.resolve(h.receipt());await tick();assert.match(text(h.render()),/FIRST/);
 });
+
+// Exercise production JSX so every native field, including dynamically loaded bundle
+// selectors and disabled fields, retains explicit theme colors and picker scheme.
+test('native comparison controls preserve theme colors before, after load, and while busy',async()=>{
+ const d=deferred();const h=harness({generate:()=>d.promise});
+ const check=count=>{
+  const controls=nodes(h.render()).filter(n=>['input','select'].includes(n.type));
+  assert.equal(controls.length,count);
+  for(const control of controls){
+   const classes=new Set(control.props.className.split(/\s+/));
+   for(const token of ['border-border','bg-background','text-foreground','[color-scheme:dark]','[.light_&]:[color-scheme:light]'])
+    assert.ok(classes.has(token),`${control.props['aria-label']} is missing ${token}`);
+  }
+  return controls;
+ };
+ check(3);await ready(h);check(5);select(h);click(h,start);await tick();
+ assert.ok(check(5).every(control=>control.props.disabled));
+ click(h,'取消对比');d.resolve(h.receipt());await tick();check(5);
+});
+
+test('comparison foreground/background tokens meet normal-text contrast in both themes',()=>{
+ const css=readFileSync(new URL('../src/index.css',import.meta.url),'utf8');
+ const luminance=percent=>{const value=percent/100;return value<=0.04045?value/12.92:((value+0.055)/1.055)**2.4;};
+ for(const selector of [':root','.light']){
+  const block=css.slice(css.indexOf(`${selector} {`)).split('}')[0];
+  // The current shared palette is neutral HSL. Fail rather than silently miscalculate a colored replacement.
+  const token=name=>{const match=block.match(new RegExp(`--${name}: 0 0% ([\\d.]+)%`));assert.ok(match,`${selector} ${name}`);return luminance(Number(match[1]));};
+  const values=[token('foreground'),token('background')].sort((a,b)=>a-b);
+  assert.ok((values[1]+0.05)/(values[0]+0.05)>=4.5,`${selector} comparison text contrast`);
+ }
+});
