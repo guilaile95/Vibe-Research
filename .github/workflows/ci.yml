@@ -40,6 +40,43 @@ jobs:
           python -m piptools compile --no-emit-index-url --output-file=requirements-dev-linux-py311.lock.txt requirements.txt requirements-dev.txt
           git diff --exit-code -- requirements-linux-py311.lock.txt requirements-dev-linux-py311.lock.txt
 
+      - name: Produce offline comparison recovery fixtures
+        timeout-minutes: 5
+        env:
+          COMPANY_COMPARISON_GOLDEN_DIR: ${{ github.workspace }}/backend/tests/fixtures/company_comparison
+          PYTHONPATH: backend
+        run: >-
+          python -m pytest -q backend/tests/test_company_comparison.py
+          -k 'registered_api_golden or registered_history_states_golden or registered_empty_bundle_lists_golden'
+
+      - name: Report synthetic fixture byte hashes
+        timeout-minutes: 1
+        run: |
+          python - <<'PY'
+          import base64, hashlib
+          from pathlib import Path
+          root = Path("backend/tests/fixtures/company_comparison")
+          names = ["US-AAPL--HK-00700.json", "US-AAPL--HK-00700-failed-quote.json", "history-states.json", "empty-bundle-lists.json"]
+          for name in names:
+              data = (root / name).read_bytes()
+              if len(data) > 262144:
+                  raise ValueError("synthetic fixture exceeds recovery log bound")
+              print("COMPARISON_FIXTURE " + name + " " + hashlib.sha256(data).hexdigest() + " " + base64.b64encode(data).decode("ascii"))
+          PY
+
+      - name: Preserve offline comparison recovery fixtures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: company-comparison-recovery-goldens
+          path: |
+            backend/tests/fixtures/company_comparison/US-AAPL--HK-00700.json
+            backend/tests/fixtures/company_comparison/US-AAPL--HK-00700-failed-quote.json
+            backend/tests/fixtures/company_comparison/history-states.json
+            backend/tests/fixtures/company_comparison/empty-bundle-lists.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Run offline backend tests
         working-directory: backend
         env:
