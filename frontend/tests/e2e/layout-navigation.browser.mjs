@@ -179,10 +179,13 @@ async function openPage(browser, { collapsed = false, viewport = MOBILE } = {}) 
   return { context, page };
 }
 
-async function gotoApp(page, route = "/daily-review") {
+// Use an data-independent form; no edits/submission or campaign context.
+async function gotoApp(page, route = "/thesis/new") {
   await page.goto(`http://127.0.0.1:${frontendPort}${route}`, { waitUntil: "domcontentloaded" });
   await sidebar(page).waitFor({ state: "attached", timeout: 15000 });
   await trigger(page).waitFor({ timeout: 15000 });
+  await page.getByRole("heading", { name: "新建投资逻辑", exact: true }).waitFor();
+  await page.locator('[role="status"][aria-busy="true"]').waitFor({ state: "hidden" });
 }
 
 async function openDrawer(page) {
@@ -372,6 +375,7 @@ async function caseScrollClearance(browser, errors) {
     for (const width of [390, 767]) {
       await page.setViewportSize({ width, height: MOBILE.height });
       await page.evaluate(() => { document.querySelector('main').scrollTop = 0; });
+      // Loaded-layout geometry only; transient lazy fallback margins are not this contract.
       const initial = await page.evaluate(() => {
         const main = document.querySelector('main');
         const nav = document.querySelector('[data-testid="nav-drawer-trigger"]');
@@ -414,6 +418,36 @@ async function caseScrollClearance(browser, errors) {
       if (Math.abs(scrolled.top - 64) > 1 || scrolled.targetTop < scrolled.navBottom ||
           Math.abs(scrolled.targetTop - scrolled.top) > 1 || !scrolled.targetHit || scrolled.scrollTop <= 0) {
         errors.push(`scroll-clearance(${width}): scrolled geometry ${JSON.stringify(scrolled)}`);
+      }
+      // Synthetic negative control: recreate the previous CSS, then restore it even on failure.
+      const oldCssControl = await page.evaluate(() => {
+        const main = document.querySelector('main');
+        const wrapper = main.firstElementChild;
+        const target = document.getElementById('layout-scroll-start');
+        const nav = document.querySelector('[data-testid="nav-drawer-trigger"]');
+        const mainStyle = main.getAttribute('style');
+        const wrapperStyle = wrapper.getAttribute('style');
+        try {
+          main.style.marginTop = '0px';
+          wrapper.style.paddingTop = '64px';
+          target.scrollIntoView({ block: 'start' });
+          const box = target.getBoundingClientRect();
+          const navBox = nav.getBoundingClientRect();
+          const left = Math.max(box.left, navBox.left), right = Math.min(box.right, navBox.right);
+          const top = Math.max(box.top, navBox.top), bottom = Math.min(box.bottom, navBox.bottom);
+          const overlaps = right > left && bottom > top;
+          const hit = overlaps ? document.elementFromPoint((left + right) / 2, (top + bottom) / 2) : null;
+          return { synthetic: true, mainTop: main.getBoundingClientRect().top,
+            targetTop: box.top, overlaps, blockedByTrigger: hit === nav || nav.contains(hit) };
+        } finally {
+          if (mainStyle === null) main.removeAttribute('style'); else main.setAttribute('style', mainStyle);
+          if (wrapperStyle === null) wrapper.removeAttribute('style'); else wrapper.setAttribute('style', wrapperStyle);
+          target.scrollIntoView({ block: 'start' });
+        }
+      });
+      geometry.push({ width, phase: 'synthetic-old-css-negative-control', ...oldCssControl });
+      if (!oldCssControl.overlaps || !oldCssControl.blockedByTrigger || Math.abs(oldCssControl.mainTop) > 1) {
+        errors.push(`scroll-clearance(${width}): old-CSS control did not reproduce overlap ${JSON.stringify(oldCssControl)}`);
       }
       await page.locator('#layout-scroll-end').evaluate(el => el.scrollIntoView({ block: 'end' }));
       const bottomReachable = await page.evaluate(() => {
