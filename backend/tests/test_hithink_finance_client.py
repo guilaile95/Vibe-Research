@@ -449,7 +449,7 @@ def test_astock_daily_falls_back_on_hithink_failure(monkeypatch):
     monkeypatch.setattr(astock, "_mootdx_client", lambda: fallback)
 
     assert astock.kline("600519", category=4, offset=20) == fallback.rows
-    assert fallback.calls == [{"symbol": "600519", "category": 4, "offset": 20}]
+    assert fallback.calls == [{"symbol": "600519", "frequency": 4, "offset": 20}]
 
 
 def test_astock_current_bse_fails_closed_instead_of_wrong_mootdx_route(monkeypatch):
@@ -471,7 +471,7 @@ def test_astock_non_daily_keeps_existing_provider(monkeypatch):
     )
     monkeypatch.setattr(astock, "_mootdx_client", lambda: fallback)
     assert astock.kline("600519", category=5, offset=20) == fallback.rows
-    assert fallback.calls == [{"symbol": "600519", "category": 5, "offset": 20}]
+    assert fallback.calls == [{"symbol": "600519", "frequency": 5, "offset": 20}]
 
 
 def test_astock_without_key_keeps_existing_provider(monkeypatch):
@@ -491,3 +491,11 @@ def test_astock_current_bse_without_key_fails_closed(monkeypatch):
     )
     with pytest.raises(client.HiThinkNotConfiguredError, match="required"):
         astock.kline("920000", category=4, offset=20)
+
+
+@pytest.fixture(autouse=True)
+def _source_mocked_kline(monkeypatch):
+    # Existing provider contracts use injected transports; process lifetime has
+    # separate synthetic-worker coverage.
+    monkeypatch.setattr(astock, "_bounded_kline_source",
+        lambda source, code, category, offset, timeout: astock._kline_source(source, code, category, offset))

@@ -429,3 +429,12 @@ def test_real_sqlite_roundtrip(tmp_path, monkeypatch):
     out2 = save_current_daily_review(db_path=db)
     assert out2["snapshot"]["inserted"] is False
     assert out2["snapshot"]["id"] == sid
+
+
+@pytest.fixture(autouse=True)
+def _source_mocked_assembly(monkeypatch):
+    # These tests inject provider results in this process. Production collection
+    # is verified separately with disposable synthetic workers.
+    import daily_review as _review
+    monkeypatch.setattr(_review, "_build_daily_review",
+        lambda: _review._assemble_daily_review(None, _test_provider_calls=True))

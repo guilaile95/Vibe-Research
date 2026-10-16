@@ -42,6 +42,7 @@ import shortline_review_service
 import shortline_review_sources
 import shortline_review_store
 import astock
+import public_data_budget
 import chat as chat_layer
 import agent_runtime
 import ai_credential_router
@@ -2676,7 +2677,8 @@ def financials(code: str = Query(...)):
     try:
         import public_data_budget
         data = public_data_budget.run("financials", code)
-        _FIN_CACHE.set(code, data)
+        if isinstance(data, dict) and data.get("status") != "partial":
+            _FIN_CACHE.set(code, data)
         try:
             import data_health_event_store as _dhes
             if not isinstance(data, dict) or not data:
@@ -2793,6 +2795,8 @@ def kline(code: str = Query(...), category: int = Query(4), offset: int = Query(
     code = _validate(code)
     try:
         return {"data": astock.kline(code, category=category, offset=offset)}
+    except public_data_budget.PublicDataUnavailable as e:
+        raise HTTPException(503, "K线来源暂不可用或超时，请稍后重试。") from e
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
