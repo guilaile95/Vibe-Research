@@ -1,3 +1,4 @@
+import * as debateHandoff from "../src/lib/debateHandoff.ts";
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
@@ -44,9 +45,9 @@ function harness(path, name, overrides = {}, globals = {}) {
   const searchParams = new URLSearchParams();
   const mods = {
     react: React,
-    'react-router-dom': { useSearchParams: () => [searchParams, () => {}], Link: 'link', useBlocker: () => ({ state: 'unblocked' }) },
+    'react-router-dom': { useLocation: () => ({ pathname: '/debate', search: '' }), useSearchParams: () => [searchParams, () => {}], Link: 'link', useBlocker: () => ({ state: 'unblocked' }) },
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }), Fragment: 'fragment' },
-    '@/lib/api': apiClient, '@/lib/notes': notes, '@/lib/researchNote': researchNote, '@/lib/modelConnectionProbe': modelProbe, ...overrides,
+    '@/lib/debateHandoff': debateHandoff, '@/lib/api': apiClient, '@/lib/notes': notes, '@/lib/researchNote': researchNote, '@/lib/modelConnectionProbe': modelProbe, ...overrides,
   };
   const exports = {};
   const js = ts.transpileModule(readFileSync(new URL('../src/' + path, import.meta.url), 'utf8'), {
@@ -1180,4 +1181,38 @@ test('sector missing, failed or wrong-owner content ends loading without exposin
     assert.match(label(tree), /研究内容加载失败/); assert.doesNotMatch(label(tree), /加载研究内容/);
     assert.equal(find(tree, 'ask-ai'), undefined); assert.equal(find(tree, 'sector-content'), undefined); h.unmount();
   }
+});
+
+test('handoff is strict identity only and never starts automatically', () => {
+  assert.equal(debateHandoff.stockDebateHref('000001'), '/debate?code=000001');
+  for (const code of ['AAPL', '00700', '600000&x=1', '１２３４５６', ' 600000']) assert.equal(debateHandoff.stockDebateHref(code), null);
+  for (const search of ['?code=AAPL', '?code=600000&code=000001', '?code=']) assert.equal(debateHandoff.debateCodeFromSearch(search), '');
+  let count = 0;
+  const h = harness('pages/Debate.tsx', 'Debate', {
+    'react-router-dom': { useLocation: () => ({ search: '?code=000001' }) },
+    '@/lib/agents': { debateStream: () => { count++; } },
+  });
+  assert.equal(find(h.render(), 'input').props.value, '000001');
+  h.flushScheduled(); assert.equal(count, 0); h.unmount();
+});
+test('navigation aborts debate and rejects old completion across A-B-A', async () => {
+  let search = '?code=600000'; const calls = [];
+  const h = harness('pages/Debate.tsx', 'Debate', {
+    'react-router-dom': { useLocation: () => ({ search }) },
+    '@/lib/agents': { debateStream: (code, rounds, handlers, signal) => {
+      const d = deferred(); calls.push({ ...d, handlers, signal }); return d.promise;
+    } },
+  });
+  h.render(); h.flushScheduled();
+  const first = find(h.render(), 'button', '开始辩论').props.onClick();
+  search = '?code=000001'; h.render(); h.flushScheduled();
+  assert.equal(calls[0].signal.aborted, true);
+  assert.equal(find(h.render(), 'input').props.value, '000001');
+  search = '?code=600000'; h.render(); h.flushScheduled();
+  const second = find(h.render(), 'button', '开始辩论').props.onClick();
+  calls[0].handlers.onStatus('STALE'); calls[0].handlers.onError('STALE');
+  calls[0].resolve(); await first;
+  assert.doesNotMatch(label(h.render()), /STALE/); assert.ok(find(h.render(), 'button', '中止'));
+  assert.equal(calls[1].signal.aborted, false);
+  h.unmount(); calls[1].resolve(); await second;
 });

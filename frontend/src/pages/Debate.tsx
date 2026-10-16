@@ -1,3 +1,6 @@
+import { AiTaskBudgetNotice } from "@/components/AiTaskBudgetNotice";
+import { useLocation } from "react-router-dom";
+import { debateCodeFromSearch } from "@/lib/debateHandoff";
 import { useEffect, useRef, useState } from "react";
 import { Swords, Play, Square, Save, CheckCircle2, Circle, AlertTriangle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -9,7 +12,6 @@ import { Disclaimer } from "@/components/ui/Disclaimer";
 import { debateStream, type DebateStage, type DossierStatus } from "@/lib/agents";
 import { addNote } from "@/lib/notes";
 import { ApiError } from "@/lib/api";
-import { AiTaskBudgetNotice } from "@/components/AiTaskBudgetNotice";
 
 interface StageBox {
   stage: DebateStage;
@@ -31,7 +33,10 @@ const STAGE_TONE: Record<DebateStage, string> = {
 const DOSSIER_HINT = "多空双方使用同一份接口返回的数据；部分、过期、空结果和截断均须保留限制，不能补造数字。";
 
 export function Debate() {
-  const [code, setCode] = useState("");
+  const { search } = useLocation();
+  const owner = useRef(search);
+  owner.current = search;
+  const [code, setCode] = useState(() => debateCodeFromSearch(search));
   const [rounds, setRounds] = useState(1);
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState("");
@@ -56,6 +61,16 @@ export function Debate() {
     setStatus(""); setProgress([]); setMissing([]); setPartial([]); setStages([]); setError(""); setSaved(false);
   };
 
+  useEffect(() => {
+    const old = abortRef.current;
+    abortRef.current = null;
+    old?.abort();
+    reset();
+    setAnalyzedCode("");
+    setRunning(false);
+    setCode(debateCodeFromSearch(search));
+  }, [search]);
+
   async function start() {
     if (abortRef.current) return;
     const c = code.trim();
@@ -65,7 +80,9 @@ export function Debate() {
     setRunning(true);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    const active = () => abortRef.current === ctrl && !ctrl.signal.aborted;
+    const navigationOwner = search;
+    const owns = () => abortRef.current === ctrl && owner.current === navigationOwner;
+    const active = () => owns() && !ctrl.signal.aborted;
     let streamFailed = false;
     try {
       await debateStream(c, rounds, {
@@ -91,14 +108,14 @@ export function Debate() {
       }, ctrl.signal);
       if (active()) { setStatus(streamFailed ? "辩论失败" : "辩论完成"); setCompleted(!streamFailed); }
     } catch (e) {
-      if (abortRef.current !== ctrl) return;
+      if (!owns()) return;
       if (e instanceof DOMException && e.name === "AbortError") setStatus("已中止");
       else {
         setStatus("辩论失败");
         if (!streamFailed) setError(e instanceof ApiError ? e.message : String(e));
       }
     } finally {
-      if (abortRef.current === ctrl) {
+      if (owns()) {
         setRunning(false);
         abortRef.current = null;
       }

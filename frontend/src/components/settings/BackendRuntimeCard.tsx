@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { RuntimeDiagnosticsExport } from "./RuntimeDiagnosticsExport";
 import { Link } from "react-router-dom";
 import { HeartPulse, RefreshCw, Server } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -76,6 +77,7 @@ export function BackendRuntimeCard() {
         </Link>
         <p className="mt-1 text-muted-foreground">服务已连接仅说明后端可响应。行情是否缺失、过期或降级，请查看数据健康。</p>
       </div>
+      <RuntimeDiagnosticsExport />
     </GlassCard>
   );
 }
