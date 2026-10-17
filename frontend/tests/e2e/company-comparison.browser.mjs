@@ -17,6 +17,9 @@ assert.ok(output, 'COMPANY_COMPARISON_BROWSER_OUTPUT_DIR is required');
 mkdirSync(output, { recursive: true });
 let origin, browser, page, width, phase = 'startup';
 const runs = [], errors = [], violations = [], captures = [], dialogs = [];
+const failureCategories = ['TIMEOUT', 'UPSTREAM', 'OUTPUT_INVALID', 'PERSISTENCE'];
+const baseGenerationAttempts = 6;
+assert.deepEqual(Object.keys(comparisonFailures.events), failureCategories);
 const server = createServer((req, res) => {
   const u = new URL(req.url, origin);
   if (req.method !== 'GET' || req.headers.host !== new URL(origin).host || u.pathname.startsWith('/api/')) {
@@ -213,8 +216,17 @@ try {
       } catch (error) { await dialog.dismiss().catch(() => {}); throw error; }
       await (accept ? dialog.accept() : dialog.dismiss());
     }, () => generate().click());
+    let confirmedAttempts = 0;
     const begin = async (scenario = 'complete', delivery = 'complete') => {
-      fixture.expectGeneration(scenario, delivery); await confirmClick(true);
+      const before = modelPosts().length;
+      const acceptedBefore = dialogs.filter(dialog => dialog.width === width && dialog.accept).length;
+      fixture.expectGeneration(scenario, delivery);
+      await observedBrowserAction(
+        () => page.waitForResponse(response => response.url() === origin + generationPath && response.request().method() === 'POST'),
+        () => confirmClick(true));
+      confirmedAttempts++;
+      assert.equal(modelPosts().length, before + 1, 'each explicit generation action makes exactly one request');
+      assert.equal(dialogs.filter(dialog => dialog.width === width && dialog.accept).length, acceptedBefore + 1, 'each generation request has one explicit accepted budget dialog');
     };
     const completed = async (scenario = 'complete') => {
       const g = comparisonGoldens[scenario], result = currentResult();
@@ -379,7 +391,7 @@ try {
     await shot(card(), 'failed-generation-no-current-report');
 
     phase = `${width} each safe failure category provides run identity and actionable recovery`;
-    for (const category of Object.keys(comparisonFailures.events)) {
+    for (const category of failureCategories) {
       const before = modelPosts().length;
       await begin('complete', category);
       const alert = card().getByRole('alert'); await alert.filter({ hasText: category }).waitFor();
@@ -412,7 +424,11 @@ try {
     await page.goBack(); await openCard('A:600000'); assert.equal(modelPosts().length, beforeDebate);
 
     phase = `${width} strict final request audit`;
-    assert.equal(modelPosts().length, 6, 'exactly six explicitly confirmed synthetic comparison attempts');
+    const expectedAttempts = baseGenerationAttempts + failureCategories.length;
+    assert.equal(confirmedAttempts, expectedAttempts, 'six baseline scenarios plus four allowlisted failure scenarios');
+    assert.equal(modelPosts().length, expectedAttempts, 'exactly one request per explicitly confirmed synthetic attempt');
+    assert.equal(dialogs.filter(dialog => dialog.width === width && dialog.accept).length, expectedAttempts);
+    assert.equal(dialogs.filter(dialog => dialog.width === width && !dialog.accept).length, 1, 'declined budget never adds a request');
     assert.deepEqual(fixture.expected, []); assert.deepEqual(fixture.violations, []);
     assert.deepEqual(fixture.base.violations, []); assert.deepEqual(fixture.base.base.violations, []); assert.deepEqual(fixture.base.base.writes, []);
     assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => /note|report|history/i.test(key))), false, 'no implicit saved research note');
