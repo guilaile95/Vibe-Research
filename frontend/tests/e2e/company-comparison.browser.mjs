@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { captureBrowserFailure } from './browser-failure-evidence.mjs';
 import { observedBrowserAction } from './observed-browser-action.mjs';
-import { createComparisonFixture, comparisonGoldens, comparisonHistoryGolden, comparisonLlm, comparisonCutoff, generationPath, CLOCK } from './company-comparison.fixture.mjs';
+import { createComparisonFixture, comparisonGoldens, comparisonHistoryGolden, comparisonPagedHistory, comparisonFailures, historyPath, comparisonLlm, comparisonCutoff, generationPath, CLOCK } from './company-comparison.fixture.mjs';
 
 if (process.env.CI !== 'true') throw Error('Comparison browser acceptance is CI-only; local browser execution is not authorized');
 const frontend = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -309,6 +309,33 @@ try {
     assert.equal(await card().getByTestId('company-comparison-result').count(), 0); assert.equal(await card().getByLabel('对比资料1', { exact: true }).count(), 0);
     await card().getByLabel('对比归档截止日', { exact: true }).fill(comparisonCutoff);
 
+    phase = `${width} filtered history survives newer foreign pairs and replaces bounded cursor pages`;
+    const pageIds = index => comparisonPagedHistory.pages[index].data.records.map(r => r.run_id);
+    const historyRows = () => card().locator(':scope > details');
+    const waitHistoryIds = async ids => page.waitForFunction(ids => JSON.stringify([...document.querySelectorAll('[data-testid="company-comparison"] > details [data-testid="company-comparison-result"]')].map(element => element.querySelector('p').textContent.split(' · ')[2])) === JSON.stringify(ids), ids);
+    assert.equal(comparisonPagedHistory.newer_other_pair_count, 51);
+    fixture.expectHistoryPage(0); await card().getByRole('button', { name: '读取该配对历史', exact: true }).click();
+    await waitHistoryIds(pageIds(0)); assert.equal(await historyRows().count(), 50);
+    const older = card().getByRole('button', { name: '读取更早一页（最多50条）', exact: true });
+    assert.equal(await older.isEnabled(), true); await shot(older, 'filtered-history-next-page-control');
+    fixture.expectHistoryPage(1); await older.click(); await waitHistoryIds(pageIds(1));
+    assert.equal(await historyRows().count(), 1, 'each page replaces the previous bounded page');
+    assert.equal(await older.count(), 0, 'no false next page at end');
+    await historyRows().first().locator(':scope > summary').click();
+    const lastPage = await historyRows().innerText();
+    assert.match(lastPage, /US:AAPL/); assert.match(lastPage, /HK:00700/);
+    assert.equal(pageIds(0).some(id => lastPage.includes(id)), false, 'earlier page cannot mix into current page');
+    await shot(historyRows().first(), 'filtered-history-last-page');
+    fixture.expectHistoryPage(0); await card().getByRole('button', { name: '读取该配对历史', exact: true }).click();
+    await waitHistoryIds(pageIds(0)); assert.equal(await historyRows().count(), 50, 'explicit history read restarts at latest page');
+    const nextPath = historyPath + '&before=' + comparisonPagedHistory.pages[0].data.next_cursor;
+    fixture.expectHistoryPage(1); await hold(nextPath); await older.click(); await held(nextPath);
+    await card().getByRole('button', { name: '取消对比', exact: true }).click();
+    await card().getByLabel('对比代码', { exact: true }).fill('00941');
+    await release(nextPath); assert.equal(await historyRows().count(), 0, 'late cursor response cannot refill another selected pair');
+    await card().getByLabel('对比代码', { exact: true }).fill('00700');
+    assert.equal(modelPosts().length, 1); assert.deepEqual(fixture.expected, []);
+
     phase = `${width} failed raw quote survives as missingness`;
     await chooseBundles('missing'); await begin('missing'); await completed('missing');
     const failedSource = comparisonGoldens.missing.record.evidence[0].sources.find(source => source.evidence_id === 'global_quote_ref');
@@ -347,9 +374,23 @@ try {
 
     phase = `${width} actual failed generation receipt remains retryable without partial result`;
     await begin('complete', 'failed');
-    await card().getByRole('alert').getByText('对比未完成；没有可用的完整报告，请检查资料后手动重试', { exact: true }).waitFor();
+    await card().getByRole('alert').filter({ hasText: 'OUTPUT_INVALID' }).waitFor();
     assert.equal(await currentResult().count(), 0); assert.equal(await generate().isDisabled(), false);
     await shot(card(), 'failed-generation-no-current-report');
+
+    phase = `${width} each safe failure category provides run identity and actionable recovery`;
+    for (const category of Object.keys(comparisonFailures.events)) {
+      const before = modelPosts().length;
+      await begin('complete', category);
+      const alert = card().getByRole('alert'); await alert.filter({ hasText: category }).waitFor();
+      const message = await alert.innerText();
+      assert.ok(message.includes(comparisonFailures.events[category][0].run_id));
+      assert.match(message, /可能已产生模型费用/); assert.match(message, /不会自动重试/);
+      assert.doesNotMatch(message, /private|fixture.example|synthetic-only/);
+      assert.equal(await currentResult().count(), 0); assert.equal(await generate().isDisabled(), false);
+      await shot(alert, 'safe-failure-' + category.toLowerCase());
+      assert.equal(modelPosts().length, before + 1, 'failure never retries automatically');
+    }
 
     phase = `${width} late selected-company response cannot own new company`;
     await hold(); await begin(); await held(); await query().fill('00700'); await query().press('Enter'); await openCard('HK:00700');

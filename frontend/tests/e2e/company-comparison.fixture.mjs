@@ -7,6 +7,8 @@ const load = suffix => JSON.parse(readFileSync(new URL(`../../../backend/tests/f
 export const comparisonGoldens = { complete: load(''), missing: load('-failed-quote') };
 export const comparisonHistoryGolden = JSON.parse(readFileSync(new URL('../../../backend/tests/fixtures/company_comparison/history-states.json', import.meta.url), 'utf8'));
 export const comparisonEmptyGolden = JSON.parse(readFileSync(new URL('../../../backend/tests/fixtures/company_comparison/empty-bundle-lists.json', import.meta.url), 'utf8'));
+export const comparisonPagedHistory = JSON.parse(readFileSync(new URL('../../../backend/tests/fixtures/company_comparison/paged-history.json', import.meta.url), 'utf8'));
+export const comparisonFailures = JSON.parse(readFileSync(new URL('../../../backend/tests/fixtures/company_comparison/failure-categories.json', import.meta.url), 'utf8'));
 export const comparisonLlm = comparisonGoldens.complete.request.llm;
 export const comparisonCutoff = comparisonGoldens.complete.request.as_of;
 export { CLOCK };
@@ -34,8 +36,8 @@ export function createComparisonFixture(origin) {
       const g = comparisonGoldens[scenario];
       for (const bundle of g.bundles) expect('GET', `/api/company-research/bundles/${bundle.bundle_id}`, json(bundle));
       // A truncated transport replays only the actual run_started receipt. It is not a new success contract.
-      const events = delivery === 'truncated' ? g.events.slice(0, -1) : delivery === 'failed' ? comparisonHistoryGolden.failed_events : g.events;
-      if (!['complete', 'truncated', 'failed'].includes(delivery) || (delivery === 'failed' && scenario !== 'complete')) throw Error('Unknown delivery fault');
+      const events = delivery === 'truncated' ? g.events.slice(0, -1) : delivery === 'failed' ? comparisonHistoryGolden.failed_events : comparisonFailures.events[delivery] ?? g.events;
+      if (!['complete', 'truncated', 'failed', ...Object.keys(comparisonFailures.events)].includes(delivery) || (delivery === 'failed' && scenario !== 'complete')) throw Error('Unknown delivery fault');
       expect('POST', generationPath, { kind: 'stream', body: events.map(e => JSON.stringify(e)).join('\n') + '\n' }, g.request);
     },
     expectEvidence(index = 0, scenario = 'complete') {
@@ -45,6 +47,10 @@ export function createComparisonFixture(origin) {
     expectHistory(scenario = 'complete') {
       const g = comparisonGoldens[scenario];
       expect('GET', historyPath, json({records:g.history ?? [g.record],next_cursor:null}));
+    },
+    expectHistoryPage(index = 0) {
+      const before = index === 0 ? '' : '&before=' + comparisonPagedHistory.pages[index - 1].data.next_cursor;
+      expect('GET', historyPath + before, { kind: 'json', status: 200, body: structuredClone(comparisonPagedHistory.pages[index]) });
     },
     expectHistoryState(state) {
       const envelope = comparisonHistoryGolden[state + '_history'];

@@ -986,3 +986,58 @@ def test_configured_limits_are_frozen_metadata_not_observed_usage(pair):
         record['limits']['max_model_calls'] = 2
         conn.execute('UPDATE runs SET payload=?', (C.canonical(record),))
     with pytest.raises(ValueError): C.list_runs()
+
+
+def test_registered_paged_history_browser_golden(monkeypatch, client):
+    _pin_golden(monkeypatch)
+    bundles = seed_pair()
+    async def start_and_cancel(pair):
+        stop = threading.Event()
+        source = C.generate(pair, AS_OF, CONFIG, stop)
+        receipt = await anext(source)
+        stop.set()
+        await source.aclose()
+        return receipt['run_id']
+    selected = [asyncio.run(start_and_cancel(bundles)) for _ in range(51)]
+    other = [asyncio.run(start_and_cancel(list(reversed(bundles)))) for _ in range(51)]
+    assert not set(selected) & {r['run_id'] for r in C.list_runs()}
+    query = dict(first_market='US', first_symbol='AAPL', second_market='HK', second_symbol='00700', as_of=AS_OF)
+    first = client.get('/api/company-comparison/runs', params=query)
+    assert first.status_code == 200
+    cursor = first.json()['data']['next_cursor']
+    second = client.get('/api/company-comparison/runs', params={**query, 'before':cursor})
+    assert second.status_code == 200
+    pages = [first.json(), second.json()]
+    assert [len(p['data']['records']) for p in pages] == [50, 1]
+    assert [r['run_id'] for p in pages for r in p['data']['records']] == list(reversed(selected))
+    assert not set(other) & {r['run_id'] for p in pages for r in p['data']['records']}
+    _golden('paged-history.json', {'fixture_only':True,
+        'authority':'Registered history API after 51 selected-pair cancelled runs and 51 newer reversed-pair cancelled runs; no model invocation',
+        'newer_other_pair_count':51, 'selected_pair_count':51, 'query':query, 'pages':pages})
+
+
+def test_registered_failure_categories_browser_golden(monkeypatch, client):
+    _pin_golden(monkeypatch)
+    bundles = seed_pair()
+    results = {}
+    for category in ['TIMEOUT', 'UPSTREAM', 'OUTPUT_INVALID', 'PERSISTENCE']:
+        async def failing(cfg, messages, *, limits):
+            if category == 'TIMEOUT': raise TimeoutError('private transport detail')
+            if category == 'UPSTREAM': raise RuntimeError('private provider detail')
+            if category == 'OUTPUT_INVALID':
+                yield {'type':'delta', 'text':'{}'}
+                yield {'type':'done'}
+            else:
+                async for event in good_stream(cfg, messages, limits=limits): yield event
+        with monkeypatch.context() as patch:
+            patch.setattr(chat, 'stream_api_messages', failing)
+            if category == 'PERSISTENCE':
+                def failed_save(*args, **kwargs): raise sqlite3.OperationalError('private database detail')
+                patch.setattr(C, '_terminal', failed_save)
+            result = events(client.post('/api/company-comparison/generate', json=request_body(bundles)))
+        assert result[-1]['category'] == category and result[-1]['run_id'] == result[0]['run_id']
+        assert 'private' not in C.canonical(result)
+        results[category] = result
+    _golden('failure-categories.json', {'fixture_only':True,
+        'authority':'Registered generation API with offline synthetic transport/output/persistence faults; no real model invocation',
+        'request':request_body(bundles), 'events':results})

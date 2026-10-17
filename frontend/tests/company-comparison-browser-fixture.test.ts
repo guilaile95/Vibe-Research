@@ -172,3 +172,33 @@ test('browser frozen drilldown fixture is an explicit read of exact registered e
  assert.deepEqual(await readComparisonEvidence(g.record,0,source,signal()),g.bundles[0]);
  assert.equal(f.calls.length,1);assert.equal(f.calls[0].method,'GET');assert.deepEqual(f.expected,[]);assert.deepEqual(f.violations,[]);
 });
+
+test('actual paged-history goldens exclude 51 newer foreign runs, advance cursor and restart latest',async t=>{
+ const {comparisonPagedHistory}=await import('./e2e/company-comparison.fixture.mjs');
+ const f=createComparisonFixture(origin);mockApi(t,f);
+ assert.equal(comparisonPagedHistory.newer_other_pair_count,51);
+ let before: string | undefined;const ids=new Set<string>();
+ for(let index=0;index<2;index++){
+  f.expectHistoryPage(index);
+  const page=await readComparisonRunPage({market:'US',symbol:'AAPL'},{market:'HK',symbol:'00700'},comparisonCutoff,signal(),before);
+  assert.deepEqual(page,comparisonPagedHistory.pages[index].data);
+  assert.equal(page.records.length,index===0?50:1);
+  for(const record of page.records){assert.ok(!ids.has(record.run_id));ids.add(record.run_id);}
+  before=page.next_cursor??undefined;
+ }
+ assert.equal(ids.size,51);assert.equal(before,undefined);
+ f.expectHistoryPage(0);
+ const restarted=await readComparisonRunPage({market:'US',symbol:'AAPL'},{market:'HK',symbol:'00700'},comparisonCutoff,signal());
+ assert.deepEqual(restarted,comparisonPagedHistory.pages[0].data);assert.deepEqual(f.expected,[]);assert.deepEqual(f.violations,[]);
+});
+for(const category of ['TIMEOUT','UPSTREAM','OUTPUT_INVALID','PERSISTENCE'])test(`actual safe ${category} browser fixture retains run identity and never retries`,async t=>{
+ const {comparisonFailures}=await import('./e2e/company-comparison.fixture.mjs');
+ const f=createComparisonFixture(origin);mockApi(t,f);f.expectGeneration('complete',category);
+ const g=comparisonGoldens.complete;
+ const bundles=await Promise.all(g.bundle_lists.map((list:any)=>readComparisonBundle(list[0],signal())));
+ await assert.rejects(generateComparison(bundles,comparisonCutoff,comparisonLlm,signal()),e=>{
+  assert.match(String(e),new RegExp(category));assert.ok(String(e).includes(comparisonFailures.events[category][0].run_id));
+  assert.match(String(e),/可能已产生模型费用/);assert.doesNotMatch(String(e),/private/);return true;
+ });
+ assert.equal(f.calls.filter((c:any)=>c.method==='POST').length,1);assert.deepEqual(f.expected,[]);assert.deepEqual(f.violations,[]);
+});
