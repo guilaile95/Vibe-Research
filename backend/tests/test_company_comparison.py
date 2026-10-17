@@ -923,3 +923,55 @@ def test_pair_history_filters_before_limit_and_keyset_pages(pair, client):
 def test_pair_history_rejects_invalid_bounds(client, extra):
     query = dict(first_market='US', first_symbol='AAPL', second_market='HK', second_symbol='00700', as_of=AS_OF)
     assert client.get('/api/company-comparison/runs', params={**query, **extra}).status_code in (409, 422)
+
+
+@pytest.mark.parametrize('mode,category', [('timeout','TIMEOUT'), ('upstream','UPSTREAM'), ('invalid','OUTPUT_INVALID'), ('persist','PERSISTENCE')])
+def test_safe_failure_categories_keep_run_identity_no_raw_errors(pair, monkeypatch, mode, category):
+    secret = 'https://private.example/token=do-not-leak'
+    async def stream(cfg, messages, *, limits):
+        if mode == 'timeout': raise TimeoutError(secret)
+        if mode == 'upstream': raise RuntimeError(secret)
+        if mode == 'invalid':
+            yield {'type':'delta','text':secret}
+            yield {'type':'done'}
+        else:
+            async for event in good_stream(cfg, messages, limits=limits): yield event
+    if mode == 'persist':
+        monkeypatch.setattr(C, '_terminal', lambda *args, **kwargs: (_ for _ in ()).throw(sqlite3.OperationalError(secret)))
+    result = asyncio.run(collect(pair, stream=stream))
+    assert result[-1]['category'] == category
+    assert result[-1]['run_id'] == result[0]['run_id']
+    assert secret not in R.canonical(result)
+    stored = C.list_runs()[0]
+    if mode == 'persist':
+        assert stored['status'] == 'RUNNING' and stored['output'] is None
+    else:
+        assert stored['failure_category'] == category and stored['status'] == 'FAILED'
+
+
+def test_failure_record_rejects_nonallowlisted_category(pair):
+    async def failed(*args, **kwargs):
+        raise RuntimeError('private')
+        yield
+    asyncio.run(collect(pair, stream=failed))
+    with C._connect(True) as conn:
+        row = conn.execute('SELECT * FROM runs').fetchone()
+        record = R._json(row['payload'])
+        record['failure_category'] = 'raw private detail'
+        conn.execute('UPDATE runs SET payload=?', (C.canonical(record),))
+    with pytest.raises(ValueError): C.list_runs()
+
+
+@pytest.mark.parametrize('error', [httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout])
+def test_real_shared_transport_timeout_has_safe_category(pair, client, monkeypatch, error):
+    calls = []
+    def handler(request):
+        calls.append(request)
+        raise error('private URL and credential', request=request)
+    install_runtime(monkeypatch, handler)
+    result = events(client.post('/api/company-comparison/generate', json=request_body(pair)))
+    assert len(calls) == 1
+    assert result[-1]['category'] == 'TIMEOUT'
+    assert result[-1]['run_id'] == result[0]['run_id']
+    assert 'private URL' not in R.canonical(result)
+    assert C.list_runs()[0]['failure_category'] == 'TIMEOUT'

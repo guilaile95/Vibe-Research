@@ -5,7 +5,13 @@ import { parseResearchBundle, type ResearchBundle, type Subject } from './compan
 export type ComparisonRef = Subject & { bundle_id: string; expected_bundle_sha256: string };
 export type ComparisonSource = { evidence_id: string; source: string; status: string; source_as_of: string | null; captured_at: string; payload_sha256: string; units: 'NOT_VERIFIED'; period: 'NOT_VERIFIED'; fixture: boolean };
 export type ComparisonOutput = Subject & { summary: string; citations: (Subject & { evidence_id: string })[]; missingness: string[]; caveats: string[] };
-export type ComparisonRecord = { schema_version: 'company_comparison.v1'; run_id: string; pair_sha256: string; subjects: ComparisonRef[]; as_of: string; status: 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'; started_at: string; finished_at?: string; model: { provider: string; name: string }; classification: 'NON_AUTHORITATIVE_AI_DRAFT'; numeric_claim_verification: 'NOT_EVALUATED'; comparability: 'NOT_ESTABLISHED'; numeric_ranking: 'NOT_PERFORMED'; evidence: (Subject & { sources: ComparisonSource[] })[]; output: { subjects: ComparisonOutput[] } | null; result_sha256?: string };
+export type ComparisonFailureCategory = 'TIMEOUT' | 'UPSTREAM' | 'OUTPUT_INVALID' | 'PERSISTENCE';
+const failureCategories = ['TIMEOUT','UPSTREAM','OUTPUT_INVALID','PERSISTENCE'];
+export function comparisonFailureMessage(category: ComparisonFailureCategory, runId: string): string {
+  const actions = { TIMEOUT: '已到调用时限；检查历史后再决定是否手动重试', UPSTREAM: '模型服务未完成响应；检查模型设置或服务状态', OUTPUT_INVALID: '输出未通过结构或来源校验；检查冻结资料后再决定是否手动重试', PERSISTENCE: '状态保存失败；先手动读取历史确认，勿假定已完成' };
+  return `对比未完成 · ${category} · 运行 ${runId}。${actions[category]}。可能已产生模型费用；不会自动重试`;
+}
+export type ComparisonRecord = { schema_version: 'company_comparison.v1'; run_id: string; pair_sha256: string; subjects: ComparisonRef[]; as_of: string; status: 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'; started_at: string; finished_at?: string; failure_category?: ComparisonFailureCategory; model: { provider: string; name: string }; classification: 'NON_AUTHORITATIVE_AI_DRAFT'; numeric_claim_verification: 'NOT_EVALUATED'; comparability: 'NOT_ESTABLISHED'; numeric_ranking: 'NOT_PERFORMED'; evidence: (Subject & { sources: ComparisonSource[] })[]; output: { subjects: ComparisonOutput[] } | null; result_sha256?: string };
 const sameRefs = (a: unknown, b: ComparisonRef[]) => Array.isArray(a) && a.length === b.length && a.every((x, i) => keys(x, ["market","symbol","bundle_id","expected_bundle_sha256"]) && same(x, b[i]) && x.bundle_id === b[i].bundle_id && x.expected_bundle_sha256 === b[i].expected_bundle_sha256);
 const same = (a: Subject, b: Subject) => a.market === b.market && a.symbol === b.symbol;
 const keys = (v: unknown, names: string[]) => !!v && typeof v === 'object' && !Array.isArray(v) && JSON.stringify(Object.keys(v).sort()) === JSON.stringify([...names].sort());
@@ -22,7 +28,8 @@ const proseTexts = (v: unknown): v is string[] => Array.isArray(v) && v.length <
 export const comparisonRefs = (bundles: ResearchBundle[]): ComparisonRef[] => bundles.map(b => ({ ...b.subject, bundle_id: b.bundle_id, expected_bundle_sha256: b.bundle_sha256 }));
 export function parseComparisonRecord(v: ComparisonRecord): ComparisonRecord {
   const fail = () => { throw new Error('对比记录身份、来源或结构无效'); };
-  if (!keys(v, ['schema_version','run_id','pair_sha256','subjects','as_of','status','started_at','model','classification','numeric_claim_verification','comparability','numeric_ranking','evidence','output', ...(v?.status !== 'RUNNING' ? ['finished_at'] : []), ...(v?.status === 'COMPLETED' ? ['result_sha256'] : [])]) || byteLength(v) > 80 * 1024 || v.schema_version !== 'company_comparison.v1' || !id(v.run_id) || !hash(v.pair_sha256) || !comparisonDayValid(v.as_of) || !timestamp(v.started_at) || v.as_of > v.started_at.slice(0,10) || !['RUNNING','COMPLETED','FAILED','CANCELLED'].includes(v.status) || (v.status !== 'RUNNING' && (!timestamp(v.finished_at) || instant(v.finished_at) < instant(v.started_at))) || v.classification !== 'NON_AUTHORITATIVE_AI_DRAFT' || v.numeric_claim_verification !== 'NOT_EVALUATED' || v.comparability !== 'NOT_ESTABLISHED' || v.numeric_ranking !== 'NOT_PERFORMED' || !keys(v.model, ['provider','name']) || !text(v.model.provider) || v.model.provider.startsWith('cli-') || !text(v.model.name) || !Array.isArray(v.subjects) || v.subjects.length !== 2 || !Array.isArray(v.evidence) || v.evidence.length !== 2) fail();
+  if (!keys(v, ['schema_version','run_id','pair_sha256','subjects','as_of','status','started_at','model','classification','numeric_claim_verification','comparability','numeric_ranking','evidence','output', ...(v?.status !== 'RUNNING' ? ['finished_at'] : []), ...(v?.status === 'COMPLETED' ? ['result_sha256'] : []), ...(v?.failure_category !== undefined ? ['failure_category'] : [])]) || byteLength(v) > 80 * 1024 || v.schema_version !== 'company_comparison.v1' || !id(v.run_id) || !hash(v.pair_sha256) || !comparisonDayValid(v.as_of) || !timestamp(v.started_at) || v.as_of > v.started_at.slice(0,10) || !['RUNNING','COMPLETED','FAILED','CANCELLED'].includes(v.status) || (v.status !== 'RUNNING' && (!timestamp(v.finished_at) || instant(v.finished_at) < instant(v.started_at))) || v.classification !== 'NON_AUTHORITATIVE_AI_DRAFT' || v.numeric_claim_verification !== 'NOT_EVALUATED' || v.comparability !== 'NOT_ESTABLISHED' || v.numeric_ranking !== 'NOT_PERFORMED' || !keys(v.model, ['provider','name']) || !text(v.model.provider) || v.model.provider.startsWith('cli-') || !text(v.model.name) || !Array.isArray(v.subjects) || v.subjects.length !== 2 || !Array.isArray(v.evidence) || v.evidence.length !== 2) fail();
+  if (v.failure_category !== undefined && (v.status !== 'FAILED' || !failureCategories.includes(v.failure_category))) fail();
   v.subjects.forEach((s, i) => {
     if (!keys(s, ['market','symbol','bundle_id','expected_bundle_sha256']) || !comparisonSubjectValid(s) || !id(s.bundle_id) || !hash(s.expected_bundle_sha256) || (i === 1 && (same(s, v.subjects[0]) || s.bundle_id === v.subjects[0].bundle_id))) fail();
     const ledger = v.evidence[i];
@@ -86,7 +93,13 @@ export async function generateComparison(bundles: ResearchBundle[], asOf: string
         })) throw new Error('对比来源回执与冻结资料不一致');
       });
       terminal = record;
-    } else if (event.type === 'error') throw new Error('对比未完成；没有可用的完整报告，请检查资料后手动重试');
+    } else if (event.type === 'error') {
+      if (keys(event, ['type','run_id','code','category','message']) && id(event.run_id) && (!runId || event.run_id === runId) && event.code === 'COMPARISON_INCOMPLETE' && typeof event.category === 'string' && failureCategories.includes(event.category)) {
+        throw new Error(comparisonFailureMessage(event.category as ComparisonFailureCategory, event.run_id as string));
+      }
+      // Do not render raw server messages, unknown categories or foreign run IDs.
+      throw new Error('对比未完成；没有可用的完整报告，请手动检查历史。可能已产生模型费用；不会自动重试');
+    }
     else throw new Error('未知对比事件');
   }, signal, { strict: true, maxBytes: 256 * 1024 });
   if (signal.aborted) throw new Error('已取消对比');

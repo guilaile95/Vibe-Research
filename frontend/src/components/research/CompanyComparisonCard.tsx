@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { loadLlm, LLM_CHANGED_EVENT } from '@/lib/llm';
 import type { Subject } from '@/lib/companyResearch';
-import { comparisonDayValid, comparisonSubjectValid, generateComparison, readComparisonBundle, readComparisonBundles, readComparisonRunPage, type ComparisonBundleChoice, type ComparisonRecord } from '@/lib/companyComparison';
+import { comparisonFailureMessage, comparisonDayValid, comparisonSubjectValid, generateComparison, readComparisonBundle, readComparisonBundles, readComparisonRunPage, type ComparisonBundleChoice, type ComparisonRecord } from '@/lib/companyComparison';
 // Native controls must use the same palette as the surrounding theme, including picker chrome.
 const controlTheme = "border-border bg-background text-foreground [color-scheme:dark] [.light_&]:[color-scheme:light]";
 const same = (a: Subject, b: Subject) => a.market === b.market && a.symbol === b.symbol;
@@ -9,6 +9,7 @@ function ComparisonResult({ record }: { record: ComparisonRecord }) {
   return <article className="my-3 space-y-2 rounded border border-border p-3" data-testid="company-comparison-result">
     <p className="text-xs break-all">{record.as_of} · {record.status} · {record.run_id} · 配对哈希 {record.pair_sha256}</p>
     <p className="text-xs text-warning">AI 草稿，事实和数字未核验；币种、单位、报告期可比性尚未建立。未进行结构化排名；文字不构成投资结论。</p>
+    {record.failure_category && <p role="status" className="text-xs text-warning">{comparisonFailureMessage(record.failure_category, record.run_id)}</p>}
     {record.subjects.map((s, i) => <section key={`${s.market}:${s.symbol}`} className="space-y-1 border-t border-border pt-2">
       <h4 className="font-semibold">{s.market}:{s.symbol}</h4><p className="break-all text-xs">资料包 {s.bundle_id} · SHA256 {s.expected_bundle_sha256}</p>
       {record.output && <><p className="whitespace-pre-wrap text-sm">{record.output.subjects[i].summary}</p><p className="text-xs">引用：{record.output.subjects[i].citations.map(c => `${c.market}:${c.symbol}/${c.evidence_id}`).join('、') || '无可用来源'}</p><p className="text-xs text-warning">模型列出的缺口与限制：{[...record.output.subjects[i].missingness, ...record.output.subjects[i].caveats].join('；') || '未额外列出，不代表完整'}</p></>}

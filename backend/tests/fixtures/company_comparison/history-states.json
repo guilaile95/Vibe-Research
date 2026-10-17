@@ -1011,6 +1011,7 @@
       "type": "error",
       "run_id": "00000000000000000000000000000067",
       "code": "COMPARISON_INCOMPLETE",
+      "category": "OUTPUT_INVALID",
       "message": "对比未完成；未保存完整对比报告"
     }
   ],
@@ -1100,6 +1101,7 @@
             "symbol": "00700"
           }
         ],
+        "failure_category": "OUTPUT_INVALID",
         "finished_at": "2026-10-13T12:00:00.000000Z",
         "model": {
           "name": "offline-fixture",

@@ -115,3 +115,14 @@ test('history page sends ordered pair and cutoff before limit and rejects mixed 
  data={records:[record(),record()],next_cursor:null};await assert.rejects(read());
  data={records:[record()],next_cursor:null};data.records[0].as_of='2026-09-29';await assert.rejects(read());
 });
+
+for(const category of ['TIMEOUT','UPSTREAM','OUTPUT_INVALID','PERSISTENCE','secret-in-category','wrong-run']) test(`failure category and run ownership ${category}`,async t=>{
+ const event={type:'error',run_id:category==='wrong-run'?'f'.repeat(32):I,code:'COMPARISON_INCOMPLETE',category:category==='wrong-run'?'TIMEOUT':category,message:'https://private.example/secret'};
+ let calls=0;t.mock.method(globalThis,'fetch',async()=>{calls++;return new Response([start(),event].map(e=>JSON.stringify(e)).join('\n')+'\n');});
+ await assert.rejects(generateComparison(bundles,day,llm,new AbortController().signal),e=>{
+   assert.doesNotMatch(String(e),/private.example|secret-in-category|ffffffff/);
+   assert.match(String(e),/可能已产生模型费用/);
+   if(!['secret-in-category','wrong-run'].includes(category)){assert.match(String(e),new RegExp(category));assert.ok(String(e).includes(I));}
+   return true;
+ });assert.equal(calls,1);
+});

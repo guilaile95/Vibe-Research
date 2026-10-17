@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import anyio
+import httpx
 import chat
 import company_research as research
 from fact_lake_store import _ControlSnapshot, _is_link_or_reparse
@@ -26,6 +27,13 @@ MAX_INPUT_BYTES = 192 * 1024
 MAX_OUTPUT_BYTES = 16000
 MAX_PAIR_BYTES = 48 * 1024
 MAX_RECORD_BYTES = 80 * 1024
+FAILURE_CATEGORIES = frozenset({'TIMEOUT', 'UPSTREAM', 'OUTPUT_INVALID', 'PERSISTENCE'})
+
+
+class _OutputInvalid(ValueError):
+    """Internal validation marker; exception text never leaves this module."""
+
+
 MAX_HISTORY = 50
 MAX_BUNDLES = 20
 MODEL_SECONDS = 90
@@ -407,6 +415,8 @@ async def generate(bundles, as_of, cfg, cancel_event, *, stream=None):
     source = None
     created = terminal = failed = False
     final_event = None
+    phase = "PERSISTENCE"
+    failure_category = None
     if not _ACTIVE.acquire(blocking=False):
         raise ValueError("COMPARISON_BUSY")
     try:
@@ -432,6 +442,7 @@ async def generate(bundles, as_of, cfg, cancel_event, *, stream=None):
                "subjects": pair["subjects"], "as_of": as_of, "max_model_calls": 1}
         if cancel_event.is_set():
             raise asyncio.CancelledError()
+        phase = "UPSTREAM"
         deadline = time.monotonic() + MODEL_SECONDS
         with anyio.fail_after(MODEL_SECONDS):
             source = (stream or chat.stream_api_messages)(
@@ -446,30 +457,33 @@ async def generate(bundles, as_of, cfg, cancel_event, *, stream=None):
                 if cancel_event.is_set():
                     raise asyncio.CancelledError()
                 if done or not isinstance(event, dict):
-                    raise ValueError("COMPARISON_MODEL_EVENT")
+                    raise _OutputInvalid("COMPARISON_MODEL_EVENT")
                 if set(event) == {"type", "text"} and event["type"] == "delta" and isinstance(event["text"], str):
                     length += len(event["text"].encode("utf-8"))
                     if length > MAX_OUTPUT_BYTES:
-                        raise ValueError("COMPARISON_MODEL_OUTPUT_LIMIT")
+                        raise _OutputInvalid("COMPARISON_MODEL_OUTPUT_LIMIT")
                     chunks.append(event["text"])
                 elif (event == {"type": "done"} or
                       set(event) == {"type", "trace", "rounds"} and event["type"] == "done" and
                       event["trace"] == [] and type(event["rounds"]) is int and event["rounds"] == 1):
                     done = True
                 else:
-                    raise ValueError("COMPARISON_MODEL_EVENT")
+                    raise _OutputInvalid("COMPARISON_MODEL_EVENT")
             # Successful cleanup is part of the shared deadline as well as
             # independently bounded; stalled close must never save COMPLETED.
             with anyio.fail_after(CLEANUP_SECONDS):
                 await source.aclose()
             source = None
             if not done:
-                raise ValueError("COMPARISON_MODEL_INCOMPLETE")
+                raise _OutputInvalid("COMPARISON_MODEL_INCOMPLETE")
             raw = "".join(chunks)
-            output = validate_output(research._json(raw), pair)
+            try:
+                output = validate_output(research._json(raw), pair)
+            except Exception:
+                raise _OutputInvalid() from None
             secret = cfg.get("apiKey") or ""
             if secret and (secret in raw or secret in canonical(output)):
-                raise ValueError("COMPARISON_SECRET_IN_OUTPUT")
+                raise _OutputInvalid("COMPARISON_SECRET_IN_OUTPUT")
             if cancel_event.is_set():
                 raise asyncio.CancelledError()
             if time.monotonic() >= deadline:
@@ -480,20 +494,24 @@ async def generate(bundles, as_of, cfg, cancel_event, *, stream=None):
                 if time.monotonic() >= deadline:
                     raise TimeoutError()
                 return cancel_event.is_set()
+            phase = "PERSISTENCE"
             _terminal(run_id, owner, "COMPLETED", record, cancelled=stopped)
             terminal = True
             final_event = {"type": "done", "record": record}
     except (asyncio.CancelledError, GeneratorExit):
         raise
-    except Exception:
+    except Exception as exc:
         # The shared API runtime reports a stopped owner as ModelTransportError
         # after shielded cleanup. Preserve explicit disconnect/cancel ownership
         # rather than misclassifying that secondary transport error as FAILED.
         if cancel_event.is_set():
             raise asyncio.CancelledError() from None
         failed = True
+        failure_category = ('TIMEOUT' if (isinstance(exc, (TimeoutError, httpx.TimeoutException)) or
+                            isinstance(exc, chat.ModelTransportError) and isinstance(exc.__cause__, (TimeoutError, httpx.TimeoutException))) else
+                            'OUTPUT_INVALID' if isinstance(exc, _OutputInvalid) else phase)
         final_event = {"type": "error", "run_id": run_id,
-                       "code": "COMPARISON_INCOMPLETE",
+                       "code": "COMPARISON_INCOMPLETE", "category": failure_category,
                        "message": "对比未完成；未保存完整对比报告"}
     finally:
         try:
@@ -512,7 +530,18 @@ async def generate(bundles, as_of, cfg, cancel_event, *, stream=None):
                     record.pop("result_sha256", None)
                     record.update(status="CANCELLED" if cancel_event.is_set() or not failed else "FAILED",
                                   finished_at=now(), output=None)
-                    _terminal(run_id, owner, record["status"], record)
+                    if record['status'] == 'FAILED':
+                        record['failure_category'] = failure_category
+                    try:
+                        _terminal(run_id, owner, record["status"], record)
+                    except Exception:
+                        # Persistence may fail even while recording the failure.
+                        # Keep the run ID for manual history lookup, but never
+                        # claim the final state was durably saved.
+                        if not cancel_event.is_set():
+                            final_event = {"type": "error", "run_id": run_id,
+                                           "code": "COMPARISON_INCOMPLETE", "category": "PERSISTENCE",
+                                           "message": "对比状态保存失败；请手动查看历史，勿假定已完成"}
         finally:
             _ACTIVE.release()
     if final_event is not None and not cancel_event.is_set():
@@ -531,6 +560,12 @@ def validate_record(value, row, pair):
         common.add("finished_at")
     if status == "COMPLETED":
         common.add("result_sha256")
+    # Older v1 records remain readable; newly observed failures carry only an
+    # allowlisted category, never exception messages or provider details.
+    if 'failure_category' in value:
+        if status != 'FAILED' or value['failure_category'] not in FAILURE_CATEGORIES:
+            raise ValueError('COMPARISON_FAILURE_CATEGORY_INVALID')
+        common.add('failure_category')
     _exact(value, common)
     _size(value, MAX_RECORD_BYTES)
     if value["schema_version"] != SCHEMA:
