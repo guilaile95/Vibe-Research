@@ -37,6 +37,7 @@ class _OutputInvalid(ValueError):
 MAX_HISTORY = 50
 MAX_BUNDLES = 20
 MODEL_SECONDS = 90
+MAX_OUTPUT_TOKENS = 2500
 CLEANUP_SECONDS = .5
 _ACTIVE = threading.BoundedSemaphore(2)
 canonical = research.canonical
@@ -408,7 +409,8 @@ async def generate(bundles, as_of, cfg, cancel_event, *, stream=None):
     record = {"schema_version": SCHEMA, "run_id": run_id,
               "pair_sha256": pair["pair_sha256"], "subjects": pair["subjects"],
               "as_of": as_of, "evidence": pair["evidence"], "status": "RUNNING",
-              "started_at": now(), "model": model, "classification": "NON_AUTHORITATIVE_AI_DRAFT",
+              "started_at": now(), "model": model,
+              "limits": {"max_model_calls": 1, "max_seconds": MODEL_SECONDS, "max_output_tokens": MAX_OUTPUT_TOKENS}, "classification": "NON_AUTHORITATIVE_AI_DRAFT",
               "numeric_claim_verification": "NOT_EVALUATED",
               "comparability": "NOT_ESTABLISHED", "numeric_ranking": "NOT_PERFORMED",
               "output": None}
@@ -447,7 +449,7 @@ async def generate(bundles, as_of, cfg, cancel_event, *, stream=None):
         with anyio.fail_after(MODEL_SECONDS):
             source = (stream or chat.stream_api_messages)(
                 {**cfg, "_cancel_event": cancel_event}, messages,
-                limits=chat.ApiStreamLimits(timeout=MODEL_SECONDS, max_tokens=2500,
+                limits=chat.ApiStreamLimits(timeout=MODEL_SECONDS, max_tokens=MAX_OUTPUT_TOKENS,
                     body_bytes=128 * 1024, line_bytes=64 * 1024,
                     text_chars=MAX_OUTPUT_BYTES, cleanup_grace=CLEANUP_SECONDS))
             chunks = []
@@ -562,6 +564,14 @@ def validate_record(value, row, pair):
         common.add("result_sha256")
     # Older v1 records remain readable; newly observed failures carry only an
     # allowlisted category, never exception messages or provider details.
+    if 'limits' in value:
+        limits = value['limits']
+        _exact(limits, ('max_model_calls', 'max_seconds', 'max_output_tokens'))
+        if (type(limits['max_model_calls']) is not int or limits['max_model_calls'] != 1 or
+                type(limits['max_output_tokens']) is not int or limits['max_output_tokens'] != MAX_OUTPUT_TOKENS or
+                type(limits['max_seconds']) not in (int, float) or not 0 < limits['max_seconds'] <= 90):
+            raise ValueError('COMPARISON_LIMITS_INVALID')
+        common.add('limits')
     if 'failure_category' in value:
         if status != 'FAILED' or value['failure_category'] not in FAILURE_CATEGORIES:
             raise ValueError('COMPARISON_FAILURE_CATEGORY_INVALID')

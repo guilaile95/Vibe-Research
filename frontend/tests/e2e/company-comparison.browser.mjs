@@ -231,11 +231,11 @@ try {
       }
       assert.deepEqual(fixture.expected, []);
     };
-    const hold = async () => page.evaluate(key => window.__comparisonHoldNext.push(key), generationPath);
-    const held = () => page.waitForFunction(key => window.__comparisonHeld.some(item => item.state.key === key && !item.state.returned), generationPath);
-    const release = async () => {
-      await page.evaluate(key => { const item = window.__comparisonHeld.find(item => item.state.key === key && !item.state.returned); if (!item) throw Error('Missing held response'); item.resolve(); }, generationPath);
-      await page.waitForFunction(key => window.__comparisonHeld.filter(item => item.state.key === key).every(item => item.state.returned && item.state.consumed), generationPath); await settle();
+    const hold = async (key = generationPath) => page.evaluate(key => window.__comparisonHoldNext.push(key), key);
+    const held = (key = generationPath) => page.waitForFunction(key => window.__comparisonHeld.some(item => item.state.key === key && !item.state.returned), key);
+    const release = async (key = generationPath) => {
+      await page.evaluate(key => { const item = window.__comparisonHeld.find(item => item.state.key === key && !item.state.returned); if (!item) throw Error('Missing held response'); item.resolve(); }, key);
+      await page.waitForFunction(key => window.__comparisonHeld.filter(item => item.state.key === key).every(item => item.state.returned && item.state.consumed), key); await settle();
     };
 
     phase = `${width} selected identity, manual inputs, no automatic reads`;
@@ -258,6 +258,44 @@ try {
     const beforeDecline = comparisonCalls().length; await confirmClick(false); await settle();
     assert.equal(comparisonCalls().length, beforeDecline, 'declined consent does not even read frozen bodies');
     await begin(); await completed(); assert.equal(modelPosts().length, 1); await shot(currentResult(), 'completed-unverified-synthetic');
+
+    phase = `${width} explicit exact frozen citation and bundle drilldown`;
+    const frozen = comparisonGoldens.complete.bundles[0];
+    const citation = comparisonGoldens.complete.record.output.subjects[0].citations[0];
+    fixture.expectEvidence(0);
+    await currentResult().getByRole('button', { name: `${citation.market}:${citation.symbol}/${citation.evidence_id}`, exact: true }).click();
+    const evidence = card().getByTestId('comparison-frozen-evidence');
+    await evidence.waitFor();
+    assert.equal(await evidence.locator('pre').innerText(), JSON.stringify(frozen.sources.find(source => source.evidence_id === citation.evidence_id), null, 2));
+    assert.equal(await evidence.locator('script,img,iframe,a').count(), 0, 'source payload remains escaped text');
+    assert.match(await currentResult().innerText(), /配置上限：1次调用 \/ 90秒 \/ 2500输出token/);
+    assert.match(await currentResult().innerText(), /实际费用：未知/);
+    await shot(evidence, 'exact-frozen-citation');
+    await evidence.getByRole('button', { name: '关闭来源详情', exact: true }).click();
+    assert.equal(await evidence.count(), 0);
+    fixture.expectEvidence(0);
+    await currentResult().getByRole('button', { name: '查看 US:AAPL 冻结资料包', exact: true }).click();
+    await evidence.waitFor();
+    assert.equal(await evidence.locator('pre').innerText(), JSON.stringify(frozen, null, 2));
+    assert.equal(modelPosts().length, 1, 'drilldown never regenerates');
+    await evidence.getByRole('button', { name: '关闭来源详情', exact: true }).click();
+    assert.deepEqual(fixture.expected, []);
+
+    phase = `${width} cancelled evidence read cannot replace a newer evidence owner`;
+    const oldSourcePath = `/api/company-research/bundles/${comparisonGoldens.complete.bundles[1].bundle_id}`;
+    const newSourcePath = `/api/company-research/bundles/${frozen.bundle_id}`;
+    fixture.expectEvidence(1); await hold(oldSourcePath);
+    await currentResult().getByRole('button', { name: '查看 HK:00700 冻结资料包', exact: true }).click(); await held(oldSourcePath);
+    await card().getByRole('button', { name: '取消对比', exact: true }).click();
+    fixture.expectEvidence(0); await hold(newSourcePath);
+    await currentResult().getByRole('button', { name: '查看 US:AAPL 冻结资料包', exact: true }).click(); await held(newSourcePath);
+    await release(oldSourcePath);
+    assert.equal(await evidence.count(), 0, 'cancelled source cannot restore stale evidence');
+    assert.equal(await card().getByRole('button', { name: '取消对比', exact: true }).count(), 1, 'old finalizer cannot clear newer source owner');
+    await release(newSourcePath); await evidence.waitFor();
+    assert.equal(await evidence.locator('pre').innerText(), JSON.stringify(frozen, null, 2));
+    await evidence.getByRole('button', { name: '关闭来源详情', exact: true }).click();
+    assert.equal(modelPosts().length, 1); assert.deepEqual(fixture.expected, []);
 
     phase = `${width} explicit history and context reset`;
     const beforeHistory = comparisonCalls().length;

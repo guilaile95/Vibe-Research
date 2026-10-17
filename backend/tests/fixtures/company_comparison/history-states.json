@@ -840,6 +840,11 @@
             "symbol": "00700"
           }
         ],
+        "limits": {
+          "max_model_calls": 1,
+          "max_output_tokens": 2500,
+          "max_seconds": 90
+        },
         "model": {
           "name": "offline-fixture",
           "provider": "deepseek"
@@ -956,6 +961,11 @@
           }
         ],
         "finished_at": "2026-10-13T12:00:00.000000Z",
+        "limits": {
+          "max_model_calls": 1,
+          "max_output_tokens": 2500,
+          "max_seconds": 90
+        },
         "model": {
           "name": "offline-fixture",
           "provider": "deepseek"
@@ -1103,6 +1113,11 @@
         ],
         "failure_category": "OUTPUT_INVALID",
         "finished_at": "2026-10-13T12:00:00.000000Z",
+        "limits": {
+          "max_model_calls": 1,
+          "max_output_tokens": 2500,
+          "max_seconds": 90
+        },
         "model": {
           "name": "offline-fixture",
           "provider": "deepseek"
@@ -1215,6 +1230,11 @@
           }
         ],
         "finished_at": "2026-10-13T12:00:00.000000Z",
+        "limits": {
+          "max_model_calls": 1,
+          "max_output_tokens": 2500,
+          "max_seconds": 90
+        },
         "model": {
           "name": "offline-fixture",
           "provider": "deepseek"

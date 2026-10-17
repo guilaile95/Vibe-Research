@@ -11,7 +11,7 @@ export function comparisonFailureMessage(category: ComparisonFailureCategory, ru
   const actions = { TIMEOUT: '已到调用时限；检查历史后再决定是否手动重试', UPSTREAM: '模型服务未完成响应；检查模型设置或服务状态', OUTPUT_INVALID: '输出未通过结构或来源校验；检查冻结资料后再决定是否手动重试', PERSISTENCE: '状态保存失败；先手动读取历史确认，勿假定已完成' };
   return `对比未完成 · ${category} · 运行 ${runId}。${actions[category]}。可能已产生模型费用；不会自动重试`;
 }
-export type ComparisonRecord = { schema_version: 'company_comparison.v1'; run_id: string; pair_sha256: string; subjects: ComparisonRef[]; as_of: string; status: 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'; started_at: string; finished_at?: string; failure_category?: ComparisonFailureCategory; model: { provider: string; name: string }; classification: 'NON_AUTHORITATIVE_AI_DRAFT'; numeric_claim_verification: 'NOT_EVALUATED'; comparability: 'NOT_ESTABLISHED'; numeric_ranking: 'NOT_PERFORMED'; evidence: (Subject & { sources: ComparisonSource[] })[]; output: { subjects: ComparisonOutput[] } | null; result_sha256?: string };
+export type ComparisonRecord = { schema_version: 'company_comparison.v1'; run_id: string; pair_sha256: string; subjects: ComparisonRef[]; as_of: string; status: 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'; started_at: string; finished_at?: string; failure_category?: ComparisonFailureCategory; limits?: { max_model_calls: 1; max_seconds: number; max_output_tokens: 2500 }; model: { provider: string; name: string }; classification: 'NON_AUTHORITATIVE_AI_DRAFT'; numeric_claim_verification: 'NOT_EVALUATED'; comparability: 'NOT_ESTABLISHED'; numeric_ranking: 'NOT_PERFORMED'; evidence: (Subject & { sources: ComparisonSource[] })[]; output: { subjects: ComparisonOutput[] } | null; result_sha256?: string };
 const sameRefs = (a: unknown, b: ComparisonRef[]) => Array.isArray(a) && a.length === b.length && a.every((x, i) => keys(x, ["market","symbol","bundle_id","expected_bundle_sha256"]) && same(x, b[i]) && x.bundle_id === b[i].bundle_id && x.expected_bundle_sha256 === b[i].expected_bundle_sha256);
 const same = (a: Subject, b: Subject) => a.market === b.market && a.symbol === b.symbol;
 const keys = (v: unknown, names: string[]) => !!v && typeof v === 'object' && !Array.isArray(v) && JSON.stringify(Object.keys(v).sort()) === JSON.stringify([...names].sort());
@@ -28,7 +28,8 @@ const proseTexts = (v: unknown): v is string[] => Array.isArray(v) && v.length <
 export const comparisonRefs = (bundles: ResearchBundle[]): ComparisonRef[] => bundles.map(b => ({ ...b.subject, bundle_id: b.bundle_id, expected_bundle_sha256: b.bundle_sha256 }));
 export function parseComparisonRecord(v: ComparisonRecord): ComparisonRecord {
   const fail = () => { throw new Error('对比记录身份、来源或结构无效'); };
-  if (!keys(v, ['schema_version','run_id','pair_sha256','subjects','as_of','status','started_at','model','classification','numeric_claim_verification','comparability','numeric_ranking','evidence','output', ...(v?.status !== 'RUNNING' ? ['finished_at'] : []), ...(v?.status === 'COMPLETED' ? ['result_sha256'] : []), ...(v?.failure_category !== undefined ? ['failure_category'] : [])]) || byteLength(v) > 80 * 1024 || v.schema_version !== 'company_comparison.v1' || !id(v.run_id) || !hash(v.pair_sha256) || !comparisonDayValid(v.as_of) || !timestamp(v.started_at) || v.as_of > v.started_at.slice(0,10) || !['RUNNING','COMPLETED','FAILED','CANCELLED'].includes(v.status) || (v.status !== 'RUNNING' && (!timestamp(v.finished_at) || instant(v.finished_at) < instant(v.started_at))) || v.classification !== 'NON_AUTHORITATIVE_AI_DRAFT' || v.numeric_claim_verification !== 'NOT_EVALUATED' || v.comparability !== 'NOT_ESTABLISHED' || v.numeric_ranking !== 'NOT_PERFORMED' || !keys(v.model, ['provider','name']) || !text(v.model.provider) || v.model.provider.startsWith('cli-') || !text(v.model.name) || !Array.isArray(v.subjects) || v.subjects.length !== 2 || !Array.isArray(v.evidence) || v.evidence.length !== 2) fail();
+  if (!keys(v, ['schema_version','run_id','pair_sha256','subjects','as_of','status','started_at','model','classification','numeric_claim_verification','comparability','numeric_ranking','evidence','output', ...(v?.status !== 'RUNNING' ? ['finished_at'] : []), ...(v?.status === 'COMPLETED' ? ['result_sha256'] : []), ...(v?.failure_category !== undefined ? ['failure_category'] : []), ...(v?.limits !== undefined ? ['limits'] : [])]) || byteLength(v) > 80 * 1024 || v.schema_version !== 'company_comparison.v1' || !id(v.run_id) || !hash(v.pair_sha256) || !comparisonDayValid(v.as_of) || !timestamp(v.started_at) || v.as_of > v.started_at.slice(0,10) || !['RUNNING','COMPLETED','FAILED','CANCELLED'].includes(v.status) || (v.status !== 'RUNNING' && (!timestamp(v.finished_at) || instant(v.finished_at) < instant(v.started_at))) || v.classification !== 'NON_AUTHORITATIVE_AI_DRAFT' || v.numeric_claim_verification !== 'NOT_EVALUATED' || v.comparability !== 'NOT_ESTABLISHED' || v.numeric_ranking !== 'NOT_PERFORMED' || !keys(v.model, ['provider','name']) || !text(v.model.provider) || v.model.provider.startsWith('cli-') || !text(v.model.name) || !Array.isArray(v.subjects) || v.subjects.length !== 2 || !Array.isArray(v.evidence) || v.evidence.length !== 2) fail();
+  if (v.limits !== undefined && (!keys(v.limits, ['max_model_calls','max_seconds','max_output_tokens']) || v.limits.max_model_calls !== 1 || v.limits.max_output_tokens !== 2500 || typeof v.limits.max_seconds !== 'number' || !(v.limits.max_seconds > 0 && v.limits.max_seconds <= 90))) fail();
   if (v.failure_category !== undefined && (v.status !== 'FAILED' || !failureCategories.includes(v.failure_category))) fail();
   v.subjects.forEach((s, i) => {
     if (!keys(s, ['market','symbol','bundle_id','expected_bundle_sha256']) || !comparisonSubjectValid(s) || !id(s.bundle_id) || !hash(s.expected_bundle_sha256) || (i === 1 && (same(s, v.subjects[0]) || s.bundle_id === v.subjects[0].bundle_id))) fail();
@@ -63,7 +64,7 @@ export async function readComparisonBundles(subject: Subject, asOf: string, sign
   }
   return rows;
 }
-export async function readComparisonBundle(choice: ComparisonBundleChoice, signal: AbortSignal): Promise<ResearchBundle> {
+export async function readComparisonBundle(choice: Pick<ComparisonBundleChoice, 'market' | 'symbol' | 'bundle_id' | 'bundle_sha256' | 'archive_cutoff'>, signal: AbortSignal): Promise<ResearchBundle> {
   const bundle = parseResearchBundle(await get<ResearchBundle>(`/company-research/bundles/${choice.bundle_id}`, { signal }), { market: choice.market, symbol: choice.symbol }, choice.archive_cutoff);
   if (bundle.bundle_id !== choice.bundle_id || bundle.bundle_sha256 !== choice.bundle_sha256 || bundle.archive_cutoff !== choice.archive_cutoff) throw new Error('归档资料版本已变化');
   return bundle;
@@ -123,4 +124,19 @@ export async function readComparisonRunPage(first: Subject, second: Subject, asO
   const records = page.records.map(parseComparisonRecord);
   if (new Set(records.map(r => r.run_id)).size !== records.length || records.some(r => r.as_of !== asOf || !same(r.subjects[0], first) || !same(r.subjects[1], second)) || (page.next_cursor !== null && !records.length)) throw new Error('对比历史配对身份无效');
   return { records, next_cursor: page.next_cursor };
+}
+
+/** Reads the exact previously frozen bundle, never a new capture or model call. */
+export async function readComparisonEvidence(record: ComparisonRecord, index: number, evidenceId: string | undefined, signal: AbortSignal): Promise<ResearchBundle> {
+  parseComparisonRecord(record);
+  if (![0,1].includes(index)) throw new Error('对比来源身份无效');
+  const ref = record.subjects[index], ledger = record.evidence[index];
+  if (evidenceId !== undefined && !ledger.sources.some(s => s.evidence_id === evidenceId)) throw new Error('对比引用不属于该冻结资料');
+  const bundle = await readComparisonBundle({ market: ref.market, symbol: ref.symbol, bundle_id: ref.bundle_id, bundle_sha256: ref.expected_bundle_sha256, archive_cutoff: record.as_of }, signal);
+  if (signal.aborted) throw new Error('已取消来源读取');
+  if (bundle.sources.length !== ledger.sources.length || bundle.sources.some((s, i) => {
+    const r = ledger.sources[i], payload = s.payload as { block?: { fixture?: boolean } } | null;
+    return r.evidence_id !== s.evidence_id || r.source !== s.source || r.status !== s.status || r.source_as_of !== s.source_as_of || r.captured_at !== s.captured_at || r.payload_sha256 !== s.payload_sha256 || r.fixture !== (s.source === 'immutable_public_source_archive' && payload?.block?.fixture === true);
+  })) throw new Error('冻结资料来源与历史回执不一致');
+  return bundle;
 }

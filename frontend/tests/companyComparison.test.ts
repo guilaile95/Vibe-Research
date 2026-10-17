@@ -126,3 +126,26 @@ for(const category of ['TIMEOUT','UPSTREAM','OUTPUT_INVALID','PERSISTENCE','secr
    return true;
  });assert.equal(calls,1);
 });
+
+test('exact frozen citation read binds subject bundle hash ledger and never calls generation',async t=>{
+ const {readComparisonEvidence}=await import('../src/lib/companyComparison.ts');
+ let response=structuredClone(bundles[0]);let calls=0;
+ t.mock.method(globalThis,'fetch',async(url,init)=>{calls++;assert.equal(String(url),`/api/company-research/bundles/${bundles[0].bundle_id}`);assert.ok(!init?.method || init.method==='GET');return new Response(JSON.stringify({data:response}));});
+ const source=golden.record.output.subjects[0].citations[0].evidence_id;
+ assert.deepEqual(await readComparisonEvidence(record(),0,source,new AbortController().signal),bundles[0]);
+ await assert.rejects(readComparisonEvidence(record(),0,'not_in_this_bundle',new AbortController().signal));assert.equal(calls,1);
+ for(const field of ['bundle_sha256','bundle_id']){
+  response=structuredClone(bundles[0]);response[field]='f'.repeat(field==='bundle_id'?32:64);
+  await assert.rejects(readComparisonEvidence(record(),0,source,new AbortController().signal));
+ }
+ response=structuredClone(bundles[1]);await assert.rejects(readComparisonEvidence(record(),0,source,new AbortController().signal));
+ response=structuredClone(bundles[0]);const changed=record();changed.evidence[0].sources[0].payload_sha256='a'.repeat(64);
+ await assert.rejects(readComparisonEvidence(changed,0,source,new AbortController().signal),/历史回执/);
+ const stop=new AbortController();stop.abort();await assert.rejects(readComparisonEvidence(record(),0,source,stop.signal));
+});
+test('legacy records retain unknown historical limits; new limits cannot imply observed usage',()=>{
+ const legacy=record();delete legacy.limits;assert.equal(parseComparisonRecord(legacy).limits,undefined);
+ for(const limits of [{max_model_calls:2,max_seconds:90,max_output_tokens:2500},{max_model_calls:1,max_seconds:91,max_output_tokens:2500},{max_model_calls:1,max_seconds:90,max_output_tokens:3000},{max_model_calls:1,max_seconds:90,max_output_tokens:2500,actual_cost:0}]){
+  assert.throws(()=>parseComparisonRecord({...record(),limits} as any));
+ }
+});

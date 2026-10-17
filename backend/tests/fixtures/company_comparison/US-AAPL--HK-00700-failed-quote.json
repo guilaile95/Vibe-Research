@@ -861,6 +861,11 @@
           "provider": "deepseek",
           "name": "offline-fixture"
         },
+        "limits": {
+          "max_model_calls": 1,
+          "max_seconds": 90,
+          "max_output_tokens": 2500
+        },
         "classification": "NON_AUTHORITATIVE_AI_DRAFT",
         "numeric_claim_verification": "NOT_EVALUATED",
         "comparability": "NOT_ESTABLISHED",
@@ -919,7 +924,7 @@
           ]
         },
         "finished_at": "2026-10-13T12:00:00.000000Z",
-        "result_sha256": "4fd2b36662a8b418b8260f1f73c6e2fba8ac83e2e7910636a3b85efc3e569216"
+        "result_sha256": "e4133e2b4f8cb3b59861d83b0e38eff474cdf6eacbff8e00c8fed926b2923b40"
       }
     }
   ],
@@ -1028,6 +1033,11 @@
       "provider": "deepseek",
       "name": "offline-fixture"
     },
+    "limits": {
+      "max_model_calls": 1,
+      "max_seconds": 90,
+      "max_output_tokens": 2500
+    },
     "classification": "NON_AUTHORITATIVE_AI_DRAFT",
     "numeric_claim_verification": "NOT_EVALUATED",
     "comparability": "NOT_ESTABLISHED",
@@ -1086,6 +1096,6 @@
       ]
     },
     "finished_at": "2026-10-13T12:00:00.000000Z",
-    "result_sha256": "4fd2b36662a8b418b8260f1f73c6e2fba8ac83e2e7910636a3b85efc3e569216"
+    "result_sha256": "e4133e2b4f8cb3b59861d83b0e38eff474cdf6eacbff8e00c8fed926b2923b40"
   }
 }

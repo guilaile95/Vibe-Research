@@ -163,3 +163,12 @@ test('capture retains real viewport evidence and measures complete tall-content 
   assert.match(source, /cancel\.isEnabled\(\)/);
   assert.doesNotMatch(source, /setViewportSize|addStyleTag|\.style\.(?:height|overflow|position)\s*=/);
 });
+
+test('browser frozen drilldown fixture is an explicit read of exact registered evidence',async t=>{
+ const {readComparisonEvidence}=await import('../src/lib/companyComparison.ts');
+ const g=comparisonGoldens.complete,f=createComparisonFixture(origin);mockApi(t,f);
+ f.expectEvidence(0);
+ const source=g.record.output.subjects[0].citations[0].evidence_id;
+ assert.deepEqual(await readComparisonEvidence(g.record,0,source,signal()),g.bundles[0]);
+ assert.equal(f.calls.length,1);assert.equal(f.calls[0].method,'GET');assert.deepEqual(f.expected,[]);assert.deepEqual(f.violations,[]);
+});

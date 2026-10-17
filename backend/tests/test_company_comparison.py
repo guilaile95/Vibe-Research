@@ -975,3 +975,14 @@ def test_real_shared_transport_timeout_has_safe_category(pair, client, monkeypat
     assert result[-1]['run_id'] == result[0]['run_id']
     assert 'private URL' not in R.canonical(result)
     assert C.list_runs()[0]['failure_category'] == 'TIMEOUT'
+
+
+def test_configured_limits_are_frozen_metadata_not_observed_usage(pair):
+    record = asyncio.run(collect(pair))[-1]['record']
+    assert record['limits'] == {'max_model_calls':1, 'max_seconds':90, 'max_output_tokens':2500}
+    assert not {'usage', 'cost', 'actual_tokens'} & set(record)
+    assert C.read_run(record['run_id']) == record
+    with C._connect(True) as conn:
+        record['limits']['max_model_calls'] = 2
+        conn.execute('UPDATE runs SET payload=?', (C.canonical(record),))
+    with pytest.raises(ValueError): C.list_runs()

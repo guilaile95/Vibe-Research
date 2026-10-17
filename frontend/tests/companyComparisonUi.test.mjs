@@ -10,7 +10,7 @@ function harness(options = {}) {
  let subject={market:'US',symbol:'AAPL'};
  const config={provider:'deepseek',model:'synthetic',baseURL:'https://fixture.example/synthetic',apiKey:'synthetic-no-secret'};
  const choices=s=>[{...s,bundle_id:(s.market==='US'?'a':'b').repeat(32),bundle_sha256:'c'.repeat(64),archive_cutoff:'2026-09-30',captured_at:'2026-10-01T00:00:00Z',available_source_count:options.empty?0:1,missing_source_count:1,limitations:[]}];
- const receipt=()=>({as_of:'2026-09-30',status:'COMPLETED',run_id:'d'.repeat(32),pair_sha256:'e'.repeat(64),subjects:[{...subject,bundle_id:'a'.repeat(32),expected_bundle_sha256:'c'.repeat(64)},{market:'HK',symbol:'00700',bundle_id:'b'.repeat(32),expected_bundle_sha256:'c'.repeat(64)}],evidence:[{sources:[]},{sources:[]}],output:{subjects:[{summary:'FIRST',citations:[],missingness:['UNKNOWN'],caveats:['UNVERIFIED']},{summary:'SECOND',citations:[],missingness:['UNKNOWN'],caveats:['UNVERIFIED']}]}});
+ const receipt=()=>({model:{provider:'deepseek',name:'synthetic'},started_at:'2026-10-01T00:00:00Z',limits:{max_model_calls:1,max_seconds:90,max_output_tokens:2500},as_of:'2026-09-30',status:'COMPLETED',run_id:'d'.repeat(32),pair_sha256:'e'.repeat(64),subjects:[{...subject,bundle_id:'a'.repeat(32),expected_bundle_sha256:'c'.repeat(64)},{market:'HK',symbol:'00700',bundle_id:'b'.repeat(32),expected_bundle_sha256:'c'.repeat(64)}],evidence:[{sources:[]},{sources:[]}],output:{subjects:[{summary:'FIRST',citations:[],missingness:['UNKNOWN'],caveats:['UNVERIFIED']},{summary:'SECOND',citations:[],missingness:['UNKNOWN'],caveats:['UNVERIFIED']}]}});
  const react={
   useState(init){const i=cursor++;if(!(i in states))states[i]=typeof init==='function'?init():init;return[states[i],v=>{const next=typeof v==='function'?v(states[i]):v;if(!Object.is(next,states[i])){states[i]=next;scheduled=true;}}];},
   useRef(init){const i=cursor++;return refs[i]??={current:init};},
@@ -24,6 +24,7 @@ function harness(options = {}) {
    comparisonSubjectValid:s=>!!s.symbol,
    readComparisonBundles:async(s,date,signal)=>{calls.push({kind:'list',s,date,signal});return choices(s);},
    readComparisonBundle:async(c,signal)=>{calls.push({kind:'bundle',c,signal});return{...c,subject:{market:c.market,symbol:c.symbol}};},
+   readComparisonEvidence:async(record,index,evidenceId,signal)=>{calls.push({kind:'evidence',record,index,evidenceId,signal});const bundle={subject:record.subjects[index],bundle_id:record.subjects[index].bundle_id,bundle_sha256:record.subjects[index].expected_bundle_sha256,captured_at:'2026-10-01T00:00:00Z',sources:[{evidence_id:'frozen_source',payload:'<script>untrusted frozen payload</script>'}]};return options.evidence?options.evidence(bundle,signal):bundle;},
    generateComparison:(bundles,date,llm,signal)=>{calls.push({kind:'generate',bundles,date,llm,signal});return options.generate?options.generate(receipt(),signal):Promise.resolve(receipt());},
    readComparisonRunPage:async(first,second,date,signal,before)=>{calls.push({kind:'history',first,second,date,signal,before});return {records:options.history?await options.history(receipt(),signal):[receipt()],next_cursor:options.nextCursor??null};},
   },
@@ -148,4 +149,31 @@ test('comparison foreground/background tokens meet normal-text contrast in both 
   const values=[token('foreground'),token('background')].sort((a,b)=>a-b);
   assert.ok((values[1]+0.05)/(values[0]+0.05)>=4.5,`${selector} comparison text contrast`);
  }
+});
+
+test('frozen source drilldown is explicit read-only and close does not regenerate',async()=>{
+ const h=harness();await ready(h);select(h);click(h,start);await tick();
+ assert.equal(h.calls.filter(c=>c.kind==='evidence').length,0);
+ click(h,'查看 US:AAPL 冻结资料包');await tick();
+ assert.equal(h.calls.filter(c=>c.kind==='evidence').length,1);
+ assert.match(text(h.render()),/<script>untrusted frozen payload<\/script>/);
+ assert.match(text(h.render()),/实际费用：未知/);
+ assert.match(text(h.render()),/配置上限：1次调用 \/ 90秒 \/ 2500输出token/);
+ const pre=nodes(h.render()).find(n=>n.type==='pre');assert.equal(typeof pre.props.children,'string');assert.equal(pre.props.dangerouslySetInnerHTML,undefined);
+ click(h,'关闭来源详情');assert.doesNotMatch(text(h.render()),/untrusted frozen payload/);
+ assert.equal(h.calls.filter(c=>c.kind==='generate').length,1);
+});
+test('cancelled or navigated source read cannot restore stale payload or clear a newer owner',async()=>{
+ const first=deferred(),second=deferred();let n=0,bundles=[];
+ const h=harness({evidence:b=>{bundles.push(b);return ++n===1?first.promise:second.promise;}});
+ await ready(h);select(h);click(h,start);await tick();
+ click(h,'查看 US:AAPL 冻结资料包');click(h,'取消对比');
+ click(h,'查看 HK:00700 冻结资料包');
+ first.resolve(bundles[0]);await tick();
+ assert.ok(button(h,'取消对比'));assert.doesNotMatch(text(h.render()),/untrusted frozen payload/);
+ assert.equal(h.calls.filter(c=>c.kind==='evidence')[0].signal.aborted,true);
+ h.changeSubject({market:'A',symbol:'600000'});
+ second.resolve(bundles[1]);await tick();
+ assert.doesNotMatch(text(h.render()),/untrusted frozen payload/);
+ assert.equal(h.calls.filter(c=>c.kind==='generate').length,1);
 });

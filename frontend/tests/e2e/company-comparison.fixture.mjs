@@ -38,6 +38,10 @@ export function createComparisonFixture(origin) {
       if (!['complete', 'truncated', 'failed'].includes(delivery) || (delivery === 'failed' && scenario !== 'complete')) throw Error('Unknown delivery fault');
       expect('POST', generationPath, { kind: 'stream', body: events.map(e => JSON.stringify(e)).join('\n') + '\n' }, g.request);
     },
+    expectEvidence(index = 0, scenario = 'complete') {
+      const bundle = comparisonGoldens[scenario].bundles[index];
+      expect('GET', `/api/company-research/bundles/${bundle.bundle_id}`, json(bundle));
+    },
     expectHistory(scenario = 'complete') {
       const g = comparisonGoldens[scenario];
       expect('GET', historyPath, json({records:g.history ?? [g.record],next_cursor:null}));
