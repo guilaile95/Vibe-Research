@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { config, chatKey, readReply, validSyntheticStream, observeSyntheticStreams } from "./ai-settings-storage.fixture.mjs";
+import { config, chatKey, readReply, validSyntheticStream, observeSyntheticStreams, readDiagnosticsReply } from "./ai-settings-storage.fixture.mjs";
 const frontend = fileURLToPath(new URL("../../", import.meta.url));
 const dist = join(frontend, "dist");
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { resolve, promise }; };
@@ -68,6 +68,7 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
   let context, page, peer;
   const errors = [], unexpected = [], requests = [], external = [], storageEvidence = [], streamEvidence = [];
   const slotsBefore = streamState.all.length;
+  const diagnostics = { mode: "malicious", count: 0, started: deferred(), release: deferred() };
   try {
     context = await browser.newContext({ baseURL, viewport: { width, height: 960 }, serviceWorkers: "block" });
     await context.addInitScript(observeSyntheticStreams);
@@ -78,6 +79,17 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
       if (url.origin !== baseURL) { external.push(url.origin); return route.abort(); }
       if (!url.pathname.startsWith("/api/")) return route.continue();
       requests.push(`${request.method()} ${url.pathname}${url.search}`);
+      if (url.pathname === "/api/runtime-diagnostics/export") {
+        const reply = readDiagnosticsReply(request.method(), url.pathname, url.search);
+        if (scenario !== "settings-diagnostics" || !reply || request.headers().authorization !== "Bearer SYNTHETIC_DIAGNOSTIC_ACCESS") {
+          unexpected.push("INVALID_DIAGNOSTICS_REQUEST");
+          return route.fulfill({ status: 503, json: { detail: "UNEXPECTED_SYNTHETIC_REQUEST" } });
+        }
+        diagnostics.count++;
+        if (diagnostics.mode === "malicious") reply.data.startup.source_directory = "SYNTHETIC_PRIVATE_PATH";
+        else { diagnostics.started.resolve(); await diagnostics.release.promise; }
+        return route.fulfill({ json: reply });
+      }
       const reply = readReply(request.method(), url.pathname, url.search);
       if (reply) return route.fulfill({ json: reply });
       if (!url.search && validSyntheticStream(request.method(), url.pathname, request.postDataJSON())) return route.continue();
@@ -156,6 +168,50 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
       await panel.getByRole("button", { name: "关闭", exact: true }).click();
       await b.check(); await a.uncheck(); await open(); assert.equal(await input.inputValue(), "");
       assert.equal(await streamCount(), 0, "reload does not automatically send");
+    } else if (scenario === "settings-diagnostics") {
+      await peer.evaluate(() => localStorage.setItem("vr-access-key", "SYNTHETIC_DIAGNOSTIC_ACCESS"));
+      await page.goto("/settings");
+      const access = page.getByPlaceholder("与后端 VR_API_KEY 保持一致", { exact: true });
+      const download = page.getByTestId("runtime-diagnostics-export");
+      await access.waitFor();
+      await page.getByTestId("backend-connection-status").filter({ hasText: "已连接" }).waitFor();
+      const beforeStorage = await stored();
+      await access.fill("SYNTHETIC_UNSAVED_ACCESS_DRAFT");
+      const downloads = [];
+      page.on("download", item => downloads.push(item));
+      assert.equal(diagnostics.count, 0, "opening Settings must not request diagnostics");
+      await download.click();
+      await page.getByRole("status").filter({ hasText: "诊断导出失败" }).waitFor();
+      assert.equal(diagnostics.count, 1);
+      assert.equal(downloads.length, 0, "schema-valid private extras must never become a download");
+      assert.equal(await access.inputValue(), "SYNTHETIC_UNSAVED_ACCESS_DRAFT");
+      assert.equal(await stored(), beforeStorage);
+      diagnostics.mode = "valid";
+      const downloaded = page.waitForEvent("download").then(file => ({ file }), error => ({ error }));
+      await download.evaluate(node => { node.click(); node.click(); });
+      await bounded(diagnostics.started.promise);
+      assert.equal(diagnostics.count, 2, "same-turn duplicate clicks start only one valid request");
+      assert.equal(await download.isDisabled(), true);
+      assert.equal(await access.inputValue(), "SYNTHETIC_UNSAVED_ACCESS_DRAFT");
+      diagnostics.release.resolve();
+      const observedDownload = await downloaded;
+      if ("error" in observedDownload) throw observedDownload.error;
+      const file = observedDownload.file;
+      assert.equal(file.suggestedFilename(), "vibe-runtime-diagnostics.json");
+      assert.equal(await file.failure(), null);
+      const stream = await file.createReadStream();
+      assert.ok(stream, "download must have readable bytes");
+      const chunks = [];
+      for await (const chunk of stream) chunks.push(chunk);
+      const bytes = Buffer.concat(chunks).toString("utf8");
+      assert.equal(bytes, JSON.stringify(readDiagnosticsReply("GET", "/api/runtime-diagnostics/export"), null, 2));
+      assert.doesNotMatch(bytes, /SYNTHETIC_PRIVATE_PATH|SYNTHETIC_DIAGNOSTIC_ACCESS|SYNTHETIC_UNSAVED_ACCESS_DRAFT/);
+      await page.getByRole("status").filter({ hasText: "已生成脱敏诊断文件" }).waitFor();
+      assert.equal(downloads.length, 1);
+      assert.equal(await download.isEnabled(), true);
+      assert.equal(await access.inputValue(), "SYNTHETIC_UNSAVED_ACCESS_DRAFT");
+      assert.equal(await stored(), beforeStorage);
+      assert.equal(await streamCount(), 0, "diagnostics never starts a model stream");
     } else if (scenario.startsWith("chat-")) {
       const openChat = async () => {
         await page.getByRole("checkbox", { name: "选择 Synthetic report", exact: true }).check();
@@ -309,13 +365,23 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
     assert.deepEqual(errors, []);
     assert.deepEqual(streamState.unexpected, []);
     assert.equal(streamState.queue.length, 0);
+    if (scenario === "settings-diagnostics") {
+      await page.getByTestId("backend-runtime-card").screenshot({ path: join(evidenceDir, `${scenario}-${width}-card-pass.png`), timeout: 3000 });
+      await page.screenshot({ path: join(evidenceDir, `${scenario}-${width}-viewport-pass.png`), fullPage: false, timeout: 3000 });
+    }
     await page.screenshot({ path: join(evidenceDir, `${scenario}-${width}-pass.png`), fullPage: true });
     return { scenario, width, status: "PASS", streamCount: streamState.all.length - slotsBefore, requests, storageEvidence, streamEvidence,
       boundary: "Native trusted localStorage events; sessionStorage event uses same-tab iframe; synthetic HTTP stream transport deliberately ignores abort to test ownership" };
   } catch (error) {
+    if (page && scenario === "settings-diagnostics") {
+      await page.content().then(html => writeFileSync(join(evidenceDir, `${scenario}-${width}-failure.html`), html)).catch(() => {});
+      await page.getByTestId("backend-runtime-card").screenshot({ path: join(evidenceDir, `${scenario}-${width}-card-failure.png`), timeout: 3000 }).catch(() => {});
+      await page.screenshot({ path: join(evidenceDir, `${scenario}-${width}-viewport-failure.png`), fullPage: false, timeout: 3000 }).catch(() => {});
+    }
     await page?.screenshot({ path: join(evidenceDir, `${scenario}-${width}-failure.png`), fullPage: true }).catch(() => {});
     throw new Error(`${scenario} ${width}px: ${error.message}; ${JSON.stringify({ errors, unexpected, requests, external })}`, { cause: error });
   } finally {
+    diagnostics.release.resolve();
     streamState.all.slice(slotsBefore).forEach(slot => slot.finish("SYNTHETIC_CLEANUP"));
     streamState.queue.length = 0;
     await context?.close();
@@ -333,13 +399,13 @@ async function main() {
     browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } : {}) });
     server = await staticServer(streamState);
     const baseURL = `http://127.0.0.1:${server.address().port}`;
-    for (const width of [1440, 390]) for (const scenario of ["chat-drafts", "chat-unrelated", "chat-runtime", "chat-access", "chat-current", "chat-epoch", "chat-clear", "chat-controls", "settings-save", "settings-races"]) {
+    for (const width of [1440, 390]) for (const scenario of ["chat-drafts", "chat-unrelated", "chat-runtime", "chat-access", "chat-current", "chat-epoch", "chat-clear", "chat-controls", "settings-save", "settings-races", "settings-diagnostics"]) {
       try { result.results.push(await runScenario(browser, baseURL, width, scenario, streamState, evidenceDir)); console.log(`[AI-SET] ${scenario} ${width}px PASS`); }
       catch (error) { result.results.push({ scenario, width, status: "FAIL", error: error.message }); console.error(`[AI-SET] ${scenario} ${width}px FAIL: ${error.message}`); }
     }
-    assert.equal(result.results.length, 20);
+    assert.equal(result.results.length, 22);
     assert.equal(result.results.filter(row => row.status !== "PASS").length, 0, "all scenario groups must pass");
-    console.log("[AI-SET] 20/20 PASS");
+    console.log("[AI-SET] 22/22 PASS");
   } catch (error) { result.error = error.message; throw error; }
   finally {
     try { writeFileSync(join(evidenceDir, "results.json"), JSON.stringify(result, null, 2)); }

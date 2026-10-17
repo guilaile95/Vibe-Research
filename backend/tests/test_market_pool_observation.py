@@ -447,3 +447,12 @@ def test_qualified_partial_overview_remains_read_only_reusable(monkeypatch):
     monkeypatch.setattr(market, "get_market_breadth", lambda: _breadth_env(status="partial"))
     assert market.get_overview()["sentiment"]["status"] == "partial"
     assert "overview" not in market._CACHE
+
+
+@pytest.fixture(autouse=True)
+def _source_mocked_assembly(monkeypatch):
+    # These tests inject provider results in this process. Production collection
+    # is verified separately with disposable synthetic workers.
+    import daily_review as _review
+    monkeypatch.setattr(_review, "_build_daily_review",
+        lambda: _review._assemble_daily_review(None, _test_provider_calls=True))

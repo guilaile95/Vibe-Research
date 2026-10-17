@@ -263,18 +263,36 @@ def run_debate_stream(cfg: dict, code: str, rounds: int = 1):
     facts = dossier_text(dossier)
     transcript: list[dict] = []
 
-    for stage in _stage_plan(rounds):
+    plan = _stage_plan(rounds)
+    cfg = {**cfg, "_task_budget": chat.debate_task_budget(len(plan))}
+
+    for stage in plan:
+        try:
+            chat._check_active(cfg)
+        except chat.ModelTransportError as exc:
+            yield {"type": "error", "message": chat.public_error_message(exc)}
+            return
         yield {"type": "stage", "stage": stage, "label": _STAGE_LABEL[stage]}
         messages = _build_messages(stage, facts, transcript)
         buf: list[str] = []
         try:
+            chat._check_active(cfg)
+            saw_done = False
             for event in chat.stream_messages(cfg, messages, use_tools=False):
+                chat._check_active(cfg)
+                if saw_done:
+                    raise chat.ModelStreamIncompleteError()
+                if event.get("type") == "done":
+                    saw_done = True
                 if event.get("type") == "error":
                     raise RuntimeError(event.get("message") or "模型调用失败")
                 text = event.get("text") if event.get("type") == "delta" else None
                 if text:
                     buf.append(text)
                     yield {"type": "delta", "stage": stage, "text": text}
+            chat._check_active(cfg)
+            if not saw_done or not "".join(buf).strip():
+                raise chat.ModelStreamIncompleteError()
         except Exception as e:  # noqa: BLE001 — 单个角色失败不该毁掉整场辩论
             # 必须补一个终态事件：前端按 stage_done 把该角色标记为完成，
             # 只发 error 的话这个角色会永远停在「生成中…」，并让「全部完成」判定不成立、
@@ -283,10 +301,17 @@ def run_debate_stream(cfg: dict, code: str, rounds: int = 1):
             yield {"type": "error", "stage": stage, "message": f"{_STAGE_LABEL[stage]}生成失败：{message}"}
             yield {"type": "stage_done", "stage": stage, "label": _STAGE_LABEL[stage],
                    "content": f"（本角色生成失败：{message}）", "failed": True}
+            if isinstance(e, chat.ModelTaskBudgetError) or (cfg.get("_cancel_event") is not None and cfg["_cancel_event"].is_set()):
+                return  # No subsequent model, tool, final done or savable result.
             continue  # 失败内容不进 transcript——不能把错误信息当论据喂给后面的角色
 
         content = "".join(buf).strip()
         transcript.append({"stage": stage, "content": content})
         yield {"type": "stage_done", "stage": stage, "label": _STAGE_LABEL[stage], "content": content}
 
+    try:
+        chat._check_active(cfg)
+    except chat.ModelTransportError as exc:
+        yield {"type": "error", "message": chat.public_error_message(exc)}
+        return
     yield {"type": "done", "code": code, "stages": transcript}

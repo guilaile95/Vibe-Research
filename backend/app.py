@@ -42,6 +42,7 @@ import shortline_review_service
 import shortline_review_sources
 import shortline_review_store
 import astock
+import public_data_budget
 import chat as chat_layer
 import agent_runtime
 import ai_credential_router
@@ -75,6 +76,7 @@ import data_health_router
 import runtime_info_router
 import platform_settings
 import company_research_router
+import company_comparison_router
 import trade_ledger_router
 import personal_review_router
 import trade_attribution_router
@@ -421,6 +423,7 @@ app.include_router(runtime_info_router.create_router(__version__))
 app.include_router(platform_settings.router)
 # 交易流水：独立存储与 API
 app.include_router(company_research_router.router)
+app.include_router(company_comparison_router.router)
 app.include_router(trade_ledger_router.router)
 app.include_router(personal_review_router.router)
 # P0-TAR1: explicit Frozen Decision attribution / explicit UNPLANNED origin.
@@ -2212,6 +2215,8 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
     cfg["_cancel_event"] = disconnect_event
 
     async def gen():
+        cfg["_task_budget"] = chat_layer.daily_review_task_budget()
+
         source = iter(chat_layer.stream_messages(cfg, messages, use_tools=False))
         try:
             parts: list[str] = []
@@ -2221,6 +2226,7 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
             async for ev in iterate_in_threadpool(source):
                 if disconnect_event.is_set():
                     return
+                cfg["_task_budget"].check()
                 if not isinstance(ev, dict):
                     continue
                 event_type = ev.get("type")
@@ -2242,6 +2248,7 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
                     saw_done = True
                     trace = ev.get("trace") if isinstance(ev.get("trace"), list) else []
                     rounds = ev.get("rounds") if isinstance(ev.get("rounds"), int) else 0
+            cfg["_task_budget"].check()
             if not saw_done:
                 raise chat_layer.ModelStreamIncompleteError()
             markdown = "".join(parts)
@@ -2254,21 +2261,22 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
                 review,
                 markdown,
                 cfg,
-                should_cancel=disconnect_event.is_set,
+                should_cancel=lambda: disconnect_event.is_set() or time.monotonic() >= cfg["_task_budget"].deadline,
                 input_basis=input_basis,
             )
             if disconnect_event.is_set():
                 return
+            cfg["_task_budget"].check()
             result = _safe_daily_review_ai_done_result(saved_record)
             yield json.dumps(
                 {"type": "done", "trace": trace, "rounds": rounds, "result": result},
                 ensure_ascii=False,
             ) + "\n"
-        except Exception:  # noqa: BLE001 — fixed safe stream error; old persisted row remains
+        except Exception as exc:  # noqa: BLE001 — sanitized error; old persisted row remains
             if disconnect_event.is_set():
                 return
             yield json.dumps(
-                {"type": "error", "message": "对话失败：每日复盘AI生成或保存失败"},
+                {"type": "error", "message": chat_layer.public_error_message(exc) if isinstance(exc, chat_layer.ModelTaskBudgetError) else "对话失败：每日复盘AI生成或保存失败"},
                 ensure_ascii=False,
             ) + "\n"
         finally:
@@ -2671,7 +2679,8 @@ def financials(code: str = Query(...)):
     try:
         import public_data_budget
         data = public_data_budget.run("financials", code)
-        _FIN_CACHE.set(code, data)
+        if isinstance(data, dict) and data.get("status") != "partial":
+            _FIN_CACHE.set(code, data)
         try:
             import data_health_event_store as _dhes
             if not isinstance(data, dict) or not data:
@@ -2788,6 +2797,8 @@ def kline(code: str = Query(...), category: int = Query(4), offset: int = Query(
     code = _validate(code)
     try:
         return {"data": astock.kline(code, category=category, offset=offset)}
+    except public_data_budget.PublicDataUnavailable as e:
+        raise HTTPException(503, "K线来源暂不可用或超时，请稍后重试。") from e
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001

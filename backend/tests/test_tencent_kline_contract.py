@@ -225,3 +225,11 @@ def test_lot_conversion_overflow_is_rejected(monkeypatch):
     install(monkeypatch, {"day": [row]})
     with pytest.raises(ValueError, match="overflow"):
         tencent.unadjusted_bars("600519", "day", 5)
+
+
+@pytest.fixture(autouse=True)
+def _source_mocked_kline(monkeypatch):
+    # Existing provider contracts use injected transports; process lifetime has
+    # separate synthetic-worker coverage.
+    monkeypatch.setattr(astock, "_bounded_kline_source",
+        lambda source, code, category, offset, timeout: astock._kline_source(source, code, category, offset))

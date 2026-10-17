@@ -28,7 +28,43 @@ $FrontendMarker = Join-Path $RuntimeDir "frontend-lock.sha256"
 $AgentRuntimeMarker = Join-Path $RuntimeDir "agent-runtime-lock.sha256"
 $BackendUrl = "http://127.0.0.1:8900"
 $FrontendUrl = "http://127.0.0.1:5899"
-$AgentRuntimeUrl = "http://127.0.0.1:8911"
+
+function Resolve-AgentRuntimeEndpoint {
+    param(
+        [AllowNull()] [string]$Url = $env:VR_AGENT_RUNTIME_URL,
+        [AllowNull()] [string]$Port = $env:VR_AGENT_RUNTIME_PORT
+    )
+
+    # Keep the same contract as tools/linux/vibe_linux.py:runtime_endpoint.
+    $rawUrl = ("$Url").Trim()
+    $rawPort = ("$Port").Trim()
+    $resolvedPort = 8911
+    if ($rawPort) {
+        if ($rawPort -cnotmatch '^[0-9]+$' -or -not [int]::TryParse($rawPort, [ref]$resolvedPort)) {
+            throw "VR_AGENT_RUNTIME_PORT must be an integer"
+        }
+    }
+    if ($rawUrl) {
+        # Match before URI normalization: do not accept aliases, credentials,
+        # encoded hosts, URL paths, query strings, fragments or backslashes.
+        if ($rawUrl -notmatch '^http://(?:127\.0\.0\.1|localhost|\[::1\]):(?<port>[0-9]+)/?$') {
+            throw "VR_AGENT_RUNTIME_URL must be an explicit loopback HTTP endpoint"
+        }
+        $urlPort = 0
+        if (-not [int]::TryParse($Matches.port, [ref]$urlPort)) {
+            throw "Runtime port is invalid"
+        }
+        if ($rawPort -and $resolvedPort -ne $urlPort) {
+            throw "Runtime URL and port disagree"
+        }
+        $resolvedPort = $urlPort
+    }
+    if ($resolvedPort -lt 1024 -or $resolvedPort -gt 65535 -or $resolvedPort -in @(8900, 5899)) {
+        throw "Runtime port is invalid or conflicts with an application port"
+    }
+    # The launcher-owned runtime always binds IPv4 loopback.
+    return [pscustomobject]@{ Url = "http://127.0.0.1:$resolvedPort"; Port = $resolvedPort }
+}
 
 function Assert-ProjectLayout {
     $required = @(
@@ -305,7 +341,7 @@ function Show-LogTail {
     foreach ($path in @($Entry.Stderr, $Entry.Stdout)) {
         if (Test-Path -LiteralPath $path) {
             Write-Host "`n--- $path ---" -ForegroundColor DarkYellow
-            Get-Content -LiteralPath $path -Tail 40
+            Get-Content -LiteralPath $path -Tail 40 | Out-Host
         }
     }
 }
@@ -319,136 +355,159 @@ function Stop-OwnedProcessTree {
     }
     Write-Host "停止 $($Entry.Name)……" -ForegroundColor DarkGray
     & taskkill.exe /PID $Entry.Process.Id /T /F *> $null
-}
-
-Assert-ProjectLayout
-New-Item -ItemType Directory -Path $RuntimeDir -Force | Out-Null
-
-if ($ValidateOnly) {
-    $cmdText = Get-Content -LiteralPath (Join-Path $RepoRoot "Start-Vibe.cmd") -Raw
-    if ($cmdText -notmatch '(?i)\bpwsh\.exe\b') {
-        throw "Start-Vibe.cmd 必须通过 pwsh.exe 启动。"
-    }
-    if ($cmdText -match '(?i)\bpowershell\.exe\b') {
-        throw "Start-Vibe.cmd 不得调用旧版 powershell.exe。"
-    }
-    if ($cmdText -notmatch '%\*') {
-        throw "Start-Vibe.cmd 必须把显式参数转交给 PowerShell 7 启动器。"
-    }
-    Write-Host "One-click launcher validation: PASS"
-    exit 0
-}
-
-$ownedProcesses = @()
-$exitCode = 0
-
-try {
-    Ensure-BackendEnvironment
-    $nodeToolchain = Resolve-NodeToolchain
-    Ensure-FrontendEnvironment -Toolchain $nodeToolchain
-    Ensure-AgentRuntimeEnvironment -Toolchain $nodeToolchain
-
-    $agentRuntimeEntry = $null
-    if (Test-HttpEndpoint -Uri "$AgentRuntimeUrl/health" -ExpectedText "vibe-agent-runtime") {
-        Write-Host "Agent Runtime 已在运行，直接复用。" -ForegroundColor Green
-    }
-    else {
-        if (Test-TcpPort -Port 8911) {
-            throw "端口 8911 已被其他程序占用，但不是可用的 Vibe Agent Runtime。"
-        }
-        Write-Host "启动 Agent Runtime……" -ForegroundColor Cyan
-        $agentRuntimeEntry = Start-OwnedProcess `
-            -Name "agent-runtime" `
-            -FilePath $nodeToolchain.Node `
-            -ArgumentList @("src/server.mjs") `
-            -WorkingDirectory $AgentRuntimeDir
-        $ownedProcesses += $agentRuntimeEntry
-        Wait-ForService `
-            -Name "Agent Runtime" `
-            -Probe { Test-HttpEndpoint -Uri "$AgentRuntimeUrl/health" -ExpectedText "vibe-agent-runtime" } `
-            -Process $agentRuntimeEntry.Process
-    }
-    $env:VR_AGENT_RUNTIME_URL = $AgentRuntimeUrl
-
-    $backendEntry = $null
-    if (Test-HttpEndpoint -Uri "$BackendUrl/api/health" -ExpectedText "vibe-research-api") {
-        Write-Host "后端已在运行，直接复用。" -ForegroundColor Green
-    }
-    else {
-        if (Test-TcpPort -Port 8900) {
-            throw "端口 8900 已被其他程序占用，但不是可用的 Vibe 后端。"
-        }
-        Write-Host "启动后端……" -ForegroundColor Cyan
-        $backendEntry = Start-OwnedProcess `
-            -Name "backend" `
-            -FilePath $BackendPython `
-            -ArgumentList @("-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", "8900") `
-            -WorkingDirectory $BackendDir
-        $ownedProcesses += $backendEntry
-        Wait-ForService `
-            -Name "后端" `
-            -Probe { Test-HttpEndpoint -Uri "$BackendUrl/api/health" -ExpectedText "vibe-research-api" } `
-            -Process $backendEntry.Process
-    }
-
-    $frontendEntry = $null
-    if (Test-HttpEndpoint -Uri $FrontendUrl -ExpectedText "Vibe-Research") {
-        Write-Host "前端已在运行，直接复用。" -ForegroundColor Green
-    }
-    else {
-        if (Test-TcpPort -Port 5899) {
-            throw "端口 5899 已被其他程序占用，但不是可用的 Vibe 前端。"
-        }
-        Write-Host "启动前端……" -ForegroundColor Cyan
-        $frontendEntry = Start-OwnedProcess `
-            -Name "frontend" `
-            -FilePath $nodeToolchain.Npm `
-            -ArgumentList @("run", "dev", "--", "--host", "127.0.0.1", "--port", "5899", "--strictPort") `
-            -WorkingDirectory $FrontendDir
-        $ownedProcesses += $frontendEntry
-        Wait-ForService `
-            -Name "前端" `
-            -Probe { Test-HttpEndpoint -Uri $FrontendUrl -ExpectedText "Vibe-Research" } `
-            -Process $frontendEntry.Process
-    }
-
-    if (-not $NoBrowser -and -not $SmokeTest) {
-        Start-Process $FrontendUrl | Out-Null
-    }
-
-    Write-Host "`nVibe-Research 已就绪：$FrontendUrl" -ForegroundColor Green
-
-    if ($SmokeTest) {
-        Write-Host "One-click launcher smoke: PASS" -ForegroundColor Green
-    }
-    else {
-        Write-Host "保持此窗口开启；按 Ctrl+C 会停止本次启动的服务。" -ForegroundColor DarkGray
-        while ($true) {
-            foreach ($entry in $ownedProcesses) {
-                $entry.Process.Refresh()
-                if ($entry.Process.HasExited) {
-                    throw "$($entry.Name) 已意外退出，退出码：$($entry.Process.ExitCode)"
-                }
-            }
-            Start-Sleep -Seconds 2
-        }
+    $Entry.Process.Refresh()
+    if (-not $Entry.Process.HasExited -and -not $Entry.Process.WaitForExit(5000)) {
+        throw "Owned process $($Entry.Name) did not stop"
     }
 }
-catch [System.Management.Automation.PipelineStoppedException] {
-    Write-Host "`n正在停止 Vibe-Research……" -ForegroundColor DarkGray
+
+function Invoke-VibeLauncher {
+    Assert-ProjectLayout
+    New-Item -ItemType Directory -Path $RuntimeDir -Force | Out-Null
+
+    if ($ValidateOnly) {
+        $cmdText = Get-Content -LiteralPath (Join-Path $RepoRoot "Start-Vibe.cmd") -Raw
+        if ($cmdText -notmatch '(?i)\bpwsh\.exe\b') {
+            throw "Start-Vibe.cmd 必须通过 pwsh.exe 启动。"
+        }
+        if ($cmdText -match '(?i)\bpowershell\.exe\b') {
+            throw "Start-Vibe.cmd 不得调用旧版 powershell.exe。"
+        }
+        if ($cmdText -notmatch '%\*') {
+            throw "Start-Vibe.cmd 必须把显式参数转交给 PowerShell 7 启动器。"
+        }
+        Write-Host "One-click launcher validation: PASS"
+        return 0
+    }
+
+    $ownedProcesses = @()
     $exitCode = 0
-}
-catch {
-    Write-Host "`n启动失败：$($_.Exception.Message)" -ForegroundColor Red
-    foreach ($entry in $ownedProcesses) {
-        Show-LogTail -Entry $entry
+    $previousRuntimeUrl = $env:VR_AGENT_RUNTIME_URL
+    $previousRuntimePort = $env:VR_AGENT_RUNTIME_PORT
+
+    try {
+        # Resolve before installing dependencies or starting any child. Both children
+        # inherit the same canonical endpoint, including URL-only overrides.
+        $endpoint = Resolve-AgentRuntimeEndpoint
+        $AgentRuntimeUrl = $endpoint.Url
+        $AgentRuntimePort = $endpoint.Port
+        $env:VR_AGENT_RUNTIME_URL = $AgentRuntimeUrl
+        $env:VR_AGENT_RUNTIME_PORT = [string]$AgentRuntimePort
+        Ensure-BackendEnvironment
+        $nodeToolchain = Resolve-NodeToolchain
+        Ensure-FrontendEnvironment -Toolchain $nodeToolchain
+        Ensure-AgentRuntimeEnvironment -Toolchain $nodeToolchain
+
+        $agentRuntimeEntry = $null
+        if (Test-HttpEndpoint -Uri "$AgentRuntimeUrl/health" -ExpectedText "vibe-agent-runtime") {
+            Write-Host "Agent Runtime 已在运行，直接复用。" -ForegroundColor Green
+        }
+        else {
+            if (Test-TcpPort -Port $AgentRuntimePort) {
+                throw "端口 $AgentRuntimePort 已被其他程序占用，但不是可用的 Vibe Agent Runtime。"
+            }
+            Write-Host "启动 Agent Runtime……" -ForegroundColor Cyan
+            $agentRuntimeEntry = Start-OwnedProcess `
+                -Name "agent-runtime" `
+                -FilePath $nodeToolchain.Node `
+                -ArgumentList @("src/server.mjs") `
+                -WorkingDirectory $AgentRuntimeDir
+            $ownedProcesses += $agentRuntimeEntry
+            Wait-ForService `
+                -Name "Agent Runtime" `
+                -Probe { Test-HttpEndpoint -Uri "$AgentRuntimeUrl/health" -ExpectedText "vibe-agent-runtime" } `
+                -Process $agentRuntimeEntry.Process
+        }
+        $backendEntry = $null
+        if (Test-HttpEndpoint -Uri "$BackendUrl/api/health" -ExpectedText "vibe-research-api") {
+            Write-Host "后端已在运行，直接复用。" -ForegroundColor Green
+        }
+        else {
+            if (Test-TcpPort -Port 8900) {
+                throw "端口 8900 已被其他程序占用，但不是可用的 Vibe 后端。"
+            }
+            Write-Host "启动后端……" -ForegroundColor Cyan
+            $backendEntry = Start-OwnedProcess `
+                -Name "backend" `
+                -FilePath $BackendPython `
+                -ArgumentList @("-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", "8900") `
+                -WorkingDirectory $BackendDir
+            $ownedProcesses += $backendEntry
+            Wait-ForService `
+                -Name "后端" `
+                -Probe { Test-HttpEndpoint -Uri "$BackendUrl/api/health" -ExpectedText "vibe-research-api" } `
+                -Process $backendEntry.Process
+        }
+
+        $frontendEntry = $null
+        if (Test-HttpEndpoint -Uri $FrontendUrl -ExpectedText "Vibe-Research") {
+            Write-Host "前端已在运行，直接复用。" -ForegroundColor Green
+        }
+        else {
+            if (Test-TcpPort -Port 5899) {
+                throw "端口 5899 已被其他程序占用，但不是可用的 Vibe 前端。"
+            }
+            Write-Host "启动前端……" -ForegroundColor Cyan
+            $frontendEntry = Start-OwnedProcess `
+                -Name "frontend" `
+                -FilePath $nodeToolchain.Npm `
+                -ArgumentList @("run", "dev", "--", "--host", "127.0.0.1", "--port", "5899", "--strictPort") `
+                -WorkingDirectory $FrontendDir
+            $ownedProcesses += $frontendEntry
+            Wait-ForService `
+                -Name "前端" `
+                -Probe { Test-HttpEndpoint -Uri $FrontendUrl -ExpectedText "Vibe-Research" } `
+                -Process $frontendEntry.Process
+        }
+
+        if (-not $NoBrowser -and -not $SmokeTest) {
+            Start-Process $FrontendUrl | Out-Null
+        }
+
+        Write-Host "`nVibe-Research 已就绪：$FrontendUrl (Agent Runtime: $AgentRuntimeUrl)" -ForegroundColor Green
+
+        if ($SmokeTest) {
+            Write-Host "One-click launcher smoke: PASS" -ForegroundColor Green
+        }
+        else {
+            Write-Host "保持此窗口开启；按 Ctrl+C 会停止本次启动的服务。" -ForegroundColor DarkGray
+            while ($true) {
+                foreach ($entry in $ownedProcesses) {
+                    $entry.Process.Refresh()
+                    if ($entry.Process.HasExited) {
+                        throw "$($entry.Name) 已意外退出，退出码：$($entry.Process.ExitCode)"
+                    }
+                }
+                Start-Sleep -Seconds 2
+            }
+        }
     }
-    $exitCode = 1
-}
-finally {
-    for ($index = $ownedProcesses.Count - 1; $index -ge 0; $index--) {
-        Stop-OwnedProcessTree -Entry $ownedProcesses[$index]
+    catch [System.Management.Automation.PipelineStoppedException] {
+        Write-Host "`n正在停止 Vibe-Research……" -ForegroundColor DarkGray
+        $exitCode = 0
     }
+    catch {
+        Write-Host "`n启动失败：$($_.Exception.Message)" -ForegroundColor Red
+        foreach ($entry in $ownedProcesses) {
+            Show-LogTail -Entry $entry
+        }
+        $exitCode = 1
+    }
+    finally {
+        for ($index = $ownedProcesses.Count - 1; $index -ge 0; $index--) {
+            try {
+                Stop-OwnedProcessTree -Entry $ownedProcesses[$index]
+            }
+            catch {
+                Write-Warning "Could not stop $($ownedProcesses[$index].Name): $($_.Exception.Message)"
+                $exitCode = 1
+            }
+        }
+        $env:VR_AGENT_RUNTIME_URL = $previousRuntimeUrl
+        $env:VR_AGENT_RUNTIME_PORT = $previousRuntimePort
+    }
+
+    return $exitCode
 }
 
-exit $exitCode
+exit (Invoke-VibeLauncher)

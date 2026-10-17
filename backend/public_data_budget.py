@@ -47,9 +47,17 @@ def _child(path, operation, code):
                                forecast_note="估值或一致预期来源尚未完成；保留已取得的行情与估值字段")
                 _write_result(path + ".checkpoint", partial)
             value = astock.full_valuation(code, on_quote=checkpoint)
+        elif operation == "daily_review":
+            import daily_review_sources
+            value = daily_review_sources.collect(lambda packet: _write_result(path + ".checkpoint", packet))
+        elif operation.startswith("kline_"):
+            import astock
+            value = astock._kline_source(operation.removeprefix("kline_"), *code)
         elif operation == "financials":
             import astock
-            value = astock.financials(code, include_health=True)
+            def summary_checkpoint(summary):
+                _write_result(path + ".checkpoint", dict(summary, status="partial", reason_code="SOURCE_TIMEOUT"))
+            value = astock.financials(code, include_health=True, on_summary=summary_checkpoint)
             if not isinstance(value, dict) or not value:
                 raise ValueError("financial source returned no usable summary")
         else:
@@ -75,8 +83,22 @@ def _read_result(path):
 
 
 def _run_process(operation, code=None, *, timeout=TIMEOUT, _target=None):
-    if operation not in {"overview", "valuation", "financials"}:
+    if operation not in {"overview", "valuation", "financials", "daily_review",
+                         "kline_hithink", "kline_mootdx", "kline_tencent"}:
         raise ValueError("unsupported public operation")
+    if operation.startswith("kline_"):
+        if (not isinstance(code, tuple) or len(code) != 3 or
+                not isinstance(code[0], str) or len(code[0]) != 6 or
+                not code[0].isascii() or not code[0].isdigit() or
+                type(code[1]) is not int or code[1] not in (4, 5, 6, 11) or
+                type(code[2]) is not int or not 1 <= code[2] <= 2000):
+            raise ValueError("invalid kline arguments")
+        import astock
+        source = operation.removeprefix("kline_")
+        if (source == "hithink" and code[1] != 4 or
+                source == "mootdx" and code[0].startswith("92") or
+                source == "tencent" and (code[1] not in (4, 5, 6) or astock.get_prefix(code[0]) == "bj")):
+            raise ValueError("unsupported kline source route")
     if not _SLOTS.acquire(blocking=False):
         raise PublicDataUnavailable("SOURCE_BUSY")
     process = None
@@ -100,12 +122,12 @@ def _run_process(operation, code=None, *, timeout=TIMEOUT, _target=None):
                 raise RuntimeError("Public data worker could not be reaped")
             if timed_out:
                 checkpoint = path + ".checkpoint"
-                if operation == "valuation" and os.path.isfile(checkpoint):
+                if operation in {"valuation", "financials", "daily_review"} and os.path.isfile(checkpoint):
                     return _read_result(checkpoint)
                 raise PublicDataUnavailable("SOURCE_TIMEOUT")
             if not os.path.isfile(path):
                 checkpoint = path + ".checkpoint"
-                if operation == "valuation" and os.path.isfile(checkpoint):
+                if operation in {"valuation", "financials", "daily_review"} and os.path.isfile(checkpoint):
                     value = _read_result(checkpoint)
                     value["reason_code"] = "SOURCE_UNAVAILABLE"
                     return value
@@ -145,7 +167,7 @@ def run(operation, code=None, *, timeout=TIMEOUT, _target=None):
         cacheable = isinstance(value, dict) and (
             operation == "valuation" and value.get("price") is not None and value.get("status") != "partial" or
             operation == "overview" and value.get("sentiment", {}).get("status") == "normal" or
-            operation == "financials" and value.get("revenue") is not None and value.get("net_profit") is not None)
+            operation == "financials" and value.get("revenue") is not None and value.get("net_profit") is not None and value.get("status") != "partial")
         if cacheable:
             with _LOCK:
                 if len(_CACHE) >= 128:

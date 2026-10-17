@@ -164,8 +164,13 @@ def _valid_trade_date(value) -> tuple[str | None, str | None]:
     if value is None or value == "":
         return None, None
     s = str(value).strip()
-    if _DATE_RE.match(s):
-        return s, None
+    if _DATE_RE.fullmatch(s):
+        try:
+            datetime.strptime(s, "%Y-%m-%d")
+        except ValueError:
+            pass
+        else:
+            return s, None
     return None, f"交易日期格式无效：{s!r}（期望 YYYY-MM-DD）"
 
 
@@ -519,14 +524,24 @@ def _kick_background_refresh(*, force: bool = False) -> bool:
     ).start()
     return True
 
-def _build_daily_review() -> dict:
-    """执行真实聚合（无缓存、无锁）。字段契约与历史版本一致。"""
+def _assemble_daily_review(sources, *, _test_provider_calls=False) -> dict:
+    """Assemble a supplied source map; only explicit source-mocked tests may collect inline."""
+    if not isinstance(sources, dict) and not (sources is None and _test_provider_calls):
+        raise ValueError("daily assembly requires a source map")
+    def observed(key, provider):
+        if sources is None:
+            return provider()
+        entry = sources.get(key)
+        if not isinstance(entry, dict) or entry.get("status") != "complete":
+            raise RuntimeError("SOURCE_UNAVAILABLE")
+        return copy.deepcopy(entry.get("value"))
+
     top_warnings: list[str] = [_WARN_NO_CUTOFF]
     labeled_warns: list[tuple[str, list[str]]] = []
 
     # —— 大盘指数 ——
     indices = _safe_call(
-        astock.index_quote,
+        lambda: observed("indices", astock.index_quote),
         source="tencent_quote",
         empty_check=lambda x: not x,
         label="indices",
@@ -535,7 +550,7 @@ def _build_daily_review() -> dict:
 
     # —— 全球指数 ——
     global_indices = _safe_call(
-        market.get_global_indices,
+        lambda: observed("global_indices", market.get_global_indices),
         source="eastmoney_global_indices",
         empty_check=lambda x: not x,
         label="global_indices",
@@ -544,7 +559,7 @@ def _build_daily_review() -> dict:
 
     # —— 市场广度（已信封，只调一次）——
     try:
-        breadth_raw = market.get_market_breadth()
+        breadth_raw = observed("breadth", market.get_market_breadth)
     except Exception as e:  # noqa: BLE001
         _log.warning("get_market_breadth failed: %s", e, exc_info=False)
         breadth_raw = {
@@ -567,7 +582,7 @@ def _build_daily_review() -> dict:
     # —— 短线情绪 ——
     emo_raw = None
     try:
-        emo_raw = market.get_short_term_emotion()
+        emo_raw = observed("emotion", market.get_short_term_emotion)
     except Exception as e:  # noqa: BLE001
         emotion = _wrap(
             "unavailable",
@@ -619,7 +634,7 @@ def _build_daily_review() -> dict:
     # —— 成交额榜（旧兼容）——
     # amount_top 来自统一全 A 快照广度；turnover_top 是项目原有榜单，暂时同时保留
     turnover = _safe_call(
-        market.get_turnover_top,
+        lambda: observed("turnover", market.get_turnover_top),
         source="eastmoney_market_snapshot",
         empty_check=lambda x: not isinstance(x, dict) or not x.get("stocks"),
         label="turnover",
@@ -629,7 +644,7 @@ def _build_daily_review() -> dict:
     # —— 板块排名 ——
     def _board(kind: str):
         try:
-            env = market.get_board_ranking(kind, top_n=10)
+            env = observed(kind, lambda: market.get_board_ranking(kind, top_n=10))
         except Exception as e:  # noqa: BLE001
             env = {
                 "status": "unavailable",
@@ -748,6 +763,66 @@ def _build_daily_review() -> dict:
     }
 
 
+def _build_daily_review() -> dict:
+    import public_data_budget
+    from daily_review_sources import KEYS
+    try:
+        packet = public_data_budget.run("daily_review")
+    except public_data_budget.PublicDataUnavailable as exc:
+        packet = {"sources": {}, "reason_code": exc.code}
+    if not isinstance(packet, dict) or not isinstance(packet.get("sources"), dict):
+        raise ValueError("invalid daily collection")
+    sources = packet["sources"]
+    if set(sources) - set(KEYS):
+        raise ValueError("unknown daily source")
+    for entry in sources.values():
+        if not isinstance(entry, dict) or entry.get("status") not in ("complete", "unavailable"):
+            raise ValueError("invalid source entry")
+        if set(entry) - {"status", "value"}:
+            raise ValueError("invalid source fields")
+    result = _assemble_daily_review(sources)
+    result["collection"] = {
+        "completed": [key for key in KEYS if sources.get(key, {}).get("status") == "complete"],
+        "failed": [key for key in KEYS if sources.get(key, {}).get("status") == "unavailable"],
+        "pending": [key for key in KEYS if key not in sources],
+        "reason_code": packet.get("reason_code") if packet.get("reason_code") in
+            (None, "SOURCE_TIMEOUT", "SOURCE_UNAVAILABLE", "SOURCE_BUSY", "SOURCE_BAD_RESPONSE") else "SOURCE_BAD_RESPONSE",
+    }
+    return result
+
+
+_build_flight_lock = threading.Lock()
+_build_flight = None
+_build_generation = 0
+_committed_generation = 0
+
+
+def _shared_build():
+    global _build_flight, _build_generation
+    with _build_flight_lock:
+        flight = _build_flight
+        leader = flight is None or flight.event.is_set()
+        if leader:
+            _build_generation += 1
+            flight = _ExplicitRefreshFlight(_build_generation)
+            _build_flight = flight
+    if leader:
+        try:
+            flight.result = _build_daily_review()
+        except BaseException as exc:
+            flight.error = exc
+        finally:
+            flight.event.set()
+            with _build_flight_lock:
+                if _build_flight is flight:
+                    _build_flight = None
+    elif not flight.event.wait(14):
+        raise DailyReviewRefreshError(reason="flight_timeout")
+    if flight.error is not None:
+        raise flight.error
+    return flight.gen, copy.deepcopy(flight.result)
+
+
 def generate_daily_review() -> dict:
     """聚合当日复盘客观数据（fresh；不调用 AI、不读磁盘 stale）。
 
@@ -763,14 +838,16 @@ def generate_daily_review() -> dict:
     if cached is not None:
         return copy.deepcopy(cached)
 
-    with _review_lock:
-        cached = _cached_review()
-        if cached is not None:
+    global _committed_generation
+    generation, result = _shared_build()
+    daily_review_errors.sanitize_review_public_fields(result)
+    with _review_lock, _build_flight_lock:
+        if generation == _build_generation and generation > _committed_generation:
+            _store_review(result)
+            _committed_generation = generation
+        elif (cached := _cached_review()) is not None:
             return copy.deepcopy(cached)
-        result = _build_daily_review()
-        daily_review_errors.sanitize_review_public_fields(result)
-        _store_review(result)
-        return copy.deepcopy(result)
+    return copy.deepcopy(result)
 
 
 class DailyReviewRefreshError(RuntimeError):
@@ -786,6 +863,7 @@ class DailyReviewRefreshError(RuntimeError):
         "invalid_status": "市场数据状态异常，本次刷新未完成",
         "build_exception": "市场数据整理失败，请稍后重试",
         "flight_timeout": "等待市场数据刷新超时，请稍后重试",
+        "superseded": "更新的市场数据已开始处理，请稍后重试",
     }
 
     def __init__(
@@ -821,8 +899,9 @@ def _run_explicit_refresh_build() -> dict:
     旧成功缓存保持不变。
     """
     # 在 _review_lock 外可先快照「是否曾有成功」；替换本身仍走 _store_review 质量规则
+    global _committed_generation
     try:
-        result = _build_daily_review()
+        generation, result = _shared_build()
     except Exception as exc:  # noqa: BLE001
         raise DailyReviewRefreshError(reason="build_exception") from exc
 
@@ -831,15 +910,16 @@ def _run_explicit_refresh_build() -> dict:
 
     daily_review_errors.sanitize_review_public_fields(result)
 
-    # 统一质量判定：同时检查新鲜内存、过期内存与磁盘最近成功
-    accepted, reason = _refresh_accepts_result(result)
-    if not accepted:
-        raise DailyReviewRefreshError(reason=reason)
-
-    # 原子替换：先写磁盘，成功再写内存；磁盘失败则保持旧成功（避免状态分裂）
-    with _review_lock:
+    # Generation fencing and quality checks share the parent persistence lock.
+    with _review_lock, _build_flight_lock:
+        if generation != _build_generation or generation < _committed_generation:
+            raise DailyReviewRefreshError(reason="superseded")
+        accepted, reason = _refresh_accepts_result(result)
+        if not accepted:
+            raise DailyReviewRefreshError(reason=reason)
         if not _store_review_on_refresh(result):
             raise DailyReviewRefreshError(reason="persist_failed")
+        _committed_generation = generation
         stored = _cached_review()
         if stored is None:
             raise DailyReviewRefreshError(reason="store_rejected")
@@ -849,7 +929,7 @@ def _run_explicit_refresh_build() -> dict:
 
 def _await_explicit_refresh_flight(flight: _ExplicitRefreshFlight) -> dict:
     """等待已捕获的 flight；只读该对象，不受后续轮次 current 替换影响。"""
-    if not flight.event.wait(timeout=120):
+    if not flight.event.wait(timeout=14):
         raise DailyReviewRefreshError(reason="flight_timeout")
     if flight.error is not None:
         raise flight.error

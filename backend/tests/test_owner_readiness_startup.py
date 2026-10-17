@@ -143,7 +143,24 @@ def test_windows_launcher_contract_uses_pwsh_and_keeps_runtime_state_private() -
     assert 'Get-Command "node.exe"' in script
     assert '22.6.0' in script
     assert '$FrontendUrl = "http://127.0.0.1:5899"' in script
-    assert '$AgentRuntimeUrl = "http://127.0.0.1:8911"' in script
+    # The default stays 8911, but the launcher now resolves URL/port overrides
+    # once and gives both children the same canonical loopback endpoint.
+    assert "function Resolve-AgentRuntimeEndpoint {" in script
+    assert "$resolvedPort = 8911" in script
+    assert 'Url = "http://127.0.0.1:$resolvedPort"; Port = $resolvedPort' in script
+    resolve = script.index("$endpoint = Resolve-AgentRuntimeEndpoint")
+    first_child = script.index("$agentRuntimeEntry = Start-OwnedProcess")
+    endpoint_assignments = (
+        "$AgentRuntimeUrl = $endpoint.Url",
+        "$AgentRuntimePort = $endpoint.Port",
+        "$env:VR_AGENT_RUNTIME_URL = $AgentRuntimeUrl",
+        "$env:VR_AGENT_RUNTIME_PORT = [string]$AgentRuntimePort",
+    )
+    for assignment in endpoint_assignments:
+        assert resolve < script.index(assignment, resolve) < first_child
+    assert first_child < script.index("$backendEntry = Start-OwnedProcess")
+    assert 'Test-HttpEndpoint -Uri "$AgentRuntimeUrl/health"' in script
+    assert "Test-TcpPort -Port $AgentRuntimePort" in script
     assert 'Join-Path $RepoRoot "agent-runtime"' in script
     assert "npm.cmd" in script
     assert ".vibe-runtime/" in ignore

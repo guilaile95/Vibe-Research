@@ -13,12 +13,15 @@
 import { chromium } from "playwright";
 import { createReadStream, existsSync } from "node:fs";
 import { createServer } from "node:http";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
 const frontendDist = path.join(root, "frontend", "dist");
+
+const evidenceDir = path.resolve(process.env.LAYOUT_NAV_EVIDENCE_DIR || path.join(root, "frontend/layout-navigation-evidence"));
 
 const MOBILE = { width: 390, height: 780 };
 const DESKTOP = { width: 1024, height: 780 };
@@ -126,6 +129,10 @@ async function launchBrowser() {
 /** Every /api/* call returns an inert success payload — no backend, no data assertions here. */
 async function handleApi(route) {
   const url = route.request().url();
+  if (new URL(url).origin !== `http://127.0.0.1:${frontendPort}`) {
+    await route.abort("blockedbyclient");
+    return;
+  }
   if (!url.includes("/api/")) {
     await route.continue();
     return;
@@ -165,17 +172,20 @@ async function activeIsTrigger(page) {
 async function openPage(browser, { collapsed = false, viewport = MOBILE } = {}) {
   const context = await browser.newContext({ viewport });
   const page = await context.newPage();
-  await page.route("**/api/**", handleApi);
+  await page.route("**/*", handleApi);
   await page.addInitScript((value) => {
     localStorage.setItem("vr-sidebar", value);
   }, collapsed ? "collapsed" : "expanded");
   return { context, page };
 }
 
-async function gotoApp(page, route = "/daily-review") {
+// Use an data-independent form; no edits/submission or campaign context.
+async function gotoApp(page, route = "/thesis/new") {
   await page.goto(`http://127.0.0.1:${frontendPort}${route}`, { waitUntil: "domcontentloaded" });
   await sidebar(page).waitFor({ state: "attached", timeout: 15000 });
   await trigger(page).waitFor({ timeout: 15000 });
+  await page.getByRole("heading", { name: "新建投资逻辑", exact: true }).waitFor();
+  await page.locator('[role="status"][aria-busy="true"]').waitFor({ state: "hidden" });
 }
 
 async function openDrawer(page) {
@@ -185,6 +195,13 @@ async function openDrawer(page) {
     null,
     { timeout: 5000 },
   );
+}
+
+async function saveEvidence(page, label, errors) {
+  await mkdir(evidenceDir, { recursive: true });
+  await writeFile(path.join(evidenceDir, `${label}.json`), JSON.stringify({ errors, url: page.url(), viewport: page.viewportSize() }, null, 2));
+  await writeFile(path.join(evidenceDir, `${label}.html`), await page.content());
+  await page.screenshot({ path: path.join(evidenceDir, `${label}.png`) });
 }
 
 /** Cases 1-4, 9: open, aria-expanded, focus containment, Escape, focus return. */
@@ -250,6 +267,7 @@ async function caseOpenKeyboard(browser, errors) {
   } catch (e) {
     errors.push(`${label}: fatal ${e.message}`);
   } finally {
+    await saveEvidence(page, label, errors);
     await context.close();
   }
 }
@@ -281,6 +299,7 @@ async function caseRouteAndOverlay(browser, errors) {
   } catch (e) {
     errors.push(`${label}: fatal ${e.message}`);
   } finally {
+    await saveEvidence(page, label, errors);
     await context.close();
   }
 }
@@ -303,14 +322,15 @@ async function caseBreakpoint(browser, errors) {
     const width = await expanded.page.evaluate(
       () => document.querySelector('[data-testid="app-sidebar"]').getBoundingClientRect().width,
     );
-    if (Math.abs(width - 240) > 4) {
-      errors.push(`breakpoint(expanded): desktop sidebar width expected ~240, got ${width}`);
+    if (Math.abs(width - 200) > 4) {
+      errors.push(`breakpoint(expanded): desktop sidebar width expected ~200, got ${width}`);
     }
     const overflow = await expanded.page.evaluate(() => document.body.style.overflow);
     if (overflow === "hidden") errors.push("breakpoint(expanded): body scroll lock leaked to desktop");
   } catch (e) {
     errors.push(`breakpoint(expanded): fatal ${e.message}`);
   } finally {
+    await saveEvidence(expanded.page, "breakpoint-expanded", errors);
     await expanded.context.close();
   }
 
@@ -320,7 +340,7 @@ async function caseBreakpoint(browser, errors) {
     await gotoApp(collapsed.page);
     await openDrawer(collapsed.page);
     // mobile drawer still shows labels even though collapsed=true
-    if (!(await sidebar(collapsed.page).getByRole("link", { name: "决策舱" }).isVisible().catch(() => false))) {
+    if (!(await sidebar(collapsed.page).getByRole("link", { name: "决策待办" }).isVisible().catch(() => false))) {
       errors.push("breakpoint(collapsed): mobile drawer must show labels while collapsed=true");
     }
     await collapsed.page.setViewportSize(DESKTOP);
@@ -335,13 +355,139 @@ async function caseBreakpoint(browser, errors) {
       errors.push(`breakpoint(collapsed): desktop sidebar width expected ~56 (icon-only), got ${width}`);
     }
     // icon-only mode: label text no longer rendered on desktop (title tooltip only)
-    if ((await sidebar(collapsed.page).getByText("决策舱", { exact: true }).count()) > 0) {
+    if ((await sidebar(collapsed.page).getByText("决策待办", { exact: true }).count()) > 0) {
       errors.push("breakpoint(collapsed): desktop collapsed sidebar should hide nav labels");
     }
   } catch (e) {
     errors.push(`breakpoint(collapsed): fatal ${e.message}`);
   } finally {
+    await saveEvidence(collapsed.page, "breakpoint-collapsed", errors);
     await collapsed.context.close();
+  }
+}
+
+/** Real Layout scrollport with bounded synthetic content; no backend/model calls. */
+async function caseScrollClearance(browser, errors) {
+  const geometry = [];
+  const { context, page } = await openPage(browser);
+  try {
+    await gotoApp(page);
+    for (const width of [390, 767]) {
+      await page.setViewportSize({ width, height: MOBILE.height });
+      await page.evaluate(() => { document.querySelector('main').scrollTop = 0; });
+      // Loaded-layout geometry only; transient lazy fallback margins are not this contract.
+      const initial = await page.evaluate(() => {
+        const main = document.querySelector('main');
+        const nav = document.querySelector('[data-testid="nav-drawer-trigger"]');
+        return { top: main.getBoundingClientRect().top, bottom: main.getBoundingClientRect().bottom,
+          contentTop: main.firstElementChild.getBoundingClientRect().top + parseFloat(getComputedStyle(main.firstElementChild).paddingTop),
+          navBottom: nav.getBoundingClientRect().bottom, viewport: innerHeight };
+      });
+      geometry.push({ width, phase: "initial", ...initial });
+      if (Math.abs(initial.top - 64) > 1 || Math.abs(initial.contentTop - 64) > 1 ||
+          initial.top < initial.navBottom || Math.abs(initial.bottom - initial.viewport) > 1) {
+        errors.push(`scroll-clearance(${width}): initial geometry ${JSON.stringify(initial)}`);
+      }
+      await page.evaluate(() => {
+        document.getElementById('layout-scroll-probe')?.remove();
+        const fixture = document.createElement('section');
+        fixture.id = 'layout-scroll-probe';
+        const start = document.createElement('button');
+        start.id = 'layout-scroll-start'; start.textContent = 'Synthetic scroll target';
+        const spacer = document.createElement('div'); spacer.style.height = `${innerHeight * 2}px`;
+        const end = document.createElement('button');
+        end.id = 'layout-scroll-end'; end.textContent = 'Synthetic bottom target';
+        fixture.append(start, spacer, end);
+        document.querySelector('main').firstElementChild.append(fixture);
+      });
+      await page.mouse.move(width / 2, MOBILE.height / 2);
+      await page.mouse.wheel(0, 200);
+      await page.waitForFunction(() => document.querySelector('main').scrollTop > 0);
+      await page.locator('#layout-scroll-start').evaluate(el => el.scrollIntoView({ block: 'start' }));
+      const scrolled = await page.evaluate(() => {
+        const main = document.querySelector('main');
+        const target = document.getElementById('layout-scroll-start');
+        const box = target.getBoundingClientRect();
+        const nav = document.querySelector('[data-testid="nav-drawer-trigger"]');
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return { top: main.getBoundingClientRect().top, targetTop: box.top,
+          scrollTop: main.scrollTop, navBottom: nav.getBoundingClientRect().bottom,
+          targetHit: target === hit || target.contains(hit) };
+      });
+      geometry.push({ width, phase: "scrolled", ...scrolled });
+      if (Math.abs(scrolled.top - 64) > 1 || scrolled.targetTop < scrolled.navBottom ||
+          Math.abs(scrolled.targetTop - scrolled.top) > 1 || !scrolled.targetHit || scrolled.scrollTop <= 0) {
+        errors.push(`scroll-clearance(${width}): scrolled geometry ${JSON.stringify(scrolled)}`);
+      }
+      // Synthetic negative control: recreate the previous CSS, then restore it even on failure.
+      const oldCssControl = await page.evaluate(() => {
+        const main = document.querySelector('main');
+        const wrapper = main.firstElementChild;
+        const target = document.getElementById('layout-scroll-start');
+        const nav = document.querySelector('[data-testid="nav-drawer-trigger"]');
+        const mainStyle = main.getAttribute('style');
+        const wrapperStyle = wrapper.getAttribute('style');
+        try {
+          main.style.marginTop = '0px';
+          wrapper.style.paddingTop = '64px';
+          target.scrollIntoView({ block: 'start' });
+          const box = target.getBoundingClientRect();
+          const navBox = nav.getBoundingClientRect();
+          const left = Math.max(box.left, navBox.left), right = Math.min(box.right, navBox.right);
+          const top = Math.max(box.top, navBox.top), bottom = Math.min(box.bottom, navBox.bottom);
+          const overlaps = right > left && bottom > top;
+          const hit = overlaps ? document.elementFromPoint((left + right) / 2, (top + bottom) / 2) : null;
+          return { synthetic: true, mainTop: main.getBoundingClientRect().top,
+            targetTop: box.top, overlaps, blockedByTrigger: hit === nav || nav.contains(hit) };
+        } finally {
+          if (mainStyle === null) main.removeAttribute('style'); else main.setAttribute('style', mainStyle);
+          if (wrapperStyle === null) wrapper.removeAttribute('style'); else wrapper.setAttribute('style', wrapperStyle);
+          target.scrollIntoView({ block: 'start' });
+        }
+      });
+      geometry.push({ width, phase: 'synthetic-old-css-negative-control', ...oldCssControl });
+      if (!oldCssControl.overlaps || !oldCssControl.blockedByTrigger || Math.abs(oldCssControl.mainTop) > 1) {
+        errors.push(`scroll-clearance(${width}): old-CSS control did not reproduce overlap ${JSON.stringify(oldCssControl)}`);
+      }
+      await page.locator('#layout-scroll-end').evaluate(el => el.scrollIntoView({ block: 'end' }));
+      const bottomReachable = await page.evaluate(() => {
+        const main = document.querySelector('main').getBoundingClientRect();
+        const target = document.getElementById('layout-scroll-end');
+        const box = target.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return box.top >= main.top && box.bottom <= main.bottom + 1 &&
+          (target === hit || target.contains(hit));
+      });
+      geometry.push({ width, phase: "bottom", bottomReachable });
+      await saveEvidence(page, `scroll-bottom-${width}`, errors);
+      if (!bottomReachable) errors.push(`scroll-clearance(${width}): bottom target not reachable`);
+    }
+    await openDrawer(page);
+    await page.setViewportSize({ width: 768, height: MOBILE.height });
+    await page.waitForFunction(() => document.querySelector('[data-testid="app-sidebar"]').dataset.mobileOpen === 'false');
+    const desktop = await page.evaluate(() => {
+      const main = document.querySelector('main'); main.scrollTop = 0;
+      return { top: main.getBoundingClientRect().top,
+        contentTop: main.firstElementChild.getBoundingClientRect().top + parseFloat(getComputedStyle(main.firstElementChild).paddingTop),
+        inert: main.hasAttribute('inert'), hidden: main.hasAttribute('aria-hidden'),
+        overflow: document.body.style.overflow };
+    });
+    geometry.push({ width: 768, phase: "desktop", ...desktop });
+    if (Math.abs(desktop.top) > 1 || Math.abs(desktop.contentTop - 28) > 1 ||
+        desktop.inert || desktop.hidden || desktop.overflow === 'hidden' || await trigger(page).isVisible()) {
+      errors.push(`scroll-clearance(768): desktop reset ${JSON.stringify(desktop)}`);
+    }
+    await page.setViewportSize({ width: 767, height: MOBILE.height });
+    await trigger(page).waitFor({ state: 'visible' });
+    if (await drawerOpen(page)) errors.push('scroll-clearance(767): drawer reopened after desktop resize');
+    const restoredTop = await page.locator('main').evaluate(el => el.getBoundingClientRect().top);
+    if (Math.abs(restoredTop - 64) > 1) errors.push(`scroll-clearance(767): restored top ${restoredTop}`);
+  } catch (e) {
+    errors.push(`scroll-clearance: fatal ${e.message}`);
+  } finally {
+    await saveEvidence(page, "scroll-clearance", errors);
+    await writeFile(path.join(evidenceDir, "scroll-geometry.json"), JSON.stringify(geometry, null, 2));
+    await context.close();
   }
 }
 
@@ -364,6 +510,7 @@ async function main() {
     await caseOpenKeyboard(browser, errors);
     await caseRouteAndOverlay(browser, errors);
     await caseBreakpoint(browser, errors);
+    await caseScrollClearance(browser, errors);
   } catch (e) {
     errors.push(`fatal: ${e && e.stack ? e.stack : String(e)}`);
   } finally {
@@ -384,7 +531,7 @@ async function main() {
     for (const e of errors) console.error(` - ${e}`);
     process.exit(1);
   }
-  console.log(`PASS layout-navigation (${browserLabel}) port=${frontendPort} cases=9`);
+  console.log(`PASS layout-navigation (${browserLabel}) port=${frontendPort} cases=10`);
 }
 
 main();

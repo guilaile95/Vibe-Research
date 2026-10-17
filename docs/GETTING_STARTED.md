@@ -101,6 +101,37 @@ npm.cmd start
 
 Linux 用户目录打包、独立安装与前台生命周期管理见 [Linux 安装包指南](LINUX_INSTALL.md)。它与上述源码手动启动是不同路径，不代表云端部署已经验收。
 
+## 环境配置与 Runtime 端口
+
+[后端配置示例](../backend/.env.example) 是说明，不是自动加载的配置文件。
+在启动器或手动服务的父终端中设置环境变量；不要把真实 key 填进仓库示例。
+
+Windows 启动器和 Linux 安装包启动器默认使用 Runtime `8911`。覆盖规则：
+
+- 仅设 `VR_AGENT_RUNTIME_PORT`，或仅设带端口的 `VR_AGENT_RUNTIME_URL`；同时设置时必须一致
+- 端口为 ASCII 十进制整数 `1024–65535`，排除后端 `8900` 和前端 `5899`
+- URL 仅允许 `http`、`127.0.0.1` / `localhost` / `[::1]`、显式端口及可选末尾 `/`；不允许凭据、其他路径、query 或 fragment
+- 启动器将结果统一为 `http://127.0.0.1:<port>`，同时传给后端与 Runtime；这不会开放远程监听
+
+例如，在运行 Windows 启动器前设置 `$env:VR_AGENT_RUNTIME_PORT = "8912"`，
+或在运行 Linux 安装包启动器前设置 `export VR_AGENT_RUNTIME_PORT=8912`。
+这条自动同步规则不适用于上面的手动分终端命令：手动启动时，后端终端应设置
+`VR_AGENT_RUNTIME_URL=http://127.0.0.1:8912`，Runtime 终端设置 `VR_AGENT_RUNTIME_PORT=8912`。
+如需让脱敏报告核对声明值，后端终端也设置相同的 `VR_AGENT_RUNTIME_PORT`。
+健康检查地址随端口调整。已有服务被复用时，仍需核对其实际版本与启动配置。
+
+供应商配置与运行状态分开判断：
+
+| 可选配置 | 实际边界 |
+| --- | --- |
+| `HITHINK_FINANCE_API_KEY` | 已有限定行情等客户端；认证、逐接口权限、证券范围和响应质量分别验证 |
+| `TUSHARE_TOKEN` | 已有受限接口客户端与显式 ingestion；不会自动启用短线研究 transport 或定时采集 |
+| `VR_SEC_CONTACT` | 本地英文姓名/邮箱设置，环境管理时页面只读；不是凭据，当前未接通 SEC transport |
+
+不配置这些项不等于所有公开来源不可用；配置成功也不等于已经获得数据。
+历史 `IWENCAI_API_KEY` / `IWENCAI_BASE_URL` / `VR_DATA_PROXY` 没有当前后端生产读取入口。
+采用范围及待接通事项见 [选择性吸收证据索引](VIBE_ASTOCK_ADOPTION_PLAN.md)。
+
 ## 隔离启动准备：暂停 Native Intel 自动抓取
 
 准备运行验收时，先为本次试运行选择新的 `VR_DATA_DIR` 和 `VR_REPORTS_DIR`，
@@ -160,6 +191,9 @@ HTTP 错误或无效原文可保留为不可用观测；传输拒绝/超限失�
 | 后端健康 | `http://127.0.0.1:8900/api/health` | 后端进程可响应 |
 | Agent Runtime 健康 | `http://127.0.0.1:8911/health` | Runtime 进程可响应；不代表已登录或真实模型可用 |
 
+需要排查时，在设置 → 本机后端运行信息导出 [脱敏运行自检](RUNTIME_DIAGNOSTICS.md)。
+此动作只读元数据，不测试网络、模型或登录；`NOT_EVALUATED` 不能解释为成功或失败。
+
 首次打开先看每日复盘和数据健康。Native Intel 可在后台刷新，完成前可能显示 `unavailable / stale / partial`。行情有内容、时间可核验、最新刷新成功是不同状态；服务健康不能代替来源可用性。
 
 ## 可选 AI 与个人数据
@@ -178,7 +212,8 @@ HTTP 错误或无效原文可保留为不可用观测；传输拒绝/超限失�
 | `pwsh.exe` 不存在 | 使用 PowerShell 7；系统自带 Windows PowerShell 5.1 不符合启动器要求 |
 | 端口已占用或页面版本较旧 | 当前端口由哪个进程提供、设置页显示哪个源码目录/版本；不要直接结束未知进程 |
 | 网页能打开但数据不可用 | 后端健康、数据来源状态、行情时间与刷新错误；不要把空、零、错误混为一类 |
-| Ask AI 不可用 | Runtime 健康与认证、模型配置、网络/额度分别检查 |
+| Ask AI 不可用 | 先看脱敏自检的 Runtime URL/端口声明；配置一致仍需分别验证实际服务、认证、模型与网络/额度 |
+| 已填供应商 key 仍无数据 | 配置名存在不证明 key 有效；检查对应接口权限、来源日期/覆盖和失败状态，勿通过粘贴密钥排障 |
 | 更新源码后仍见旧界面 | 核对实际运行版本；源码提交、前端产物和已运行进程可能不同 |
 
 开发验证命令与证据边界见 [测试指南](TESTING.md)，长期限制见 [KNOWN_ISSUES](KNOWN_ISSUES.md)。运行指南不是安装、服务切换或功能验收回执。

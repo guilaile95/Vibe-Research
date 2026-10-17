@@ -185,6 +185,43 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Run layout navigation and mobile scroll acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          LAYOUT_NAV_EVIDENCE_DIR: ${{ runner.temp }}/layout-navigation-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/layout-navigation.browser.mjs
+
+      - name: Preserve layout navigation geometry evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: layout-navigation-evidence
+          path: |
+            ${{ runner.temp }}/layout-navigation-evidence/*.png
+            ${{ runner.temp }}/layout-navigation-evidence/*.html
+            ${{ runner.temp }}/layout-navigation-evidence/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Run two-company comparison mounted-page acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          COMPANY_COMPARISON_BROWSER_OUTPUT_DIR: ${{ runner.temp }}/company-comparison-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/company-comparison.browser.mjs
+
+      - name: Preserve two-company comparison synthetic evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: company-comparison-evidence
+          path: ${{ runner.temp }}/company-comparison-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Run research analytics production page acceptance
         if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend

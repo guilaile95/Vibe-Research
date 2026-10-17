@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+const diagnosticsGolden = JSON.parse(readFileSync(new URL("../fixtures/runtime-diagnostics.json", import.meta.url), "utf8"));
 const platformStartup = JSON.parse(readFileSync(new URL("../fixtures/platform-settings-startup.json", import.meta.url), "utf8"));
 // Synthetic-only contracts shared by offline checks and browser harness.
 export const config = { provider: "openai-compatible", baseURL: "https://synthetic.invalid/v1", apiKey: "SYNTHETIC_MODEL_KEY", model: "SYNTHETIC_MODEL" };
@@ -51,4 +52,9 @@ export function observeSyntheticStreams() {
     };
     return response;
   };
+}
+
+export function readDiagnosticsReply(method, path, search = "") {
+  if (method !== "GET" || path !== "/api/runtime-diagnostics/export" || search) return null;
+  return { data: structuredClone(diagnosticsGolden) };
 }

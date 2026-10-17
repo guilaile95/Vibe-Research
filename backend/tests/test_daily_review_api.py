@@ -227,3 +227,12 @@ def test_daily_review_api_exposes_cache_meta(monkeypatch):
     assert body["data"]["status"] == "normal"
     assert body["cache_meta"]["stale"] is True
     assert body["cache_meta"]["source"] == "persisted"
+
+
+@pytest.fixture(autouse=True)
+def _source_mocked_assembly(monkeypatch):
+    # These tests inject provider results in this process. Production collection
+    # is verified separately with disposable synthetic workers.
+    import daily_review as _review
+    monkeypatch.setattr(_review, "_build_daily_review",
+        lambda: _review._assemble_daily_review(None, _test_provider_calls=True))
