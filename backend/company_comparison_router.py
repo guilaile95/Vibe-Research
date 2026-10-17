@@ -97,9 +97,22 @@ def bundles(request: Request, market: str, symbol: str, as_of: str):
 
 @router.get("/runs")
 def runs(request: Request):
-    _query(request)
+    if not request.query_params:
+        return {"data": _legacy_runs()}
+    required = {"first_market", "first_symbol", "second_market", "second_symbol", "as_of"}
+    supplied = set(request.query_params)
+    if not required <= supplied or not supplied <= required | {"before", "limit"}:
+        raise HTTPException(422, "COMPARISON_QUERY_INVALID")
+    _query(request, supplied)
+    q = request.query_params
     try:
-        return {"data": service.list_runs()}
+        if any(not q[k].isascii() or not q[k].isdigit() or len(q[k]) > 19 for k in ("before", "limit") if k in q):
+            raise ValueError()
+        return {"data": service.list_run_page(
+            {"market": q["first_market"], "symbol": q["first_symbol"]},
+            {"market": q["second_market"], "symbol": q["second_symbol"]}, q["as_of"],
+            before=int(q["before"]) if "before" in q else None,
+            limit=int(q.get("limit", service.MAX_HISTORY)))}
     except Exception:
         raise HTTPException(409, "COMPARISON_RECORD_CORRUPTED_OR_UNAVAILABLE") from None
 
@@ -109,5 +122,12 @@ def run(run_id: str, request: Request):
     _query(request)
     try:
         return {"data": service.read_run(run_id)}
+    except Exception:
+        raise HTTPException(409, "COMPARISON_RECORD_CORRUPTED_OR_UNAVAILABLE") from None
+
+
+def _legacy_runs():
+    try:
+        return service.list_runs()
     except Exception:
         raise HTTPException(409, "COMPARISON_RECORD_CORRUPTED_OR_UNAVAILABLE") from None

@@ -100,3 +100,14 @@ export async function readComparisonRuns(signal: AbortSignal): Promise<Compariso
   if (new Set(records.map(r => r.run_id)).size !== records.length) throw new Error('对比历史运行身份重复');
   return records;
 }
+
+export type ComparisonRunPage = { records: ComparisonRecord[]; next_cursor: string | null };
+export async function readComparisonRunPage(first: Subject, second: Subject, asOf: string, signal: AbortSignal, before?: string): Promise<ComparisonRunPage> {
+  if (!comparisonSubjectValid(first) || !comparisonSubjectValid(second) || same(first, second) || !comparisonDayValid(asOf) || (before !== undefined && !/^[1-9][0-9]{0,18}$/.test(before))) throw new Error('对比历史查询无效');
+  const query = new URLSearchParams({ first_market: first.market, first_symbol: first.symbol, second_market: second.market, second_symbol: second.symbol, as_of: asOf, ...(before ? { before } : {}) });
+  const page = await get<ComparisonRunPage>(`/company-comparison/runs?${query}`, { signal });
+  if (!keys(page, ['records','next_cursor']) || !Array.isArray(page.records) || page.records.length > 50 || !(page.next_cursor === null || (typeof page.next_cursor === 'string' && /^[1-9][0-9]{0,18}$/.test(page.next_cursor) && (!before || BigInt(page.next_cursor) < BigInt(before))))) throw new Error('对比历史分页响应无效');
+  const records = page.records.map(parseComparisonRecord);
+  if (new Set(records.map(r => r.run_id)).size !== records.length || records.some(r => r.as_of !== asOf || !same(r.subjects[0], first) || !same(r.subjects[1], second)) || (page.next_cursor !== null && !records.length)) throw new Error('对比历史配对身份无效');
+  return { records, next_cursor: page.next_cursor };
+}

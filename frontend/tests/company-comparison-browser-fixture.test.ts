@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
-import { comparisonRefs, generateComparison, parseComparisonRecord, readComparisonBundle, readComparisonBundles, readComparisonRuns } from '../src/lib/companyComparison.ts';
+import { comparisonRefs, generateComparison, parseComparisonRecord, readComparisonBundle, readComparisonBundles, readComparisonRunPage } from '../src/lib/companyComparison.ts';
 import { parseResearchBundle } from '../src/lib/companyResearch.ts';
 import { createComparisonFixture, comparisonGoldens, comparisonHistoryGolden, comparisonEmptyGolden, comparisonLlm, comparisonCutoff, bundleListPaths, generationPath, historyPath } from './e2e/company-comparison.fixture.mjs';
 const origin = 'http://127.0.0.1:8911';
@@ -44,7 +44,7 @@ for (const scenario of ['complete', 'missing']) test(`actual registered ${scenar
   const bundles = await Promise.all(lists.map((list: any) => readComparisonBundle(list[0], signal())));
   const result = await generateComparison(bundles, comparisonCutoff, comparisonLlm, signal());
   assert.deepEqual(result, g.record); assert.deepEqual(f.expected, []);
-  f.expectHistory(scenario); assert.deepEqual(await readComparisonRuns(signal()), [g.record]);
+  f.expectHistory(scenario); assert.deepEqual((await readComparisonRunPage({market:'US',symbol:'AAPL'},{market:'HK',symbol:'00700'},comparisonCutoff,signal())).records, [g.record]);
   assert.deepEqual(f.expected, []); assert.deepEqual(f.violations, []);
   assert.equal(f.calls.filter((call: any) => call.method === 'POST').length, 1);
   for (let i = 0; i < result.evidence.length; i++) for (let j = 0; j < result.evidence[i].sources.length; j++) {
@@ -56,7 +56,7 @@ for (const scenario of ['complete', 'missing']) test(`actual registered ${scenar
 });
 for (const state of ['running', 'cancelled', 'failed']) test(`actual ${state} history retains terminal distinction and no output`, async t => {
   const f = createComparisonFixture(origin); mockApi(t, f); f.expectHistoryState(state);
-  const records = await readComparisonRuns(signal());
+  const records = (await readComparisonRunPage({market:'US',symbol:'AAPL'},{market:'HK',symbol:'00700'},comparisonCutoff,signal())).records;
   assert.deepEqual(records, comparisonHistoryGolden[state + '_history'].data);
   assert.ok(records.every(record => record.output === null && record.status !== 'COMPLETED'));
   assert.deepEqual(f.expected, []); assert.deepEqual(f.violations, []);

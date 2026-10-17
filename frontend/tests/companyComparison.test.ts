@@ -104,3 +104,14 @@ test('total-record UTF-8 bound rejects large ledger even with individually bound
  assert.ok(size(r)>80*1024,'negative fixture must exceed total record cap');
  assert.throws(()=>parseComparisonRecord(r));
 });
+
+test('history page sends ordered pair and cutoff before limit and rejects mixed history',async t=>{
+ const {readComparisonRunPage}=await import('../src/lib/companyComparison.ts');
+ let data:any={records:[record()],next_cursor:'51'};
+ t.mock.method(globalThis,'fetch',async url=>{assert.equal(String(url),`/api/company-comparison/runs?first_market=US&first_symbol=AAPL&second_market=HK&second_symbol=00700&as_of=${day}&before=100`);return new Response(JSON.stringify({data}));});
+ const read=()=>readComparisonRunPage(bundles[0].subject,bundles[1].subject,day,new AbortController().signal,'100');
+ assert.equal((await read()).records[0].run_id,I);
+ data.next_cursor='100';await assert.rejects(read());
+ data={records:[record(),record()],next_cursor:null};await assert.rejects(read());
+ data={records:[record()],next_cursor:null};data.records[0].as_of='2026-09-29';await assert.rejects(read());
+});

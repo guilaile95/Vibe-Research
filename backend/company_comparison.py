@@ -600,3 +600,36 @@ def read_run(run_id):
             raise ValueError("COMPARISON_RUN_UNAVAILABLE")
         result = _read_record(conn, run_id)
     return result
+
+
+def list_run_page(first, second, as_of, *, before=None, limit=MAX_HISTORY):
+    """Filter ordered subject identity/cutoff before bounding a keyset page.
+
+    The cursor is a local row position, not identity authority. Every returned
+    record still passes the immutable pair/hash validator in the same snapshot.
+    """
+    first = research.identity(first['market'], first['symbol'])
+    second = research.identity(second['market'], second['symbol'])
+    _cutoff(as_of)
+    if first == second or type(limit) is not int or not 1 <= limit <= MAX_HISTORY:
+        raise ValueError('COMPARISON_HISTORY_QUERY_INVALID')
+    if before is not None and (type(before) is not int or not 1 <= before <= 9223372036854775807):
+        raise ValueError('COMPARISON_HISTORY_CURSOR_INVALID')
+    with _snapshot() as conn:
+        if conn is None:
+            return {'records': [], 'next_cursor': None}
+        rows = conn.execute(
+            "SELECT runs.id,runs.rowid AS position FROM runs JOIN pairs ON pairs.hash=runs.pair_hash "
+            "WHERE (? IS NULL OR runs.rowid<?) AND CASE WHEN typeof(pairs.payload)='text' "
+            "AND length(CAST(pairs.payload AS BLOB))<=? AND json_valid(pairs.payload) THEN "
+            "json_extract(pairs.payload,'$.subjects[0].market')=? AND "
+            "json_extract(pairs.payload,'$.subjects[0].symbol')=? AND "
+            "json_extract(pairs.payload,'$.subjects[1].market')=? AND "
+            "json_extract(pairs.payload,'$.subjects[1].symbol')=? AND "
+            "json_extract(pairs.payload,'$.as_of')=? ELSE 0 END "
+            "ORDER BY runs.rowid DESC LIMIT ?",
+            (before, before, MAX_PAIR_BYTES, first['market'], first['symbol'],
+             second['market'], second['symbol'], as_of, limit + 1)).fetchall()
+        records = [_read_record(conn, row['id']) for row in rows[:limit]]
+        return {'records': records,
+                'next_cursor': str(rows[limit - 1]['position']) if len(rows) > limit else None}

@@ -16,7 +16,7 @@ const json = (data, status = 200) => ({ kind: 'json', status, body: { data: stru
 const listPath = ref => `/api/company-comparison/bundles?market=${ref.market}&symbol=${ref.symbol}&as_of=${comparisonCutoff}`;
 export const bundleListPaths = comparisonGoldens.complete.request.subjects.map(listPath);
 export const generationPath = '/api/company-comparison/generate';
-export const historyPath = '/api/company-comparison/runs';
+export const historyPath = '/api/company-comparison/runs?first_market=US&first_symbol=AAPL&second_market=HK&second_symbol=00700&as_of=' + comparisonCutoff;
 export function createComparisonFixture(origin) {
   const base = createExtendedPageFixture(origin), calls = [], violations = [], expected = [];
   const deny = reason => { violations.push(reason); return { kind: 'deny', reason }; };
@@ -40,12 +40,12 @@ export function createComparisonFixture(origin) {
     },
     expectHistory(scenario = 'complete') {
       const g = comparisonGoldens[scenario];
-      expect('GET', historyPath, json(g.history ?? [g.record]));
+      expect('GET', historyPath, json({records:g.history ?? [g.record],next_cursor:null}));
     },
     expectHistoryState(state) {
       const envelope = comparisonHistoryGolden[state + '_history'];
       if (!envelope) throw Error('Unknown history state');
-      expect('GET', historyPath, { kind: 'json', status: 200, body: structuredClone(envelope) });
+      expect('GET', historyPath, { kind: 'json', status: 200, body: {data:{records:structuredClone(envelope.data),next_cursor:null}} });
     },
     handle(rawUrl, method = 'GET', body) {
       let u;

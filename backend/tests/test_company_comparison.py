@@ -892,3 +892,34 @@ def test_held_cleanup_distinguishes_owner_cancel_from_timeout(pair, monkeypatch,
     assert value["status"] == ("CANCELLED" if cancel_owner else "FAILED")
     assert value["output"] is None and "result_sha256" not in value
     assert calls == [True]
+
+
+def test_pair_history_filters_before_limit_and_keyset_pages(pair, client):
+    wanted = asyncio.run(collect(pair))[-1]['record']
+    reversed_pair = list(reversed(pair))
+    for _ in range(51):
+        asyncio.run(collect(reversed_pair))
+    assert wanted['run_id'] not in {r['run_id'] for r in C.list_runs()}
+    query = dict(first_market='US', first_symbol='AAPL', second_market='HK', second_symbol='00700', as_of=AS_OF)
+    page = client.get('/api/company-comparison/runs', params=query).json()['data']
+    assert page == {'records': [wanted], 'next_cursor': None}
+    query.update(first_market='HK', first_symbol='00700', second_market='US', second_symbol='AAPL', limit=20)
+    seen = set()
+    for expected in [20, 20, 11]:
+        page = client.get('/api/company-comparison/runs', params=query).json()['data']
+        assert len(page['records']) == expected
+        for record in page['records']:
+            assert record['subjects'] == refs(reversed_pair)
+            assert record['run_id'] not in seen
+            seen.add(record['run_id'])
+        if page['next_cursor']:
+            query['before'] = page['next_cursor']
+    assert len(seen) == 51 and page['next_cursor'] is None
+    query['as_of'] = '2026-09-29'
+    assert client.get('/api/company-comparison/runs', params=query).json()['data']['records'] == []
+
+
+@pytest.mark.parametrize('extra', [{'limit':'0'}, {'limit':'51'}, {'before':'-1'}, {'before':'1.2'}, {'before':'9223372036854775808'}, {'unknown':'1'}])
+def test_pair_history_rejects_invalid_bounds(client, extra):
+    query = dict(first_market='US', first_symbol='AAPL', second_market='HK', second_symbol='00700', as_of=AS_OF)
+    assert client.get('/api/company-comparison/runs', params={**query, **extra}).status_code in (409, 422)

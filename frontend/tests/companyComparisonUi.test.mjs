@@ -25,7 +25,7 @@ function harness(options = {}) {
    readComparisonBundles:async(s,date,signal)=>{calls.push({kind:'list',s,date,signal});return choices(s);},
    readComparisonBundle:async(c,signal)=>{calls.push({kind:'bundle',c,signal});return{...c,subject:{market:c.market,symbol:c.symbol}};},
    generateComparison:(bundles,date,llm,signal)=>{calls.push({kind:'generate',bundles,date,llm,signal});return options.generate?options.generate(receipt(),signal):Promise.resolve(receipt());},
-   readComparisonRuns:async(signal)=>{calls.push({kind:'history',signal});return options.history?options.history(receipt(),signal):[receipt()];},
+   readComparisonRunPage:async(first,second,date,signal,before)=>{calls.push({kind:'history',first,second,date,signal,before});return {records:options.history?await options.history(receipt(),signal):[receipt()],next_cursor:options.nextCursor??null};},
   },
  };
  const exports={};
