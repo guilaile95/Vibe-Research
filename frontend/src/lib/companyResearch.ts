@@ -100,6 +100,16 @@ export async function readCompanyResearchRuns(signal?: AbortSignal): Promise<Res
   rows.forEach(parseResearchRecord);
   return rows;
 }
+// Read the immutable bundle referenced by this saved run. Never capture or generate here.
+export async function readCompanyResearchEvidence(record: ResearchRecord, signal: AbortSignal): Promise<ResearchBundle> {
+  parseResearchRecord(record);
+  if (signal.aborted) throw new Error("已取消来源读取");
+  const bundle = parseResearchBundle(await get<ResearchBundle>(`/company-research/bundles/${record.bundle_id}`, { signal }), record.subject);
+  if (signal.aborted) throw new Error("已取消来源读取");
+  if (bundle.bundle_id !== record.bundle_id || bundle.bundle_sha256 !== record.bundle_sha256) throw new Error("冻结资料与研究记录不一致");
+  record.stages.forEach((stage, index) => parseResearchStage(stage, RESEARCH_STAGES[index], bundle, record.stages.slice(0, index)));
+  return bundle;
+}
 export function researchNote(record: ResearchRecord): string {
   if (record.status !== "COMPLETED" || record.stages.length !== 6) throw new Error("研究未完成，不能保存完整报告");
   return [`# ${record.subject.market}:${record.subject.symbol} 六阶段公司研究`, `NON_AUTHORITATIVE_AI_DRAFT · 数字与事实未自动核验`, `运行 ${record.run_id} · 来源包 ${record.bundle_id} · SHA256 ${record.bundle_sha256}`, `生成 ${record.finished_at} · ${record.model.provider}/${record.model.name}`, ...record.stages.map(s => `## ${STAGE_LABELS[s.stage]}\n${s.summary}\n引用：${s.evidence_ids.join(", ") || "无可用来源"}\n缺口：${[...s.source_gaps.map(g => `${g.evidence_id}:${g.status}`), ...s.gaps].join("；") || "模型未列出额外缺口，不代表完整"}`)].join("\n\n");

@@ -49,6 +49,26 @@ Windows 使用 Python 3.12 与 `requirements-dev-windows-py312.lock.txt`，
 为同样三个环境变量指定新的临时路径，再用虚拟环境 Python 执行
 `-m pytest -m "not live"`。Linux 通过不能代替 Windows 文件名/依赖合同验证。
 
+## 有界离线验收 runner
+
+从仓库根目录，用上述开发环境的 Python 执行：
+
+```sh
+backend/.venv/bin/python tools/acceptance/offline_acceptance.py --timeout 120
+```
+
+`--timeout` 是每个门的期限，不是总耗时。需要指定 Node 时传入
+`--node /absolute/path/to/node`；路径应指向已安装、可信的 Node 可执行文件。
+六个门为 `metadata_diagnostics`、`runtime_contracts`、`data_health`、
+`synthetic_ai`、`linux_package`、`saved_research_journey`。
+读取 JSON 中每一门的 `pass` / `fail` / `blocked`，不能只看总状态。
+
+离线门全部通过仍不等于发布验收：`real_provider`、`real_model`、
+`natural_next_day`、`deployment` 与 `release_acceptance` 保持 `blocked`；
+未进行的来源能力检查保持 `NOT_EVALUATED`。合成 AI、回环 HTTP、
+进程重启和合成次日只证明对应工程合同。
+真实验收范围与授权前置条件见 [2026-10-19 清单](research/ACCEPTANCE_CHECKLIST_20261019.md)。
+
 ## 浏览器验证
 
 已有脚本集中在 [frontend/package.json](../frontend/package.json) 的

@@ -42,3 +42,48 @@ test('explicit archive cutoff travels unchanged and invalid cutoff never request
  for(const value of ['','2026-02-30','2099-01-01'])await assert.rejects(captureCompanyResearch(bundle.subject,new AbortController().signal,value));
  assert.equal(calls,1);
 });
+
+// Saved history uses only the immutable bundle GET and reconciles the saved run.
+test('saved evidence read preserves frozen payload and never recaptures or generates', async t => {
+ const { readCompanyResearchEvidence } = await import('../src/lib/companyResearch.ts');
+ const record = (events().at(-1) as any).record;
+ const signal = new AbortController().signal;
+ let calls = 0;
+ t.mock.method(globalThis, 'fetch', async (url, init) => {
+  calls++; assert.equal(String(url), `/api/company-research/bundles/${I}`);
+  assert.equal(init?.method ?? 'GET', 'GET'); assert.equal(init?.signal, signal);
+  return new Response(JSON.stringify({data:bundle}));
+ });
+ assert.deepEqual(await readCompanyResearchEvidence(record, signal), bundle);
+ assert.equal(calls, 1);
+});
+for (const variant of ['id','hash','subject','malformedhash','malformedsource','citation','sourcegap','null','transport']) {
+ test(`saved evidence fails closed: ${variant}`, async t => {
+  const { readCompanyResearchEvidence } = await import('../src/lib/companyResearch.ts');
+  const record = (events().at(-1) as any).record;
+  let returned:any = structuredClone(bundle);
+  if (variant === 'id') returned.bundle_id = 'd'.repeat(32);
+  if (variant === 'hash') returned.bundle_sha256 = 'd'.repeat(64);
+  if (variant === 'subject') returned.subject = {market:'US',symbol:'AAPL'};
+  if (variant === 'malformedhash') returned.sources[0].payload_sha256 = 'corrupt';
+  if (variant === 'malformedsource') returned.sources[0].captured_at = 'bad';
+  if (variant === 'citation') record.stages[0].evidence_ids = ['absent'];
+  if (variant === 'sourcegap') record.stages[0].source_gaps = [{evidence_id:'facts',status:'MISSING'}];
+  if (variant === 'null') returned = null;
+  t.mock.method(globalThis, 'fetch', async () => variant === 'transport' ? new Response('',{status:500}) : new Response(JSON.stringify({data:returned})));
+  await assert.rejects(readCompanyResearchEvidence(record, new AbortController().signal));
+ });
+}
+test('saved evidence rejects invalid record before fetch and aborted completion after fetch', async t => {
+ const { readCompanyResearchEvidence } = await import('../src/lib/companyResearch.ts');
+ let calls = 0;
+ const controller = new AbortController();
+ t.mock.method(globalThis,'fetch',async()=>{calls++;controller.abort();return new Response(JSON.stringify({data:bundle}));});
+ const record = (events().at(-1) as any).record;
+ await assert.rejects(readCompanyResearchEvidence({...record,bundle_id:'../capture'},new AbortController().signal));
+ assert.equal(calls,0);
+ await assert.rejects(readCompanyResearchEvidence(record,controller.signal));
+ assert.equal(calls,1);
+ await assert.rejects(readCompanyResearchEvidence(record,controller.signal));
+ assert.equal(calls,1);
+});
