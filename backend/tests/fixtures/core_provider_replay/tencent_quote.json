@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "kind": "synthetic_constructed",
+    "captured_at": null,
+    "source": "Repository parser contracts and existing offline tests; no HTTP capture",
+    "boundary": "raw_http_body_gbk"
+  },
+  "cases": [
+    {
+      "id": "normal_units",
+      "body": "v_sh600519=\"1~合成测试股票~600519~11~10~10.5~~~~~~~~~~~~~~~~~~~~~~~~~20260821150000~1~10~12~9~~~1234~2~20~~~~30~100~80~3~11~9~1.5~~~19\";",
+      "expected": {
+        "price": 11.0,
+        "trade_date": "2026-08-21",
+        "data_time": "2026-08-21T15:00:00+08:00",
+        "amount_wan": 1234.0,
+        "mcap_yi": 100.0,
+        "change_pct": 10.0
+      },
+      "reason": "Explicit 万/亿/percentage fields retain provider units; GBK is decoded"
+    },
+    {
+      "id": "empty",
+      "body": "",
+      "expected": {},
+      "reason": "Empty body is not a valid quote"
+    },
+    {
+      "id": "missing_date",
+      "body": "v_sh600519=\"1~合成测试股票~600519~11~10~10.5~~~~~~~~~~~~~~~~~~~~~~~~~~1~10~12~9~~~1234~2~20~~~~30~100~80~3~11~9~1.5~~~19\";",
+      "expected": {
+        "price": 11.0,
+        "trade_date": null,
+        "data_time": null,
+        "amount_wan": 1234.0,
+        "mcap_yi": 100.0,
+        "change_pct": 10.0
+      },
+      "reason": "Missing source time remains unknown; never fetch time"
+    },
+    {
+      "id": "identity_drift",
+      "body": "v_sh600519=\"1~合成测试股票~000001~11~10~10.5~~~~~~~~~~~~~~~~~~~~~~~~~20260821150000~1~10~12~9~~~1234~2~20~~~~30~100~80~3~11~9~1.5~~~19\";",
+      "expected": {},
+      "reason": "Mismatched payload identity is rejected"
+    },
+    {
+      "id": "invalid_price",
+      "body": "v_sh600519=\"1~合成测试股票~600519~NaN~10~10.5~~~~~~~~~~~~~~~~~~~~~~~~~20260821150000~1~10~12~9~~~1234~2~20~~~~30~100~80~3~11~9~1.5~~~19\";",
+      "expected": {},
+      "reason": "Nonfinite price is rejected"
+    },
+    {
+      "id": "optional_field_drift",
+      "body": "v_sh600519=\"1~合成测试股票~600519~11~10~10.5~~~~~~~~~~~~~~~~~~~~~~~~~20260821150000~1~10~12~9~~~--~2~20~~~~30~100~80~3~11~9~1.5~~~19\";",
+      "expected": {
+        "price": 11.0,
+        "trade_date": "2026-08-21",
+        "data_time": "2026-08-21T15:00:00+08:00",
+        "amount_wan": null,
+        "mcap_yi": 100.0,
+        "change_pct": 10.0
+      },
+      "reason": "Unknown amount stays missing rather than zero"
+    },
+    {
+      "id": "short_row",
+      "body": "v_sh600519=\"1~合成测试股票~600519~11~10~10.5~~~~~~~~~~~~~~~~~~~~~~~~\";",
+      "expected": {},
+      "reason": "Truncated provider shape is rejected"
+    },
+    {
+      "id": "rate_limit",
+      "http_status": 429,
+      "body": "",
+      "error": "HTTPError",
+      "reason": "429 propagates instead of producing quote success"
+    }
+  ]
+}

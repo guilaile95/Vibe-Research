@@ -70,6 +70,8 @@ import sector_industry_context as sic
 import northbound_capital_flow as ncf
 import top_risk_service as trs
 import watchlist_store
+import research_annotations_router
+import research_annotations
 import evidence_thesis_router
 import evidence_temporal_authority_router
 import data_health_router
@@ -102,6 +104,7 @@ import position_reality_router
 import position_reality_service as prs
 import account_reality_router
 import cash_event_router
+import allocation_targets_router
 import portfolio_risk_context_router
 import campaign_router
 import campaign_ai_draft_router
@@ -111,9 +114,13 @@ import decision_commit_router
 import decision_challenge_router
 import formal_decision_outcome_router
 import research_data_plane_router
+import prediction_journal_router
+import experiment_ledger_router
 import research_analytics_router
 import historical_signal_validation_router
 import factor_validation_router
+import filing_evidence_router
+import announcement_groups_router
 import research_event_calendar_router
 import stock_relative_context_router
 import stock_valuation_context_router
@@ -414,6 +421,7 @@ app = FastAPI(title="Vibe-Research API", version=__version__, lifespan=lifespan)
 
 # 投资逻辑与证据账本：独立路由模块最小接入
 app.include_router(local_ocr_router.router)
+app.include_router(research_annotations_router.router)
 app.include_router(evidence_thesis_router.router)
 app.include_router(evidence_temporal_authority_router.router)
 # 数据健康中心：只读聚合 API
@@ -463,6 +471,7 @@ app.include_router(account_reality_router.router)
 app.include_router(cash_event_router.router)
 # PLANNING-PARITY-PORTFOLIO-RISK1-R1: current, read-only portfolio context.
 app.include_router(portfolio_risk_context_router.router)
+app.include_router(allocation_targets_router.router)
 app.include_router(campaign_router.router)
 # #206 explicit server-owned Campaign AI Draft; ephemeral witness only.
 app.include_router(campaign_ai_draft_router.router)
@@ -482,6 +491,8 @@ import public_research_router
 app.include_router(public_research_router.router)
 # Historical Signal Validation: read-only research computation; no formal writes.
 app.include_router(historical_signal_validation_router.router)
+app.include_router(prediction_journal_router.router)
+app.include_router(experiment_ledger_router.router)
 app.include_router(research_analytics_router.router)
 import next_day_verification_router
 app.include_router(next_day_verification_router.router)
@@ -491,6 +502,8 @@ app.include_router(observation_workflows_router.router)
 app.include_router(factor_validation_router.router)
 # PLANNING-PARITY-EVENT-CALENDAR1: bounded read-only aggregation over existing
 # Decision Calendar / StockData contracts; no event persistence or writes.
+app.include_router(filing_evidence_router.router)
+app.include_router(announcement_groups_router.router)
 app.include_router(research_event_calendar_router.router)
 # PLANNING-PARITY-STOCK-RELATIVE-CONTEXT1: current, read-only stock context.
 app.include_router(stock_relative_context_router.router)
@@ -2792,11 +2805,15 @@ def disclosure(code: str = Query(...)):
 
 
 @app.get("/api/kline")
-def kline(code: str = Query(...), category: int = Query(4), offset: int = Query(60, ge=1, le=800)):
+def kline(code: str = Query(...), category: int = Query(4), offset: int = Query(60, ge=1, le=800), annotation_context: bool = Query(False)):
     """K线（需 mootdx）。category 4=日 5=周 6=月 11=60分钟。"""
     code = _validate(code)
     try:
-        return {"data": astock.kline(code, category=category, offset=offset)}
+        bars = astock.kline(code, category=category, offset=offset)
+        result = {"data": bars}
+        if annotation_context is True:
+            result["annotation_context"] = research_annotations.snapshot_context(code, bars) if category == 4 else None
+        return result
     except public_data_budget.PublicDataUnavailable as e:
         raise HTTPException(503, "K线来源暂不可用或超时，请稍后重试。") from e
     except astock.DependencyMissing as e:

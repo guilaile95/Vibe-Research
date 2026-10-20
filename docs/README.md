@@ -34,6 +34,7 @@
 [Vibe-Astock 决策与后续证据索引](VIBE_ASTOCK_ADOPTION_PLAN.md) 区分已采用的软件合同、
 未接通的生产采集/部署能力与待真实验证的范围；八月暂停结论保留为历史，不覆盖后续证据。
 
+- [2026-10-19 四批研究改进入口与边界](acceptance/RESEARCH_ADOPTION_MATRIX_20261019.md)：累计已实现切片、用户前置条件和未完成范围
 - [2026-10-19 有界验收清单](research/ACCEPTANCE_CHECKLIST_20261019.md)：离线工程门与待授权的真实数据 / AI 案例
 
 ## 历史资料
@@ -52,3 +53,5 @@
 - [Trade-list read ownership](TRADE_LIST_READ_OWNERSHIP.md): applied-filter identity and stale-response protection
 
 - [RDP snapshot replay](research/RDP_SNAPSHOT_REPLAY_20261009.md): reopen an imported research generation, retain receipts, and run the offline two-generation example
+
+- [Explicit experiment comparison](research/EXPERIMENT_COMPARISON.md): persisted research manifests, exact receipts, and incomparable metrics.

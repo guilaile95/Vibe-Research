@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { Plus, ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle, Sparkles, RotateCw, Pencil } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { PortfolioAllocationCard } from "@/components/portfolio/PortfolioAllocationCard";
 import { PortfolioRiskContextCard } from "@/components/portfolio/PortfolioRiskContextCard";
 import {
   api,
@@ -1158,6 +1159,7 @@ export function Portfolio() {
         <div id="portfolio-panel-risk" role="tabpanel" aria-labelledby="portfolio-tab-risk" data-testid="portfolio-panel-risk">
           {data && <SecurityExposureCard portfolio={data} basis={exposureBasis} />}
           <PortfolioRiskContextCard context={riskContext} error={riskContextError} />
+          <PortfolioAllocationCard snapshotToken={data} />
         </div>
       )}
 

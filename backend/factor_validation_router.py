@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 import factor_validation as fv
 import research_data_plane as rdp
+import experiment_ledger
 
 router = APIRouter(prefix="/api/signals/factor-validation", tags=["factor-validation"])
 
@@ -54,8 +55,7 @@ def registry():
     }
 
 
-@router.post("/evaluate")
-def evaluate(body: FactorValidationRequest):
+def _evaluate(body: FactorValidationRequest):
     if body.factor_id not in {item["factor_id"] for item in fv.FACTOR_REGISTRY}:
         raise HTTPException(status_code=422, detail="unknown factor")
     request = body.model_dump()
@@ -65,3 +65,11 @@ def evaluate(body: FactorValidationRequest):
         return fv.unavailable_report(body.factor_id, request, str(exc))
     except rdp.ResearchDataPlaneValidationError as exc:
         return fv.unavailable_report(body.factor_id, request, f"Research Runtime 数据校验失败：{exc}")
+
+
+@router.post("/evaluate")
+def evaluate(body: FactorValidationRequest, record_id: str | None = None):
+    try:
+        return experiment_ledger.execute(record_id, 'factor', body.model_dump(), lambda: _evaluate(body))
+    except (ValueError, LookupError, experiment_ledger.store.StoreError):
+        raise HTTPException(status_code=422, detail="实验记录与请求不匹配") from None

@@ -192,6 +192,24 @@ async function run() {
     await page.getByText("Event Ledger", { exact: false }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(screenshotDir, "historical-signal-validation-ledger.png"), fullPage: false });
 
+    // Explicit persistent receipts, existing evaluator, and read-only comparison.
+    const ledger = page.getByTestId("experiment-ledger");
+    for (let index = 0; index < 2; index++) {
+      await ledger.getByRole("button", { name: "运行当前输入并记录实验", exact: true }).click();
+      await ledger.getByText("实验已归档：", { exact: false }).waitFor({ timeout: 30000 });
+    }
+    await page.waitForFunction(() => document.querySelector('[aria-label="左侧实验"]').options.length === 3);
+    const ids = await page.getByLabel("左侧实验").locator("option").evaluateAll(options => options.map(x => x.value).filter(Boolean));
+    await page.getByLabel("左侧实验").selectOption(ids[0]);
+    await page.getByLabel("右侧实验").selectOption(ids[1]);
+    await page.getByTestId("experiment-comparison").waitFor();
+    assert.match(await page.getByTestId("experiment-comparison").innerText(), /同一输入身份：是/);
+    assert.match(await page.getByTestId("experiment-comparison").innerText(), /COMPARABLE/);
+    assert.match(await page.getByTestId("experiment-comparison").innerText(), /SNAPSHOT/);
+    await page.screenshot({ path: path.join(screenshotDir, "experiment-comparison.png"), fullPage: true });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => document.querySelector('[aria-label="左侧实验"]')?.options.length === 3);
+
     // Distinct empty, immature, partial-benchmark, and missing-sample states.
     const runUi = async ({ sampleCodes, benchmark = "", endDate = "" }) => {
       await page.getByLabel("显式样本代码").fill(sampleCodes);

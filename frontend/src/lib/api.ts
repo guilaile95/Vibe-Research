@@ -3,6 +3,7 @@
 // 纯类型定义见 ./api/types.ts；本文件仅保留运行时客户端。
 
 export type * from "./api/types.ts";
+import { registerAnnotationContext, type AnnotationContext } from "./researchAnnotations.ts";
 import { storageSetChecked, storageRemoveChecked } from "./storage.ts";
 
 import type { MarketCloudEnvelope } from "./marketCloud.ts";
@@ -925,7 +926,8 @@ export const api = {
   industry: (top = 20) => get<IndustryData>(`/industry?top=${top}`),
   /** K 线（需 mootdx）：category 4=日 5=周 6=月 11=60分钟；依赖缺失抛 501。 */
   kline: (code: string, category = 4, offset = 60) =>
-    get<KlineBar[]>(`/kline?code=${code}&category=${category}&offset=${offset}`),
+    request<{ data: KlineBar[]; annotation_context?: AnnotationContext | null }>(`/kline?code=${code}&category=${category}&offset=${offset}&annotation_context=true`, "GET", undefined, { unwrapData: false })
+      .then((result) => registerAnnotationContext(result.data, result.annotation_context)),
   /** 技术指标与价格触发（SMA/EMA/MACD/RSI/布林带/5-20 日均量比）；依赖缺失抛 501。 */
   technicalIndicators: (code: string, period = "daily", days = 120) =>
     get<TechnicalIndicators>(`/market/technical-indicators?code=${code}&period=${period}&days=${days}`),

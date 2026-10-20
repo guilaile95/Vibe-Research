@@ -6,7 +6,7 @@ import ts from 'typescript';
 import { addCodes, parseCodes } from '../src/lib/watchlist.ts';
 import * as snapshot from '../src/lib/quoteSnapshot.ts';
 
-function harness(quoteState, live = false) {
+function harness(quoteState, live = false, anomalyItems = []) {
   const failRetryReadback = false;
   const slots = [], effects = [];
   let cursor = 0, pending = [], loads = 0;
@@ -32,7 +32,7 @@ function harness(quoteState, live = false) {
       saveWatchAuthoritative: async (codes, etag) => { saves.push({ codes, etag }); return { codes, etag: 'saved' }; },
       filterAndSortWatchlistCodes: codes => codes,
     },
-    '@/lib/decisionCockpit': { getWatchlistAnomalies: async () => ({ items: [], unavailable_codes: [] }) },
+    '@/lib/decisionCockpit': { getWatchlistAnomalies: async () => ({ items: anomalyItems, unavailable_codes: [] }) },
     '@/hooks/useLiveQuotes': { useLiveQuotes: () => ({refresh:()=>{},...quoteState}), isTradingHours:()=>false },
     '@/lib/quoteSnapshot': snapshot,
     '@/lib/candidateCampaign': { candidateWorkspaceHref: code => `/candidate?code=${code}` },
@@ -117,4 +117,59 @@ test('separate refresh control retains action and loading accessibility behavior
     if (!loading) button.props.onClick();
   }
   assert.equal(refreshes, 1);
+});
+
+const nameProjection = (tree) => nodes(tree).find(node => typeof node.props?.onContextChange === 'function').props;
+const stockRow = (tree, code) => nodes(tree).find(node => node.props?.['data-watchlist-code'] === code);
+
+test('missing quote and event use existing security metadata by code, including refreshed names and unknowns', async () => {
+  const h = harness({ ...quoteState, quotes: {} }); h.render(); await tick();
+  const initial = h.render();
+  const projection = nameProjection(initial);
+  projection.onContextChange({ securities: [
+    { code: '600002', company_name: '元数据名称' },
+    { code: '600000', company_name: '另一公司' },
+    { code: '999999', company_name: '无关公司' },
+  ] }, projection.codes);
+  let tree = h.render();
+  assert.match(text(stockRow(tree, '600002')), /元数据名称/);
+  assert.doesNotMatch(text(stockRow(tree, '600001')), /元数据名称|另一公司|无关公司/);
+  assert.ok(nodes(stockRow(tree, '600002')).some(node => node.props?.['aria-label'] === '移除 元数据名称（600002）'));
+  assert.deepEqual(h.saves, [], 'display metadata cannot write watchlist authority');
+  projection.onContextChange({ securities: [{ code: '600002', company_name: '更名后名称' }] }, projection.codes);
+  tree = h.render();
+  assert.match(text(stockRow(tree, '600002')), /更名后名称/);
+  assert.doesNotMatch(text(stockRow(tree, '600002')), /元数据名称/);
+  projection.onContextChange(null, projection.codes);
+  assert.doesNotMatch(text(stockRow(h.render(), '600002')), /更名后名称/);
+});
+
+test('list changes reject late old metadata, even for a code still in the new list', async () => {
+  const h = harness({ ...quoteState, quotes: {} }); h.render(); await tick();
+  let tree = h.render(); const old = nameProjection(tree);
+  nodes(stockRow(tree, '600000')).find(node => node.props?.['aria-label'] === '移除 股票（600000）').props.onClick();
+  await tick(); tree = h.render();
+  old.onContextChange({ securities: [{ code: '600002', company_name: '迟到旧名称' }] }, old.codes);
+  assert.doesNotMatch(text(stockRow(h.render(), '600002')), /迟到旧名称/);
+  const current = nameProjection(h.render());
+  current.onContextChange({ securities: [{ code: '600002', company_name: '当前名称' }] }, current.codes);
+  assert.match(text(stockRow(h.render(), '600002')), /当前名称/);
+});
+
+test('quote and anomaly name behavior remains primary over metadata fallback', async () => {
+  const h = harness(quoteState); h.render(); await tick();
+  const projection = nameProjection(h.render());
+  projection.onContextChange({ securities: [{ code: '600000', company_name: '后备名称' }] }, projection.codes);
+  const row = text(stockRow(h.render(), '600000'));
+  assert.match(row, /Old/); assert.doesNotMatch(row, /后备名称/);
+});
+
+
+test('event name remains the fallback before metadata when quote is absent', async () => {
+  const h = harness({ ...quoteState, quotes: {} }, false, [{ code: '600002', name: '异动名称', type: 'price', reason: '测试' }]);
+  h.render(); await tick(); h.render(); await tick();
+  const projection = nameProjection(h.render());
+  projection.onContextChange({ securities: [{ code: '600002', company_name: '后备名称' }] }, projection.codes);
+  const row = text(stockRow(h.render(), '600002'));
+  assert.match(row, /异动名称/); assert.doesNotMatch(row, /后备名称/);
 });

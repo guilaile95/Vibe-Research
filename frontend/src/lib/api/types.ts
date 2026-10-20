@@ -1534,6 +1534,7 @@ export interface DataHealthOverviewResult {
 }
 
 export interface DataHealthDetailResult {
+  impact?: import("../dataHealthView").DataHealthImpact;
   record: DataHealthRecordDto;
   calculation: {
     quality_basis?: string[];
@@ -1805,6 +1806,7 @@ export interface HistoricalSignalValidationData {
   source_kind: string | null;
   source_name: string | null;
   license_status: string | null;
+  snapshot_id?: string | null;
   artifact_sha256?: string | null;
   as_of: string | null;
   coverage: { start: string; end: string; row_count: number; code_count: number } | null;

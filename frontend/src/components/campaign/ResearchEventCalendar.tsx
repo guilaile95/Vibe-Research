@@ -1,3 +1,4 @@
+import { EventResearchReview, CampaignEventReviewHistory } from "./EventResearchReview";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { AlertCircle, CalendarDays, Loader2, RefreshCw } from "lucide-react";
@@ -180,6 +181,7 @@ function EventRow({ event }: { event: ResearchEventCalendarEvent }) {
           </div>
         </details>
       </div>
+      <EventResearchReview event={event} />
     </article>
   );
 }
@@ -362,6 +364,7 @@ export function ResearchEventCalendar({
           </div>
 
           <SourceSummary data={data} />
+          <CampaignEventReviewHistory campaignIds={data.universe.securities.flatMap(item => item.campaign_ids)} />
 
           {data.universe.status === "NORMAL" && filteredEvents.length === 0 && (
             <div className="rounded-md border border-dashed border-border/60 bg-background/30 p-4 text-xs text-muted-foreground" data-testid="research-event-no-events">

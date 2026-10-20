@@ -1,3 +1,4 @@
+import { ScreeningConditions } from "../components/ScreeningConditions.tsx";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Filter, Loader2, Play, Plus, Trash2 } from "lucide-react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
@@ -538,6 +539,7 @@ export function Screener() {
         </>
       ) : mode === "full-market" ? (
         <GlassCard className="space-y-4 p-4" data-testid="full-market-form">
+          <ScreeningConditions filters={fullMarketFilters} cutoff={fullMarketLatest ? null : fullMarketAsOf} />
           <div className="flex flex-wrap items-center gap-3">
             <label className="inline-flex items-center gap-2 text-sm">
               <input type="checkbox" checked={fullMarketLatest} disabled={loading} onChange={(event) => { setFullMarketLatest(event.target.checked); resetFullMarketResult(); }} />

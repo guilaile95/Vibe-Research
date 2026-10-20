@@ -5,23 +5,24 @@ import { api, ApiError, type NativeIntelWatchlistContext as Context } from "@/li
 const usable = (status?: string) => status === "normal" || status === "partial" || status === "stale";
 const statusLabel = (status?: string) => ({ normal: "可用", partial: "部分可用", stale: "历史可用 · 已过期", unavailable: "不可用" }[status || ""] || status || "读取中");
 
-export function NativeIntelWatchlistContext({ codes }: { codes: string[] }) {
+export function NativeIntelWatchlistContext({ codes, onContextChange }: { codes: string[]; onContextChange?: (context: Context | null, codes: string[]) => void }) {
   const [context, setContext] = useState<Context | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
+    onContextChange?.(null, codes);
     if (!codes.length) return;
     const controller = new AbortController();
     setLoading(true);
     setError(null);
     api.nativeIntelWatchlistContext(controller.signal)
-      .then((value) => { if (!controller.signal.aborted) setContext(value); })
+      .then((value) => { if (!controller.signal.aborted) { setContext(value); onContextChange?.(value, codes); } })
       .catch((cause) => { if (!controller.signal.aborted) setError(cause instanceof ApiError ? cause.message : "Native Intel 自选上下文读取失败"); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [codes, retry]);
+  }, [codes, retry, onContextChange]);
 
   const byCode = useMemo(() => new Map((context?.securities ?? []).map((item) => [item.code, item])), [context]);
   if (!codes.length) return null;

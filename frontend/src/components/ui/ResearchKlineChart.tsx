@@ -4,17 +4,21 @@ import { api, type KlineBar, type TechnicalIndicators } from "@/lib/api";
 import type { EvidenceListResult, ResearchEventCalendar } from "@/lib/api/types";
 import { normalizeKlineIndicatorOverlay } from "@/lib/klineIndicatorOverlay";
 import { klineResearchEvents, positionResearchEvents, type PositionedResearchEvent } from "@/lib/klineResearchEvents";
+import { inspectionContextKey } from "@/lib/klineInspection";
 import { researchEventStateLabel } from "@/lib/researchEventCalendar";
+import { annotationContext, type AnnotationContext } from "@/lib/researchAnnotations";
+import { ResearchAnnotationPanel } from "./ResearchAnnotationPanel";
 import { KlineChart } from "./KlineChart";
 
 const EVIDENCE_LIMIT = 100;
 const DISPLAY_LIMIT = 100;
 type Result<T> = { data: T | null; error: string };
 
-function EventEntry({ row }: { row: PositionedResearchEvent }) {
+function EventEntry({ row, selectedDate, onSelect }: { row: PositionedResearchEvent; selectedDate: string | null; onSelect: (date: string) => void }) {
   const { event, placement, barDate } = row;
   return (
-    <li className="min-w-0 space-y-1 rounded border border-border/50 p-2 text-xs" data-testid="kline-research-event" data-event-id={event.id} data-kind={event.kind}>
+    <li className={`min-w-0 space-y-1 rounded border border-border/50 p-2 text-xs ${event.date != null && event.date === selectedDate ? "bg-primary/10" : ""}`} data-testid="kline-research-event" data-event-id={event.id} data-kind={event.kind} data-selected={event.date != null && event.date === selectedDate}>
+      {event.date && <button type="button" aria-pressed={event.date === selectedDate} className="rounded border border-border px-2 py-2 text-primary" onClick={() => onSelect(event.date!)}>检查原日期 {event.date}</button>}
       <p className="break-words font-medium">{event.title}</p>
       <p className="break-words text-muted-foreground">
         {event.kind === "evidence" ? "证据来源日期（非有效时间）" : "事件原日期"}：{event.rawDate || "未知"}
@@ -42,9 +46,10 @@ function EventEntry({ row }: { row: PositionedResearchEvent }) {
 }
 
 /** A keyed child scopes pending requests and opt-in to one stock/window. */
-function ScopedResearchKlineChart({ bars, indicators, code, dates }: {
-  bars: KlineBar[]; indicators: TechnicalIndicators | null; code: string; dates: string[];
+function ScopedResearchKlineChart({ bars, indicators, code, dates, context }: {
+  bars: KlineBar[]; indicators: TechnicalIndicators | null; code: string; dates: string[]; context: AnnotationContext | null;
 }) {
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [epoch, setEpoch] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -81,7 +86,8 @@ function ScopedResearchKlineChart({ bars, indicators, code, dates }: {
   const markers = mapped.map(([date, entries], index) => ({ date, label: String(index + 1), href: `#${id}-${date}`, title: `标记 ${index + 1}：${date}，${entries.length} 条研究记录；跳到文字列表` }));
   return (
     <div className="min-w-0 scroll-mt-16 space-y-3 md:scroll-mt-4" data-testid="research-kline-chart" data-security-code={code}>
-      <KlineChart bars={bars} indicators={indicators} researchMarkers={enabled ? markers : []} />
+      <KlineChart bars={bars} indicators={indicators} selectedDate={selectedDate} onSelectedDateChange={setSelectedDate} researchMarkers={enabled ? markers : []} />
+      <ResearchAnnotationPanel code={code} context={context} selectedDate={selectedDate} dates={dates} />
       {from && to && /^\d{6}$/.test(code) && (
         <button type="button" className="rounded border border-border px-3 py-2 text-xs hover:bg-muted" aria-expanded={enabled} aria-controls={`${id}-list`} onClick={() => {
           setEnabled(!enabled);
@@ -101,13 +107,14 @@ function ScopedResearchKlineChart({ bars, indicators, code, dates }: {
           {calendar.data?.limitations.map((limitation) => <p key={limitation} className="break-words text-xs text-muted-foreground">日历限制：{limitation}</p>)}
           {evidence.data && evidence.data.total > evidence.data.items.length && <p className="text-xs text-warning">证据共 {evidence.data.total} 条，本次仅取得 {evidence.data.items.length} 条；其余未读取，图上没有不代表账本不存在。</p>}
           {rows.length > DISPLAY_LIMIT && <p className="text-xs text-warning">已取得 {rows.length} 条可用记录，本视图仅展示前 {DISPLAY_LIMIT} 条，其余 {rows.length - DISPLAY_LIMIT} 条未显示。</p>}
+          {selectedDate && <p className="text-xs" data-testid="kline-selected-research">已选原日期 {selectedDate}：本次显示的记录中 {displayed.filter((row) => row.event.date === selectedDate).length} 条精确日期匹配（不含映射日期）。</p>}
           {mapped.map(([date, entries], index) => (
             <section key={date} id={`${id}-${date}`} tabIndex={-1} className="scroll-mt-16 space-y-2 rounded md:scroll-mt-4 focus:outline focus:outline-2 focus:outline-primary">
               <h4 className="text-xs font-semibold">标记 {index + 1} · {date} · {entries.length} 条</h4>
-              <ul className="space-y-2">{entries.map((row) => <EventEntry key={row.event.key} row={row} />)}</ul>
+              <ul className="space-y-2">{entries.map((row) => <EventEntry key={row.event.key} row={row} selectedDate={selectedDate} onSelect={setSelectedDate} />)}</ul>
             </section>
           ))}
-          {groups.has("unmapped") && <section className="space-y-2"><h4 className="text-xs font-semibold">未在图上落点</h4><ul className="space-y-2">{groups.get("unmapped")!.map((row) => <EventEntry key={row.event.key} row={row} />)}</ul></section>}
+          {groups.has("unmapped") && <section className="space-y-2"><h4 className="text-xs font-semibold">未在图上落点</h4><ul className="space-y-2">{groups.get("unmapped")!.map((row) => <EventEntry key={row.event.key} row={row} selectedDate={selectedDate} onSelect={setSelectedDate} />)}</ul></section>}
           {!loading && (calendar.data || evidence.data) && !rows.length && <p className="text-xs text-muted-foreground">本次成功读取的数据中没有可展示记录；请同时检查读取状态与限制。</p>}
           <button type="button" disabled={loading} className="rounded border border-border px-3 py-2 text-xs disabled:opacity-50" onClick={() => setEpoch((value) => value + 1)}>重新读取研究事件</button>
         </section>
@@ -116,7 +123,11 @@ function ScopedResearchKlineChart({ bars, indicators, code, dates }: {
   );
 }
 
-export function ResearchKlineChart({ bars, indicators, code }: { bars: KlineBar[]; indicators: TechnicalIndicators | null; code: string }) {
-  const dates = useMemo(() => normalizeKlineIndicatorOverlay(bars, null, 60).map((point) => point.date), [bars]);
-  return <ScopedResearchKlineChart key={`${code}:${dates.join(",")}`} bars={bars} indicators={indicators} code={code} dates={dates} />;
+export function ResearchKlineChart({ bars, indicators, code, barPeriod = "day" }: { bars: KlineBar[]; indicators: TechnicalIndicators | null; code: string; barPeriod?: string }) {
+  const points = useMemo(() => normalizeKlineIndicatorOverlay(bars, null, 60), [bars]);
+  const dates = useMemo(() => points.map((point) => point.date), [points]);
+  // This SVG implementation normalizes calendar dates. Never silently collapse intraday bars.
+  if (barPeriod !== "day") return <p className="text-xs text-muted-foreground">当前检查器仅支持日 K 线；周期 {barPeriod} 未显示，未按日线替代。</p>;
+  const context = annotationContext(bars, code, points);
+  return <ScopedResearchKlineChart key={`${inspectionContextKey(code, barPeriod, points)}:${context?.token ?? ""}`} bars={bars} indicators={indicators} code={code} dates={dates} context={context} />;
 }

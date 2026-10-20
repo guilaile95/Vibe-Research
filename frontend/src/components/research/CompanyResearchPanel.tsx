@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { loadLlm } from "@/lib/llm";
 import { addNote } from "@/lib/notes";
 import { captureCompanyResearch, generateCompanyResearch, readCompanyResearchRuns, readCompanyResearchEvidence, researchNote, STAGE_LABELS, type ResearchBundle, type ResearchRecord, type ResearchStage, type Subject } from "@/lib/companyResearch";
+import { ReverseDcfCard } from "./ReverseDcfCard";
 function archiveLabel(payload: unknown): string {
   if (!payload || typeof payload !== "object") return "";
   const v = payload as { as_of?: string; capture_time?: string; source_artifact_hash?: string; block?: { fixture?: boolean } };
@@ -78,6 +79,7 @@ export function CompanyResearchPanel({ subject }: { subject: Subject }) {
   return <details className="mb-4 rounded-xl border border-border p-4" data-testid="company-research">
     <summary className="cursor-pointer font-semibold">六阶段公司研究 · {subject.market}:{subject.symbol}</summary>
     <p className="my-2 text-xs text-muted-foreground">先显式采集公开资料，再确认模型预算。全部阶段使用同一冻结资料包；资料来自现有数据适配器，不代表已核验的公司事实或完整原始 HTTP 响应。港美盈利预期/风险来源不足会明确列出。无自动交易或正式论点写入。</p>
+    <ReverseDcfCard key={`${subject.market}:${subject.symbol}`} subject={subject} />
     <label className="block text-xs">归档截止日（当前存储版本，不代表历史当时已知）<input aria-label="研究归档截止日" type="date" value={asOf} disabled={busy} onChange={e => { closeEvidence(); historyOwner.current?.abort(); setHistory([]); setError(""); setAsOf(e.target.value); setBundle(null); setRecord(null); setStages([]); }} className="ml-2 rounded border p-2" /></label>
     <div className="flex flex-wrap gap-3"><button type="button" disabled={busy} onClick={() => void capture()} className="min-h-11 text-primary disabled:opacity-50">采集并冻结公开资料（不调用模型）</button><button type="button" disabled={busy || !bundle} onClick={() => void generate()} className="min-h-11 text-primary disabled:opacity-50">确认预算并开始六阶段研究</button>{busy && <button type="button" onClick={() => { stop(); setError("已取消；未完成文字不能作为完整报告，后端仅保留失败/取消元数据。完成前已付模型费用可能无法撤销。"); }} className="min-h-11">取消研究</button>}</div>
     {error && <p role="alert" className="my-2 text-sm text-destructive">{error}</p>}

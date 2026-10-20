@@ -3819,10 +3819,8 @@ def full_valuation(code: str) -> dict:
     pe_fwd = price / eps_cur if eps_cur else float("inf")
     cagr = (eps_next / eps_cur - 1) if (eps_cur and eps_next) else 0
     peg = pe_fwd / (cagr * 100) if cagr > 0 else float("inf")
-    digest = (
-        math.log(pe_fwd / 30) / math.log(1 + cagr)
-        if pe_fwd > 30 and cagr > 0 else 0
-    )
+    # 已不高于目标 PE 才是 0 年；高于目标且无正增长时无法消化（JSON 用 None）。
+    digest = pe_digestion(pe_fwd, cagr)
 
     return {
         "name": vals[1],
@@ -3835,7 +3833,7 @@ def full_valuation(code: str) -> dict:
         "pe_fwd": round(pe_fwd, 1) if eps_cur else None,
         "cagr_pct": round(cagr * 100, 0) if cagr else None,
         "peg": round(peg, 2) if peg != float("inf") else None,
-        "digest_years": round(digest, 1),
+        "digest_years": round(digest, 1) if digest != float("inf") else None,
         "analyst_count": analyst_count,
     }
 

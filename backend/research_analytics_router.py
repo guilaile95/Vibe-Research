@@ -1,4 +1,5 @@
 """Private, read-only calculation API. No generated-code or provider execution."""
+import experiment_ledger
 from fastapi import APIRouter, Body, HTTPException, Response
 from pydantic import ValidationError
 from research_analytics import METRIC_KEYS, VERSION, performance, scenario
@@ -10,12 +11,12 @@ from research_cost_comparison import CostComparisonRequest, compare_costs
 router = APIRouter(prefix='/api/research-analytics', tags=['research-analytics'])
 
 
-def _calculate(body, model, fn, response):
+def _calculate(body, model, fn, response, record_id=None, kind=None):
     response.headers['Cache-Control'] = 'no-store'
     try:
         request = model.model_validate(body)
-        return fn(request)
-    except (ValidationError, ValueError, ArithmeticError):
+        return experiment_ledger.execute(record_id, kind, body, lambda: fn(request))
+    except (ValidationError, ValueError, ArithmeticError, LookupError, experiment_ledger.store.StoreError):
         # Never serialize raw private input, NaN, provider paths, SQL or traceback.
         raise HTTPException(status_code=422, detail='研究输入合同不满足：检查字段、有限数值、唯一日期、币种及样本边界。') from None
 
@@ -57,23 +58,23 @@ def simulation_plan_endpoint(response: Response, body: dict = Body(...)):
 
 
 @router.post('/simulation')
-def simulation_endpoint(response: Response, body: dict = Body(...)):
-    return _calculate(body, SimulationRequest, simulate, response)
+def simulation_endpoint(response: Response, body: dict = Body(...), record_id: str | None = None):
+    return _calculate(body, SimulationRequest, simulate, response, record_id, 'simulation')
 
 
 @router.post('/scenario')
-def scenario_endpoint(response: Response, body: dict = Body(...)):
-    return _calculate(body, ScenarioRequest, scenario, response)
+def scenario_endpoint(response: Response, body: dict = Body(...), record_id: str | None = None):
+    return _calculate(body, ScenarioRequest, scenario, response, record_id, 'scenario')
 
 
 @router.post('/performance')
-def performance_endpoint(response: Response, body: dict = Body(...)):
-    return _calculate(body, PerformanceRequest, performance, response)
+def performance_endpoint(response: Response, body: dict = Body(...), record_id: str | None = None):
+    return _calculate(body, PerformanceRequest, performance, response, record_id, 'performance')
 
 
 @router.post('/ledger-performance')
-def ledger_endpoint(response: Response, body: dict = Body(...)):
-    return _calculate(body, LedgerPerformanceRequest, ledger_performance, response)
+def ledger_endpoint(response: Response, body: dict = Body(...), record_id: str | None = None):
+    return _calculate(body, LedgerPerformanceRequest, ledger_performance, response, record_id, 'ledger-performance')
 
 
 @router.post('/rdp-inputs')
@@ -82,5 +83,5 @@ def rdp_endpoint(response: Response, body: dict = Body(...)):
 
 
 @router.post('/cost-comparison')
-def cost_comparison_endpoint(response: Response, body: dict = Body(...)):
-    return _calculate(body, CostComparisonRequest, compare_costs, response)
+def cost_comparison_endpoint(response: Response, body: dict = Body(...), record_id: str | None = None):
+    return _calculate(body, CostComparisonRequest, compare_costs, response, record_id, 'cost-comparison')

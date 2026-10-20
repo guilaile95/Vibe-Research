@@ -1,3 +1,4 @@
+import { ExperimentLedger } from "@/components/research/ExperimentLedger";
 import { useEffect, useState } from "react";
 import { AlertCircle, Database, FlaskConical, Loader2, ShieldAlert, Table2 } from "lucide-react";
 import { api, ApiError, type FactorValidationReport, type FactorValidationRequest } from "@/lib/api";
@@ -131,6 +132,7 @@ export function FactorValidationPanel() {
         </div>
       </form>
 
+      <ExperimentLedger kind="factor" input={JSON.stringify({ factor_id: selectedFactor, forward_windows: WINDOWS, date_from: dateFrom || null, date_to: dateTo || null })} />
       {error && <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"><AlertCircle className="mr-1 inline h-4 w-4" />{error}</div>}
       {loadingRegistry && <div role="status" className="rounded-lg border border-dashed border-border/70 p-6 text-center text-sm text-muted-foreground">正在读取透明 Factor 目录…</div>}
 

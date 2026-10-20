@@ -1,3 +1,4 @@
+import { ExperimentLedger } from "@/components/research/ExperimentLedger";
 import { useEffect, useRef, useState } from "react";
 import { addNote } from "@/lib/notes";
 import { researchAnalyticsNote } from "@/lib/researchAnalyticsNote";
@@ -111,6 +112,7 @@ export function ResearchAnalytics() {
       <textarea id="analytics-input" className="min-h-64 w-full rounded border bg-transparent p-3 font-mono text-xs" spellCheck={false} value={input} onChange={e => { invalidate(); setInput(e.target.value); }} />
       <div className="flex flex-wrap gap-2"><button className="rounded bg-primary px-4 py-2 text-primary-foreground" disabled={busy || !input.trim()} onClick={calculate}>{busy ? "计算或读取中…" : "只读计算"}</button><button className="rounded border px-3 py-2" onClick={() => { invalidate(); setInput(""); setSynthetic(false); setAdapter(null); }}>清空输入与结果</button></div>
     </section>
+    <ExperimentLedger kind={mode} input={input} />
     <details className="card-surface p-4"><summary className="cursor-pointer font-medium">从已有本地 RDP 读取价格输入</summary><p className="my-2 text-sm">只读已存数据，不联网采集。观测日期不冒充正式交易日历；费用、限制和公司行为仍须补齐。</p>
       <div className="flex flex-wrap gap-2"><input aria-label="RDP证券代码" className="min-w-0 rounded border bg-transparent p-2" placeholder="六位代码，逗号分隔" value={rdpCodes} onChange={e => { invalidate(); setAdapter(null); setRdpCodes(e.target.value); }} /><input aria-label="RDP开始日期" type="date" value={from} onChange={e => { invalidate(); setAdapter(null); setFrom(e.target.value); }} /><input aria-label="RDP结束日期" type="date" value={to} onChange={e => { invalidate(); setAdapter(null); setTo(e.target.value); }} /><button className="rounded border p-2" disabled={busy || !rdpCodes.trim()} onClick={readRdp}>读取本地价格</button></div>
       {adapter && <textarea aria-label="RDP适配结果" readOnly className="mt-3 h-64 w-full rounded border bg-transparent p-2 font-mono text-xs" value={JSON.stringify(adapter, null, 2)} />}</details>

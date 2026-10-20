@@ -17,6 +17,13 @@ _initialization_lock = threading.Lock()
 _preview_connection = ContextVar("observation_preview_connection", default=None)
 
 TABLES = {
+    'research_annotations': 'id TEXT PRIMARY KEY, payload TEXT NOT NULL',
+    'allocation_targets': 'version INTEGER PRIMARY KEY, payload TEXT NOT NULL',
+    'screening_cards': 'id TEXT PRIMARY KEY, name TEXT NOT NULL, version INTEGER NOT NULL, payload TEXT NOT NULL',
+    'screening_runs': 'id TEXT PRIMARY KEY, payload TEXT NOT NULL',
+    'prediction_forecasts': 'id TEXT PRIMARY KEY, payload TEXT NOT NULL',
+    'prediction_resolutions': 'id TEXT, revision INTEGER, payload TEXT NOT NULL, PRIMARY KEY(id,revision)',
+    'experiment_records': 'id TEXT PRIMARY KEY, payload TEXT NOT NULL',
     'observation_slots': 'day TEXT, slot TEXT, payload TEXT NOT NULL, PRIMARY KEY(day,slot)',
     'observation_attempts': 'day TEXT, slot TEXT, attempt INTEGER, payload TEXT NOT NULL, PRIMARY KEY(day,slot,attempt)',
     'observation_watch': 'day TEXT, symbol TEXT, payload TEXT NOT NULL, PRIMARY KEY(day,symbol)',

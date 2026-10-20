@@ -42,6 +42,7 @@ export type DataHealthOverview = {
 };
 
 export type DataHealthDetail = {
+  impact?: DataHealthImpact;
   record: DataHealthRecord;
   calculation: {
     quality_basis?: string[];
@@ -351,4 +352,24 @@ export function marketObservationLabels(record: {
       : "行情时间未知",
   ];
   return labels.filter((label): label is string => label !== null);
+}
+
+/** Only persisted ledger relationships are mapped; source events never imply a stock. */
+export type DataHealthImpact = {
+  schema_version: "data-health-impact.v1";
+  source_id: string;
+  mapping_state: "mapped" | "unmapped" | "unknown";
+  reason_code: string;
+  truncated: boolean;
+  items: Array<{
+    thesis_id: string; title: string; subject_type: string; subject_id: string;
+    frozen: boolean; path: string;
+    evidence: Array<{ evidence_id: string; state: "available" | "missing" | "subject_mismatch"; path: string | null }>;
+  }>;
+};
+
+/** Hide mismatched/older-server payloads rather than attributing another source's impact. */
+export function currentSourceImpact(sourceId: string, impact: DataHealthImpact | undefined): DataHealthImpact | null {
+  if (!impact || impact.schema_version !== "data-health-impact.v1" || impact.source_id !== sourceId) return null;
+  return impact;
 }

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import type { KlineBar, TechnicalIndicators } from "@/lib/api";
 import {
   buildKlineIndicatorGeometry,
@@ -9,8 +9,12 @@ import {
   type KlineMetricSegment,
 } from "@/lib/klineIndicatorOverlay";
 
+import { formatInspectionVolume, moveInspectionDate } from "@/lib/klineInspection";
+
 export type KlineChartProps = {
   bars: KlineBar[];
+  selectedDate?: string | null;
+  onSelectedDateChange?: (date: string | null) => void;
   indicators?: TechnicalIndicators | null;
   researchMarkers?: readonly { date: string; label: string; href: string; title: string }[];
 };
@@ -76,7 +80,8 @@ function candleTitle(c: {
  * 轻量 SVG K 线（蜡烛图）+ 可选价格指标叠加。
  * 无外部图表库依赖；指标失败不影响 K 线展示。
  */
-export function KlineChart({ bars, indicators = null, researchMarkers = [] }: KlineChartProps) {
+export function KlineChart({ bars, indicators = null, researchMarkers = [], selectedDate = null, onSelectedDateChange }: KlineChartProps) {
+  const inspectionId = useId();
   const points = useMemo(
     () => normalizeKlineIndicatorOverlay(bars, indicators?.series ?? null, 60),
     [bars, indicators],
@@ -86,6 +91,8 @@ export function KlineChart({ bars, indicators = null, researchMarkers = [] }: Kl
     [points],
   );
 
+  const selected = geometry.candles.find((c) => c.date === selectedDate);
+  const selectedPoint = points.find((c) => c.date === selectedDate);
   const hasOverlay = hasAnyOverlayMetric(points);
   const partialNote =
     indicators?.status === "partial" && hasOverlay ? "技术指标部分缺失" : null;
@@ -105,7 +112,7 @@ export function KlineChart({ bars, indicators = null, researchMarkers = [] }: Kl
   const { width: W, height: H, padX, padY, plotH, candleWidth: cw } = geometry;
 
   return (
-    <div className="space-y-2">
+    <div className="min-w-0 space-y-2">
       <div className="flex flex-wrap items-baseline gap-3 text-xs text-muted-foreground">
         <span>
           最新收盘 <b className="font-mono text-foreground">{formatOverlayPrice(lastClose)}</b>
@@ -143,11 +150,27 @@ export function KlineChart({ bars, indicators = null, researchMarkers = [] }: Kl
         </div>
       )}
 
+      {onSelectedDateChange && <>
+        <p id={`${inspectionId}-help`} className="text-xs text-muted-foreground">聚焦下方检查按钮，用左右键逐日查看，Home / End 到首末日，Escape 清除选择；也可点击蜡烛或文字表。仅显示最近 60 条有效日 K 线。成交量为来源原值，单位未提供，不推断为股或手。</p>
+        <button type="button" data-testid="kline-inspection-control" aria-describedby={`${inspectionId}-help ${inspectionId}-status`}
+          className="rounded border border-border px-3 py-2 text-xs focus:outline focus:outline-2 focus:outline-primary"
+          onClick={() => onSelectedDateChange(selectedDate ?? last.date)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") { onSelectedDateChange(null); return; }
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || event.altKey || event.ctrlKey || event.metaKey) return;
+            event.preventDefault();
+            onSelectedDateChange(moveInspectionDate(points.map((p) => p.date), selectedDate, event.key));
+          }}>键盘检查 K 线</button>
+        <p id={`${inspectionId}-status`} role="status" aria-live="polite" className="break-words text-xs" data-testid="kline-inspection-status">
+          {selected ? `已选 ${selected.date} · 开 ${formatOverlayPrice(selected.open)} · 高 ${formatOverlayPrice(selected.high)} · 低 ${formatOverlayPrice(selected.low)} · 收 ${formatOverlayPrice(selected.close)} · 量 ${formatInspectionVolume(selectedPoint?.volume)}（单位未知）`
+            : selectedDate ? `${selectedDate}：当前窗口没有此日期的有效日 K 线，未选择相邻日期。` : "尚未选择日期"}
+        </p>
+      </>}
       <svg
         viewBox={`0 ${researchMarkers.length ? -28 : 0} ${W} ${H + (researchMarkers.length ? 28 : 0)}`}
         className="w-full"
         preserveAspectRatio="xMidYMid meet"
-        role="img"
+        role={onSelectedDateChange ? "group" : "img"}
         aria-label={hasOverlay ? "K 线及技术指标图" : "K 线图"}
         data-testid="kline-chart-svg"
       >
@@ -155,7 +178,7 @@ export function KlineChart({ bars, indicators = null, researchMarkers = [] }: Kl
           const candle = geometry.candles.find((item) => item.date === marker.date);
           if (!candle) return null;
           return (
-            <a key={marker.date} href={marker.href} aria-label={marker.title} data-testid="kline-research-marker">
+            <a key={marker.date} href={marker.href} onClick={() => onSelectedDateChange?.(marker.date)} aria-label={marker.title} data-testid="kline-research-marker">
               <title>{marker.title}</title>
               <line x1={candle.x} x2={candle.x} y1={-3} y2={H} stroke="hsl(var(--primary) / 0.25)" strokeDasharray="3 3" />
               <circle cx={candle.x} cy={-14} r={11} fill="hsl(var(--primary))" />
@@ -234,14 +257,34 @@ export function KlineChart({ bars, indicators = null, researchMarkers = [] }: Kl
         {geometry.candles.map((c) => {
           const color = c.up ? "hsl(var(--danger))" : "hsl(var(--success))";
           return (
-            <g key={c.date} data-testid="kline-candle" data-date={c.date}>
+            <g key={c.date} data-testid="kline-candle" data-date={c.date} onClick={() => onSelectedDateChange?.(c.date)} style={{ cursor: onSelectedDateChange ? "pointer" : undefined }}>
+              {onSelectedDateChange && <rect x={c.x - geometry.plotW / geometry.candles.length / 2} y={0} width={geometry.plotW / geometry.candles.length} height={H} fill="transparent" />}
               <title>{candleTitle(c)}</title>
               <line x1={c.x} y1={c.yHigh} x2={c.x} y2={c.yLow} stroke={color} strokeWidth={1} />
               <rect x={c.x - cw / 2} y={c.bodyTop} width={cw} height={c.bodyH} fill={color} />
             </g>
           );
         })}
+        {selected && onSelectedDateChange && <g data-testid="kline-inspection-crosshair" pointerEvents="none" aria-hidden="true">
+          <line x1={selected.x} x2={selected.x} y1={padY} y2={H - padY} stroke="hsl(var(--primary))" strokeDasharray="4 3" />
+          <line x1={padX} x2={W - padX} y1={selected.yClose} y2={selected.yClose} stroke="hsl(var(--primary))" strokeDasharray="4 3" />
+          <circle cx={selected.x} cy={selected.yClose} r={4} fill="hsl(var(--primary))" />
+        </g>}
       </svg>
+      {onSelectedDateChange && <details className="min-w-0 text-xs">
+        <summary className="cursor-pointer py-2">查看可访问的 OHLCV 数据表（{points.length} 条）</summary>
+        <div className="max-w-full overflow-x-auto" tabIndex={0} role="region" aria-label="日 K 线数据表，可横向滚动">
+          <table className="w-full text-right" data-testid="kline-inspection-table">
+            <caption className="py-2 text-left">当前窗口原始 OHLCV；成交量单位未知</caption>
+            <thead><tr>{["日期", "开盘", "最高", "最低", "收盘", "成交量（原值）"].map((label) => <th key={label} scope="col" className="whitespace-nowrap p-2">{label}</th>)}</tr></thead>
+            <tbody>{points.map((p) => <tr key={p.date} aria-selected={p.date === selectedDate} className={p.date === selectedDate ? "bg-primary/10" : ""}>
+              <th scope="row" className="whitespace-nowrap p-2"><button type="button" className="py-1 text-primary underline" onClick={() => onSelectedDateChange(p.date)}>{p.date}</button></th>
+              {[p.open, p.high, p.low, p.close].map((value, index) => <td key={index} className="whitespace-nowrap p-2 font-mono">{formatOverlayPrice(value)}</td>)}
+              <td className="whitespace-nowrap p-2 font-mono">{formatInspectionVolume(p.volume)}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+      </details>}
     </div>
   );
 }

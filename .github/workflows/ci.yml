@@ -285,6 +285,45 @@ jobs:
           PYTHON: python
         run: npm run test:e2e:factor-validation
 
+      - name: Run historical signal experiment save and comparison E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          VR_E2E_PYTHON: python
+          E2E_SCREENSHOT_DIR: ${{ runner.temp }}/historical-experiment-evidence
+        run: npm run test:e2e:historical-signal-validation
+
+      - name: Preserve historical experiment evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: historical-experiment-evidence
+          path: ${{ runner.temp }}/historical-experiment-evidence
+          if-no-files-found: warn
+
+      - name: Run synthetic K-line inspection component E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/kline-inspection.browser.mjs
+
+      - name: Run synthetic adoption component workflows E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          E2E_ARTIFACT_DIR: ${{ runner.temp }}/adoption-workflow-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/adoption-workflows.browser.mjs
+
+      - name: Preserve synthetic adoption component evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: adoption-workflow-evidence
+          path: ${{ runner.temp }}/adoption-workflow-evidence
+          if-no-files-found: warn
+
       - name: Run Full-Market Discovery E2E
         if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
@@ -1049,6 +1088,11 @@ jobs:
         env:
           PYTHON: python
         run: npm run test:e2e:research-event-calendar
+      - name: Run synthetic event expectation and judgment component E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/event-review.browser.mjs
       - name: Run DCR1 Decision Commit valid readback E2E
         if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend

@@ -25,6 +25,8 @@ import { cn } from "@/lib/utils";
 import { WatchlistImport } from "@/components/watchlist/WatchlistImport";
 import { NativeIntelWatchlistContext } from "@/components/native-intel/NativeIntelWatchlistContext";
 
+import type { NativeIntelWatchlistContext as IntelContext } from "@/lib/api";
+
 // A 股红涨绿跌（与整个看板一致）。
 const color = (v: number | null | undefined) =>
   v == null ? "text-muted-foreground" : v > 0 ? "text-danger" : v < 0 ? "text-success" : "text-muted-foreground";
@@ -53,6 +55,16 @@ const saveLive = (on: boolean) => {
 
 export function Watchlist() {
   const [codes, setCodes] = useState<string[]>([]);
+  // Reuse the existing backend security-directory projection; codes stay the identity.
+  // Bind each response to its requested list so late results cannot name a new list.
+  const [nameContext, setNameContext] = useState<{ codes: string[]; context: IntelContext | null } | null>(null);
+  const onNameContext = useCallback((context: IntelContext | null, requestedCodes: string[]) => {
+    setNameContext({ codes: requestedCodes, context });
+  }, []);
+  const metadataNames = useMemo(() => {
+    const context = nameContext?.codes === codes ? nameContext.context : null;
+    return new Map((context?.securities ?? []).map((item) => [item.code, item.company_name]));
+  }, [codes, nameContext]);
   const [etag, setEtag] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [saving, setSaving] = useState(false);
@@ -373,7 +385,7 @@ export function Watchlist() {
               </p>
             ) : (
               <>
-                <NativeIntelWatchlistContext codes={codes} />
+                <NativeIntelWatchlistContext codes={codes} onContextChange={onNameContext} />
 
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted/20 px-3 py-2 text-xs">
               <div className="text-muted-foreground">
@@ -429,6 +441,7 @@ export function Watchlist() {
                     {visibleCodes.map((c) => {
                       const q = quotes[c];
                       const events = anomalyByCode[c] ?? [];
+                      const name = q?.name || events[0]?.name || metadataNames.get(c);
                       return (
                         <tr role="row" key={c} data-watchlist-code={c}>
                   <td role="cell" headers="watchlist-stock" className="px-2 py-3">
@@ -445,8 +458,8 @@ export function Watchlist() {
                       </Link>
                     </div>
                     <div className="text-xs text-muted-foreground" data-testid={`quote-status-${c}`}>{quoteSnapshotLabel(snapshots?.[c])}</div>
-                    {(q?.name || events[0]?.name) && (
-                      <span className="ml-2 text-muted-foreground">{q?.name || events[0]?.name}</span>
+                    {name && (
+                      <span className="ml-2 text-muted-foreground">{name}</span>
                     )}
                   </td>
                   <td role="cell" headers="watchlist-price" className="px-2 py-3 text-right font-mono"><span aria-hidden="true" className="watchlist-field-label hidden">快照价</span>{q?.price ?? "—"}</td>
@@ -481,7 +494,7 @@ export function Watchlist() {
                       onClick={() => remove(c)}
                       disabled={saving}
                       className="inline-flex min-h-11 min-w-11 items-center justify-center rounded text-muted-foreground hover:text-danger disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-                      aria-label={`移除 ${q?.name || events[0]?.name || "股票"}（${c}）`}
+                      aria-label={`移除 ${name || "股票"}（${c}）`}
                       title="移除"
                     >
                       <X className="h-3.5 w-3.5" />

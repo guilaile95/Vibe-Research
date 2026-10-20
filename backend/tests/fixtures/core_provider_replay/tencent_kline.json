@@ -1,0 +1,193 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "kind": "synthetic_constructed",
+    "captured_at": null,
+    "source": "Repository parser contracts and existing offline tests; no HTTP capture",
+    "boundary": "raw_http_json"
+  },
+  "cases": [
+    {
+      "id": "normal_lots",
+      "code": "600519",
+      "payload": {
+        "data": {
+          "sh600519": {
+            "day": [
+              [
+                "2026-08-20",
+                "10",
+                "11",
+                "12",
+                "9",
+                "23",
+                "999999"
+              ]
+            ]
+          }
+        }
+      },
+      "http_status": 200,
+      "error": null,
+      "reason": "Main-board lots convert once to shares; seventh column is not turnover"
+    },
+    {
+      "id": "normal_star_shares",
+      "code": "688981",
+      "payload": {
+        "data": {
+          "sh688981": {
+            "day": [
+              [
+                "2026-08-20",
+                "10",
+                "11",
+                "12",
+                "9",
+                "23",
+                "999999"
+              ]
+            ]
+          }
+        }
+      },
+      "http_status": 200,
+      "error": null,
+      "reason": "STAR volume already uses shares"
+    },
+    {
+      "id": "empty",
+      "code": "600519",
+      "payload": {
+        "data": {
+          "sh600519": {
+            "day": []
+          }
+        }
+      },
+      "http_status": 200,
+      "error": "series is missing",
+      "reason": "Empty series fails closed"
+    },
+    {
+      "id": "missing_date",
+      "code": "600519",
+      "payload": {
+        "data": {
+          "sh600519": {
+            "day": [
+              [
+                null,
+                "10",
+                "11",
+                "12",
+                "9",
+                "23",
+                "999999"
+              ]
+            ]
+          }
+        }
+      },
+      "http_status": 200,
+      "error": "fromisoformat",
+      "reason": "Missing date fails the whole batch"
+    },
+    {
+      "id": "field_drift",
+      "code": "600519",
+      "payload": {
+        "data": {
+          "sh600519": {
+            "day": [
+              [
+                "2026-08-20",
+                "10",
+                "11",
+                "12",
+                "9"
+              ]
+            ]
+          }
+        }
+      },
+      "http_status": 200,
+      "error": "row is malformed",
+      "reason": "Missing volume rejects the row"
+    },
+    {
+      "id": "nonfinite_volume",
+      "code": "600519",
+      "payload": {
+        "data": {
+          "sh600519": {
+            "day": [
+              [
+                "2026-08-20",
+                "10",
+                "11",
+                "12",
+                "9",
+                "nan"
+              ]
+            ]
+          }
+        }
+      },
+      "http_status": 200,
+      "error": "not finite",
+      "reason": "Nonfinite volume is rejected"
+    },
+    {
+      "id": "partial_batch",
+      "code": "600519",
+      "payload": {
+        "data": {
+          "sh600519": {
+            "day": [
+              [
+                "2026-08-20",
+                "10",
+                "11",
+                "12",
+                "9",
+                "23",
+                "999999"
+              ],
+              [
+                "broken"
+              ]
+            ]
+          }
+        }
+      },
+      "http_status": 200,
+      "error": "row is malformed",
+      "reason": "No partially accepted batch"
+    },
+    {
+      "id": "rate_limit",
+      "code": "600519",
+      "payload": {
+        "data": {
+          "sh600519": {
+            "day": [
+              [
+                "2026-08-20",
+                "10",
+                "11",
+                "12",
+                "9",
+                "23",
+                "999999"
+              ]
+            ]
+          }
+        }
+      },
+      "http_status": 429,
+      "error": "429",
+      "reason": "HTTP rate limit fails closed"
+    }
+  ]
+}

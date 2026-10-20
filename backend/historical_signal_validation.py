@@ -89,12 +89,15 @@ def study_series(
     dates: list[str],
     closes: list[float | None],
     windows: tuple[int, ...] = WINDOWS,
+    *, sma_fast: int = SMA_FAST, sma_slow: int = SMA_SLOW,
 ) -> dict[str, Any]:
     """Compute one code's tri-state signal and observation windows, with no I/O."""
     if len(dates) != len(closes):
         raise ValueError("dates and closes must have equal length")
-    sma_fast = _sma(closes, SMA_FAST)
-    sma_slow = _sma(closes, SMA_SLOW)
+    if not 1 <= sma_fast < sma_slow <= 120:
+        raise ValueError("invalid SMA observation lengths")
+    sma_fast = _sma(closes, sma_fast)
+    sma_slow = _sma(closes, sma_slow)
     signal = [
         None if fast is None or slow is None else fast > slow
         for fast, slow in zip(sma_fast, sma_slow)
@@ -144,6 +147,7 @@ def study_series(
         "last_date": dates[-1] if dates else None,
         "events": events,
         "excluded_unknown_prior_state": excluded,
+        "excluded_unknown_prior_dates": [dates[i] for i, current in enumerate(signal) if current is True and (i == 0 or signal[i - 1] is None)],
         "per_window": per_window,
     }
 
@@ -185,10 +189,11 @@ def run_study(
     series_by_code: dict[str, tuple[list[str], list[float | None]]],
     benchmark: tuple[list[str], list[float | None]] | None,
     windows: tuple[int, ...] = WINDOWS,
+    *, sma_fast: int = SMA_FAST, sma_slow: int = SMA_SLOW,
 ) -> dict[str, Any]:
     """Run the fixed protocol; benchmark input is independent from sample input."""
     studies = {
-        code: study_series(dates, closes, windows)
+        code: study_series(dates, closes, windows, sma_fast=sma_fast, sma_slow=sma_slow)
         for code, (dates, closes) in series_by_code.items()
     }
     benchmark_close_by_date: dict[str, float | None] | None = None
@@ -294,7 +299,8 @@ def run_study(
 
 
 def _load_series_from_rdp(
-    data_root: str | Path | None, codes: list[str], date_from: str | None, date_to: str | None
+    data_root: str | Path | None, codes: list[str], date_from: str | None, date_to: str | None,
+    snapshot_id: str | None = None,
 ) -> dict[str, tuple[list[str], list[float]]]:
     """Load explicit code series through RDP pagination; never writes an artifact."""
     series: dict[str, tuple[list[str], list[float]]] = {}
@@ -305,12 +311,15 @@ def _load_series_from_rdp(
         while True:
             page = rdp.query_daily_bars(
                 root=data_root,
+                snapshot_id=snapshot_id,
                 code=code,
                 date_from=date_from,
                 date_to=date_to,
                 limit=rdp._MAX_LIMIT,
                 offset=offset,
             )
+            if snapshot_id is not None and page.get("snapshot_id") != snapshot_id:
+                raise rdp.ResearchDataPlaneValidationError("signal snapshot receipt mismatch")
             rows = page.get("rows") or []
             if not rows:
                 break
@@ -397,9 +406,9 @@ def evaluate_rdp(
     if signal_id != SIGNAL_ID:
         raise ValueError(f"unknown historical validation signal: {signal_id}")
     manifest = rdp.read_manifest()
-    sample = _load_series_from_rdp(None, codes, date_from, date_to)
+    sample = _load_series_from_rdp(None, codes, date_from, date_to, manifest["snapshot_id"])
     benchmark = (
-        _load_series_from_rdp(None, [benchmark_code], date_from, date_to).get(benchmark_code)
+        _load_series_from_rdp(None, [benchmark_code], date_from, date_to, manifest["snapshot_id"]).get(benchmark_code)
         if benchmark_code
         else None
     )
@@ -411,6 +420,7 @@ def evaluate_rdp(
         "source_name": manifest.get("source_name"),
         "license_status": manifest.get("license_status"),
         "artifact_sha256": manifest.get("artifact_sha256"),
+        "snapshot_id": manifest["snapshot_id"],
         "as_of": manifest.get("coverage_end"),
         "coverage": {
             "start": manifest.get("coverage_start"),

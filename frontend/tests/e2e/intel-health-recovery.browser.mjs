@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { runHealthImpactScenario } from "./data-health-impact.browser.mjs";
 import { runRssCoverageScenario } from "./rss-coverage.browser.mjs";
 
 const frontend = fileURLToPath(new URL("../../", import.meta.url));
@@ -259,8 +260,12 @@ async function main() {
       result.results.push(await runRssCoverageScenario(browser, baseURL, width, mode, evidenceDir));
       console.log(`[RECOVERY] rss-${mode} ${width}px PASS`);
     }
-    assert.equal(result.results.length, 12);
-    console.log(`[RECOVERY] 12/12 PASS; evidence: ${evidenceDir}`);
+    for (const width of [1440, 390]) {
+      result.results.push(await runHealthImpactScenario(browser, baseURL, width, evidenceDir));
+      console.log(`[RECOVERY] health-impact ${width}px PASS`);
+    }
+    assert.equal(result.results.length, 14);
+    console.log(`[RECOVERY] 14/14 PASS; evidence: ${evidenceDir}`);
   } catch (error) {
     result.error = error.message;
     throw error;

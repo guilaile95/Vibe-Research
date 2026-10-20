@@ -85,3 +85,10 @@ def runs():
 def read_bundle(bundle_id: str):
     try: return {"data": service.read_bundle(bundle_id)}
     except Exception: raise HTTPException(409,"RESEARCH_BUNDLE_CORRUPTED_OR_UNAVAILABLE") from None
+
+# Explicit manual inputs only; this calculation never calls capture or generation.
+from reverse_dcf import ReverseDcfInput, calculate as calculate_reverse_dcf
+
+@router.post("/reverse-dcf")
+def reverse_dcf(body: ReverseDcfInput):
+    return {"data": calculate_reverse_dcf(body)}

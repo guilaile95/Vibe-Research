@@ -1,3 +1,5 @@
+import { RollingSignalValidationPanel } from "@/components/signals/RollingSignalValidationPanel";
+import { ExperimentLedger } from "@/components/research/ExperimentLedger";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
@@ -497,6 +499,7 @@ function HistoricalSignalValidationPanel() {
 
   return (
     <div className="space-y-4" data-testid="historical-signal-validation">
+      <RollingSignalValidationPanel />
       <div className="rounded-xl border border-warning/40 bg-warning/10 p-4 text-sm leading-relaxed">
         <div className="flex items-center gap-2 font-semibold text-warning">
           <ShieldAlert className="h-4 w-4" /> RESEARCH ONLY · Historical validity not proven
@@ -540,6 +543,7 @@ function HistoricalSignalValidationPanel() {
           </button>
         </div>
       </form>
+      <ExperimentLedger kind="signal" input={JSON.stringify({ signal_id: selectedSignal, codes: parseCodes(codes), benchmark_code: benchmarkCode.trim() || null, date_from: dateFrom || null, date_to: dateTo || null })} />
 
       {error && <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"><AlertCircle className="mr-1 inline h-4 w-4" />{error}</div>}
       {loadingRegistry && <div role="status" className="rounded-lg border border-dashed border-border/70 p-6 text-center text-sm text-muted-foreground">正在读取稳定信号目录…</div>}

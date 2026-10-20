@@ -43,6 +43,7 @@ try {
       if (url.origin !== origin) { audit.external.push(url.origin); return route.abort(); }
       if (!url.pathname.startsWith('/api/')) return route.continue();
       audit.requests.push(req.method() + ' ' + url.pathname);
+      if (url.pathname === '/api/research-experiments' && req.method() === 'GET') return route.fulfill({ json: { records: [], limit: 500 } });
       const example = url.pathname.match(/^\/api\/research-analytics\/example\/(simulation|scenario|performance|ledger-performance|cost-comparison)$/);
       if (example && req.method() === 'GET') return route.fulfill({ json: { synthetic: true, input: fixture[example[1]].input } });
       const result = url.pathname.match(/^\/api\/research-analytics\/(simulation|scenario|performance|ledger-performance|cost-comparison)$/);
