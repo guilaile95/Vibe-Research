@@ -11,8 +11,17 @@ import company_research as service
 from test_company_research import bundle, good_stream
 from offline_testclient import offline_network
 
+@pytest.fixture
+def run_async(request):
+    # Initialize only an empty loop before the unconditional network guard.
+    # Windows creates a loopback self-pipe here; application work starts below it.
+    with asyncio.Runner() as runner:
+        runner.get_loop()
+        request.getfixturevalue('offline_network')
+        yield runner.run
+
 @pytest.fixture(autouse=True)
-def isolated(tmp_path, monkeypatch, offline_network):
+def isolated(tmp_path, monkeypatch, run_async):
     monkeypatch.setenv('VR_DATA_DIR', str(tmp_path))
 
 async def run(b, cfg=None, stream=good_stream):
@@ -71,51 +80,51 @@ def test_native_empty_is_missing(monkeypatch):
     assert all(rows[k]['status']=='MISSING' and rows[k]['payload'] is None for k in ('financials','announcements','lockup'))
 
 @pytest.mark.parametrize('provider',[None,'','  ','api','custom-api'])
-def test_metadata_normalized_before_run_and_readable(provider):
+def test_metadata_normalized_before_run_and_readable(provider, run_async):
     cfg={'model':'fixture'}
     if provider is not None: cfg['provider']=provider
-    result=asyncio.run(run(bundle(),cfg))[-1]['record']
+    result=run_async(run(bundle(),cfg))[-1]['record']
     assert result['model']['provider']==(provider if provider and provider.strip() else 'api')
     assert service.list_runs()==[result]
 
 @pytest.mark.parametrize('cfg',[{'provider':9,'model':'m'},{'provider':'x'*201,'model':'m'},{'provider':'cli-tool','model':'m'},{'provider':'a\nb','model':'m'},{'model':' '},{'model':'secret','apiKey':'secret'}])
-def test_bad_metadata_creates_no_run(cfg):
+def test_bad_metadata_creates_no_run(cfg, run_async):
     b=bundle()
-    with pytest.raises(ValueError):asyncio.run(run(b,cfg))
+    with pytest.raises(ValueError):run_async(run(b,cfg))
     assert service.list_runs()==[]
 
 
-def test_completion_commit_ack_loss_reads_back_without_fallback(monkeypatch):
+def test_completion_commit_ack_loss_reads_back_without_fallback(monkeypatch, run_async):
     original=service._terminal
     calls=[]
     def lost(*args,**kwargs):
         calls.append(args[2]);original(*args,**kwargs)
         raise sqlite3.OperationalError('synthetic acknowledgement lost')
     monkeypatch.setattr(service,'_terminal',lost)
-    events=asyncio.run(run(bundle()))
+    events=run_async(run(bundle()))
     assert events[-1]['type']=='done'
     assert calls==['COMPLETED']
     assert service.list_runs()==[events[-1]['record']]
 
 
-def test_completion_write_failure_clean_failed_record(monkeypatch):
+def test_completion_write_failure_clean_failed_record(monkeypatch, run_async):
     original=service._terminal
     def fail(*args,**kwargs):
         if args[2]=='COMPLETED':raise sqlite3.OperationalError('synthetic failure')
         return original(*args,**kwargs)
     monkeypatch.setattr(service,'_terminal',fail)
-    assert asyncio.run(run(bundle()))[-1]['type']=='error'
+    assert run_async(run(bundle()))[-1]['type']=='error'
     result=service.list_runs()[0]
     assert result['status']=='FAILED' and result['stages']==[] and 'result_sha256' not in result
 
 
-def test_both_writes_fail_no_fake_completion(monkeypatch):
+def test_both_writes_fail_no_fake_completion(monkeypatch, run_async):
     monkeypatch.setattr(service,'_terminal',lambda *a,**k:(_ for _ in ()).throw(sqlite3.OperationalError('synthetic failure')))
-    with pytest.raises(sqlite3.OperationalError):asyncio.run(run(bundle()))
+    with pytest.raises(sqlite3.OperationalError):run_async(run(bundle()))
     assert service.list_runs()[0]['status']=='RUNNING'
 
 
-def test_real_sqlite_contention_readback():
+def test_real_sqlite_contention_readback(run_async):
     b=bundle(); locked=threading.Event(); release=threading.Event(); worker=None
     def lock():
         with sqlite3.connect(service.db_path(),timeout=10) as conn:
@@ -128,7 +137,7 @@ def test_real_sqlite_contention_readback():
             if event.get('type')=='stage_done' and event['stage']=='report':
                 worker=threading.Thread(target=lock);worker.start();assert locked.wait(2)
         return events
-    try: events=asyncio.run(generate())
+    try: events=run_async(generate())
     finally:
         release.set()
         if worker:worker.join()
@@ -205,12 +214,12 @@ def test_registered_native_capture_generate_and_history(monkeypatch):
     assert len(service.list_runs())==1
 
 
-def test_cancel_before_completed_transition_is_readable():
+def test_cancel_before_completed_transition_is_readable(run_async):
     stop=threading.Event()
     async def generate():
         async for event in service.generate(bundle(),{'model':'fixture'},stop,stream=good_stream):
             if event.get('type')=='stage_done' and event['stage']=='report': stop.set()
-    with pytest.raises(asyncio.CancelledError):asyncio.run(generate())
+    with pytest.raises(asyncio.CancelledError):run_async(generate())
     saved=service.list_runs()[0]
     assert saved['status']=='CANCELLED' and saved['completed_stage_count']==6 and saved['stages']==[]
     assert 'result_sha256' not in saved
@@ -244,8 +253,8 @@ def test_readonly_diagnostics_preserve_legacy_bytes_and_hashes():
     assert service.db_path().read_bytes()==before
 
 
-def test_old_completed_report_and_original_evidence_survive_failed_history_pages():
-    b=bundle();completed=asyncio.run(run(b))[-1]['record']
+def test_old_completed_report_and_original_evidence_survive_failed_history_pages(run_async):
+    b=bundle();completed=run_async(run(b))[-1]['record']
     seed(b,51)
     first=service.list_run_page('A','600519')
     assert completed not in first['records'] and first['next_cursor']
@@ -277,3 +286,18 @@ def test_invalid_or_ambiguous_archive_subject_is_unassigned_not_invisible(varian
         assert page=={'records':[],'diagnostics':[],'unassigned_corrupt_count':1,'next_cursor':None}
     with pytest.raises(ValueError):service.read_run(record['run_id'],'A','600519')
     assert service.db_path().read_bytes()==before
+
+
+def test_async_audit_runner_reuses_initialized_loop_under_guard(run_async, monkeypatch):
+    import socket
+    def unexpected_loop(*args, **kwargs):
+        raise AssertionError('unexpected event loop initialization')
+    monkeypatch.setattr(asyncio, 'new_event_loop', unexpected_loop)
+    monkeypatch.setattr(asyncio.get_event_loop_policy(), 'new_event_loop', unexpected_loop)
+    async def guarded():
+        for address in [('203.0.113.1', 443), ('127.0.0.1', 12345), ('::1', 12345)]:
+            with pytest.raises(AssertionError, match='network prohibited'):
+                socket.create_connection(address)
+        return 'guarded'
+    assert run_async(guarded()) == 'guarded'
+    assert run_async(guarded()) == 'guarded'

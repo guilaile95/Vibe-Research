@@ -1303,7 +1303,7 @@ jobs:
       - name: Install backend dependencies (exact Windows lock)
         run: python -m pip install -r backend/requirements-dev-windows-py312.lock.txt
 
-      # Fail early on the seven affected portability modules; the complete
+      # Fail early on the affected portability modules; the complete
       # offline selection below remains unchanged and still runs after success.
       - name: Windows adoption portability preflight
         working-directory: backend
@@ -1313,6 +1313,7 @@ jobs:
           VIBE_RESEARCH_REVIEW_DB: ${{ runner.temp }}/review.db
         run: >-
           python -m pytest -m "not live" -q
+          tests/test_company_research_audit.py
           tests/test_allocation_targets.py
           tests/test_experiment_ledger.py
           tests/test_prediction_journal.py
