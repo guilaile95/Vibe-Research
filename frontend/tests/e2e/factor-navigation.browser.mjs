@@ -51,6 +51,10 @@ try {
     await requestStarted;
   }
   await open(); await start();
+  // Research analytics is a secondary entry under Trades, not a global link.
+  // Follow the real client-side navigation so the pending request loses ownership.
+  await page.locator('a[href="/trades"]').first().click();
+  await page.waitForURL('**/trades');
   await page.locator('a[href="/research-analytics"]').first().click();
   await page.waitForURL('**/research-analytics');
   release(); await page.waitForTimeout(100);
