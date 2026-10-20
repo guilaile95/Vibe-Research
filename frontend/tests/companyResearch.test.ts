@@ -87,3 +87,31 @@ test('saved evidence rejects invalid record before fetch and aborted completion 
  await assert.rejects(readCompanyResearchEvidence(record,controller.signal));
  assert.equal(calls,1);
 });
+
+test('subject history query preserves cursor and accepts explicit diagnostics',async t=>{
+ const {readCompanyResearchPage}=await import('../src/lib/companyResearch.ts');
+ const row=(events().at(-1) as any).record;
+ const page={records:[row],diagnostics:[{run_id:'e'.repeat(32),status:'CORRUPTED_OR_UNSUPPORTED'}],unassigned_corrupt_count:2,next_cursor:'bound-cursor'};
+ t.mock.method(globalThis,'fetch',async(url,init)=>{const parsed=new URL(String(url),'https://fixture.example');assert.equal(parsed.pathname,'/api/company-research/history');assert.equal(parsed.searchParams.get('market'),'A');assert.equal(parsed.searchParams.get('symbol'),'600519');assert.equal(parsed.searchParams.get('cursor'),'old+cursor=');return new Response(JSON.stringify({data:page}));});
+ assert.deepEqual(await readCompanyResearchPage(bundle.subject,new AbortController().signal,'old+cursor='),page);
+});
+for(const variant of ['wrongsubject','duplicate','invalidrecord','diagnostic','count','cursor','overlap'])test(`subject history rejects ${variant}`,async t=>{
+ const {readCompanyResearchPage}=await import('../src/lib/companyResearch.ts');const row=(events().at(-1) as any).record;
+ const page:any={records:[row],diagnostics:[],unassigned_corrupt_count:0,next_cursor:null};
+ if(variant==='wrongsubject')row.subject={market:'US',symbol:'AAPL'};
+ if(variant==='duplicate')page.records.push(row);
+ if(variant==='invalidrecord')row.model.provider='';
+ if(variant==='diagnostic')page.diagnostics=[{run_id:null,status:'VALID'}];
+ if(variant==='count')page.unassigned_corrupt_count=-1;
+ if(variant==='cursor')page.next_cursor=12;
+ if(variant==='overlap')page.diagnostics=[{run_id:row.run_id,status:'CORRUPTED_OR_UNSUPPORTED'}];
+ t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({data:page})));
+ await assert.rejects(readCompanyResearchPage(bundle.subject,new AbortController().signal));
+});
+
+test('native envelope explicitly binds request without claiming provider identity',()=>{
+ const row={...bundle.sources[0],source:'astock.announcements',payload:{schema_version:'company-native-request.v1',adapter:'astock.announcements',requested_subject:bundle.subject,identity_basis:'ADAPTER_REQUEST_CONTRACT_NOT_PROVIDER_IDENTITY',payload:[{title:'Synthetic',date:'2026-10-12'}]}};
+ assert.deepEqual(parseResearchBundle({...bundle,sources:[row]},bundle.subject).sources[0],row);
+ assert.throws(()=>parseResearchBundle({...bundle,sources:[{...row,payload:{...row.payload,requested_subject:{market:'US',symbol:'AAPL'}}}]},bundle.subject));
+ assert.throws(()=>parseResearchBundle({...bundle,sources:[{...row,payload:{...row.payload,identity_basis:'VERIFIED'}}]},bundle.subject));
+});

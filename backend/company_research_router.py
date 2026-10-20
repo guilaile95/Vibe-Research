@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import anyio
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Query
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 import company_research as service
 router = APIRouter(prefix="/api/company-research", tags=["company-research"])
@@ -55,6 +55,8 @@ async def capture(body: CaptureIn, request: Request):
 async def generate(body: GenerateIn):
     if not body.confirm_model_calls: raise HTTPException(400, "MODEL_BUDGET_CONFIRMATION_REQUIRED")
     if body.llm.provider.strip().startswith("cli-"): raise HTTPException(400, "六阶段研究仅使用现有 API 接入；订阅页内聊天边界不变")
+    try: service.model_meta(body.llm.model_dump())
+    except ValueError: raise HTTPException(422, "RESEARCH_MODEL_METADATA_INVALID") from None
     import app as app_module
     llm=app_module.LLMConfig.model_validate(body.llm.model_dump())
     app_module._require_llm_ready(llm)
@@ -79,6 +81,21 @@ async def generate(body: GenerateIn):
 @router.get("/runs")
 def runs():
     try: return {"data": service.list_runs()}
+    except Exception: raise HTTPException(409,"RESEARCH_RECORD_CORRUPTED_OR_UNAVAILABLE") from None
+
+@router.get("/diagnostics")
+def diagnostics():
+    try: return {"data": service.diagnose_runs()}
+    except Exception: raise HTTPException(409,"RESEARCH_RECORD_CORRUPTED_OR_UNAVAILABLE") from None
+
+@router.get("/history")
+def history(market: str, symbol: str, cursor: str | None = None, limit: int = Query(default=50, ge=1, le=50)):
+    try: return {"data": service.list_run_page(market, symbol, cursor=cursor, limit=limit)}
+    except Exception: raise HTTPException(409,"RESEARCH_RECORD_CORRUPTED_OR_UNAVAILABLE") from None
+
+@router.get("/runs/{run_id}")
+def run(run_id: str, market: str, symbol: str):
+    try: return {"data": service.read_run(run_id, market, symbol)}
     except Exception: raise HTTPException(409,"RESEARCH_RECORD_CORRUPTED_OR_UNAVAILABLE") from None
 
 @router.get("/bundles/{bundle_id}")

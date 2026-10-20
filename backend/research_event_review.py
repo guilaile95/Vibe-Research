@@ -85,6 +85,52 @@ def list_reviews(campaign_id, db_path=None):
         return []
 
 
+def history(*, security_code=None, campaign_id=None, cursor=None, limit=50, db_path=None):
+    """Read persisted observations, never the active scan universe or providers.
+
+    Rowid keyset pagination is stable when new reviews arrive. The cursor is
+    scope-bound; changing subject/Campaign starts a new traversal.
+    """
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError('历史分页大小须为 1–100')
+    code = calendar._normalise_security_code(security_code) if security_code else None
+    scope = [code, campaign_id]
+    before = None
+    if cursor:
+        try:
+            decoded = json.loads(base64.urlsafe_b64decode(cursor))
+            before = decoded['before']
+            if decoded['scope'] != scope or type(before) is not int or before <= 0:
+                raise ValueError()
+        except (ValueError, KeyError, TypeError):
+            raise ValueError('历史分页游标无效或查询对象已变化') from None
+    def read(conn):
+        if not store._table_exists(conn, 'event_research_reviews'):
+            return {'items': [], 'next_cursor': None}
+        clauses, params = [], []
+        if code:
+            clauses.append("json_extract(payload, '$.observation.security_code')=?")
+            params.append(code)
+        if campaign_id:
+            clauses.append('campaign_id=?')
+            params.append(campaign_id)
+        if before is not None:
+            clauses.append('rowid<?')
+            params.append(before)
+        where = ' WHERE ' + ' AND '.join(clauses) if clauses else ''
+        rows = conn.execute('SELECT rowid,payload FROM event_research_reviews' + where +
+                            ' ORDER BY rowid DESC LIMIT ?', (*params, limit + 1)).fetchall()
+        page = rows[:limit]
+        next_cursor = base64.urlsafe_b64encode(json.dumps(
+            {'before': page[-1]['rowid'], 'scope': scope}).encode()).decode() if len(rows) > limit else None
+        return {'items': [_with_judgment(conn, json.loads(row['payload'])) for row in page],
+                'next_cursor': next_cursor}
+    try:
+        return store.read_transaction(thesis_service.resolve_db_path(db_path), read)
+    except FileNotFoundError:
+        return {'items': [], 'next_cursor': None}
+
+
 def context(campaign_id, db_path=None):
     campaign = campaign_service.get_campaign(campaign_id)
     binding = campaign_service.get_campaign_thesis_binding(campaign_id)
@@ -105,6 +151,8 @@ def _subject(thesis, code):
 def bind(payload, db_path=None):
     thesis_service._validate_expected_revision(payload['expected_thesis_revision'])
     campaign = campaign_service.get_campaign(payload['campaign_id'])
+    if campaign.get('status') not in calendar.ACTIVE_RESEARCH_CAMPAIGN_STATUSES:
+        raise ReviewConflict('仅活跃研究 Campaign 可以新增事件绑定；历史记录仍可只读查看')
     binding = campaign_service.get_campaign_thesis_binding(payload['campaign_id'])
     if binding['thesis_id'] != payload['thesis_id']:
         raise ReviewConflict('Campaign 正式绑定已变化，请重新读取')

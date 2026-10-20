@@ -285,6 +285,22 @@ jobs:
           PYTHON: python
         run: npm run test:e2e:factor-validation
 
+      - name: Run delayed factor navigation regression E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          E2E_SCREENSHOT_DIR: ${{ runner.temp }}/factor-navigation-evidence
+        run: npm run test:e2e:factor-navigation
+
+      - name: Preserve factor navigation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: factor-navigation-evidence
+          path: ${{ runner.temp }}/factor-navigation-evidence
+          if-no-files-found: warn
+
       - name: Run historical signal experiment save and comparison E2E
         if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend

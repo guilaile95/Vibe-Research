@@ -50,8 +50,22 @@ def context(evidence_id, db_path=None):
         groups = [r for r in _latest(history).values() if any(m['evidence_id'] == evidence_id for m in r['members'])]
         rows = conn.execute("SELECT * FROM evidence_records WHERE subject_type='stock' AND subject_id=? AND deleted=0 ORDER BY created_at DESC, id LIMIT 201", (record['subject_id'],)).fetchall()
         ids = {r['group_id'] for r in groups}
+        # Mandatory existing members are not new-candidate discovery. Resolve
+        # their CURRENT records independently of the bounded candidate window.
+        member_ids = {evidence_id}
+        member_ids.update(m['evidence_id'] for group in groups for m in group['members'])
+        current_members, member_conflicts = [], []
+        for member_id in sorted(member_ids):
+            try:
+                member = _record(conn, member_id)
+                if member['subject_id'] != record['subject_id']:
+                    raise ValueError('成员研究对象已变化')
+                current_members.append(member)
+            except ValueError as exc:
+                member_conflicts.append({'evidence_id': member_id, 'reason': str(exc)})
         return {'groups': groups, 'history': [r for r in history if r['group_id'] in ids],
                 'candidates': [store._evidence_row_to_dict(r) for r in rows[:200]], 'has_more': len(rows) > 200,
+                'current_members': current_members, 'member_conflicts': member_conflicts,
                 'relationship_basis': 'USER_DECLARED_UNVERIFIED', 'automatic_grouping': 'UNAVAILABLE_NO_VERIFIED_DOCUMENT_ID',
                 'ownership_change': OWNERSHIP_STATUS}
     return store.read_transaction(svc.resolve_db_path(db_path), read)

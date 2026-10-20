@@ -28,6 +28,10 @@ export function parseResearchBundle(v: ResearchBundle, subject: Subject, expecte
   const ids = new Set<string>();
   for (const row of v.sources) {
     if (!keys(row,["evidence_id","source","status","captured_at","source_as_of","payload_sha256","stages","payload","scope",...("error_code" in row ? ["error_code"] : [])]) || !text(row.evidence_id,100) || !/^[a-z][a-z0-9_]*$/.test(row.evidence_id) || ids.has(row.evidence_id) || !hash(row.payload_sha256) || !["AVAILABLE", "MISSING", "ERROR", "UNSUPPORTED"].includes(row.status) || !texts(row.stages, 6) || row.stages.some(s => !RESEARCH_STAGES.includes(s as typeof RESEARCH_STAGES[number])) || !row.stages.length || new Set(row.stages).size !== row.stages.length || !text(row.source) || !text(row.scope) || !timestamp(row.captured_at) || (row.source_as_of !== null && !sourceDate(row.source_as_of)) || ("error_code" in row && (row.status !== "ERROR" || row.error_code !== "SOURCE_UNAVAILABLE_OR_INVALID"))) throw new Error("研究来源身份或状态无效");
+    const native = row.payload as { schema_version?: string; adapter?: string; requested_subject?: Subject; identity_basis?: string; payload?: unknown } | null;
+    if (native?.schema_version === "company-native-request.v1") {
+      if (!keys(native,["schema_version","adapter","requested_subject","identity_basis","payload"]) || !["astock.financials","astock.announcements","astock.lockup_expiry"].includes(row.source) || native.adapter !== row.source || !native.requested_subject || !validSubject(native.requested_subject) || !sameSubject(native.requested_subject,subject) || native.identity_basis !== "ADAPTER_REQUEST_CONTRACT_NOT_PROVIDER_IDENTITY" || native.payload === null || typeof native.payload !== "object") throw new Error("原生资料请求绑定回执无效");
+    }
     if (row.source === "immutable_public_source_archive") {
       const receipt = row.payload as { as_of: string; subject: Subject; market: string; symbol: string; source_id: string; schema_version: string; point_in_time_claim: string; provider_fetch_performed: boolean; qualification: string; status: string; capture_time: string | null; source_time: string | null; source_artifact_hash: string | null; reason_codes: string[]; block: { source_id: string; subject: string; requested_as_of: string; captured_at: string; point_in_time_claim: string; status: string; fixture: boolean; rows: unknown[]; evidence: { raw_payload_hash: string } } | null };
       if (!keys(receipt,["schema_version","subject","market","symbol","source_id","status","qualification","as_of","source_time","capture_time","source_artifact_hash","point_in_time_claim","provider_fetch_performed","block","reason_codes"]) || receipt.schema_version !== "company-public-source.v1" || !validSubject(receipt.subject) || !sameSubject(receipt.subject,subject) || receipt.market !== subject.market || receipt.symbol !== subject.symbol || receipt.source_id !== row.evidence_id || receipt.point_in_time_claim !== "NONE" || receipt.provider_fetch_performed !== false || !sourceDate(receipt.as_of) || receipt.as_of.length !== 10 || !v.archive_cutoff || receipt.as_of !== v.archive_cutoff || !texts(receipt.reason_codes) || (receipt.source_time !== null && !timestamp(receipt.source_time)) || (receipt.capture_time !== null && !timestamp(receipt.capture_time)) || (receipt.source_artifact_hash !== null && (typeof receipt.source_artifact_hash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(receipt.source_artifact_hash)))) throw new Error("研究归档截止日或来源身份回执不一致");
@@ -113,4 +117,22 @@ export async function readCompanyResearchEvidence(record: ResearchRecord, signal
 export function researchNote(record: ResearchRecord): string {
   if (record.status !== "COMPLETED" || record.stages.length !== 6) throw new Error("研究未完成，不能保存完整报告");
   return [`# ${record.subject.market}:${record.subject.symbol} 六阶段公司研究`, `NON_AUTHORITATIVE_AI_DRAFT · 数字与事实未自动核验`, `运行 ${record.run_id} · 来源包 ${record.bundle_id} · SHA256 ${record.bundle_sha256}`, `生成 ${record.finished_at} · ${record.model.provider}/${record.model.name}`, ...record.stages.map(s => `## ${STAGE_LABELS[s.stage]}\n${s.summary}\n引用：${s.evidence_ids.join(", ") || "无可用来源"}\n缺口：${[...s.source_gaps.map(g => `${g.evidence_id}:${g.status}`), ...s.gaps].join("；") || "模型未列出额外缺口，不代表完整"}`)].join("\n\n");
+}
+
+export type ResearchHistoryPage = { records: ResearchRecord[]; diagnostics: { run_id: string | null; status: "CORRUPTED_OR_UNSUPPORTED" }[]; unassigned_corrupt_count: number; next_cursor: string | null };
+export async function readCompanyResearchPage(subject: Subject, signal: AbortSignal, cursor?: string): Promise<ResearchHistoryPage> {
+  const query = new URLSearchParams({ market: subject.market, symbol: subject.symbol, ...(cursor ? { cursor } : {}) });
+  const page = await get<ResearchHistoryPage>(`/company-research/history?${query}`, { signal });
+  if (!keys(page,["records","diagnostics","unassigned_corrupt_count","next_cursor"]) || !Array.isArray(page.records) || !Array.isArray(page.diagnostics) || page.records.length + page.diagnostics.length > 50 || !Number.isSafeInteger(page.unassigned_corrupt_count) || page.unassigned_corrupt_count < 0 || !(page.next_cursor === null || text(page.next_cursor,400))) throw new Error("研究历史分页回执无效");
+  const seen = new Set<string>();
+  for (const row of page.records) {
+    parseResearchRecord(row);
+    if (!sameSubject(row.subject,subject) || seen.has(row.run_id)) throw new Error("研究历史主体或运行身份冲突");
+    seen.add(row.run_id);
+  }
+  for (const row of page.diagnostics) {
+    if (!keys(row,["run_id","status"]) || row.status !== "CORRUPTED_OR_UNSUPPORTED" || !(row.run_id === null || id(row.run_id)) || (row.run_id !== null && seen.has(row.run_id))) throw new Error("研究历史诊断回执无效");
+    if (row.run_id) seen.add(row.run_id);
+  }
+  return page;
 }

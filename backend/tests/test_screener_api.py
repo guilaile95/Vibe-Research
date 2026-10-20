@@ -190,7 +190,7 @@ def test_happy_path_match_and_reject(monkeypatch):
     assert r.status_code == 200
     data = r.json()
     assert data["logic"] == "AND"
-    assert data["schema_version"] == "screener-v0.1"
+    assert data["schema_version"] == "screener-v0.2"
     assert [s["code"] for s in data["matched"]] == ["000001"]
     assert [s["code"] for s in data["rejected"]] == ["600519"]
     assert data["unavailable"] == []

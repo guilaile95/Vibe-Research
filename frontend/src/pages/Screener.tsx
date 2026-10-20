@@ -187,7 +187,7 @@ function ResultGroup({ title, items }: { title: string; items: ScreenerStockResu
                   候选研究
                 </Link>
                 <span className="text-xs text-muted-foreground">{item.trade_date || "—"}</span>
-                <span className="ml-auto text-xs text-muted-foreground">{item.technical_status}</span>
+                <span className="ml-auto text-xs text-muted-foreground">{item.technical_status === "stale" ? "过期样本（非当前信号）" : item.technical_status}</span>
               </summary>
               <div className="mt-3 space-y-2 text-xs text-muted-foreground">
                 {item.data_coverage ? (
@@ -665,7 +665,7 @@ export function Screener() {
             {result.batch_coverage ? (
               <p className="text-xs text-muted-foreground" data-testid="screener-batch-coverage">
                 本次请求 {result.batch_coverage.requested_count} 股 · 读到样本 {result.batch_coverage.with_data_count} 股 · 空样本 {result.batch_coverage.empty_count} 股 · 读取失败 {result.batch_coverage.failed_count} 股
-                <span className="block">全部条件可评估 {result.batch_coverage.fully_evaluable_count} 股 · 有缺失条件 {result.batch_coverage.missing_condition_count} 股 · 整股不可评估 {result.batch_coverage.unavailable_count} 股</span>
+                <span className="block">过期排除 {result.batch_coverage.stale_count ?? "未知"} 股 · 全部条件可评估 {result.batch_coverage.fully_evaluable_count} 股 · 有缺失条件 {result.batch_coverage.missing_condition_count} 股 · 整股不可评估 {result.batch_coverage.unavailable_count} 股</span>
               </p>
             ) : <p className="text-xs text-muted-foreground">本次请求覆盖未提供</p>}
             <p className="text-xs text-muted-foreground">
@@ -674,7 +674,7 @@ export function Screener() {
             {result.research_data.limitations.map((line) => <p key={line} className="text-xs text-muted-foreground">{line}</p>)}
           </GlassCard>
           <div className="grid gap-3 lg:grid-cols-3">
-            <ResultGroup title="命中" items={groups.matched} />
+            <ResultGroup title="当前命中" items={groups.matched} />
             <ResultGroup title="未命中" items={groups.rejected} />
             <ResultGroup title="不可评估" items={groups.unavailable} />
           </div>

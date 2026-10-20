@@ -62,6 +62,7 @@ export type ScreenerConditionResult = {
 };
 
 export type ScreenerStockCoverage = {
+  freshness?: "current" | "stale" | "unknown";
   status: "available" | "empty" | "unavailable";
   returned_rows: number | null;
   start: string | null;
@@ -72,6 +73,7 @@ export type ScreenerStockCoverage = {
 };
 
 export type ScreenerBatchCoverage = {
+  stale_count?: number;
   requested_count: number;
   with_data_count: number;
   empty_count: number;

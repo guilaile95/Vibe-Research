@@ -16,6 +16,7 @@ import re
 import selectors
 import signal
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -36,6 +37,7 @@ BLOCKED = ("real_provider", "real_model", "natural_next_day", "deployment")
 
 def isolated_env(root: Path, node=None) -> dict[str, str]:
     """Do not read/copy ambient credentials, proxies, hooks or provider settings."""
+    root = root.resolve()
     env = {"PATH": os.defpath, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
            "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1",
            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
@@ -43,10 +45,18 @@ def isolated_env(root: Path, node=None) -> dict[str, str]:
            "VIBE_NATIVE_INTEL_DISABLE_SCHEDULER": "1"}
     for name, directory in {"HOME": "home", "TMPDIR": "tmp", "XDG_CONFIG_HOME": "config",
                             "XDG_CACHE_HOME": "cache", "XDG_DATA_HOME": "xdg-data",
-                            "VR_DATA_DIR": "data", "VR_REPORTS_DIR": "reports"}.items():
+                            "XDG_STATE_HOME": "state", "USERPROFILE": "home",
+                            "APPDATA": "appdata", "LOCALAPPDATA": "localappdata",
+                            "TEMP": "tmp", "TMP": "tmp",
+                            "VR_DATA_DIR": "data", "VR_REPORTS_DIR": "reports",
+                            "VR_FACT_LAKE_ROOT": "fact-lake",
+                            "VIBE_RESEARCH_RESEARCH_DATA_DIR": "research-data"}.items():
         path = root / directory
+        if path.resolve() != path:
+            raise ValueError("isolation directory must not be a symlink")
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
         env[name] = str(path)
+    env["VIBE_RESEARCH_REVIEW_DB"] = str(root / "data" / "daily_reviews.sqlite3")
     # Resolve executable directories explicitly, not the caller's arbitrary PATH.
     env["PATH"] = os.pathsep.join(dict.fromkeys([str(Path(sys.executable).parent), os.defpath]))
     if node is not None:
@@ -55,6 +65,82 @@ def isolated_env(root: Path, node=None) -> dict[str, str]:
             raise ValueError("node must be an absolute executable path")
         env["PATH"] = str(executable.parent) + os.pathsep + env["PATH"]
     return env
+
+
+
+# Import only side-effect-free production resolvers, never app/portfolio/store
+# constructors: those may migrate legacy data or initialize databases on import.
+_ISOLATION_PROBE = r"""
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from review_db_path import resolve_review_db_path
+from research_data_plane_path import resolve_research_data_root
+root = Path(sys.argv[2]).resolve()
+names = ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TMPDIR", "TEMP", "TMP",
+         "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
+         "VR_DATA_DIR", "VR_REPORTS_DIR", "VR_FACT_LAKE_ROOT",
+         "VIBE_RESEARCH_REVIEW_DB", "VIBE_RESEARCH_RESEARCH_DATA_DIR")
+for name in names:
+    raw = os.environ.get(name, "")
+    if not raw or not Path(raw).is_absolute():
+        raise ValueError("missing absolute isolation path: " + name)
+    path = Path(raw).resolve()
+    if path == root or root not in path.parents:
+        raise ValueError("isolation path outside root: " + name)
+review = resolve_review_db_path()
+research = resolve_research_data_root().resolve()
+if review != Path(os.environ["VIBE_RESEARCH_REVIEW_DB"]).resolve():
+    raise ValueError("review resolver mismatch")
+if research != Path(os.environ["VIBE_RESEARCH_RESEARCH_DATA_DIR"]).resolve():
+    raise ValueError("research resolver mismatch")
+for flag in ("VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH", "VIBE_NATIVE_INTEL_DISABLE_SCHEDULER"):
+    if os.environ.get(flag) != "1":
+        raise ValueError("automatic fetch is not disabled")
+print(json.dumps({"status": "pass", "scope": "PATH_RESOLUTION_ONLY_NO_DATABASE_OPEN",
+                  "explicit_review_db": True, "explicit_research_root": True,
+                  "configured_paths_contained": len(names)}))
+"""
+
+
+def legacy_private_inputs_present(repository: Path) -> bool:
+    """Metadata only: never follow a legacy cache link or open private inputs.
+
+    Portfolio can copy its legacy JSON on import. Reports have a separate legacy
+    directory; reject it too rather than relying on a later import-time override.
+    """
+    cache = repository / "backend" / ".cache"
+    try:
+        mode = cache.lstat().st_mode
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISDIR(mode):
+        return True  # Includes dangling/live symlinks; do not traverse them.
+    for name in ("portfolio.json", "myreports"):
+        try:
+            (cache / name).lstat()
+        except FileNotFoundError:
+            continue
+        return True  # Any existing entry, including a dangling symlink.
+    return False
+
+
+def verify_isolated_env(root: Path, env: dict[str, str], repository: Path = ROOT):
+    """Fail closed before DB writes; disclose no paths, credentials or child logs.
+
+    Call with isolated_env's fresh allowlist, not a copy of os.environ. This is
+    path preflight, not filesystem/network confinement or lifecycle acceptance.
+    """
+    try:
+        if legacy_private_inputs_present(repository):
+            return {"status": "blocked", "reason": "LEGACY_PRIVATE_INPUT_PRESENT"}
+        completed = subprocess.run(
+            [sys.executable, "-c", _ISOLATION_PROBE, str(repository / "backend"), str(root)],
+            cwd=repository, env=env, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10, check=True)
+        return json.loads(completed.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {"status": "blocked", "reason": "ISOLATION_PATH_CHECK_FAILED"}
 
 
 def run_owned(command, *, cwd, env, timeout):
@@ -164,6 +250,10 @@ def acceptance(root=ROOT, timeout=120, node=None):
         return report
     with tempfile.TemporaryDirectory(prefix="vibe-offline-") as directory:
         env = isolated_env(Path(directory) / "diagnostics", node)
+        report["storage_isolation"] = verify_isolated_env(Path(directory) / "diagnostics", env, root)
+        if report["storage_isolation"]["status"] != "pass":
+            report["status"] = "blocked"
+            return report
         probe = run_owned(namespace_command([sys.executable, "-c", "pass"], True),
                           cwd=root, env=env, timeout=min(timeout, 10))
         if probe["status"] != "pass":
@@ -193,6 +283,10 @@ def acceptance(root=ROOT, timeout=120, node=None):
                     continue
                 command = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *targets]
             env = isolated_env(Path(directory) / name, node)
+            checked = verify_isolated_env(Path(directory) / name, env, root)
+            if checked["status"] != "pass":
+                report["gates"][name] = checked
+                continue
             report["gates"][name] = run_owned(namespace_command(command, name == "saved_research_journey"),
                                               cwd=cwd, env=env, timeout=timeout)
     after = identity(root)
@@ -213,6 +307,8 @@ def main():
         diagnostics(Path(sys.argv[2]), sys.argv[3], json.loads(sys.argv[4]))
     else:
         parser = argparse.ArgumentParser(description=__doc__)
+        parser.add_argument("--check-isolation", action="store_true",
+                            help="check a fresh allowlisted environment; no app, DB or network startup")
         parser.add_argument("--timeout", type=float, default=120, help="hard deadline per gate, seconds")
         parser.add_argument("--node", type=Path, help="explicit absolute Node executable for saved journey")
         args = parser.parse_args()
@@ -220,7 +316,12 @@ def main():
             parser.error("timeout must be positive and finite")
         if args.node is not None and (not args.node.is_absolute() or not args.node.is_file() or not os.access(args.node, os.X_OK)):
             parser.error("node must be an absolute executable path")
-        report = acceptance(timeout=args.timeout, node=args.node)
+        if args.check_isolation:
+            with tempfile.TemporaryDirectory(prefix="vibe-path-check-") as directory:
+                root = Path(directory)
+                report = verify_isolated_env(root, isolated_env(root, args.node))
+        else:
+            report = acceptance(timeout=args.timeout, node=args.node)
         print(json.dumps(report, sort_keys=True))
         return 0 if report["status"] == "pass" else 1 if report["status"] == "fail" else 2
     return 0

@@ -82,6 +82,7 @@ test("result grouping preserves matched/rejected/unavailable buckets", () => {
       limitations: ["Research Runtime 数据不是 Canonical Fact Authority。"],
     },
     limitations: [],
+    // Legacy responses remain readable; no schema-string gating in the view.
     schema_version: "screener-v0.1",
   };
   const groups = groupResults(result);

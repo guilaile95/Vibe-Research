@@ -26,9 +26,9 @@ def test_all_missing_code_is_not_available_source_or_dataset_coverage(tmp_path, 
     assert result['status'] == result['research_data']['status'] == 'unavailable'
     assert result['research_data']['coverage']['code_count'] == 2  # explicitly whole artifact
     assert result['batch_coverage'] == dict(requested_count=1, with_data_count=0, empty_count=1,
-        failed_count=0, fully_evaluable_count=0, missing_condition_count=0, unavailable_count=1)
+        failed_count=0, stale_count=0, fully_evaluable_count=0, missing_condition_count=0, unavailable_count=1)
     observed = result['unavailable'][0]['data_coverage']
-    assert observed == dict(status='empty', returned_rows=0, start=None, end=None,
+    assert observed == dict(freshness='unknown', status='empty', returned_rows=0, start=None, end=None,
         snapshot_id=manifest['snapshot_id'], artifact_sha256=manifest['artifact_sha256'], cutoff=manifest['coverage_end'])
     assert result['unavailable'][0]['matched'] is None
 
@@ -96,3 +96,46 @@ def test_global_cutoff_is_not_reported_as_stock_last_date(tmp_path, monkeypatch)
     assert observed['end'] == '2026-01-30'
     assert observed['cutoff'] == result['research_data']['as_of'] == '2026-05-30'
     assert observed['returned_rows'] == 30
+
+
+def test_stale_tail_matches_full_market_and_never_current_match(tmp_path, monkeypatch):
+    root, _ = seed(tmp_path, monkeypatch)
+    source = tmp_path/'synthetic.csv'
+    rows = list(csv.reader(source.open()))
+    source.write_text('\n'.join(','.join(r) for r in rows if r[0] != '000003' or r[1] <= '2026-03-21')+'\n')
+    manifest = rdp.import_csv(source, root=root)
+    result = api(body(['000001', '000003']))
+    stale = result['unavailable'][0]
+    assert stale['code'] == '000003' and stale['matched'] is None
+    assert stale['technical_status'] == stale['data_coverage']['freshness'] == 'stale'
+    condition = stale['condition_results'][0]
+    assert condition['evaluable'] is False and condition['passed'] is None
+    assert condition['evidence']['reason'] == 'STALE'
+    assert condition['evidence']['last_known']['passed'] is True
+    assert result['batch_coverage']['stale_count'] == 1
+    assert result['batch_coverage']['fully_evaluable_count'] == 1
+    assert result['status'] == 'partial'
+    assert result['rejected'][0]['data_coverage']['freshness'] == 'current'
+    full = rdp.query_full_market(latest=True)
+    assert next(r for r in full['rows'] if r['code'] == '000003')['status'] == 'stale'
+    # Explicit pinned historical cutoff remains current, regardless of wall clock.
+    old = svc.evaluate_one_stock('000003', body().conditions, snapshot_id=manifest['snapshot_id'], cutoff='2026-03-21')
+    assert old['bucket'] == 'matched'
+    assert old['research_data']['_screener_sample']['freshness'] == 'current'
+
+
+def test_stale_insufficient_history_keeps_stale_count(tmp_path, monkeypatch):
+    root, _ = seed(tmp_path, monkeypatch)
+    source = tmp_path/'synthetic.csv'
+    rows = list(csv.reader(source.open()))
+    source.write_text('\n'.join(','.join(r) for r in rows if r[0] != '000003' or r[1] <= '2026-01-05')+'\n')
+    rdp.import_csv(source, root=root)
+    result = api(body(['000003']))
+    assert result['unavailable'][0]['technical_status'] == 'stale'
+    assert result['batch_coverage']['stale_count'] == 1
+    assert result['batch_coverage']['fully_evaluable_count'] == 0
+    assert result['status'] == 'unavailable'
+
+
+def test_stale_classifier_never_promotes_last_known_pass():
+    assert svc.classify_stock([{'evaluable': True, 'passed': True}], 'stale') == 'unavailable'

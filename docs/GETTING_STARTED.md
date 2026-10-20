@@ -132,30 +132,64 @@ Windows 启动器和 Linux 安装包启动器默认使用 Runtime `8911`。覆�
 历史 `IWENCAI_API_KEY` / `IWENCAI_BASE_URL` / `VR_DATA_PROXY` 没有当前后端生产读取入口。
 采用范围及待接通事项见 [选择性吸收证据索引](VIBE_ASTOCK_ADOPTION_PLAN.md)。
 
-## 隔离启动准备：暂停 Native Intel 自动抓取
+## 隔离启动准备：独立存储与暂停自动抓取
 
-准备运行验收时，先为本次试运行选择新的 `VR_DATA_DIR` 和 `VR_REPORTS_DIR`，
-并确认已有数据库路径覆盖变量没有指向真实用户数据。启动后端前，同时设置：
+**只更换 `VR_DATA_DIR` / `VR_REPORTS_DIR` 不能隔离全部存储。** 复盘、短线历史及部分驾驶舱数据共用
+`VIBE_RESEARCH_REVIEW_DB`：未显式设置时，Linux 使用 `$XDG_DATA_HOME/vibe-research/daily_reviews.sqlite3`
+（未设置 XDG 时为 `~/.local/share/vibe-research/daily_reviews.sqlite3`），Windows 使用
+`%LOCALAPPDATA%\VibeResearch\daily_reviews.sqlite3`（未设置时回退到用户目录的 `AppData/Local`）。
+此默认位置不随 `VR_DATA_DIR` 改变。本步骤不修改默认路径、不迁移已有安装或复制真实历史数据。
+
+从仓库根目录，用已安装项目依赖的 Python 先做不打开数据库、不导入应用、不联网的路径预检：
 
 ```bash
-export VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH=1
-export VIBE_NATIVE_INTEL_DISABLE_SCHEDULER=1
+# Linux
+backend/.venv/bin/python tools/acceptance/offline_acceptance.py --check-isolation
 ```
-
-PowerShell 7 对应设置为：
 
 ```powershell
-$env:VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH = "1"
-$env:VIBE_NATIVE_INTEL_DISABLE_SCHEDULER = "1"
+# Windows / PowerShell 7：同一纯路径预检，不运行 Linux namespace 验收
+backend\.venv\Scripts\python.exe tools/acceptance/offline_acceptance.py --check-isolation
 ```
 
-两个开关分别阻止 Native Intel 启动抓取和定时抓取；只设置其中一个不等于暂停全部自动抓取。
-它们不是全局断网开关：打开行情页面、手动刷新、公开来源采集或模型操作仍可能发起网络请求。
-严格离线验收应继续使用已有受控测试夹具，而不是把普通启动当作零外联证明。
+该命令创建并清理一套临时环境，只返回脱敏的路径检查状态。`pass` 仅证明这套临时环境的路径解析，
+不会修改当前终端，也不能替之后另开的普通启动终端背书。完整离线验收入口仍为
+`tools/acceptance/offline_acceptance.py`（不带 `--check-isolation`）；没有 Linux user/network/PID namespaces 时必须停止，不静默降级。
 
-普通后端启动也不是只读操作：本地服务可能初始化或恢复数据存储，持仓后台线程每 1,800 秒
-写入本地刷新时间戳。上述开关不禁用该线程。避免让不同版本同时使用同一数据目录，
-也不要把隔离启动、健康检查或合成验收记为真实用户使用记录。
+定制验收复用 `tools/acceptance/offline_acceptance.py` 的 `isolated_env(root)`，不要复制 `os.environ`。
+每个实例必须使用不同的全新临时根目录；该函数不继承原有凭据、代理、Python hooks 或数据库覆盖变量，并设置：
+
+- `HOME` / `USERPROFILE`、XDG config/cache/data/state、`APPDATA` / `LOCALAPPDATA` 和临时目录；
+- 独立的 `VR_DATA_DIR`、`VR_REPORTS_DIR`、**`VIBE_RESEARCH_REVIEW_DB`**；
+- 独立的 `VR_FACT_LAKE_ROOT`、`VIBE_RESEARCH_RESEARCH_DATA_DIR`；
+- `VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH=1` 与 `VIBE_NATIVE_INTEL_DISABLE_SCHEDULER=1`。
+
+在同一环境启动任何可能写数据的子进程前，调用 `verify_isolated_env(root, env, repository)` 并要求
+`status == "pass"`。它检查必需路径均在本实例根目录内，并调用生产代码的无副作用复盘DB与研究数据根解析器；
+缺少显式复盘DB路径、路径越界或自动抓取开关未关闭时失败关闭。现有离线验收入口已在每个 gate 前执行此检查。
+可复用方式（仍须为实际测试命令使用已有 namespace 包装，不要直接启动真实服务）：
+
+```python
+with tempfile.TemporaryDirectory(prefix="vibe-test-") as directory:
+    root = Path(directory)
+    env = isolated_env(root)
+    checked = verify_isolated_env(root, env, repository=repository)
+    if checked["status"] != "pass":
+        raise RuntimeError("storage isolation not verified")
+    result = run_owned(namespace_command(command), cwd=repository, env=env, timeout=120)
+```
+
+路径预检不是文件系统沙箱，也不检查任意第三方测试代码。它还只检查文件元数据：若存在旧版
+`backend/.cache/portfolio.json`、`backend/.cache/myreports`，或 `.cache` 本身是符号链接，则在运行 gate 前停止，
+不读取私有内容、不自动删除、复制或迁移。出现 `LEGACY_PRIVATE_INPUT_PRESENT` 时，优先选择不含这些数据的干净源码工作区；
+若要继续使用原工作区，由用户自行确认备份与移出旧数据，工具不会自动清理。不要把真实持仓、账户、研报或 SQLite 文件作为测试输入。
+需要复制数据库时须采用一致性备份，不能有 WAL 时只复制主文件。
+
+两个 Native Intel 开关分别阻止启动抓取和定时抓取；只设一个不等于暂停全部自动抓取。
+它们不是全局断网开关：行情页面、手动刷新、公开来源采集或模型操作仍可能外联。
+普通后端启动也不是只读操作：本地服务可能初始化或恢复存储，持仓后台线程每 1,800 秒写入刷新时间戳，
+上述开关不禁用该线程。严格离线测试须另用网络隔离；带真实生命周期的测试也须替换外部服务边界。
+禁止让不同版本同时使用同一数据目录，不把路径检查、健康检查或合成验收记为真实用户使用记录。
 
 ## 手动归档一份公开 A 股报价
 

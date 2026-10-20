@@ -13,9 +13,9 @@ from datetime import date, datetime, time, timezone
 # 常量
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = "technical-indicators-v0.2"
+SCHEMA_VERSION = "technical-indicators-v0.3"
 MAX_SERIES_POINTS = 60
-KDJ_LIMITATION = "KDJ(9,3,3) 因高低价历史不足或无效而不可用"
+KDJ_LIMITATION = "KDJ(9,3,3) 因连续收盘/高低价历史不足或无效而不可用"
 
 
 # ---------------------------------------------------------------------------
@@ -53,17 +53,15 @@ def _parse_klines(raw: list[dict]) -> list[dict]:
             continue
 
         close = _clean_float(row.get("close"))
-        if close is None:
-            continue
-
+        # Keep dated gaps: observation windows must never borrow older rows.
         high = _clean_float(row.get("high"))
         low = _clean_float(row.get("low"))
         # A finite provider value is not necessarily a valid price bound. Keep
         # usable closes, but make contradictory/missing range evidence unknown
         # for both KDJ and the 20-session breakout window.
-        if high is not None and (high <= 0 or high < close):
+        if high is not None and (high <= 0 or (close is not None and high < close)):
             high = None
-        if low is not None and (low <= 0 or low > close):
+        if low is not None and (low <= 0 or (close is not None and low > close)):
             low = None
         volume = _clean_float(row.get("volume"))
         if volume is None:
@@ -142,7 +140,7 @@ def _kdj(
     J(i) = 3K - 2D
 
     - 首个可计算点之前 prev K/D = 50
-    - 无效窗口输出 None，且不更新 prev K/D
+    - 无效窗口输出 None 并重置 prev K/D = 50；恢复需完整 n 日窗口
     - HHV == LLV 时 RSV = 50
     - 无未来函数：第 i 日仅使用 0..i
     """
@@ -158,25 +156,36 @@ def _kdj(
 
     for i in range(length):
         if i < n - 1:
+            prev_k = prev_d = 50.0
             continue
 
         window_highs = highs[i - n + 1 : i + 1]
         window_lows = lows[i - n + 1 : i + 1]
         close = closes[i]
 
+        # Reset recursion whenever any required observation is missing.
+        if any(v is None for v in closes[i - n + 1 : i + 1]):
+            prev_k = prev_d = 50.0
+            continue
+
         # Window validity: all high/low finite, each high >= low, close finite, LLV <= close <= HHV
         if not _is_finite(close):
+            prev_k = prev_d = 50.0
             continue
         if any(not _is_finite(h) or not _is_finite(l) for h, l in zip(window_highs, window_lows)):
+            prev_k = prev_d = 50.0
             continue
         if any(h < l for h, l in zip(window_highs, window_lows)):  # type: ignore[operator]
+            prev_k = prev_d = 50.0
             continue
 
         hhv = max(window_highs)  # type: ignore[type-var]
         llv = min(window_lows)  # type: ignore[type-var]
         if not _is_finite(hhv) or not _is_finite(llv):
+            prev_k = prev_d = 50.0
             continue
         if close < llv or close > hhv:
+            prev_k = prev_d = 50.0
             continue
 
         if hhv == llv:
@@ -190,6 +199,7 @@ def _kdj(
 
         # Finite wash before emit / state update
         if not (math.isfinite(k_val) and math.isfinite(d_val) and math.isfinite(j_val)):
+            prev_k = prev_d = 50.0
             continue
 
         k_out[i] = k_val
@@ -202,22 +212,27 @@ def _kdj(
 
 
 def _ema(values: list[float | None], n: int) -> list[float | None]:
-    """指数移动平均。k = 2/(N+1)。
+    """EMA with first-value seed, preserving complete-input legacy results.
 
-    第一个有效值作为初始 EMA；后续递推。中间有 None 则跳过该日（保持前值）。
+    A missing observation emits None and resets state. After a gap, require n
+    consecutive values before emitting the freshly seeded recurrence. No fill.
+    MACD DEA consequently warms up for 9 valid DIFs after EMA26 recovers.
     """
     result: list[float | None] = []
     k = 2.0 / (n + 1)
     prev: float | None = None
+    recovering = False
+    count = 0
     for v in values:
         if v is None:
-            result.append(prev)
+            result.append(None)
+            prev = None
+            count = 0
+            recovering = True
             continue
-        if prev is None:
-            prev = v
-        else:
-            prev = v * k + prev * (1 - k)
-        result.append(prev)
+        count += 1
+        prev = v if prev is None else v * k + prev * (1 - k)
+        result.append(prev if not recovering or count >= n else None)
     return result
 
 
@@ -246,58 +261,33 @@ def _macd(closes: list[float | None]) -> tuple[list[float | None], list[float | 
 
 
 def _rsi(closes: list[float | None], n: int = 14) -> list[float | None]:
-    """RSI（Wilder 平滑）。需要 n+1 个收盘价（n 个变化）。"""
+    """Wilder RSI: seed/restart with n changes from n+1 contiguous closes."""
     result: list[float | None] = [None] * len(closes)
-    if len(closes) < n + 1:
-        return result
-
-    # 计算价格变化
-    changes: list[float | None] = [None]  # 第一个无变化
-    for i in range(1, len(closes)):
-        if closes[i] is not None and closes[i - 1] is not None:
-            changes.append(closes[i] - closes[i - 1])
-        else:
-            changes.append(None)
-
-    # 初始 avg_gain / avg_loss：前 n 个有效变化的均值
-    first_valid = []
-    for c in changes[1:]:
-        if c is not None:
-            first_valid.append(c)
-        if len(first_valid) == n:
-            break
-
-    if len(first_valid) < n:
-        return result
-
-    gains = [c if c > 0 else 0.0 for c in first_valid]
-    losses = [-c if c < 0 else 0.0 for c in first_valid]
-    avg_gain = sum(gains) / n
-    avg_loss = sum(losses) / n
-
-    # RSI 在第 n 个变化处（索引 n）产出第一个值
-    if avg_loss == 0:
-        result[n] = 50.0 if avg_gain == 0 else 100.0
-    else:
-        rs = avg_gain / avg_loss
-        result[n] = 100.0 - 100.0 / (1.0 + rs)
-
-    # 后续递推
-    for i in range(n + 1, len(closes)):
-        c = changes[i]
-        if c is None:
-            result[i] = result[i - 1]
+    previous = None
+    changes: list[float] = []
+    avg_gain = avg_loss = None
+    for i, close in enumerate(closes):
+        if close is None:
+            previous = None
+            changes = []
+            avg_gain = avg_loss = None
             continue
-        gain = c if c > 0 else 0.0
-        loss = -c if c < 0 else 0.0
-        avg_gain = (avg_gain * (n - 1) + gain) / n
-        avg_loss = (avg_loss * (n - 1) + loss) / n
-        if avg_loss == 0:
-            result[i] = 50.0 if avg_gain == 0 else 100.0
+        if previous is None:
+            previous = close
+            continue
+        change = close - previous
+        previous = close
+        gain, loss = max(change, 0.0), max(-change, 0.0)
+        if avg_gain is None:
+            changes.append(change)
+            if len(changes) < n:
+                continue
+            avg_gain = sum(max(c, 0.0) for c in changes) / n
+            avg_loss = sum(max(-c, 0.0) for c in changes) / n
         else:
-            rs = avg_gain / avg_loss
-            result[i] = 100.0 - 100.0 / (1.0 + rs)
-
+            avg_gain = (avg_gain * (n - 1) + gain) / n
+            avg_loss = (avg_loss * (n - 1) + loss) / n
+        result[i] = (50.0 if avg_gain == 0 else 100.0) if avg_loss == 0 else 100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
     return result
 
 
@@ -544,7 +534,7 @@ def _compute_indicators_inner(
     # status 判定
     limitations: list[str] = []
     has_sma60 = sma60[idx] is not None
-    has_macd = macd_dif[idx] is not None
+    has_macd = macd_histogram[idx] is not None
     has_rsi = rsi14[idx] is not None
     has_bollinger = bollinger_middle[idx] is not None
     has_kdj = (
@@ -559,7 +549,10 @@ def _compute_indicators_inner(
     historical_lows = [klines[j].get("low") for j in range(max(0, idx - 20), idx) if klines[j].get("low") is not None]
     trigger_window_complete = idx >= 20 and len(historical_highs) == 20 and len(historical_lows) == 20
 
-    if len(klines) >= 60 and all([
+    if closes[idx] is None:
+        status = "unavailable"
+        limitations.append("最新交易日收盘价缺失或非有限值；不回退到较早交易日")
+    elif len(klines) >= 60 and all([
         has_sma60,
         has_macd,
         has_rsi,
@@ -573,9 +566,13 @@ def _compute_indicators_inner(
     elif len(klines) >= 20:
         status = "partial"
         if not has_sma60:
-            limitations.append(f"历史长度 {len(klines)} 不足 60 个交易日，SMA60 不可用")
+            limitations.append("连续有效收盘价不足 60 个交易日，SMA60 不可用")
         if not has_rsi:
-            limitations.append("历史长度不足 15 个交易日，RSI14 不可用")
+            limitations.append("连续有效收盘价不足 15 个交易日，RSI14 不可用")
+        if not has_macd:
+            limitations.append("EMA/MACD 缺失后重新暖机，尚不可用")
+        if not has_bollinger:
+            limitations.append("连续有效收盘价不足 20 个交易日，SMA20/布林带不可用")
         if not has_volume_ratio:
             limitations.append("成交量历史不足，5/20 日均量比不可用")
         if not trigger_window_complete:

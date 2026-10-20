@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { request } from "@/lib/api";
-import { experimentEndpoint, ExperimentGeneration, type ExperimentRecord, type ExperimentComparison } from "@/lib/experimentLedger";
+import { experimentEndpoint, experimentReason, ExperimentGeneration, type ExperimentRecord, type ExperimentComparison } from "@/lib/experimentLedger";
 
 export function ExperimentLedger({ kind, input }: { kind: string; input: string }) {
   const [records, setRecords] = useState<ExperimentRecord[]>([]);
@@ -66,9 +66,9 @@ export function ExperimentLedger({ kind, input }: { kind: string; input: string 
     {!records.length && !error && <p className="text-sm">尚无已记录实验；旧页面结果不冒充已有持久化记录</p>}
     {comparison && <div data-testid="experiment-comparison" className="space-y-3">
       <p>同一输入身份：{comparison.same_input ? "是" : "否或缺失"} · 变化：{comparison.changes.join("、") || "无"}</p>
-      {!!comparison.reasons.length && <p>不可比原因：{comparison.reasons.join("、")}</p>}
+      {!!comparison.reasons.length && <p>不可比原因：{comparison.reasons.map(experimentReason).join("、")}</p>}
       <div className="grid gap-3 md:grid-cols-2">{[comparison.left, comparison.right].map((item, index) => <dl key={index} className="min-w-0 rounded border p-3 text-xs">{Object.entries(item).filter(([key]) => key !== "metrics").map(([key, value]) => <div key={key} className="break-all"><dt className="text-muted-foreground">{key}</dt><dd>{value == null ? "缺失 / 不适用" : typeof value === "object" ? JSON.stringify(value) : String(value)}</dd></div>)}</dl>)}</div>
-      <div className="overflow-auto"><table className="w-full text-left text-xs"><thead><tr>{["指标", "左（单位）", "右（单位）", "可比状态", "右减左"].map(x => <th key={x}>{x}</th>)}</tr></thead><tbody>{comparison.metrics.map(metric => <tr key={metric.name}><td>{metric.name}</td><td>{metric.left ?? "未定义"} ({metric.left_unit})</td><td>{metric.right ?? "未定义"} ({metric.right_unit})</td><td>{metric.status}</td><td>{metric.delta ?? "不计算"}</td></tr>)}</tbody></table></div>
+      <div className="overflow-auto"><table className="w-full text-left text-xs"><thead><tr>{["指标", "左（单位）", "右（单位）", "可比状态", "右减左"].map(x => <th key={x}>{x}</th>)}</tr></thead><tbody>{comparison.metrics.map(metric => <tr key={metric.name}><td>{metric.dimension ? `${metric.dimension.currency} · ${metric.dimension.method} · ${metric.dimension.name}` : metric.name}</td><td>{metric.left ?? "未定义"} ({metric.left_unit})</td><td>{metric.right ?? "未定义"} ({metric.right_unit})</td><td>{metric.status}</td><td>{metric.delta ?? "不计算"}</td></tr>)}</tbody></table></div>
     </div>}
   </section>;
 }

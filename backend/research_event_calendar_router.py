@@ -89,6 +89,17 @@ def event_review_context(campaign_id: str):
     return _review_call(lambda: review.context(campaign_id))
 
 
+@router.get("/research-events/reviews/history")
+def event_review_history(
+    security_code: str | None = Query(None),
+    campaign_id: str | None = Query(None, max_length=150),
+    cursor: str | None = Query(None, max_length=1000),
+    limit: int = Query(50, ge=1, le=100),
+):
+    return _review_call(lambda: review.history(security_code=security_code, campaign_id=campaign_id,
+                                             cursor=cursor, limit=limit))
+
+
 @router.get("/research-events/reviews/{campaign_id}")
 def event_reviews(campaign_id: str):
     return _review_call(lambda: review.list_reviews(campaign_id))

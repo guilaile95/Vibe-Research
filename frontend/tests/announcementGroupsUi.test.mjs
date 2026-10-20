@@ -7,7 +7,7 @@ import { request as apiRequest } from '../src/lib/api.ts';
 import { filingSourceUrl } from '../src/lib/filingEvidence.ts';
 const evidence = { id:'anchor', edit_token:'anchor-token', evidence_type:'announcement',source_title:'Same headline',claim:'<script>untrusted</script>',source_url:'javascript:alert(1)' };
 const report = {...evidence,id:'report',edit_token:'report-token',evidence_type:'news'};
-const context = {groups:[],history:[],candidates:[evidence,report],has_more:false,ownership_change:{status:'NOT_IMPLEMENTED_PREREQUISITE_MISSING'}};
+const context = {groups:[],history:[],candidates:[evidence,report],current_members:[evidence],member_conflicts:[],has_more:false,ownership_change:{status:'NOT_IMPLEMENTED_PREREQUISITE_MISSING'}};
 const nodes = t => t==null||typeof t!=='object'?[]:Array.isArray(t)?t.flatMap(nodes):[t,...nodes(t.props?.children)];
 const text = t => t==null||typeof t==='boolean'?'':typeof t!=='object'?String(t):Array.isArray(t)?t.map(text).join(''):text(t.props?.children);
 const button = (t,label) => nodes(t).find(n=>n.type==='button'&&text(n).includes(label));
@@ -47,4 +47,31 @@ test('conflict is visible and never retried automatically',async()=>{
 });
 test('late context after unmount is ignored',async()=>{
   let finish;const h=harness(()=>new Promise(r=>{finish=r;}));h.render();h.unmount();finish(response(context));await tick();assert.equal(button(h.render(),'保存用户关联'),undefined);
+});
+
+for (const grouped of [false, true]) test(`old ${grouped ? 'group members' : 'ungrouped anchor'} outside 200 candidates use current tokens`, async () => {
+  const fresh = {...evidence, edit_token:'current-anchor-token'};
+  const freshReport = {...report, edit_token:'current-report-token'};
+  const candidates = Array.from({length:200}, (_,i)=>({...report,id:`new-${i}`,edit_token:`token-${i}`}));
+  const group = {group_id:'g',anchor_id:'anchor',period:'FY2025',revision:1,members:[
+    {evidence_id:'anchor',role:'original',relates_to:null,evidence_snapshot:evidence},
+    {evidence_id:'report',role:'commentary',relates_to:null,evidence_snapshot:report}]};
+  const ctx = {...context,candidates,current_members:grouped?[fresh,freshReport]:[fresh],groups:grouped?[group]:[],has_more:true};
+  const h=harness(async()=>response(ctx));h.render();await tick();
+  if(!grouped)fill(h,'报告期','FY2025');
+  fill(h,'同一个股','new-0');field(h.render(),'我声明').props.onChange({target:{checked:true}});
+  button(h.render(),'保存用户关联').props.onClick();await tick();
+  const writes=h.calls.filter(c=>c[1].method==='POST');assert.equal(writes.length,1);
+  const body=JSON.parse(writes[0][1].body);
+  assert.equal(body.members[0].expected_edit_token,'current-anchor-token');
+  if(grouped)assert.equal(body.members[1].expected_edit_token,'current-report-token');
+  assert.equal(body.members.at(-1).evidence_id,'new-0');
+});
+test('missing existing member is displayed and cannot be silently removed', async()=>{
+  const h=harness(async()=>response({...context,member_conflicts:[{evidence_id:'missing',reason:'证据不存在或已删除'}]}));
+  h.render();await tick();fill(h,'报告期','FY2025');fill(h,'同一个股','report');field(h.render(),'我声明').props.onChange({target:{checked:true}});
+  assert.equal(button(h.render(),'保存用户关联').props.disabled,true);
+  assert.match(text(h.render()),/不会自动删除成员/);
+  button(h.render(),'保存用户关联').props.onClick();await tick();
+  assert.equal(h.calls.filter(c=>c[1].method==='POST').length,0);
 });

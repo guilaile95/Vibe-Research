@@ -19,7 +19,7 @@ def setup(tmp_path, monkeypatch):
     thesis = svc.create_thesis(path, _make_thesis_payload())
     evidence = svc.create_evidence(path, _make_evidence_payload())
     tid = thesis['thesis']['id']
-    monkeypatch.setattr(review.campaign_service, 'get_campaign', lambda _: {'security_code': '600519'})
+    monkeypatch.setattr(review.campaign_service, 'get_campaign', lambda _: {'security_code': '600519', 'status': 'ACTIVE'})
     monkeypatch.setattr(review.campaign_service, 'get_campaign_thesis_binding', lambda _: {'thesis_id': tid})
     monkeypatch.setenv('VIBE_RESEARCH_EVIDENCE_THESIS_DB', str(path))
     event = dict(event_id='event-1', event_type='PERIODIC_REPORT', security_code='600519',
@@ -162,3 +162,55 @@ def test_calendar_receipt_issued_without_ledger_write(setup, monkeypatch):
     assert observed['observation_hash'] == review.fingerprint(event)
     assert not store.read_transaction(path, lambda c: store._table_exists(c, 'event_research_reviews'))
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('status', ['CLOSED', 'REJECTED', 'EXPIRED'])
+def test_terminal_campaign_history_survives_without_active_universe(setup, monkeypatch, status):
+    path, _, _, _, payload, judgment = setup
+    saved = review.bind(payload, path)
+    final = review.judge(saved['id'], judgment, path)
+    monkeypatch.setattr(review.campaign_service, 'get_campaign', lambda _: {'security_code': '600519', 'status': status})
+    monkeypatch.setattr(review.calendar, 'build_research_event_calendar', lambda **_: pytest.fail('history must not scan'))
+    before = path.read_bytes()
+    assert review.history(security_code='600519', db_path=path)['items'] == [final]
+    assert review.history(security_code='000001', db_path=path)['items'] == []
+    assert path.read_bytes() == before
+    with pytest.raises(review.ReviewConflict):
+        review.bind(payload, path)
+    assert review.campaign_service.get_campaign('campaign-a')['status'] == status
+
+
+def test_history_pagination_scope_and_insert_stability(setup, monkeypatch):
+    path, _, _, _, payload, _ = setup
+    ids = [review.bind({**payload, 'campaign_id': f'campaign-{i}'}, path)['id'] for i in range(5)]
+    first = review.history(security_code='600519', limit=2, db_path=path)
+    assert [r['id'] for r in first['items']] == ids[-1:-3:-1]
+    review.bind({**payload, 'campaign_id': 'new-campaign'}, path)
+    rest, cursor = [], first['next_cursor']
+    while cursor:
+        page = review.history(security_code='600519', limit=2, cursor=cursor, db_path=path)
+        rest.extend(r['id'] for r in page['items']); cursor = page['next_cursor']
+    assert rest == ids[-3::-1]
+    assert len(review.history(campaign_id='campaign-0', db_path=path)['items']) == 1
+    with pytest.raises(ValueError):
+        review.history(security_code='000001', cursor=first['next_cursor'], db_path=path)
+    monkeypatch.setattr(review.campaign_service, 'get_campaign', lambda _: pytest.fail('archive must not require live Campaign'))
+    app = FastAPI(); app.include_router(router.router)
+    response = TestClient(app).get('/api/research-events/reviews/history?security_code=600519&limit=2')
+    assert response.status_code == 200 and len(response.json()['data']['items']) == 2
+
+
+def test_history_missing_database_is_readonly(tmp_path):
+    path = tmp_path / 'missing.db'
+    assert review.history(db_path=path) == {'items': [], 'next_cursor': None}
+    assert not path.exists()
+
+
+def test_pending_terminal_review_can_use_existing_judgment_rules(setup, monkeypatch):
+    path, _, _, _, payload, judgment = setup
+    pending = review.bind(payload, path)
+    monkeypatch.setattr(review.campaign_service, 'get_campaign', lambda _: {'security_code': '600519', 'status': 'CLOSED'})
+    assert review.history(db_path=path)['items'] == [pending]
+    assert review.context('campaign-a', path)['reviews'] == [pending]
+    assert review.judge(pending['id'], judgment, path)['status'] == 'support'
+    assert review.campaign_service.get_campaign('campaign-a')['status'] == 'CLOSED'

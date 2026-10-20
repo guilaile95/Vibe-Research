@@ -18,14 +18,136 @@ class OfflineAcceptanceTests(unittest.TestCase):
     def test_environment_is_allowlisted_and_private(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
                 "SECRET_TOKEN": "CANARY", "HTTPS_PROXY": "CANARY", "PYTHONPATH": "CANARY",
-                "VR_DATA_DIR": "CANARY", "HOME": "CANARY"}):
+                "VR_DATA_DIR": "CANARY", "HOME": "CANARY",
+                "VIBE_RESEARCH_REVIEW_DB": "CANARY", "VR_FACT_LAKE_ROOT": "CANARY",
+                "VIBE_RESEARCH_RESEARCH_DATA_DIR": "CANARY",
+                "VIBE_NATIVE_INTEL_DB": "CANARY", "http_proxy": "CANARY"}):
             env = runner.isolated_env(Path(directory))
             self.assertNotIn("CANARY", json.dumps(env))
-            for name in ("SECRET_TOKEN", "HTTPS_PROXY", "PYTHONPATH"):
+            for name in ("SECRET_TOKEN", "HTTPS_PROXY", "http_proxy", "PYTHONPATH", "VIBE_NATIVE_INTEL_DB"):
                 self.assertNotIn(name, env)
-            for name in ("HOME", "TMPDIR", "VR_DATA_DIR", "VR_REPORTS_DIR"):
+            for name in ("HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TMPDIR",
+                         "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
+                         "VR_DATA_DIR", "VR_REPORTS_DIR", "VR_FACT_LAKE_ROOT",
+                         "VIBE_RESEARCH_RESEARCH_DATA_DIR"):
                 self.assertTrue(Path(env[name]).is_relative_to(directory))
                 self.assertEqual(Path(env[name]).stat().st_mode & 0o777, 0o700)
+
+    def test_two_instances_have_distinct_storage_and_pure_resolver_preflight(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first, second = Path(directory) / "first", Path(directory) / "second"
+            environments = [runner.isolated_env(path) for path in (first, second)]
+            for name in ("HOME", "XDG_DATA_HOME", "LOCALAPPDATA", "VR_DATA_DIR", "VR_REPORTS_DIR",
+                         "VIBE_RESEARCH_REVIEW_DB", "VR_FACT_LAKE_ROOT", "VIBE_RESEARCH_RESEARCH_DATA_DIR"):
+                self.assertNotEqual(environments[0][name], environments[1][name])
+            for root, env in zip((first, second), environments):
+                before = set(root.rglob("*"))
+                result = runner.verify_isolated_env(root, env)
+                self.assertEqual(result["status"], "pass")
+                self.assertEqual(set(root.rglob("*")), before)
+                self.assertFalse(any(path.is_file() for path in root.rglob("*")))
+                self.assertNotIn(directory, json.dumps(result))
+
+    def test_legacy_private_inputs_block_preflight_without_read_or_subprocess(self):
+        for name in ("portfolio.json", "myreports"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                repository = root / "checkout"
+                cache = repository / "backend" / ".cache"
+                cache.mkdir(parents=True)
+                canary = cache / name
+                canary.write_text("SYNTHETIC_PRIVATE_CANARY", encoding="utf-8")
+                env = runner.isolated_env(root / "isolated")
+                with patch.object(runner.subprocess, "run") as execute, \
+                        patch.object(Path, "open", side_effect=AssertionError("must not read legacy content")):
+                    result = runner.verify_isolated_env(root / "isolated", env, repository)
+                execute.assert_not_called()
+                self.assertEqual(result, {"status": "blocked", "reason": "LEGACY_PRIVATE_INPUT_PRESENT"})
+                self.assertEqual(canary.read_text(), "SYNTHETIC_PRIVATE_CANARY")
+                self.assertNotIn("CANARY", json.dumps(result))
+                self.assertFalse(any(path.is_file() for path in (root / "isolated").rglob("*")))
+
+    @unittest.skipUnless(os.name == "posix", "symlink construction requires POSIX")
+    def test_legacy_links_block_without_following_their_targets(self):
+        for name in (".cache", ".cache/portfolio.json", ".cache/myreports"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                repository = root / "checkout"
+                link = repository / "backend" / name
+                link.parent.mkdir(parents=True)
+                missing_target = root / "not-created"
+                link.symlink_to(missing_target)
+                env = runner.isolated_env(root / "isolated")
+                with patch.object(runner.subprocess, "run") as execute:
+                    result = runner.verify_isolated_env(root / "isolated", env, repository)
+                execute.assert_not_called()
+                self.assertEqual(result["reason"], "LEGACY_PRIVATE_INPUT_PRESENT")
+                self.assertTrue(link.is_symlink())
+                self.assertFalse(missing_target.exists())
+
+    def test_missing_shared_review_override_is_rejected_before_any_db_open(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = runner.isolated_env(root)
+            del env["VIBE_RESEARCH_REVIEW_DB"]
+            self.assertEqual(runner.verify_isolated_env(root, env)["status"], "blocked")
+            self.assertFalse(any(path.is_file() for path in root.rglob("*")))
+
+    def test_outside_path_and_enabled_scheduler_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "isolated"
+            env = runner.isolated_env(root)
+            for name in ("VIBE_RESEARCH_REVIEW_DB", "VR_FACT_LAKE_ROOT", "VR_REPORTS_DIR",
+                         "VIBE_RESEARCH_RESEARCH_DATA_DIR"):
+                escaped = {**env, name: str(Path(directory) / "outside")}
+                self.assertEqual(runner.verify_isolated_env(root, escaped)["status"], "blocked")
+            for flag in ("VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH", "VIBE_NATIVE_INTEL_DISABLE_SCHEDULER"):
+                self.assertEqual(runner.verify_isolated_env(root, {**env, flag: "0"})["status"], "blocked")
+            self.assertFalse((Path(directory) / "outside").exists())
+
+    @unittest.skipUnless(os.name == "posix", "symlink construction requires POSIX")
+    def test_symlink_directory_rejected_before_creating_external_children(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "isolated"
+            root.mkdir()
+            outside = Path(directory) / "outside"
+            outside.mkdir()
+            (root / "home").symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                runner.isolated_env(root)
+            self.assertEqual(list(outside.iterdir()), [])
+
+    def test_existing_platform_review_defaults_unchanged_and_shared_without_override(self):
+        # Real resolver code, synthetic HOME/XDG/appdata only. Platform branch
+        # simulation is not a claim of a native Windows runtime test.
+        code = r"""
+import os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import review_db_path as paths
+from unittest.mock import patch
+root = Path(os.environ['HOME']).parent
+for platform, expected in (
+    ('linux', Path(os.environ['XDG_DATA_HOME']) / 'vibe-research' / 'daily_reviews.sqlite3'),
+    ('win32', Path(os.environ['LOCALAPPDATA']) / 'VibeResearch' / 'daily_reviews.sqlite3'),
+    ('darwin', Path(os.environ['HOME']) / 'Library' / 'Application Support' / 'VibeResearch' / 'daily_reviews.sqlite3')):
+    with patch.object(paths.sys, 'platform', platform):
+        os.environ['VR_DATA_DIR'] = str(root / 'production')
+        first = paths.resolve_review_db_path()
+        os.environ['VR_DATA_DIR'] = str(root / 'acceptance')
+        second = paths.resolve_review_db_path()
+        assert first == second == expected.resolve()
+        os.environ['VIBE_RESEARCH_REVIEW_DB'] = str(root / 'explicit' / 'review.sqlite3')
+        assert paths.resolve_review_db_path() == (root / 'explicit' / 'review.sqlite3').resolve()
+        del os.environ['VIBE_RESEARCH_REVIEW_DB']
+assert not any(p.is_file() for p in root.rglob('*'))
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            env = runner.isolated_env(Path(directory))
+            del env["VIBE_RESEARCH_REVIEW_DB"]
+            result = subprocess.run([sys.executable, "-c", code, str(runner.ROOT / "backend")],
+                                    env=env, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
 
     def test_unknown_identity_is_not_clean(self):
         with tempfile.TemporaryDirectory() as directory:

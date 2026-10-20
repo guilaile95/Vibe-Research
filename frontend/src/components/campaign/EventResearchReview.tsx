@@ -99,15 +99,57 @@ export function EventResearchReview({ event }: { event: ReviewEvent }) {
 }
 
 
-export function CampaignEventReviewHistory({ campaignIds }: { campaignIds: string[] }) {
-  const [campaignId, setCampaignId] = useState('');
-  const selected = campaignIds.includes(campaignId) ? campaignId : '';
-  if (!campaignIds.length) return null;
-  return <section className="rounded border p-3 text-xs" aria-label="已绑定事件复核记录">
-    <h3>已绑定事件复核记录（保留窗口外的历史）</h3>
-    <label>Campaign <select aria-label="查看 Campaign 复核历史" value={selected} onChange={e => setCampaignId(e.target.value)}>
-      <option value="">请选择</option>{[...new Set(campaignIds)].map(id => <option key={id} value={id}>{id}</option>)}
-    </select></label>
-    {selected && <CampaignReview key={selected} campaignId={selected} />}
+export function CampaignEventReviewHistory({ securityCode, reloadEpoch = 0 }: { securityCode?: string; reloadEpoch?: number }) {
+  const [rows, setRows] = useState<EventReview[]>([]);
+  const [next, setNext] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [campaignFilter, setCampaignFilter] = useState('');
+  const [appliedCampaign, setAppliedCampaign] = useState('');
+  const [reviewCampaign, setReviewCampaign] = useState('');
+  const [opened, setOpened] = useState(false);
+  const generation = useRef(0);
+  const load = (cursor?: string) => {
+    const request = ++generation.current;
+    setBusy(true); setError('');
+    const params = new URLSearchParams();
+    if (securityCode) params.set('security_code', securityCode);
+    if (appliedCampaign) params.set('campaign_id', appliedCampaign);
+    if (cursor) params.set('cursor', cursor);
+    reviewRequest<{ items: EventReview[]; next_cursor: string | null }>(`/history?${params}`).then(page => {
+      if (request !== generation.current) return;
+      setRows(current => cursor ? [...current, ...page.items] : page.items);
+      setNext(page.next_cursor);
+    }).catch(err => { if (request === generation.current) setError(err instanceof Error ? err.message : '历史读取失败'); })
+      .finally(() => { if (request === generation.current) setBusy(false); });
+  };
+  useEffect(() => {
+    setRows([]); setNext(null); setReviewCampaign('');
+    if (opened) load();
+    return () => { generation.current++; };
+  }, [securityCode, appliedCampaign, reloadEpoch, opened]);
+  return <section className="rounded border p-3 text-xs space-y-2" aria-label="已绑定事件复核记录">
+    <h3>已绑定事件复核记录（包括已关闭、拒绝及过期 Campaign）</h3>
+    <p>从保存的复核发现历史，不依赖当前扫描范围。历史浏览只读，不重新开放 Campaign 或新增绑定；待复核可进入原有复核流程。</p>
+    <form onSubmit={e => { e.preventDefault(); setAppliedCampaign(campaignFilter.trim()); }}>
+      <label>筛选历史 Campaign <input value={campaignFilter} onChange={e => setCampaignFilter(e.target.value)} /></label>
+      <button type="submit" disabled={busy}>筛选</button>
+    </form>
+    <button type="button" disabled={busy} onClick={() => opened ? load() : setOpened(true)}>{opened ? '刷新复核历史' : '读取复核历史'}</button>
+    {error && <p role="alert">历史读取失败：{error}</p>}
+    {busy && <p>正在读取复核历史…</p>}
+    {opened && !busy && !error && !rows.length && <p>暂无已保存的复核记录</p>}
+    {rows.map(row => <details key={row.id}>
+      <summary>{row.observation.security_code} · Campaign {row.campaign_id} · {row.observation.title} · {reviewStatus[row.status]}</summary>
+      <p>原预期：{row.expectation}</p>
+      <p>研究逻辑 {row.thesis_id} · 保留版本 {row.thesis_revision}</p>
+      <p>事件日期：{row.observation.event_date || '未知'} · 来源：{row.observation.source}</p>
+      {row.judgment ? <>
+        <p>{row.judgment.reason} · 审阅于 {row.judgment.reviewed_at}</p>
+        {row.judgment.evidence.map(item => <p key={item.id}>{item.source_title}：{item.claim}</p>)}
+      </> : <><p>待复核；历史只读入口不会更改该状态。</p><button type="button" onClick={() => setReviewCampaign(row.campaign_id)}>继续原有复核</button></>}
+    </details>)}
+    {reviewCampaign && <CampaignReview key={reviewCampaign} campaignId={reviewCampaign} />}
+    {next && <button type="button" disabled={busy} onClick={() => load(next)}>加载更早复核</button>}
   </section>;
 }

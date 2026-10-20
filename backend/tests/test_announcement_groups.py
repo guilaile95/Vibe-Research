@@ -96,3 +96,53 @@ def test_api_schema_errors_and_get_is_readonly(setup):
     assert client.post('/api/announcement-groups',json=payload).status_code == 200
     assert client.post('/api/announcement-groups',json={**payload,'period':'different'}).status_code == 409
     assert client.get('/api/announcement-groups/context/missing').status_code == 422
+
+
+def _bury_members(path):
+    def write(conn):
+        conn.execute("UPDATE evidence_records SET created_at='2020-01-01T00:00:00+00:00'")
+        for i in range(205):
+            store._insert_evidence(conn, {**_make_evidence_payload(), 'id': store.new_id(),
+                'created_at': f'2026-01-01T00:00:00.{i:06d}+00:00', 'updated_at': '2026-01-01T00:00:00+00:00'})
+    store.write_transaction(path, write)
+
+
+@pytest.mark.parametrize('already_grouped', [False, True])
+def test_old_anchor_and_members_outside_candidates_use_current_tokens(setup, already_grouped):
+    path, anchor, report, payload, member = setup
+    first = groups.save(payload, path) if already_grouped else None
+    _bury_members(path)
+    changed = svc.update_evidence(path, anchor['id'], {**_make_evidence_payload(evidence_type='announcement'),
+        'claim': 'Updated current anchor', 'expected_edit_token': svc.get_evidence(path, anchor['id'])['edit_token']})
+    ctx = groups.context(anchor['id'], path)
+    assert len(ctx['candidates']) == 200 and ctx['has_more']
+    assert anchor['id'] not in {e['id'] for e in ctx['candidates']}
+    current = {e['id']: e for e in ctx['current_members']}
+    assert current[anchor['id']]['claim'] == 'Updated current anchor'
+    assert not ctx['member_conflicts']
+    members = [dict(m, expected_edit_token=current[m['evidence_id']]['edit_token']) for m in payload['members']] if first else [member(current[anchor['id']], 'original')]
+    update = {**payload, 'request_id': 'append-old', 'group_id': first['group_id'] if first else None,
+        'expected_revision': 1 if first else 0, 'members': members + [member(ctx['candidates'][0])]}
+    saved = groups.save(update, path)
+    assert saved['revision'] == (2 if first else 1)
+    assert groups.save(update, path) == saved
+    if first:
+        assert ctx['history'][0]['members'][0]['evidence_snapshot']['claim'] != 'Updated current anchor'
+    # A subsequent edit must still invalidate the freshly loaded token.
+    stale = {**update, 'request_id': 'stale', 'group_id': saved['group_id'], 'expected_revision': saved['revision']}
+    svc.update_evidence(path, anchor['id'], {**_make_evidence_payload(evidence_type='announcement'),
+        'claim': 'Concurrent edit', 'expected_edit_token': current[anchor['id']]['edit_token']})
+    with pytest.raises(groups.Conflict): groups.save(stale, path)
+
+
+@pytest.mark.parametrize('change', ['deleted', 'subject'])
+def test_missing_or_changed_existing_member_is_explicit_conflict(setup, change):
+    path, anchor, report, payload, member = setup
+    groups.save(payload, path)
+    def alter(conn):
+        if change == 'deleted': conn.execute('UPDATE evidence_records SET deleted=1 WHERE id=?', (report['id'],))
+        else: conn.execute("UPDATE evidence_records SET subject_id='000001' WHERE id=?", (report['id'],))
+    store.write_transaction(path, alter)
+    ctx = groups.context(anchor['id'], path)
+    assert [c['evidence_id'] for c in ctx['member_conflicts']] == [report['id']]
+    assert len(ctx['groups'][0]['members']) == 2  # Never silently prune history.

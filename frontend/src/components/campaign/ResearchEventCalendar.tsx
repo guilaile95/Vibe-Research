@@ -302,6 +302,8 @@ export function ResearchEventCalendar({
         <p role="alert" data-testid="research-event-window-error" className="text-xs text-red-600">{windowError}</p>
       )}
 
+      <CampaignEventReviewHistory key={securityCode || filters.securityCode || "all"} securityCode={securityCode || filters.securityCode || undefined} reloadEpoch={reloadEpoch} />
+
       {loading && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -364,7 +366,6 @@ export function ResearchEventCalendar({
           </div>
 
           <SourceSummary data={data} />
-          <CampaignEventReviewHistory campaignIds={data.universe.securities.flatMap(item => item.campaign_ids)} />
 
           {data.universe.status === "NORMAL" && filteredEvents.length === 0 && (
             <div className="rounded-md border border-dashed border-border/60 bg-background/30 p-4 text-xs text-muted-foreground" data-testid="research-event-no-events">

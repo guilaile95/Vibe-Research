@@ -206,3 +206,140 @@ def test_archive_get_fails_closed_when_execution_transitions_during_snapshot_rea
     assert response.json()['detail'] == '实验记录无法核对；检查输入合同或归档状态，原记录已保留'
     after = client.get('/api/research-experiments')
     assert after.status_code == 200 and after.json()['records'][0]['status'] == 'COMPLETED'
+
+
+def run_cost(body=None):
+    from research_cost_comparison import CostComparisonRequest, compare_costs
+    body = body or example_input('cost-comparison')
+    record = ledger.create('cost-comparison', body)
+    ledger.execute(record['id'], 'cost-comparison', body, lambda: compare_costs(CostComparisonRequest.model_validate(body)))
+    return next(x for x in ledger.records() if x['id'] == record['id'])
+
+
+def test_cost_currency_method_metrics_persist_and_compare_without_sums():
+    a, b = run_cost(), run_cost()
+    assert a['schema_version'] == 'experiment-record.v2'
+    assert a['metric_protocol'] == 'cost-groups.v1'
+    assert len(a['metrics']) == 32
+    # Independent arithmetic: buy 100@10 + 1; buy 100@20 + 1; sell 100@20 - 1.
+    for currency in ('CNY', 'USD'):
+        assert a['metrics'][f'{currency}.fifo.realized_pnl'] == 998
+        assert a['metrics'][f'{currency}.moving_average.realized_pnl'] == 498
+        assert a['metrics'][f'{currency}.fifo.remaining_cost'] == 2001
+        assert a['metrics'][f'{currency}.moving_average.remaining_cost'] == 1501
+    comparison = ledger.compare(a, b)
+    assert not comparison['reasons'] and len(comparison['metrics']) == 32
+    assert all(m['delta'] == 0 and m['left_unit'] == m['dimension']['currency'] for m in comparison['metrics'])
+    assert all(key.startswith(('CNY.', 'USD.')) for key in a['metrics'])
+
+
+def test_cost_single_currency_unknown_values_and_empty_results():
+    body = example_input('cost-comparison')
+    body['securities'] = body['securities'][:1]
+    body['trades'] = [t for t in body['trades'] if t['code'] == body['securities'][0]['code']]
+    body['securities'][0]['terminal_price'] = None
+    a = run_cost(body)
+    assert len(a['metrics']) == 16
+    assert a['metrics']['CNY.fifo.realized_pnl'] == 998
+    assert a['metrics']['CNY.fifo.unrealized_pnl'] is None
+    assert a['metric_dimensions']['CNY.fifo.unrealized_pnl']['status'] == 'UNKNOWN'
+    assert ledger.cost_metrics({'groups': []}) == ({}, {})
+    assert ledger._metrics({'metrics': None}, 'simulation') == {}
+
+
+def test_legacy_empty_metrics_are_readable_unchanged_but_never_equal():
+    a = run_cost()
+    old = copy.deepcopy(a)
+    old.update(schema_version=ledger.LEGACY_VERSION, metrics={})
+    old.pop('metric_protocol'); old.pop('metric_dimensions')
+    payload = ledger.seal(old)
+    with ledger.store.write() as conn:
+        conn.execute('UPDATE experiment_records SET payload=? WHERE id=?', (payload, old['id']))
+    assert ledger.records()[0] == old
+    assert ledger.compare(old, old)['reasons'] == ['LEGACY_METRICS_NOT_RETAINED']
+    assert 'metric_protocol' in ledger.compare(old, a)['reasons']
+    with ledger.store.read() as conn:
+        assert conn.execute('SELECT payload FROM experiment_records WHERE id=?', (old['id'],)).fetchone()[0] == payload
+
+
+@pytest.mark.parametrize('bad', ['currency', 'method', 'unit', 'status'])
+def test_cost_dimension_validation_rejects_forged_contract(bad):
+    a = run_cost()
+    a['metric_dimensions']['CNY.fifo.realized_pnl'][bad] = 'invalid'
+    with pytest.raises(ValueError):
+        ledger.seal(a)
+
+
+def test_cost_adapter_is_bounded_and_does_not_flatten_arbitrary_fields():
+    metrics, dims = ledger.cost_metrics({'groups': [{'currency': 'HKD', 'fifo': {'fees': 0, 'hidden': {'value': 999}}}]})
+    assert len(metrics) == 16 and metrics['HKD.fifo.fees'] == 0
+    assert all('hidden' not in key for key in metrics)
+    with pytest.raises(ValueError):
+        ledger.cost_metrics({'groups': [{'currency': 'CNY'}, {'currency': 'CNY'}]})
+
+
+@pytest.mark.parametrize('kind', ['simulation', 'scenario', 'performance'])
+def test_analytics_recording_retains_supported_metrics(kind):
+    body = example_input(kind)
+    record = ledger.create(kind, body)
+    model, calculate = {'simulation': (research_analytics_router.SimulationRequest, research_analytics_router.simulate),
+                        'scenario': (research_analytics_router.ScenarioRequest, research_analytics_router.scenario),
+                        'performance': (research_analytics_router.PerformanceRequest, research_analytics_router.performance)}[kind]
+    ledger.execute(record['id'], kind, body, lambda: calculate(model.model_validate(body)))
+    assert ledger.records()[0]['metrics']
+
+
+def test_ledger_performance_retains_twr_from_actual_evaluator():
+    from research_analytics_adapters import ledger_performance
+    from research_analytics_contract import LedgerPerformanceRequest
+    body = example_input('ledger-performance')
+    body.update(ledger_fees_confirmed=True, opening_positions_complete=True)
+    record = ledger.create('ledger-performance', body)
+    ledger.execute(record['id'], 'ledger-performance', body,
+                   lambda: ledger_performance(LedgerPerformanceRequest.model_validate(body), trades=[]))
+    assert ledger.records()[0]['metrics']['twr'] is not None
+
+
+@pytest.mark.parametrize('kind', ['signal', 'factor'])
+def test_signal_factor_compact_metric_contract_and_indicator_version(kind):
+    import technical_indicators
+    import historical_signal_validation
+    body = {'signal_id': historical_signal_validation.SIGNAL_ID, 'codes': ['600000']} if kind == 'signal' else {'factor_id': 'return_5d'}
+    record = ledger.create(kind, body)
+    assert record['rules_version'].endswith(';' + technical_indicators.SCHEMA_VERSION)
+    result = {'events_evaluated': 2, 'failures': 0, 'signal_return': {'mean': 0.5},
+              'benchmark_return': {'mean': None}, 'excess_return': {'mean': None}} if kind == 'signal' else {
+              'mean_ic': 0, 'median_ic': None, 'mean_high_minus_low_spread': .1, 'pair_count_total': 2}
+    ledger.execute(record['id'], kind, body, lambda: {'status': 'normal', 'results': {'5': result}, 'source': {'snapshot_id': 'a'*64}})
+    saved = ledger.records()[0]
+    assert saved['metrics'] and saved['status'] == 'COMPLETED'
+    assert saved['metrics']['5.failures' if kind == 'signal' else '5.mean_ic'] == 0
+
+
+def test_old_pending_record_requires_new_explicit_run_without_rewrite():
+    body = example_input('cost-comparison')
+    old = ledger.create('cost-comparison', body)
+    old.update(schema_version=ledger.LEGACY_VERSION)
+    old.pop('metric_protocol'); old.pop('metric_dimensions')
+    payload = ledger.seal(old)
+    with ledger.store.write() as conn:
+        conn.execute('UPDATE experiment_records SET payload=? WHERE id=?', (payload, old['id']))
+    with pytest.raises(ValueError):
+        ledger.execute(old['id'], 'cost-comparison', body, lambda: pytest.fail('must not execute old protocol'))
+    assert ledger.records()[0] == old
+
+
+def test_cost_metrics_production_routes_round_trip():
+    app = FastAPI(); app.include_router(experiment_ledger_router.router); app.include_router(research_analytics_router.router)
+    client = TestClient(app)
+    body = example_input('cost-comparison')
+    created = client.post('/api/research-experiments', json={'kind': 'cost-comparison', 'input': body})
+    assert created.status_code == 200
+    identity = created.json()['id']
+    evaluated = client.post('/api/research-analytics/cost-comparison?record_id=' + identity, json=body)
+    assert evaluated.status_code == 200 and evaluated.json()['status'] == 'CALCULATED'
+    saved = client.get('/api/research-experiments').json()['records'][0]
+    assert saved['metrics']['CNY.fifo.realized_pnl'] == 998
+    compared = client.get('/api/research-experiments/compare', params={'left': identity, 'right': identity})
+    assert compared.status_code == 200
+    assert len(compared.json()['metrics']) == 32 and compared.json()['reasons'] == []

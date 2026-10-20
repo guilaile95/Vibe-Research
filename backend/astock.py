@@ -429,6 +429,15 @@ def disclosure(code: str) -> list[dict]:
     return df.head(30).to_dict("records") if df is not None and not df.empty else []
 
 
+def _research_identity_rows(rows, code):
+    """Check identities actually supplied upstream, without inventing one."""
+    for row in rows:
+        if not isinstance(row, dict): raise ValueError("SOURCE_SHAPE_INVALID")
+        for key in ("code", "symbol", "股票代码", "SECURITY_CODE", "stock_code"):
+            if row.get(key) is not None and str(row[key]) != code:
+                raise ValueError("SOURCE_IDENTITY_CONFLICT")
+
+
 def announcements(code: str, limit: int = 15, *, strict: bool = False) -> list[dict]:
     """个股近期公告（东财公开接口，仅 requests，稳定）。返回 日期/标题/类型/详情链接。
 
@@ -455,6 +464,13 @@ def announcements(code: str, limit: int = 15, *, strict: bool = False) -> list[d
     if strict and any(not isinstance(item, dict) for item in lst):
         raise ValueError("announcement provider response contains malformed rows")
     out = []
+    if strict:
+        _research_identity_rows(lst, code)
+        for a in lst:
+            codes = a.get("codes")
+            if codes is not None:
+                if not isinstance(codes, list) or not codes: raise ValueError("SOURCE_IDENTITY_UNPROVEN")
+                if not any(isinstance(c, dict) and str(c.get("stock_code")) == code for c in codes): raise ValueError("SOURCE_IDENTITY_CONFLICT")
     for a in lst:
         cols = [c.get("column_name") for c in (a.get("columns") or []) if c.get("column_name")]
         art = a.get("art_code", "")
@@ -581,7 +597,7 @@ def pe_digestion(current_pe: float, cagr: float, target_pe: float = 30) -> float
     return math.log(current_pe / target_pe) / math.log(1 + cagr)
 
 
-def financials(code: str, *, include_health: bool = False, on_summary=None) -> dict:
+def financials(code: str, *, include_health: bool = False, on_summary=None, strict: bool = False) -> dict:
     """同花顺财务体检：最新摘要 + 同报告期现金流/资产负债事实。
 
     注：mootdx finance() 的营收/净利数值不可靠(实测放大数倍)，故财务摘要走此源。
@@ -594,6 +610,7 @@ def financials(code: str, *, include_health: bool = False, on_summary=None) -> d
     if df is None or df.empty:
         return {}
     summary_rows = df.to_dict("records")
+    if strict: _research_identity_rows(summary_rows, code)
 
     def present(value):
         if isinstance(value, bool) or value is None or value in ("false", ""):
@@ -678,7 +695,9 @@ def financials(code: str, *, include_health: bool = False, on_summary=None) -> d
             warnings.append(f"{source}_unavailable")
             return {}
         result: dict[str, dict[str, float | None]] = {}
-        for raw in frame.to_dict("records"):
+        raw_rows = frame.to_dict("records")
+        if strict: _research_identity_rows(raw_rows, code)
+        for raw in raw_rows:
             metric = raw.get("metric_name")
             if metric not in wanted:
                 continue
@@ -725,6 +744,10 @@ def financials(code: str, *, include_health: bool = False, on_summary=None) -> d
         try:
             frame = getattr(ak, function_name)(symbol=code, indicator="按报告期")
             tables[source] = metric_rows(frame, wanted, source)
+        except ValueError as exc:
+            if strict and str(exc) == "SOURCE_IDENTITY_CONFLICT": raise
+            warnings.append(f"{source}_unavailable")
+            tables[source] = {}
         except Exception:  # one optional statement must not erase the reliable summary
             warnings.append(f"{source}_unavailable")
             tables[source] = {}
@@ -1982,23 +2005,26 @@ def lockup_expiry(code: str, trade_date: str | None = None, forward_days: int = 
     默认保持既有调用方的空结果降级语义。
     """
     trade_date = trade_date or datetime.now().strftime("%Y-%m-%d")
+    def checked(rows):
+        if strict: _research_identity_rows(rows, code)
+        return rows
     history = [{
         "date": str(r.get("FREE_DATE", ""))[:10], "type": r.get("FREE_SHARES_TYPE", ""),
         "shares": r.get("FREE_SHARES", 0), "able_shares": r.get("ABLE_FREE_SHARES", 0),
         "ratio": r.get("FREE_RATIO", 0),
-    } for r in eastmoney_datacenter(
+    } for r in checked(eastmoney_datacenter(
         "RPT_LIFT_STAGE", filter_str=f'(SECURITY_CODE="{code}")',
-        page_size=15, sort_columns="FREE_DATE", sort_types="-1", strict=strict)]
+        page_size=15, sort_columns="FREE_DATE", sort_types="-1", strict=strict))]
 
     end = (datetime.strptime(trade_date, "%Y-%m-%d") + timedelta(days=forward_days)).strftime("%Y-%m-%d")
     upcoming = [{
         "date": str(r.get("FREE_DATE", ""))[:10], "type": r.get("FREE_SHARES_TYPE", ""),
         "shares": r.get("FREE_SHARES", 0), "able_shares": r.get("ABLE_FREE_SHARES", 0),
         "ratio": r.get("FREE_RATIO", 0),
-    } for r in eastmoney_datacenter(
+    } for r in checked(eastmoney_datacenter(
         "RPT_LIFT_STAGE",
         filter_str=f'(SECURITY_CODE="{code}")(FREE_DATE>=\'{trade_date}\')(FREE_DATE<=\'{end}\')',
-        page_size=20, sort_columns="FREE_DATE", sort_types="1", strict=strict)]
+        page_size=20, sort_columns="FREE_DATE", sort_types="1", strict=strict))]
     return {"history": history, "upcoming": upcoming}
 
 

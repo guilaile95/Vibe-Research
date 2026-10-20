@@ -536,7 +536,7 @@ class TestKDJ:
             trade_date="ignored",
             fetched_at="2026-03-11T00:00:00Z",
         )
-        assert result["schema_version"] == "technical-indicators-v0.2"
+        assert result["schema_version"] == "technical-indicators-v0.3"
         assert result["status"] == "normal"
         for key in ("kdj_k", "kdj_d", "kdj_j"):
             assert result["latest"][key] is not None
