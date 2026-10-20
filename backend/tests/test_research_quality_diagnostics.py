@@ -19,7 +19,7 @@ def no_network(monkeypatch):
 
 
 def company():
-    fixture = json.loads((FIXTURES / 'company_research/US-AAPL.json').read_text())
+    fixture = json.loads((FIXTURES / 'company_research/US-AAPL.json').read_text(encoding="utf-8"))
     return fixture['events'][-1]['record'], fixture['bundle']
 
 
@@ -47,7 +47,7 @@ def test_saved_company_contract_does_not_certify_semantic_support():
 
 
 def test_saved_comparison_contract_keeps_qualified_source_ids():
-    fixture = json.loads((FIXTURES / 'company_comparison/US-AAPL--HK-00700.json').read_text())
+    fixture = json.loads((FIXTURES / 'company_comparison/US-AAPL--HK-00700.json').read_text(encoding="utf-8"))
     record = fixture['record']
     pair = {key: record[key] for key in ('schema_version', 'as_of', 'subjects', 'evidence', 'pair_sha256')}
     result = Q.evaluate('comparison', record, pair)
@@ -130,7 +130,7 @@ def test_daily_actual_persistence_roundtrip_no_invented_sources(tmp_path, monkey
 
 
 def case_and_runs(origin='SAVED_PROVIDER_RESPONSE'):
-    case = json.loads((FIXTURES / 'research_quality/cross_company.json').read_text())
+    case = json.loads((FIXTURES / 'research_quality/cross_company.json').read_text(encoding="utf-8"))
     runs = []
     for role in ('baseline', 'perturbed'):
         output = 'Synthetic test of saved-response contract, not an observed model run.'
@@ -144,7 +144,7 @@ def case_and_runs(origin='SAVED_PROVIDER_RESPONSE'):
 
 @pytest.mark.parametrize('label', ['irrelevant', 'cross_company', 'conflicting', 'missing', 'prompt_injection'])
 def test_noise_inputs_without_saved_responses_have_no_robustness_evidence(label):
-    case = json.loads((FIXTURES / f'research_quality/{label}.json').read_text())
+    case = json.loads((FIXTURES / f'research_quality/{label}.json').read_text(encoding="utf-8"))
     result = Q.compare_noise(case)
     assert result['status'] == result['model_robustness'] == 'NOT_EVALUATED'
 

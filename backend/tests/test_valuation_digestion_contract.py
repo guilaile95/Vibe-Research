@@ -16,7 +16,7 @@ import astock
 
 
 def example_digest(price, eps_cur, eps_next):
-    skill = (Path(__file__).resolve().parents[2] / "a-stock-data" / "SKILL.md").read_text()
+    skill = (Path(__file__).resolve().parents[2] / "a-stock-data" / "SKILL.md").read_text(encoding="utf-8")
     blocks = [part.split("```", 1)[0] for part in skill.split("```python\n")[1:]]
     helper = next(ast.parse(block) for block in blocks if "def pe_digestion(" in block)
     example = next(ast.parse(block) for block in blocks if "def full_valuation(" in block)

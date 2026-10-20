@@ -1,7 +1,7 @@
 """Offline annotation persistence and boundaries; all writes confined to tmp_path."""
 import copy
 import json
-import socket
+from offline_testclient import offline_network
 import sqlite3
 
 import pytest
@@ -13,13 +13,10 @@ import research_annotations_router as router
 BAR = {'date': '2026-10-16', 'open': 10, 'high': 12, 'low': 9, 'close': 11, 'volume': 20}
 
 @pytest.fixture(autouse=True)
-def isolated(tmp_path, monkeypatch):
+def isolated(tmp_path, monkeypatch, offline_network):
     monkeypatch.setenv('VR_DATA_DIR', str(tmp_path))
     monkeypatch.delenv('VR_FACT_LAKE_ROOT', raising=False)
-    def deny(*args, **kwargs):
-        raise AssertionError('network prohibited')
-    monkeypatch.setattr(socket, 'create_connection', deny)
-    monkeypatch.setattr(socket.socket, 'connect', deny)
+
 
 @pytest.fixture
 def client():

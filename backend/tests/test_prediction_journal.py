@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 import copy
 import json
-import socket
+from offline_testclient import offline_network
 
 import pytest
 from fastapi import FastAPI
@@ -18,14 +18,11 @@ T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
 @pytest.fixture(autouse=True)
-def isolated(monkeypatch, tmp_path):
+def isolated(monkeypatch, tmp_path, offline_network):
     monkeypatch.setenv('VR_DATA_DIR', str(tmp_path))
     monkeypatch.delenv('VR_FACT_LAKE_ROOT', raising=False)
     monkeypatch.setattr(journal, 'now', lambda: T0)
-    def deny(*args, **kwargs):
-        raise AssertionError('network prohibited')
-    monkeypatch.setattr(socket, 'create_connection', deny)
-    monkeypatch.setattr(socket.socket, 'connect', deny)
+
 
 
 def forecast(**changes):

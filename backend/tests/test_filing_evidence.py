@@ -56,7 +56,7 @@ def test_toc_repeated_headings_parts_and_preservation():
     assert len(filing.structure('ITEM 1. Financial statements\nBody','10-Q')[0]) == 1
 
 
-@pytest.mark.parametrize('text', ['', '   ', 'x' * 200001])
+@pytest.mark.parametrize('text', ['', '   ', 'x' * 200001], ids=['empty', 'whitespace', 'over-limit'])
 def test_invalid_text(text):
     with pytest.raises(ValueError): filing.structure(text, '10-K')
 

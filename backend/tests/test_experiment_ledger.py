@@ -1,7 +1,7 @@
 """Offline experiment manifest acceptance; existing calculation engines only."""
 import copy
 import json
-import socket
+from offline_testclient import offline_network
 import sqlite3
 
 import pytest
@@ -18,13 +18,10 @@ from research_analytics_simulation import simulate
 
 
 @pytest.fixture(autouse=True)
-def isolated(monkeypatch, tmp_path):
+def isolated(monkeypatch, tmp_path, offline_network):
     monkeypatch.setenv('VR_DATA_DIR', str(tmp_path))
     monkeypatch.delenv('VR_FACT_LAKE_ROOT', raising=False)
-    def deny(*args, **kwargs):
-        raise AssertionError('network prohibited')
-    monkeypatch.setattr(socket, 'create_connection', deny)
-    monkeypatch.setattr(socket.socket, 'connect', deny)
+
 
 
 def run(body=None):

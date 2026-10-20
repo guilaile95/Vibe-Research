@@ -1,7 +1,7 @@
 """Offline private-target contract; no provider, model or real account data."""
 from datetime import datetime, timezone, timedelta
 import copy
-import socket
+from offline_testclient import offline_network
 import pytest
 from pydantic import ValidationError
 from fastapi import FastAPI
@@ -10,11 +10,9 @@ import allocation_targets as svc
 import allocation_targets_router
 
 @pytest.fixture(autouse=True)
-def isolated(monkeypatch, tmp_path):
+def isolated(monkeypatch, tmp_path, offline_network):
     monkeypatch.setenv('VR_DATA_DIR', str(tmp_path)); monkeypatch.delenv('VR_FACT_LAKE_ROOT', raising=False)
-    def deny(*a, **kw): raise AssertionError('Network prohibited')
-    monkeypatch.setattr(socket.socket, 'connect', deny)
-    monkeypatch.setattr(socket, 'create_connection', deny)
+
 
 def body(**kw):
     return dict(expected_version=0, effective_date='2026-10-19', market='CN', currency='CNY', basis='CONFIRMED_ACCOUNT_ASSETS', coverage='FULL', targets={'600000': 60, 'CASH': 40}, **kw)
