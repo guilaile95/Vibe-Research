@@ -147,13 +147,21 @@ try {
     await page.getByLabel('研究记录类型', { exact: true }).selectOption('回测研究');
     await search.fill('输入指纹');await page.getByText(/当前显示 1 \/ 1 条已保存记录/).waitFor();
     assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes'))), savedNotes);
-    await page.reload();await page.getByRole('button', { name: '验收：研究记录页面', exact: true }).click();
+    assert.equal(audit.requests.length, beforeLocal, 'local note save/search sends no API or model request');
+    // Reload mounts the analytics page and its read-only experiment archive child.
+    // Await that specific read before checking the complete request delta.
+    const archiveReload = page.waitForResponse(response => new URL(response.url()).pathname === '/api/research-experiments' && response.request().method() === 'GET');
+    await page.reload();
+    const archiveResponse = await archiveReload;
+    assert.equal(archiveResponse.status(), 200);
+    await archiveResponse.finished();
+    await page.getByRole('button', { name: '验收：研究记录页面', exact: true }).click();
     await page.getByText(/当前显示 1 \/ 1 条已保存记录/).waitFor();
     assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes'))), savedNotes);
-    assert.equal(audit.requests.length, beforeLocal, 'save/search/reload sends no API or model request');
+    assert.deepEqual(audit.requests.slice(beforeLocal), ['GET /api/research-experiments'], 'reload permits exactly the archive read; local notes send no API/model writes or other requests');
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 2));
     await page.screenshot({ path: join(output, `saved-note-search-${width}.png`), fullPage: true });
-    checks.push({ width, flows: ['all_modes', 'missingness', 'undefined_metrics', 'malformed_recovery', 'error_retry', 'cancel_stale_response', 'no_horizontal_overflow', 'save_failure_retry', 'duplicate_save', 'local_note_search', 'note_reload_no_api'] });
+    checks.push({ width, flows: ['all_modes', 'missingness', 'undefined_metrics', 'malformed_recovery', 'error_retry', 'cancel_stale_response', 'no_horizontal_overflow', 'save_failure_retry', 'duplicate_save', 'local_note_search', 'note_reload_only_archive_read'] });
     await context.close();
   }
   assert.deepEqual(audit.external, []); assert.deepEqual(audit.unexpected, []); assert.deepEqual(audit.errors, []);

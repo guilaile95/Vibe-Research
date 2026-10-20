@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build, preview } from 'vite';
 import { chromium } from 'playwright';
-import { syntheticApi } from './fixtures/adoption-api.mjs';
+import { syntheticApi, auditMutationReadbacks } from './fixtures/adoption-api.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 // Tailwind resolves its config from cwd, as do existing frontend scripts.
 process.chdir(root);
@@ -21,8 +21,8 @@ if (process.argv.includes('--build-only')) {
   console.log('Fixture build passed. Actual-browser acceptance: NOT_EVALUATED (build-only).');
 } else {
   let browser, server;
-  const { state, dispatch } = syntheticApi();
-  const violations = [], pageErrors = [];
+  let { state, dispatch } = syntheticApi();
+  const violations = [], pageErrors = [], failures = [], allCalls = [];
   const artifacts = process.env.E2E_ARTIFACT_DIR;
   try {
     if (artifacts) await mkdir(artifacts, { recursive: true });
@@ -30,9 +30,7 @@ if (process.argv.includes('--build-only')) {
     const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, timezoneId: 'UTC', serviceWorkers: 'block' });
-    const page = await context.newPage();
-    page.setDefaultTimeout(10000);
-    page.on('pageerror', error => pageErrors.push(error.message));
+    let page, currentWidth;
     await context.routeWebSocket('**/*', socket => { violations.push(`WebSocket ${socket.url()}`); socket.close(); });
     await context.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url());
@@ -50,15 +48,39 @@ if (process.argv.includes('--build-only')) {
     const shown = async locator => locator.waitFor({ state: 'visible' });
     const nav = async name => page.getByRole('button', { name, exact: true }).click();
     const layout = async name => {
-      for (const width of [1280, 375]) {
-        await page.setViewportSize({ width, height: 900 });
-        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${name}: ${width}px document overflow`);
-        if (artifacts) await page.screenshot({ path: path.join(artifacts, `synthetic-${name}-${width}.png`), fullPage: true });
-      }
-      await page.setViewportSize({ width: 1280, height: 900 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${name}: ${currentWidth}px document overflow`);
+      if (artifacts) await page.screenshot({ path: path.join(artifacts, `synthetic-${name}-${currentWidth}.png`), fullPage: true });
     };
-    await page.goto(`${origin}/tests/e2e/fixtures/adoption-workflows.html`);
-
+    const runCase = async (name, width, execute) => {
+      ({ state, dispatch } = syntheticApi());
+      currentWidth = width;
+      const id = `${name}-${width}`;
+      try {
+        page = await context.newPage();
+        page.setDefaultTimeout(10000);
+        page.on('pageerror', error => pageErrors.push(`${id}: ${error.message}`));
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto(`${origin}/tests/e2e/fixtures/adoption-workflows.html`);
+        await execute();
+        console.log(`PASS synthetic case: ${id}`);
+      } catch (error) {
+        failures.push({ case: id, error: error.stack ?? String(error) });
+        console.error(`FAIL synthetic case: ${id}\n${error.stack ?? error}`);
+        if (artifacts && page && !page.isClosed()) {
+          try { await page.screenshot({ path: path.join(artifacts, `synthetic-${id}-failure.png`), fullPage: true }); }
+          catch (captureError) { failures.push({ case: id, error: `Failure screenshot: ${captureError.message}` }); }
+        }
+      } finally {
+        allCalls.push(...state.calls.map(call => ({ case: id, ...call })));
+        try { await page?.close(); }
+        catch (error) { failures.push({ case: id, error: `Page cleanup: ${error.message}` }); }
+        page = undefined;
+      }
+    };
+    // Each viewport repeats the actual workflow on a fresh page and fresh mock
+    // archive. A failed case is reported, never converted into a pass or skip.
+    for (const width of [1280, 375]) {
+    await runCase('dcf', width, async () => {
     // Manual DCF: HTML-required empty state, exact-input receipt and invalidation.
     const dcf = page.getByTestId('reverse-dcf');
     await dcf.locator('summary').click();
@@ -66,14 +88,16 @@ if (process.argv.includes('--build-only')) {
     assert.equal(state.calls.length, 0, 'empty DCF must not submit');
     await dcf.getByLabel('行业适用性').selectOption('non_financial');
     await dcf.getByLabel('行业分类来源').fill('Synthetic filing');
+    // Nested select options contribute to label text. Scope by semantic role and
+    // stable label prefix; keep exact names where production supplies aria-label.
     for (const label of ['参考股价', '年度无杠杆自由现金流 FCFF', '净债务（债务减现金，可为负）', '稀释后股数']) {
-      const field = dcf.locator('fieldset').filter({ has: page.locator('legend', { hasText: label }) }).filter({ has: page.getByLabel(`${label}数值`, { exact: true }) }).last();
+      const field = dcf.getByRole('group', { name: label, exact: true });
       await field.getByLabel(`${label}数值`, { exact: true }).fill('100');
-      if (label !== '稀释后股数') await field.getByLabel('币种', { exact: true }).selectOption('CNY');
+      if (label !== '稀释后股数') await field.getByRole('combobox', { name: /^币种/ }).selectOption('CNY');
       await field.getByLabel('来源（报告/页码或链接）').fill('Synthetic page 1');
       await field.getByLabel('数据截至日').fill('2026-01-06');
     }
-    await dcf.getByLabel('FCF 口径', { exact: true }).selectOption('annual_unlevered_fcff');
+    await dcf.getByRole('combobox', { name: /^FCF 口径/ }).selectOption('annual_unlevered_fcff');
     for (const [label, value] of [['WACC (%)，0 至 100','10'], ['永续增长率 (%)，大于 -100，最高 20','2'], ['显式预测年数（整数 1–30）','5'], ['求解增长率下界 (%)，大于 -100','-50'], ['求解增长率上界 (%)，最高 300','50'], ['敏感性 WACC (%)，逗号分隔，最多 9 个','9,11'], ['假设依据与局限','Synthetic only']]) await dcf.getByLabel(label, { exact: true }).fill(value);
     await dcf.getByRole('button', { name: '计算价格隐含增长率', exact: true }).click();
     await shown(dcf.getByTestId('reverse-dcf-result'));
@@ -91,6 +115,9 @@ if (process.argv.includes('--build-only')) {
     await nav('Switch subject');
     await layout('dcf');
 
+    });
+
+    await runCase('filing', width, async () => {
     // Actual EvidenceDetail child: append versions, preserved text and compare.
     await nav('filing');
     const filing = page.getByRole('region', { name: '原始文档证据与章节比较' });
@@ -120,6 +147,9 @@ if (process.argv.includes('--build-only')) {
     assert.equal(await filing.getByLabel('原文差异结果').count(), 0);
     await layout('filing');
 
+    });
+
+    await runCase('annotation', width, async () => {
     // Chart keyboard selects exact bar; appended note readback and stale rejection.
     await nav('annotation');
     await page.getByTestId('kline-inspection-control').focus();
@@ -141,6 +171,9 @@ if (process.argv.includes('--build-only')) {
     assert.equal(state.notes.length, 1);
     await layout('annotation');
 
+    });
+
+    await runCase('prediction', width, async () => {
     // Register and append resolution through real forms; no outcome is not zero score.
     await nav('prediction');
     const journal = page.getByTestId('prediction-journal');
@@ -158,7 +191,7 @@ if (process.argv.includes('--build-only')) {
     const record = journal.locator('article');
     assert.match(await record.innerText(), /未决 · 结果修订 0/);
     await record.getByText('追加人工结果 / 修正（不重写原预测）', { exact: true }).click();
-    await record.getByLabel('结果', { exact: true }).selectOption('TRUE');
+    await record.getByRole('combobox', { name: /^结果/ }).selectOption('TRUE');
     await record.getByLabel('结果证据可用时间（本机时区）', { exact: true }).fill('2030-01-02T00:00');
     await record.getByLabel('依据', { exact: true }).fill('Synthetic resolution evidence');
     await record.getByLabel('首次判定说明 / 修正原因', { exact: true }).fill('Synthetic determination');
@@ -171,6 +204,9 @@ if (process.argv.includes('--build-only')) {
     assert.equal(await record.getByRole('button', { name: '追加结果修订' }).isDisabled(), true);
     await layout('prediction');
 
+    });
+
+    await runCase('allocation', width, async () => {
     // Explicit allocation targets, rejected duplicate, unknown target and expiry.
     await nav('allocation');
     const allocation = page.getByTestId('allocation-target-card');
@@ -193,14 +229,17 @@ if (process.argv.includes('--build-only')) {
     assert.doesNotMatch(await allocation.innerText(), /\+10.00 pp/);
     await layout('allocation');
 
+    });
+
+    await runCase('groups', width, async () => {
     // Explicit manual announcement relation, declaration gate and readback.
     await nav('groups');
     const groups = page.getByRole('region', { name: '公告中心用户关联' });
     await shown(groups.getByText('手动登记关联', { exact: true }));
     await groups.getByText('手动登记关联', { exact: true }).click();
     await groups.getByLabel('报告期 / 事件范围', { exact: true }).fill('Synthetic FY2026');
-    await groups.getByLabel('同一个股的另一条证据', { exact: true }).selectOption('commentary');
-    await groups.getByLabel('关系', { exact: true }).selectOption('commentary');
+    await groups.getByRole('combobox', { name: /^同一个股的另一条证据/ }).selectOption('commentary');
+    await groups.getByRole('combobox', { name: /^关系/ }).selectOption('commentary');
     assert.equal(await groups.getByRole('button', { name: '保存用户关联' }).isDisabled(), true);
     await groups.getByRole('checkbox').check();
     await groups.getByRole('button', { name: '保存用户关联' }).click();
@@ -212,16 +251,17 @@ if (process.argv.includes('--build-only')) {
     await shown(groups.getByText('手动登记关联', { exact: true }));
     assert.equal(await groups.getByText('用户声明范围：Synthetic FY2026', { exact: false }).count(), 0);
 
-    // Audit includes reads after every accepted write and rejects all other API paths.
-    for (const [method, path, readPath] of [['POST','/filing-evidence/documents/anchor','/filing-evidence/context/anchor'], ['POST','/research-annotations','/research-annotations'], ['POST','/prediction-journal','/prediction-journal'], ['PUT','/portfolio/allocation-targets','/portfolio/allocation-targets'], ['POST','/announcement-groups','/announcement-groups/context/anchor']]) {
-      const writeIndex = state.calls.findIndex(c => c.method === method && c.path === path);
-      assert.ok(writeIndex >= 0 && state.calls.slice(writeIndex+1).some(c => c.method === 'GET' && c.path === readPath), `${path} must read back`);
+    });
     }
-    assert.deepEqual(violations, [], 'unexpected network/route attempts');
-    assert.deepEqual(pageErrors, [], 'browser errors');
+
+    // Audit all five mutation workflows independently at both viewport sizes.
+    failures.push(...auditMutationReadbacks(allCalls));
+    if (violations.length) failures.push({ case: 'route-audit', error: JSON.stringify(violations) });
+    if (pageErrors.length) failures.push({ case: 'browser-errors', error: JSON.stringify(pageErrors) });
+    assert.deepEqual(failures, [], 'one or more synthetic browser cases failed');
     console.log('PASS: six synthetic production-component browser workflows; no live-provider or full-app evidence');
   } finally {
-    if (artifacts) await writeFile(path.join(artifacts, 'synthetic-route-audit.json'), JSON.stringify({ calls: state.calls, violations, pageErrors }, null, 2));
+    if (artifacts) await writeFile(path.join(artifacts, 'synthetic-route-audit.json'), JSON.stringify({ calls: allCalls, violations, pageErrors, failures }, null, 2));
     await browser?.close();
     if (server) await new Promise(resolve => server.httpServer.close(resolve));
   }

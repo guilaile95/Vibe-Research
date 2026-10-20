@@ -33,3 +33,25 @@ export function syntheticApi() {
   }
   return { state, dispatch };
 }
+
+// Every mutation workflow must demonstrate its own readback at each viewport.
+export function auditMutationReadbacks(calls) {
+  const missing = [];
+  for (const width of [1280, 375]) {
+    for (const [workflow, method, path, readPath] of [
+      ['filing', 'POST', '/filing-evidence/documents/anchor', '/filing-evidence/context/anchor'],
+      ['annotation', 'POST', '/research-annotations', '/research-annotations'],
+      ['prediction', 'POST', '/prediction-journal', '/prediction-journal'],
+      ['allocation', 'PUT', '/portfolio/allocation-targets', '/portfolio/allocation-targets'],
+      ['groups', 'POST', '/announcement-groups', '/announcement-groups/context/anchor'],
+    ]) {
+      const id = `${workflow}-${width}`;
+      const scoped = calls.filter(call => call.case === id);
+      const write = scoped.findIndex(call => call.method === method && call.path === path);
+      if (write < 0 || !scoped.slice(write + 1).some(call => call.method === 'GET' && call.path === readPath)) {
+        missing.push({ case: id, error: `${method} ${path} must have a subsequent ${readPath} readback in this case` });
+      }
+    }
+  }
+  return missing;
+}

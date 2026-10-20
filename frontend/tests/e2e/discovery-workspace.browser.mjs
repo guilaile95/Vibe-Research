@@ -327,6 +327,12 @@ try {
     const request = route.request();
     const url = new URL(request.url());
     apiRequests.push({ method: request.method(), pathname: url.pathname, search: url.search });
+    // Full Market mounts the read-only condition-card catalog on entry/reload.
+    // Only this exact empty catalog read is part of the Discovery fixture.
+    if (url.pathname === "/api/screener/condition-cards" && request.method() === "GET" && url.search === "") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ cards: [], runs: [] }) });
+      return;
+    }
     if (url.pathname === "/api/screener/discovery" && request.method() === "GET") {
       const refresh = url.searchParams.get("refresh") === "true";
       if (refresh) discoveryRefreshes += 1;
@@ -649,6 +655,10 @@ try {
     0,
     "Discovery handoff must not auto-create Campaign, Evidence, or Thesis state",
   );
+  assert.deepEqual(apiRequests.filter(({ pathname }) => pathname === "/api/screener/condition-cards"), [
+    { method: "GET", pathname: "/api/screener/condition-cards", search: "" },
+    { method: "GET", pathname: "/api/screener/condition-cards", search: "" },
+  ], "only the two explicit Full Market mounts read the condition catalog; no condition writes");
   assert.deepEqual(browserErrors, []);
   assert.ok(externalRequests.every((origin) => origin === "https://fonts.googleapis.com"), "only known font stylesheet requests may be fulfilled locally; all external requests are intercepted");
   if (screenshots) {

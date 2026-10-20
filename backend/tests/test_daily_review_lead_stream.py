@@ -2,6 +2,7 @@
 import asyncio
 import json
 import threading
+from types import SimpleNamespace
 
 import anyio
 import httpx
@@ -140,11 +141,32 @@ def test_async_transport_preserves_go_headers_and_no_tools(monkeypatch):
     assert len(requests) == 1
 
 
-@pytest.mark.parametrize("phase", ["before_headers", "body_pause", "trickling"])
+@pytest.mark.parametrize("phase", [
+    "before_headers", "body_pause", "trickling", "before_first_read", "between_reads",
+])
 def test_async_total_deadline_bounds_headers_body_and_trickling(monkeypatch, phase):
     monkeypatch.setattr(chat, "_TURN_TIMEOUT", 0.05)
     closed = []
     interrupted = []
+    cancelled_reads = []
+    active_reads = set()
+    owner_task = None
+    clock = 0.0
+    if phase in ("before_first_read", "between_reads"):
+        # Advance only the model deadline, independently of the event-loop clock.
+        monkeypatch.setattr(chat, "time", SimpleNamespace(monotonic=lambda: clock))
+
+    async def read(awaitable):
+        task = asyncio.current_task()
+        assert task is owner_task  # No detached reader may outlive the API task.
+        active_reads.add(task)
+        try:
+            await awaitable
+        except asyncio.CancelledError:
+            cancelled_reads.append(True)
+            raise
+        finally:
+            active_reads.remove(task)
 
     class Body(httpx.AsyncByteStream):
         async def __aiter__(self):
@@ -152,8 +174,8 @@ def test_async_total_deadline_bounds_headers_body_and_trickling(monkeypatch, pha
                 while True:
                     yield sse({"choices": [{"delta": {"content": "partial"}}]})
                     if phase == "body_pause":
-                        await asyncio.Event().wait()
-                    await anyio.sleep(0.005)
+                        await read(asyncio.Event().wait())
+                    await read(anyio.sleep(0.005))
             finally:
                 interrupted.append(True)
 
@@ -162,27 +184,54 @@ def test_async_total_deadline_bounds_headers_body_and_trickling(monkeypatch, pha
             closed.append(True)
 
     async def handler(request):
+        nonlocal clock
         if phase == "before_headers":
             try:
-                await asyncio.Event().wait()
+                await read(asyncio.Event().wait())
             finally:
                 interrupted.append(True)
+        if phase == "before_first_read":
+            clock += 1.0
         return httpx.Response(200, stream=Body())
 
-    real_client = httpx.AsyncClient
-    monkeypatch.setattr(chat.httpx, "AsyncClient",
-                        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+    # Prepare the mock client outside the short header/body deadline budget.
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: client)
 
     async def exercise():
+        nonlocal clock, owner_task
+        # Thread startup is not the header/body phase this test exercises.
+        await anyio.to_thread.run_sync(lambda: None)
+        owner_task = asyncio.current_task()
         result = []
         with pytest.raises(chat.ModelTransportError, match="超时"):
             async for event in chat.stream_api_messages(LLM, []):
                 result.append(event)
+                if phase == "between_reads":
+                    clock += 1.0
         assert all(event["type"] != "done" for event in result)
-        assert interrupted == [True]
+        assert not active_reads
+        if phase in ("before_headers", "body_pause"):
+            assert cancelled_reads == [True]
+        if cancelled_reads:
+            assert interrupted == [True]  # In-flight reads must stop before return.
+        # Resource cleanup must finish even when no body read is being awaited.
         assert closed == ([] if phase == "before_headers" else [True])
+        assert client.is_closed
+        if phase == "before_first_read":
+            assert result == [] and interrupted == [] and cancelled_reads == []
+        elif phase == "between_reads":
+            assert result == [{"type": "delta", "text": "partial"}]
+            assert cancelled_reads == []
 
-    asyncio.run(exercise())
+    async def bounded_exercise():
+        # A resetting per-read timeout must not let a trickling stream run forever.
+        await asyncio.wait_for(exercise(), timeout=1)
+
+    asyncio.run(bounded_exercise())
+    # HTTPX's nested async generators may finalize only at loop shutdown when a
+    # deadline is detected between reads; their finalizers do not own the socket.
+    assert interrupted == ([] if phase == "before_first_read" else [True])
 
 
 @pytest.mark.parametrize("failure", ["http", "connect", "read"])
