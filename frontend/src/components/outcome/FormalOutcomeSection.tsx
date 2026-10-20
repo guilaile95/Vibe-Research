@@ -39,6 +39,8 @@ function actualCapitalCell(item: FormalDecisionOutcome) {
   return (
     <div data-actual-capital-state={item.actual_capital_outcome?.state || ""}>
       <div>{actual.label}</div>
+      {item.actual_capital_outcome?.reason_codes?.includes('CORRECTED_TRADE_REQUIRES_RECONCILIATION') && <div className="text-xs text-amber-600">交易已修正，盈亏待对账</div>}
+      {item.actual_capital_outcome?.reason_codes?.includes('HISTORICAL_ACTUAL_NOT_RECONSTRUCTIBLE') && <div className="text-xs text-amber-600">无法可靠重建该历史时点，未评估盈亏</div>}
       {actual.canonical ? (
         <div className="mt-1 font-mono text-[11px] text-muted-foreground">{actual.canonical}</div>
       ) : null}

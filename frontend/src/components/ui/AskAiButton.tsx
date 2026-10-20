@@ -20,7 +20,7 @@ import {
 } from "@/lib/llm";
 import { ApiError, type ReportPageSelection } from "@/lib/api";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
-import { storageGet, storageSet, storageRemove } from "@/lib/storage";
+import { storageGet, storageGetChecked, storageSetChecked, storageRemoveChecked } from "@/lib/storage";
 import { parseReportChatCoverage } from "@/lib/reportChatCoverage";
 import { applyChatToolResult, chatToolStatusLabel, parseStoredChatTools, type ChatToolUse } from "@/lib/chatToolStatus";
 import { conversationNoteMetadata, parseNoteResearchMetadata, type NoteResearchMetadata } from "@/lib/researchNote";
@@ -53,18 +53,20 @@ function loadNoteMetadata(value: unknown): NoteResearchMetadata | undefined {
   catch { return undefined; } // A damaged optional note link must not erase the conversation.
 }
 
-function loadChat(key: string): StoredMsg[] {
-  const raw = storageGet(key);
-  if (!raw) return [];
+type ChatArchive = { key: string; msgs: StoredMsg[]; raw: string | null; readError: string | null; dirty: boolean };
+
+function loadChat(key: string): ChatArchive {
+  let raw: string | null = null;
   try {
+    raw = storageGetChecked(key);
+    if (raw === null) return { key, msgs: [], raw, readError: null, dirty: false };
     const parsed = JSON.parse(raw);
-    // 存量数据可能来自旧版本或被手工改坏，形状不对就当没有，别让页面崩。
-    if (!Array.isArray(parsed)) return [];
-    return boundedCompleteTurns(parsed.filter(
-      (m): m is StoredMsg =>
-        m && typeof m === "object" && typeof m.content === "string" &&
-        (m.role === "user" || m.role === "assistant"),
-    ).map((m) => ({
+    // 损坏的存档保留原始字节，不把读取失败伪装成可覆盖的空对话。
+    if (!Array.isArray(parsed) || parsed.length % 2 || !parsed.every((m, i) =>
+      m && typeof m === "object" && typeof m.content === "string" &&
+      m.role === (i % 2 ? "assistant" : "user") && !m.partial
+    )) throw new Error("对话存档格式损坏");
+    const msgs: StoredMsg[] = (parsed as StoredMsg[]).map((m) => ({
       ...m,
       tools: parseStoredChatTools(m.tools),
       noteMetadata: loadNoteMetadata(m.noteMetadata),
@@ -74,9 +76,10 @@ function loadChat(key: string): StoredMsg[] {
           typeof source.title === "string" &&
           (source.page === null || (Number.isInteger(source.page) && source.page > 0)),
       ).slice(0, 8) : undefined,
-    })));
+    }));
+    return { key, msgs, raw, readError: null, dirty: false };
   } catch {
-    return [];
+    return { key, msgs: [], raw, readError: raw === null ? "无法读取对话存档，未覆盖本地数据" : "对话存档损坏，原始数据已保留；可导出后明确清空", dirty: false };
   }
 }
 
@@ -95,7 +98,7 @@ function completeTurns(msgs: StoredMsg[]): StoredMsg[] {
   return out;
 }
 
-// UI、持久化和发给模型的历史使用同一上限与同一完整轮次集合。
+// 存储和模型上下文有上限；超长回答仍保留在界面供导出，不冒充已保存。
 // 从尾部保留最新内容；若边界落在 assistant，丢掉该孤立回答。
 function boundedCompleteTurns(msgs: StoredMsg[]): StoredMsg[] {
   const complete = completeTurns(msgs);
@@ -107,6 +110,7 @@ function boundedCompleteTurns(msgs: StoredMsg[]): StoredMsg[] {
     const assistant = complete[index + 1];
     if (user.role !== "user" || assistant.role !== "assistant") return [];
     const pairChars = user.content.length + assistant.content.length;
+    if (pairChars > MAX_PERSISTED_CHARS) continue;
     if (out.length + 2 > MAX_PERSISTED_MSGS || chars + pairChars > MAX_PERSISTED_CHARS) break;
     out.unshift(user, assistant);
     chars += pairChars;
@@ -114,17 +118,23 @@ function boundedCompleteTurns(msgs: StoredMsg[]): StoredMsg[] {
   return out;
 }
 
-function saveChat(key: string, msgs: StoredMsg[]): void {
-  if (!msgs.length) {
-    storageRemove(key);
-    return;
-  }
+function hasOversizedTurn(msgs: StoredMsg[]): boolean {
+  const complete = completeTurns(msgs);
+  return complete.some((msg, i) => i % 2 === 0 && msg.content.length + (complete[i + 1]?.content.length ?? 0) > MAX_PERSISTED_CHARS);
+}
+
+function saveChat(key: string, msgs: StoredMsg[], expectedRaw: string | null): string | null {
+  if (storageGetChecked(key) !== expectedRaw) throw new Error("本地存档已在其他窗口更改，未覆盖；请导出当前对话后重新加载");
+  // Streaming or interrupted output never rewrites the previously saved archive.
+  if (msgs.some((message) => message.partial)) return expectedRaw;
+  // Never replace the previous archive with an empty transcript for a large answer.
+  if (hasOversizedTurn(msgs)) throw new Error("超长回答未写入本地存档，也不会进入后续上下文；本次新增对话均未保存，请导出或保存为笔记，离开页面前妥善保存");
   const keep = boundedCompleteTurns(msgs);
-  if (!keep.length) {
-    storageRemove(key);
-    return;
-  }
-  storageSet(key, JSON.stringify(keep));
+  const raw = keep.length ? JSON.stringify(keep) : null;
+  if (raw === expectedRaw) return raw;
+  if (raw === null) storageRemoveChecked(key);
+  else storageSetChecked(key, raw);
+  return raw;
 }
 
 function loadEpoch(key: string): number {
@@ -175,15 +185,20 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
   // （setState 下一帧才生效），落盘守卫会误放行，把来源页对话写进目标 key、
   // 覆盖掉目标页已存的对话。捆在一起后，转场帧里 chat.key 天然还是旧值，守卫必然拦住。
   // 惰性初始化：首帧就带上已存的对话，避免先渲染空列表再闪一下补上。
-  const [chat, setChat] = useState<{ key: string; msgs: StoredMsg[] }>(
-    () => ({ key: chatKey, msgs: loadChat(chatKey) }),
+  const [chat, setChat] = useState<ChatArchive>(
+    () => loadChat(chatKey),
   );
-  const msgs = chat.msgs;
+  const msgs = chat.key === chatKey ? chat.msgs : [];
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const archiveWarning = chat.key === chatKey
+    ? saveError || chat.readError || (hasOversizedTurn(msgs) ? "超长回答不会进入后续上下文；请导出或保存为笔记" : null)
+    : null;
   const setMsgs = (
     updater: StoredMsg[] | ((prev: StoredMsg[]) => StoredMsg[]),
   ) =>
     setChat((c) => ({
-      key: c.key,
+      ...c,
+      dirty: true,
       msgs: typeof updater === "function" ? updater(c.msgs) : updater,
     }));
   // Unsent drafts belong to this mounted instance and the exact conversation key.
@@ -248,14 +263,24 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     abortRef.current = null;
     setLoading(false);
     setEpoch(loadEpoch(chatKey));
-    setChat({ key: chatKey, msgs: loadChat(chatKey) });
+    setChat(loadChat(chatKey));
+    setSaveError(null);
   }, [chatKey]);
 
   // 每次消息变动落盘。守卫见上方 chat state 的注释：转场帧里 chat.key 仍是旧值，
   // 与 chatKey 不等，于是不会把旧对话写进新 key。
   useEffect(() => {
     if (chat.key !== chatKey) return;
-    saveChat(chatKey, chat.msgs);
+    if (!chat.dirty) return;
+    let raw = chat.raw;
+    try {
+      if (chat.readError) throw new Error(chat.readError);
+      raw = saveChat(chatKey, chat.msgs, chat.raw);
+      setSaveError(null);
+    } catch (cause) {
+      setSaveError(cause instanceof Error ? cause.message : "对话未保存，请导出备份");
+    }
+    setChat((current) => current === chat ? { ...current, raw, dirty: false } : current);
   }, [chatKey, chat]);
 
   useEffect(() => () => abortRef.current?.abort(), []); // 组件卸载兜底
@@ -265,12 +290,17 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     abortRef.current = null;
     setLoading(false);
     setErr(null);
-    setMsgs([]);          // saveChat 见空数组会 storageRemove，不留空壳
-    setEpoch((current) => {
-      const next = current + 1;
-      storageSet(CHAT_EPOCH_PREFIX + chatKey, String(next));
-      return next;
-    });
+    try {
+      if (storageGetChecked(chatKey) !== chat.raw) throw new Error("本地存档已变化，未清空；请先导出并重新加载");
+      const next = epoch + 1;
+      storageSetChecked(CHAT_EPOCH_PREFIX + chatKey, String(next));
+      storageRemoveChecked(chatKey);
+      setEpoch(next);
+      setChat({ key: chatKey, msgs: [], raw: null, readError: null, dirty: false });
+      setSaveError(null);
+    } catch (cause) {
+      setSaveError(cause instanceof Error ? cause.message : "清空失败，原对话仍保留");
+    }
   };
 
   const close = () => {
@@ -302,6 +332,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
   const send = async (text: string) => {
     const q = text.trim();
     if (!q || loading) return;
+    if (q.length > MAX_PERSISTED_CHARS) { setErr("问题超过 80000 字符，未发送；请缩短问题，草稿已保留"); return; }
     setInput("");
     setErr(null);
     // 未完成的轮次整轮不进 history（半截回答 + 它的提问）：
@@ -325,7 +356,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
     // 这样「流到一半用户换页/换标的」时，落盘的那份天然就不含这条残句——
     // 靠中止时再补标记是来不及的：每个 delta 都会触发落盘。
     setMsgs([
-      ...visibleHistory,
+      ...(hasOversizedTurn(msgs) ? msgs : visibleHistory),
       { role: "user", content: q },
       { role: "assistant", content: "", tools: [], partial: true,
         noteMetadata: answerMetadata },
@@ -348,11 +379,14 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
         onDelta: (t) => { if (alive()) patchLast((msg) => ({ ...msg, content: msg.content + t })); },
       }, ac.signal, session, reportIds, reportPageContext);
       // 正常收完：摘掉 partial，这条回答才开始落盘、才进下一轮 history。
-      if (alive()) setMsgs((current) => boundedCompleteTurns(current.map((msg, index) => {
-        if (index !== current.length - 1 || msg.role !== "assistant") return msg;
-        const { partial: _drop, ...rest } = msg;
-        return rest;
-      })));
+      if (alive()) setMsgs((current) => {
+        const completed = current.map((msg, index) => {
+          if (index !== current.length - 1 || msg.role !== "assistant") return msg;
+          const { partial: _drop, ...rest } = msg;
+          return rest;
+        });
+        return hasOversizedTurn(completed) ? completed : boundedCompleteTurns(completed);
+      });
     } catch (e) {
       // 三种「不该清理」的情况要分开判，不能简单用 abortRef.current === ac：
       //   · 有更新的请求接管了（abortRef 指向别人）→ 别删人家的气泡
@@ -544,6 +578,15 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         {isCodexRuntime ? "Codex 正在根据当前页面思考…" : "AI 正在思考 / 调取数据…"}
+                      </div>
+                    )}
+                    {archiveWarning && (
+                      <div role="alert" className="my-2 rounded border border-warning/40 p-2 text-xs text-warning">
+                        <p>{archiveWarning}</p>
+                        <a aria-label="导出当前对话" download="vibe-chat.json" href={`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(msgs, null, 2))}`} className="mr-3 underline">导出当前对话</a>
+                        {chat.raw !== null && <a aria-label="导出原始存档" download="vibe-chat-original.json" href={`data:application/json;charset=utf-8,${encodeURIComponent(chat.raw)}`} className="mr-3 underline">导出原始存档</a>}
+                        {!chat.readError && <button aria-label="重试保存对话" onClick={() => setChat((current) => ({ ...current, dirty: true }))} className="underline">重试保存</button>}
+                        <button aria-label="清空损坏存档" onClick={clearChat} className="ml-3 underline">明确清空存档</button>
                       </div>
                     )}
                     {err && (

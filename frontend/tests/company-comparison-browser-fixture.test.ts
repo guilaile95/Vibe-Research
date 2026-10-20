@@ -1,3 +1,4 @@
+import { installCredentialFixture, withCredentialStatus } from './credentialTransportFixture.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -7,14 +8,16 @@ import { parseResearchBundle } from '../src/lib/companyResearch.ts';
 import { createComparisonFixture, comparisonGoldens, comparisonHistoryGolden, comparisonEmptyGolden, comparisonLlm, comparisonCutoff, bundleListPaths, generationPath, historyPath } from './e2e/company-comparison.fixture.mjs';
 const origin = 'http://127.0.0.1:8911';
 const signal = () => new AbortController().signal;
+const storedComparisonLlm = { ...comparisonLlm, revision: '1' };
 function mockApi(t: any, fixture: any) {
-  t.mock.method(globalThis, 'fetch', async (url: string | URL, init?: RequestInit) => {
+  installCredentialFixture(t, storedComparisonLlm);
+  t.mock.method(globalThis, 'fetch', withCredentialStatus(async (url: string | URL, init?: RequestInit) => {
     const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
     const response = fixture.handle(new URL(String(url), origin).href, init?.method || 'GET', body);
     assert.notEqual(response.kind, 'deny', JSON.stringify(fixture.violations));
     assert.notEqual(response.kind, 'static', 'parser tests may read fixture APIs only');
     return new Response(response.kind === 'stream' ? response.body : JSON.stringify(response.body), { status: response.status || 200 });
-  });
+  }));
 }
 test('actual empty-store registered selectors pass production parser without enabling generation', async t => {
   const f = createComparisonFixture(origin); mockApi(t, f); f.expectEmptyBundles();
@@ -42,7 +45,7 @@ for (const scenario of ['complete', 'missing']) test(`actual registered ${scenar
   assert.deepEqual(lists, g.bundle_lists); assert.deepEqual(f.expected, []);
   f.expectGeneration(scenario);
   const bundles = await Promise.all(lists.map((list: any) => readComparisonBundle(list[0], signal())));
-  const result = await generateComparison(bundles, comparisonCutoff, comparisonLlm, signal());
+  const result = await generateComparison(bundles, comparisonCutoff, storedComparisonLlm, signal());
   assert.deepEqual(result, g.record); assert.deepEqual(f.expected, []);
   f.expectHistory(scenario); assert.deepEqual((await readComparisonRunPage({market:'US',symbol:'AAPL'},{market:'HK',symbol:'00700'},comparisonCutoff,signal())).records, [g.record]);
   assert.deepEqual(f.expected, []); assert.deepEqual(f.violations, []);
@@ -65,7 +68,7 @@ for (const delivery of ['truncated', 'failed']) test(`actual stream ${delivery} 
   const f = createComparisonFixture(origin); mockApi(t, f); f.expectGeneration('complete', delivery);
   const g = comparisonGoldens.complete;
   const bundles = await Promise.all(g.bundle_lists.map((list: any) => readComparisonBundle(list[0], signal())));
-  await assert.rejects(generateComparison(bundles, comparisonCutoff, comparisonLlm, signal()), delivery === 'truncated' ? /未收到完整报告/ : /对比未完成/);
+  await assert.rejects(generateComparison(bundles, comparisonCutoff, storedComparisonLlm, signal()), delivery === 'truncated' ? /未收到完整报告/ : /对比未完成/);
   assert.equal(f.calls.filter((c: any) => c.method === 'POST').length, 1); assert.deepEqual(f.expected, []);
 });
 test('manual list, readback, history and generate all fail closed without a corresponding click', () => {
@@ -196,7 +199,7 @@ for(const category of ['TIMEOUT','UPSTREAM','OUTPUT_INVALID','PERSISTENCE'])test
  const f=createComparisonFixture(origin);mockApi(t,f);f.expectGeneration('complete',category);
  const g=comparisonGoldens.complete;
  const bundles=await Promise.all(g.bundle_lists.map((list:any)=>readComparisonBundle(list[0],signal())));
- await assert.rejects(generateComparison(bundles,comparisonCutoff,comparisonLlm,signal()),e=>{
+ await assert.rejects(generateComparison(bundles,comparisonCutoff,storedComparisonLlm,signal()),e=>{
   assert.match(String(e),new RegExp(category));assert.ok(String(e).includes(comparisonFailures.events[category][0].run_id));
   assert.match(String(e),/可能已产生模型费用/);assert.doesNotMatch(String(e),/private/);return true;
  });

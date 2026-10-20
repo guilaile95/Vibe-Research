@@ -261,19 +261,49 @@ export async function downloadReport(id: string, name: string): Promise<void> {
 }
 
 
+// All model-submit paths pass these shared transports, including callers that
+// captured a config before another tab cleared it. Explicit draft connection
+// probes are deliberately exempt: they do not save or consume stored authority.
+export function modelRequestWireBody(body: unknown): unknown {
+  if (!body || typeof body !== "object" || !("llm" in body)) return body;
+  const llm = (body as { llm?: unknown }).llm;
+  if (!llm || typeof llm !== "object" || Array.isArray(llm)) return body;
+  // Client-only concurrency metadata must not weaken strict backend ModelIn
+  // schemas. Preserve all other fields so unknown fields still fail closed.
+  const { revision: _revision, ...model } = llm as Record<string, unknown>;
+  return { ...body, llm: model };
+}
+
+export async function checkCredentialGeneration(path: string, body: unknown, signal?: AbortSignal) {
+  if (path === "/ai/connection-test" || !body || typeof body !== "object" || !("llm" in body)) return;
+  const llm = (body as { llm?: unknown }).llm;
+  if (!llm || typeof llm !== "object") return;
+  const candidate = llm as { revision?: string; provider?: string; model?: string; baseURL?: string; apiKey?: string };
+  const status = await request<{ revision: string | null; configured: boolean }>(
+    "/ai/credential-status", "GET", undefined, { unwrapData: false, signal });
+  let current;
+  try { current = JSON.parse(localStorage.getItem("vr-llm") || "null"); } catch { current = null; }
+  if (!status || status.configured !== true || typeof status.revision !== "string" || !/^(0|[1-9][0-9]{0,18})$/.test(status.revision) || !candidate.revision || status.revision !== candidate.revision ||
+      !current || current.revision !== status.revision ||
+      ["provider", "model", "baseURL", "apiKey"].some(key => current[key] !== candidate[key as keyof typeof candidate])) {
+    throw new ApiError("AI 配置已变化或尚未同步，请在接入 AI 页面重新保存", 409);
+  }
+}
+
 export async function request<T>(
   path: string,
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" = "GET",
   body?: unknown,
   options?: { unwrapData?: boolean; signal?: AbortSignal },
 ): Promise<T> {
+  await checkCredentialGeneration(path, body, options?.signal);
   const unwrapData = options?.unwrapData ?? true;
   let resp: Response;
   const headers: Record<string, string> = { ...authHeaders() };
   const opts: RequestInit = { method };
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
-    opts.body = JSON.stringify(body);
+    opts.body = JSON.stringify(modelRequestWireBody(body));
   }
   if (options?.signal) opts.signal = options.signal;
   if (Object.keys(headers).length > 0) opts.headers = headers;
@@ -450,12 +480,13 @@ export async function streamNdjson(
   handlers: NdjsonStreamHandlers = {},
   signal?: AbortSignal,
 ): Promise<NdjsonStreamResult> {
+  await checkCredentialGeneration(path, body, signal);
   let resp: Response;
   try {
     resp = await fetch(`/api${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify(body),
+      body: JSON.stringify(modelRequestWireBody(body)),
       signal,
     });
   } catch (e) {
@@ -528,6 +559,18 @@ export async function dailyReviewAnalyzeStream(
 }
 
 
+export interface AiCredentialStatus {
+  revision: string | null;
+  configured: boolean;
+  provider: string | null;
+  model: string | null;
+  baseURL: string;
+  updated_at: string | null;
+  scheduled_available: boolean;
+  scheduled_credential_available: boolean;
+  error: string | null;
+}
+
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
   putAiCredential: (payload: {
@@ -535,20 +578,12 @@ export const api = {
     model: string;
     baseURL?: string;
     apiKey?: string;
-  }) => request("/ai/credential", "PUT", payload, { unwrapData: false }),
-  getAiCredentialStatus: () =>
-    request<{
-      configured: boolean;
-      provider: string | null;
-      model: string | null;
-      baseURL: string;
-      updated_at: string | null;
-      scheduled_available: boolean;
-      scheduled_credential_available: boolean;
-      error: string | null;
-    }>("/ai/credential-status", "GET", undefined, { unwrapData: false }),
-  deleteAiCredential: () =>
-    request("/ai/credential", "DELETE", undefined, { unwrapData: false }),
+    expectedRevision: string;
+  }, signal?: AbortSignal) => request<AiCredentialStatus>("/ai/credential", "PUT", payload, { unwrapData: false, signal }),
+  getAiCredentialStatus: (signal?: AbortSignal) =>
+    request<AiCredentialStatus>("/ai/credential-status", "GET", undefined, { unwrapData: false, signal }),
+  deleteAiCredential: (observedRevision: string, signal?: AbortSignal) =>
+    request<AiCredentialStatus>("/ai/credential", "DELETE", { observedRevision }, { unwrapData: false, signal }),
   indices: () => get<IndexQuote[]>("/indices"),
   /**
    * 结构化每日复盘聚合包（一次请求覆盖指数/广度/情绪/成交/板块）。

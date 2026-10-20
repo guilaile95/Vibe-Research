@@ -275,8 +275,9 @@ def test_voided_and_not_executed_trades_are_excluded(tmp_path, monkeypatch):
     result = runtime.evaluate_outcome(
         decision["decision_id"], evaluation_as_of=EVALUATION_AS_OF
     )
-    assert result["actual_capital_outcome"]["state"] == "NO_ACTUAL_TRADE"
-    assert result["actual_capital_outcome"]["trade_ids"] == []
+    assert result["actual_capital_outcome"]["pnl_state"] == "NOT_EVALUATED"
+    assert "HISTORICAL_ACTUAL_NOT_RECONSTRUCTIBLE" in result["reason_codes"]
+    assert result["actual_capital_outcome"]["trade_ids"] == [voided["trade_id"]]
 
 
 def test_replay_hash_is_stable_when_later_trade_is_added(tmp_path, monkeypatch):

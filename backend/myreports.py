@@ -101,6 +101,19 @@ class ReportError(ValueError):
     """上传/校验类错误（对应 HTTP 400/413）。"""
 
 
+class ReportDeleteError(RuntimeError):
+    """Stable public delete failure; never expose filesystem exception details."""
+    def __init__(self, recovery_required: bool = False):
+        self.code = "REPORT_DELETE_RECOVERY_REQUIRED" if recovery_required else "REPORT_DELETE_RETRYABLE"
+        self.status_code = 409 if recovery_required else 503
+        message = (
+            "删除未完成，归档索引恢复需要核对；原文件和备份已保留，请勿重复上传。"
+            if recovery_required else
+            "删除未完成，归档条目已恢复，正文索引可能需要重建；请重试删除。"
+        )
+        super().__init__(f"{self.code}: {message}")
+
+
 class ReportIndexCorruptedError(RuntimeError):
     """本地研报索引文件损坏，已停止读写以避免覆盖。"""
     MESSAGE = (
@@ -905,32 +918,47 @@ def delete_report(rid: str) -> bool:
         # Do not discard searchable text before the authoritative archive index
         # is safely published. A rejected delete must leave research usable.
         _save_index(new_items)
-        try:
-            fulltext.remove_report(REPORTS_DIR, rid)
-        except Exception:
-            # The archive lock still covers this rollback, so a concurrent
-            # upload/edit cannot be overwritten. Keep both the source and the
-            # pre-delete .bak intact, including when rollback itself fails.
+        index_after = json.dumps(new_items, ensure_ascii=False, indent=2).encode("utf-8")
+
+        def rollback_index() -> None:
+            # _LOCK serializes this process only. Detect unexpected external
+            # writes before replacement; this is not a cross-process CAS.
             rollback_tmp = _tmp_name(str(index_path))
             try:
+                if index_path.read_bytes() != index_after:
+                    raise ReportDeleteError(recovery_required=True)
                 with open(rollback_tmp, "wb") as stream:
                     stream.write(index_before)
                     stream.flush()
                     os.fsync(stream.fileno())
+                if index_path.read_bytes() != index_after:
+                    raise ReportDeleteError(recovery_required=True)
                 os.replace(rollback_tmp, index_path)
+            except ReportDeleteError:
+                raise
+            except OSError:
+                raise ReportDeleteError(recovery_required=True) from None
             finally:
                 if os.path.exists(rollback_tmp):
                     try:
                         os.remove(rollback_tmp)
                     except OSError:
                         pass
+
+        try:
+            fulltext.remove_report(REPORTS_DIR, rid)
+        except Exception:
+            rollback_index()
             raise
 
         fp = REPORTS_DIR / f"{rid}{hit.get('ext', '')}"
         try:
             fp.unlink(missing_ok=True)
         except OSError:
-            pass
+            # The source is still manageable. Removed derived text is NOT_INDEXED,
+            # not falsely reported as restored or successfully deleted.
+            rollback_index()
+            raise ReportDeleteError() from None
     return True
 
 

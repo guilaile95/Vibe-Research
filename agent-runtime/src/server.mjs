@@ -25,18 +25,37 @@ async function readJson(req) {
     if (bytes > MAX_BODY_BYTES) throw new RuntimeError("BAD_REQUEST", 413);
     chunks.push(chunk);
   }
-  if (!chunks.length) return {};
+  if (!chunks.length) throw new RuntimeError("BAD_REQUEST", 400);
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("object required");
+    return body;
   } catch {
     throw new RuntimeError("BAD_REQUEST", 400);
   }
 }
 
+// This is a backend-only loopback API, not a browser API. Host validation also
+// prevents DNS-rebinding requests to the loopback listener.
+function checkRequestBoundary(req) {
+  const port = req.socket.localPort;
+  const allowed = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
+  if (port === 80) for (const host of ["127.0.0.1", "localhost", "[::1]"]) allowed.add(host);
+  if (!allowed.has(req.headers.host) || req.headers.origin !== undefined ||
+      (req.headers["sec-fetch-site"] !== undefined && req.headers["sec-fetch-site"] !== "none")) {
+    throw new RuntimeError("REQUEST_FORBIDDEN", 403);
+  }
+  if (req.method === "POST" && !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(req.headers["content-type"] || "")) {
+    throw new RuntimeError("BAD_REQUEST", 415);
+  }
+}
+
 export function createAgentServer(runtime = new AgentRuntime()) {
   return http.createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", `http://${HOST}`);
     try {
+      checkRequestBoundary(req);
+      if (!(req.url ?? "/").startsWith("/") || (req.url ?? "/").startsWith("//")) throw new RuntimeError("BAD_REQUEST", 400);
+      const url = new URL(req.url ?? "/", `http://${HOST}`);
       if (req.method === "GET" && url.pathname === "/health") {
         return json(res, 200, { ok: true, service: "vibe-agent-runtime", runtime: "Codex Subscription" });
       }

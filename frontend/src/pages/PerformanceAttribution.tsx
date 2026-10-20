@@ -61,6 +61,7 @@ export default function PerformanceAttribution() {
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [freezing, setFreezing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [snapshotApplicability, setSnapshotApplicability] = useState<string | null>(null);
   const [viewingSnapshotId, setViewingSnapshotId] = useState<string | null>(null);
   const [snapshotListError, setSnapshotListError] = useState<string | null>(null);
   const [freezeError, setFreezeError] = useState<string | null>(null);
@@ -97,6 +98,7 @@ export default function PerformanceAttribution() {
     setError(null);
     setResult(null);
     setViewingSnapshotId(null);
+    setSnapshotApplicability(null);
     try {
       const res = await api.getPerformanceAttribution({
         date_from: dateFrom || undefined,
@@ -125,6 +127,7 @@ export default function PerformanceAttribution() {
     setLoading(true);
     setResult(null);
     setViewingSnapshotId(null);
+    setSnapshotApplicability(null);
     setError(null);
     if (field === "from") setDateFrom(value); else setDateTo(value);
   };
@@ -154,14 +157,17 @@ export default function PerformanceAttribution() {
           viewRequestRef.current += 1;
           setResult(res.attribution);
           setViewingSnapshotId(null);
+          setSnapshotApplicability(null);
           setError(null);
           setLoading(false);
         }
         setSnapshotsOpen(true);
         await loadSnapshots();
       }
-    } catch {
-      const message = "未确认冻结快照结果，请先查看历史快照再决定是否重试；不会自动重新提交。";
+    } catch (err: any) {
+      const message = err?.status === 409 && err?.detail?.code === 'ATTRIBUTION_REQUIRES_RECONCILIATION'
+        ? "交易已有修正，需先对账；本次没有生成快照。"
+        : "未确认冻结快照结果，请先查看历史快照再决定是否重试；不会自动重新提交。";
       toast.error(message);
       if (mountedRef.current) setFreezeError(message);
     } finally {
@@ -177,9 +183,11 @@ export default function PerformanceAttribution() {
     setError(null);
     setResult(null);
     setViewingSnapshotId(null);
+    setSnapshotApplicability(null);
     try {
       const detail = await api.getAttributionSnapshot(snapshotId);
       if (!isCurrent()) return;
+      setSnapshotApplicability(detail.snapshot?.current_applicability?.state ?? "UNVERIFIABLE");
       const payload = detail.snapshot?.payload;
       if (payload) {
         setResult({ ...payload, positions: detail.positions ?? payload.positions ?? [] });
@@ -237,7 +245,7 @@ export default function PerformanceAttribution() {
           <button
             type="button"
             onClick={handleFreeze}
-            disabled={freezing}
+            disabled={freezing || result?.measurement_state === 'UNAVAILABLE'}
             className="flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm hover:bg-accent/50 disabled:opacity-50"
           >
             {freezing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
@@ -262,6 +270,7 @@ export default function PerformanceAttribution() {
       {viewingSnapshotId && (
         <div className="rounded-md border border-border/60 bg-accent/30 p-3 text-sm text-muted-foreground">
           正在查看历史快照 {viewingSnapshotId}
+          {snapshotApplicability !== 'APPLICABLE' && <p role="status">此为原始冻结结果，不代表当前有效盈亏：{snapshotApplicability === 'REQUIRES_RECONCILIATION' ? '相关交易已有修正，待对账。' : '无法验证当前交易来源。'}</p>}
           <button
             type="button"
             onClick={fetchAttribution}
@@ -292,6 +301,10 @@ export default function PerformanceAttribution() {
       ) : !result ? (
         <div className={`${CARD} text-center text-muted-foreground`}>
           归因结果暂不可用，请检查读取状态后重试。
+        </div>
+      ) : result.measurement_state === 'UNAVAILABLE' ? (
+        <div role="status" className={`${CARD} text-center text-amber-600`}>
+          所选交易存在修正，盈亏暂不可计量；待对账后再计算。
         </div>
       ) : positions.length === 0 ? (
         <div className={`${CARD} text-center text-muted-foreground`}>
@@ -421,6 +434,7 @@ export default function PerformanceAttribution() {
                       <td className="py-3 font-mono">{s.as_of_date}</td>
                       <td className={`py-3 font-mono ${pnlClass(s.total_realized_pnl)}`}>
                         {fmtMoney(s.total_realized_pnl)}
+                        {s.current_applicability?.state !== 'APPLICABLE' && <span className="ml-2 text-amber-600">历史值，当前不可验证或待对账</span>}
                       </td>
                       <td className="py-3 font-mono">{s.position_count}</td>
                     </tr>

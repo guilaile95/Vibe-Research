@@ -1,3 +1,4 @@
+import { installCredentialFixture, withCredentialStatus } from './credentialTransportFixture.mjs';
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -5,10 +6,12 @@ import test from "node:test";
 // 验证「前端绝不提交候选池/持仓快照/信号/证据/actions/trade_date_override」的 API 形态：
 //  generate 仅发送 trade_date + llm + force；watchlist 仅发送 codes。
 
-test("generateTomorrowPlan body carries only trade_date/llm/force (no authoritative data)", async () => {
+test("generateTomorrowPlan body carries only trade_date/llm/force (no authoritative data)", async t => {
+  const llm = { provider: "cli-openai", baseURL: "", apiKey: "", model: "x", revision: "1" };
+  installCredentialFixture(t, llm);
   let capturedBody: any = null;
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (_url: any, init: any) => {
+  globalThis.fetch = withCredentialStatus(async (_url: any, init: any) => {
     capturedBody = JSON.parse(init.body);
     return new Response(JSON.stringify({ data: { id: 1, skipped: false } }), { status: 200 });
   }) as any;
@@ -16,12 +19,13 @@ test("generateTomorrowPlan body carries only trade_date/llm/force (no authoritat
     const { generateTomorrowPlan } = await import("../src/lib/decisionCockpit.ts");
     await generateTomorrowPlan(
       "2026-07-24",
-      { provider: "cli-openai", baseURL: "", apiKey: "", model: "x" },
+      llm,
       false,
     );
     assert.equal(capturedBody.trade_date, "2026-07-24");
     assert.equal(capturedBody.force, false);
     assert.equal(capturedBody.llm.model, "x");
+    assert.equal(Object.hasOwn(capturedBody.llm, "revision"), false);
     // 绝不提交权威数据字段
     assert.equal(capturedBody.candidates, undefined);
     assert.equal(capturedBody.signals, undefined);

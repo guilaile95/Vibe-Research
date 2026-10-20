@@ -38,6 +38,10 @@ def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return root
 
 
+def _save_current(payload):
+    return cred.save(payload, expected_revision=cred.status()["revision"])
+
+
 def _seed_intel(db: Path) -> Path:
     store.initialize_store(db)
     store.upsert_sources(
@@ -145,7 +149,7 @@ def test_status_empty(data_dir: Path) -> None:
 
 
 def test_save_api_and_status_hides_secret(data_dir: Path) -> None:
-    status = cred.save(
+    status = _save_current(
         {
             "provider": "openai-compatible",
             "baseURL": "http://127.0.0.1:9",
@@ -168,14 +172,14 @@ def test_save_api_and_status_hides_secret(data_dir: Path) -> None:
 
 def test_save_rejects_incomplete_api(data_dir: Path) -> None:
     with pytest.raises(cred.CredentialStoreError):
-        cred.save(
+        _save_current(
             {"provider": "deepseek", "model": "x", "baseURL": "", "apiKey": SECRET}
         )
 
 
 def test_save_rejects_unknown_provider(data_dir: Path) -> None:
     with pytest.raises(cred.CredentialStoreError):
-        cred.save(
+        _save_current(
             {
                 "provider": "vault-kms",
                 "model": "x",
@@ -186,7 +190,7 @@ def test_save_rejects_unknown_provider(data_dir: Path) -> None:
 
 
 def test_codex_save_wipes_api_secret(data_dir: Path) -> None:
-    cred.save(
+    _save_current(
         {
             "provider": "openai-compatible",
             "baseURL": "http://127.0.0.1:9",
@@ -194,17 +198,19 @@ def test_codex_save_wipes_api_secret(data_dir: Path) -> None:
             "apiKey": SECRET,
         }
     )
-    cred.save({"provider": "cli-codex", "model": "gpt-5-codex"})
+    _save_current({"provider": "cli-codex", "model": "gpt-5-codex"})
     raw = json.loads(cred.credential_path().read_text(encoding="utf-8"))
     assert raw["provider"] == "cli-codex"
     assert raw["apiKey"] == ""
     assert SECRET not in json.dumps(raw)
 
 
-def test_delete_removes_file(data_dir: Path) -> None:
-    cred.save({"provider": "cli-codex", "model": "gpt-5-codex"})
-    cred.delete()
-    assert not cred.credential_path().exists()
+def test_delete_replaces_secret_with_tombstone(data_dir: Path) -> None:
+    _save_current({"provider": "cli-codex", "model": "gpt-5-codex"})
+    cred.delete(observed_revision=cred.status()["revision"])
+    tombstone = json.loads(cred.credential_path().read_text())
+    assert tombstone["configured"] is False
+    assert not any(key in tombstone for key in ("apiKey", "provider", "baseURL", "model"))
     assert cred.status()["configured"] is False
 
 
@@ -230,6 +236,7 @@ def test_http_put_get_delete(data_dir: Path, monkeypatch: pytest.MonkeyPatch) ->
     put = client.put(
         "/api/ai/credential",
         json={
+            "expectedRevision": cred.status()["revision"],
             "provider": "openai-compatible",
             "baseURL": "http://127.0.0.1:9",
             "model": "fixture-model",
@@ -245,7 +252,7 @@ def test_http_put_get_delete(data_dir: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert status.status_code == 200
     assert status.json()["scheduled_credential_available"] is True
     assert SECRET not in status.text
-    deleted = client.delete("/api/ai/credential")
+    deleted = client.request("DELETE", "/api/ai/credential", json={"observedRevision": cred.status()["revision"]})
     assert deleted.status_code == 200
     assert client.get("/api/ai/credential-status").json()["configured"] is False
 
@@ -260,7 +267,7 @@ def test_http_rejects_extra_fields(
     client = TestClient(app_module.app)
     resp = client.put(
         "/api/ai/credential",
-        json={"provider": "cli-codex", "model": "gpt-5-codex", "vault": "no"},
+        json={"expectedRevision": cred.status()["revision"], "provider": "cli-codex", "model": "gpt-5-codex", "vault": "no"},
     )
     assert resp.status_code == 422
 
@@ -311,7 +318,7 @@ def test_scheduled_api_fixture_success_and_secret_stays_local(
     thread.start()
     try:
         port = server.server_address[1]
-        cred.save(
+        _save_current(
             {
                 "provider": "openai-compatible",
                 "baseURL": f"http://127.0.0.1:{port}/v1",
@@ -365,7 +372,7 @@ def test_get_intel_status_reports_scheduled_flag(
     tools = agent_tools.NativeIntelAgentTools(str(db))
     empty = tools.get_intel_status()
     assert empty["ai"]["scheduled_credential_available"] is False
-    cred.save({"provider": "cli-codex", "model": "gpt-5-codex"})
+    _save_current({"provider": "cli-codex", "model": "gpt-5-codex"})
     filled = tools.get_intel_status()
     assert filled["ai"]["scheduled_credential_available"] is True
     assert filled["ai"]["scheduled_provider"] == "cli-codex"
@@ -382,7 +389,7 @@ def test_http_incomplete_api_is_400(
     client = TestClient(app_module.app)
     resp = client.put(
         "/api/ai/credential",
-        json={"provider": "deepseek", "model": "x", "baseURL": "", "apiKey": SECRET},
+        json={"expectedRevision": cred.status()["revision"], "provider": "deepseek", "model": "x", "baseURL": "", "apiKey": SECRET},
     )
     assert resp.status_code == 400
     assert SECRET not in resp.text
@@ -410,7 +417,7 @@ def test_scheduled_error_redacts_secret(
     thread.start()
     try:
         port = server.server_address[1]
-        cred.save(
+        _save_current(
             {
                 "provider": "openai-compatible",
                 "baseURL": f"http://127.0.0.1:{port}/v1",
@@ -436,7 +443,7 @@ def test_scheduled_error_redacts_secret(
 def test_injected_runner_still_bypasses_store(data_dir: Path, tmp_path: Path) -> None:
     db = _seed_intel(tmp_path / "intel.sqlite3")
     _enable_ai_segment(db)
-    cred.save({"provider": "cli-codex", "model": "gpt-5-codex"})
+    _save_current({"provider": "cli-codex", "model": "gpt-5-codex"})
 
     def runner(_cfg, _messages):
         return json.dumps(ANALYSIS, ensure_ascii=False)
@@ -469,7 +476,7 @@ def test_request_less_sentiment_uses_api_mirror(
         {"ai_analysis_provider": "cli-codex", "ai_analysis_model": "gpt-5-codex"},
         db_path=db,
     )
-    cred.save(
+    _save_current(
         {
             "provider": "deepseek",
             "baseURL": "http://127.0.0.1:9/v1",
@@ -504,7 +511,7 @@ def test_request_less_sentiment_uses_codex_mirror(
     import native_intel_agent_tools as agent_tools
 
     db = _seed_intel(tmp_path / "intel.sqlite3")
-    cred.save({"provider": "cli-codex", "model": "gpt-5-codex"})
+    _save_current({"provider": "cli-codex", "model": "gpt-5-codex"})
     captured: list[dict] = []
 
     def fake_invoke(cfg, messages, model_runner=None):
@@ -582,3 +589,147 @@ def test_legacy_sqlite_deepseek_does_not_win_without_mirror(
         mocked.assert_not_called()
     assert res.get("success") is False
     assert "UNAVAILABLE_CREDENTIAL" in str(res.get("error"))
+
+
+def test_revision_cas_rejects_late_save_after_clear(data_dir):
+    first = cred.save({"provider": "cli-codex", "model": "synthetic"}, expected_revision="0")
+    assert first["revision"] == "1"
+    cleared = cred.delete(observed_revision="0")  # stale clear is a barrier
+    assert cleared["revision"] == "2" and not cleared["configured"]
+    with pytest.raises(cred.CredentialConflict):
+        cred.save({"provider": "cli-codex", "model": "late"}, expected_revision="1")
+    assert cred.load() is None
+    assert cred.status()["revision"] == "2"
+    assert cred.delete(observed_revision="0")["revision"] == "3"
+
+
+def test_future_clear_and_competing_save_do_not_write(data_dir):
+    cred.save({"provider": "cli-codex", "model": "first"}, expected_revision="0")
+    before = cred.credential_path().read_bytes()
+    with pytest.raises(cred.CredentialConflict):
+        cred.delete(observed_revision="2")
+    with pytest.raises(cred.CredentialConflict):
+        cred.save({"provider": "cli-codex", "model": "stale"}, expected_revision="0")
+    assert cred.credential_path().read_bytes() == before
+
+
+def test_legacy_read_no_migration_then_explicit_clear(data_dir):
+    path = cred.credential_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"schema_version": "ai_credential.v1", "provider": "openai-compatible", "baseURL": "https://synthetic.invalid", "model": "synthetic", "apiKey": SECRET}))
+    before = path.read_bytes()
+    assert cred.status()["revision"] == "0"
+    assert cred.scheduled_config()[0]["apiKey"] == SECRET
+    assert path.read_bytes() == before
+    cleared = cred.delete(observed_revision="0")
+    assert cleared["revision"] == "1"
+    assert SECRET not in path.read_text()
+    assert cred.scheduled_config() == (None, cred.UNAVAILABLE_CREDENTIAL)
+
+
+@pytest.mark.parametrize("raw", ["{bad", '{"schema_version":"future"}', '{"schema_version":"ai_credential.v2","configured":true,"revision":true}'])
+def test_corrupt_unknown_state_never_resets_revision(data_dir, raw):
+    path = cred.credential_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(raw)
+    assert cred.status()["revision"] is None
+    for operation in [lambda: cred.save({"provider": "cli-codex", "model": "synthetic"}, expected_revision="0"), lambda: cred.delete(observed_revision="0")]:
+        with pytest.raises(cred.CredentialStoreError):
+            operation()
+        assert path.read_text() == raw
+
+
+def test_old_mutation_protocol_fails_closed(data_dir):
+    from ai_credential_router import router
+    from fastapi import FastAPI
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    assert client.put("/api/ai/credential", json={"provider": "cli-codex", "model": "synthetic"}).status_code == 422
+    assert client.delete("/api/ai/credential").status_code == 422
+    assert not cred.credential_path().exists()
+    assert client.put("/api/ai/credential", json={"provider": "cli-codex", "model": "synthetic", "expectedRevision": "0"}).status_code == 200
+    assert client.put("/api/ai/credential", json={"provider": "cli-codex", "model": "synthetic", "expectedRevision": "0"}).status_code == 409
+
+
+def test_concurrent_save_clear_stress_ends_cleared(data_dir):
+    # Both requests observe the same generation; this stress test samples scheduling.
+    import concurrent.futures
+    for _ in range(12):
+        revision = cred.status()["revision"]
+        barrier = threading.Barrier(2)
+        def save():
+            barrier.wait()
+            try:
+                cred.save({"provider": "cli-codex", "model": "synthetic"}, expected_revision=revision)
+            except cred.CredentialConflict:
+                pass
+        def clear():
+            barrier.wait()
+            cred.delete(observed_revision=revision)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            tasks = [pool.submit(save), pool.submit(clear)]
+            for task in tasks:
+                task.result()
+        assert cred.status()["configured"] is False
+
+
+@pytest.mark.parametrize("first", ["save", "clear"])
+def test_save_clear_order_is_deterministic(data_dir, first):
+    import concurrent.futures
+    first_done = threading.Event()
+    order = []
+    def save():
+        if first != "save":
+            assert first_done.wait(2)
+        try:
+            cred.save({"provider": "cli-codex", "model": "synthetic"}, expected_revision="0")
+            order.append("save")
+        except cred.CredentialConflict:
+            order.append("save_conflict")
+        finally:
+            if first == "save":
+                first_done.set()
+    def clear():
+        if first != "clear":
+            assert first_done.wait(2)
+        cred.delete(observed_revision="0")
+        order.append("clear")
+        if first == "clear":
+            first_done.set()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        for future in [pool.submit(save), pool.submit(clear)]:
+            future.result()
+    assert order == (["save", "clear"] if first == "save" else ["clear", "save_conflict"])
+    assert cred.status()["configured"] is False
+    assert cred.status()["revision"] == ("2" if first == "save" else "1")
+
+
+def test_two_saves_at_same_generation_have_one_winner(data_dir):
+    import concurrent.futures
+    barrier = threading.Barrier(2)
+    def save(model):
+        barrier.wait()
+        try:
+            cred.save({"provider": "cli-codex", "model": model}, expected_revision="0")
+            return "saved"
+        except cred.CredentialConflict:
+            return "conflict"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        results = [future.result() for future in [pool.submit(save, "synthetic-a"), pool.submit(save, "synthetic-b")]]
+    assert sorted(results) == ["conflict", "saved"]
+    assert cred.status()["revision"] == "1"
+
+
+def test_atomic_replace_failure_preserves_record_and_revision(data_dir, monkeypatch):
+    cred.save({"provider": "cli-codex", "model": "synthetic"}, expected_revision="0")
+    before = cred.credential_path().read_bytes()
+    def fail(*args):
+        raise OSError("synthetic replace failure")
+    monkeypatch.setattr(cred.os, "replace", fail)
+    for action in [lambda: cred.save({"provider": "cli-codex", "model": "synthetic-new"}, expected_revision="1"), lambda: cred.delete(observed_revision="1")]:
+        with pytest.raises(OSError):
+            action()
+        assert cred.credential_path().read_bytes() == before
+        assert cred.status()["revision"] == "1"
+        assert not list(cred.credential_path().parent.glob("*.tmp.*"))

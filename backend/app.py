@@ -1354,7 +1354,10 @@ def myreports_file(rid: str):
 
 @app.delete("/api/myreports/{rid}")
 def myreports_delete(rid: str):
-    return {"data": {"ok": mr.delete_report(rid)}}
+    try:
+        return {"data": {"ok": mr.delete_report(rid)}}
+    except mr.ReportDeleteError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
 
 
 @app.get("/api/myreports/browse")

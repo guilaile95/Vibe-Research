@@ -46,7 +46,7 @@ test('conflict is visible and never retried automatically',async()=>{
   assert.match(text(h.render()),/分组已变化/);assert.equal(h.calls.filter(c=>c[1].method==='POST').length,1);
 });
 test('late context after unmount is ignored',async()=>{
-  let finish;const h=harness(()=>new Promise(r=>{finish=r;}));h.render();h.unmount();finish(response(context));await tick();assert.equal(button(h.render(),'保存用户关联'),undefined);
+  let finish;const h=harness(()=>new Promise(r=>{finish=r;}));h.render();await tick();h.unmount();finish(response(context));await tick();assert.equal(button(h.render(),'保存用户关联'),undefined);
 });
 
 for (const grouped of [false, true]) test(`old ${grouped ? 'group members' : 'ungrouped anchor'} outside 200 candidates use current tokens`, async () => {

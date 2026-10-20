@@ -2,7 +2,7 @@
 // 抽出来是因为多 agent 流程的事件类型比对话多（阶段、进度、分角色增量），
 // 各页面只关心事件本身，不该各写一遍拆行/解码逻辑。
 
-import { ApiError, authHeaders } from "./api.ts";
+import { ApiError, authHeaders, checkCredentialGeneration, modelRequestWireBody } from "./api.ts";
 
 export type NdjsonEvent = Record<string, any>;
 
@@ -18,12 +18,13 @@ export async function streamNdjson(
   signal?: AbortSignal,
   options?: { strict?: boolean; maxBytes?: number },
 ): Promise<void> {
+  await checkCredentialGeneration(url.replace(/^\/api/, ""), body, signal);
   let resp: Response;
   try {
     resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify(body),
+      body: JSON.stringify(modelRequestWireBody(body)),
       signal,
     });
   } catch (e) {

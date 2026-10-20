@@ -37,7 +37,12 @@ def _rdp_reader(rows: list[dict]):
         page = rows[offset : offset + 4]
         return {
             "status": "normal",
+            "snapshot_id": "a" * 64,
             "as_of": "2026-09-08",
+            "latest_date": "2026-09-08",
+            "dataset_id": "ashare_daily_unadjusted",
+            "provider_id": "local_bulk_dump",
+            "adjustment": "UNADJUSTED",
             "provenance": {"artifact_sha256": "fixture"},
             "rows": page,
             "next_offset": offset + len(page) if offset + len(page) < len(rows) else None,

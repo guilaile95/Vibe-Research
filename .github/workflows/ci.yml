@@ -285,6 +285,24 @@ jobs:
           PYTHON: python
         run: npm run test:e2e:factor-validation
 
+      - name: Run bounded workflow recovery E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          WORKFLOW_RECOVERY_EVIDENCE_DIR: ${{ runner.temp }}/workflow-recovery-evidence
+          WORKFLOW_RECOVERY_PR_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: npm run test:e2e:workflow-recovery
+
+      - name: Preserve workflow recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: workflow-recovery-evidence
+          path: ${{ runner.temp }}/workflow-recovery-evidence
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Run delayed factor navigation regression E2E
         if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
@@ -1314,6 +1332,11 @@ jobs:
         run: >-
           python -m pytest -m "not live" -q
           tests/test_company_research_audit.py
+          tests/test_test_environment_isolation.py
+          tests/test_safe_deep_read_fetch.py
+          tests/test_ai_credential_store.py
+          tests/test_formal_account_authority_regressions.py
+          tests/test_global_metrics_semantics.py
           tests/test_allocation_targets.py
           tests/test_experiment_ledger.py
           tests/test_prediction_journal.py

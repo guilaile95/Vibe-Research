@@ -68,6 +68,7 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
   let context, page, peer;
   const errors = [], unexpected = [], requests = [], external = [], storageEvidence = [], streamEvidence = [];
   const slotsBefore = streamState.all.length;
+  const credential = { revision: 1, configured: true, putStarted: deferred(), releasePut: deferred(), cleared: deferred() };
   const diagnostics = { mode: "malicious", count: 0, started: deferred(), release: deferred() };
   try {
     context = await browser.newContext({ baseURL, viewport: { width, height: 960 }, serviceWorkers: "block" });
@@ -89,6 +90,25 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
         if (diagnostics.mode === "malicious") reply.data.startup.source_directory = "SYNTHETIC_PRIVATE_PATH";
         else { diagnostics.started.resolve(); await diagnostics.release.promise; }
         return route.fulfill({ json: reply });
+      }
+      if (scenario === "credential-race" && url.pathname === "/api/ai/credential-status") {
+        return route.fulfill({ json: { revision: String(credential.revision), configured: credential.configured, provider: credential.configured ? config.provider : null, scheduled_available: credential.configured } });
+      }
+      if (scenario === "credential-race" && url.pathname === "/api/ai/credential") {
+        const body = request.postDataJSON();
+        if (request.method() === "PUT") {
+          assert.equal(body.apiKey, config.apiKey);
+          assert.equal(body.expectedRevision, "1");
+          credential.putStarted.resolve();
+          await credential.releasePut.promise;
+          if (body.expectedRevision !== String(credential.revision)) return route.fulfill({ status: 409, json: { detail: "CREDENTIAL_REVISION_CONFLICT" } });
+          credential.revision++; credential.configured = true;
+        } else if (request.method() === "DELETE") {
+          assert.ok(Number(body.observedRevision) <= credential.revision);
+          credential.revision++; credential.configured = false;
+          credential.cleared.resolve();
+        } else throw new Error("Unexpected credential method");
+        return route.fulfill({ json: { revision: String(credential.revision), configured: credential.configured } });
       }
       const reply = readReply(request.method(), url.pathname, url.search);
       if (reply) return route.fulfill({ json: reply });
@@ -120,7 +140,26 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
     };
     const aborted = index => page.waitForFunction(i => window.__streams[i]?.aborted, index);
     const stored = () => page.evaluate(() => JSON.stringify(Object.fromEntries(Object.entries(localStorage))));
-    if (scenario === "chat-drafts") {
+    if (scenario === "credential-race") {
+      await page.goto("/settings");
+      await page.getByTestId("wave5-save-api-btn").click();
+      await bounded(credential.putStarted.promise);
+      await page.getByTestId("wave5-forget-btn").click();
+      await page.waitForFunction(() => localStorage.getItem("vr-llm") === null);
+      // Unmount/remount cannot discard the queue or let old save completion own UI.
+      if (width < 768) await page.getByTestId("nav-drawer-trigger").click();
+      await page.locator('a[href="/my-reports"]').first().click();
+      credential.releasePut.resolve();
+      await bounded(credential.cleared.promise);
+      await page.goto("/settings");
+      await page.getByText("接入 AI", { exact: true }).first().waitFor();
+      assert.equal(await page.evaluate(() => localStorage.getItem("vr-llm")), null);
+      assert.equal(credential.configured, false);
+      assert.equal(credential.revision, 3);
+      assert.equal(requests.filter(row => row === "PUT /api/ai/credential").length, 1);
+      assert.equal(requests.filter(row => row === "DELETE /api/ai/credential").length, 1);
+      assert.equal(await streamCount(), 0);
+    } else if (scenario === "chat-drafts") {
       await page.goto("/my-reports");
       const a = page.getByRole("checkbox", { name: "选择 Synthetic report", exact: true });
       const b = page.getByRole("checkbox", { name: "选择 Synthetic report B", exact: true });
@@ -193,7 +232,8 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
       assert.equal(diagnostics.count, 2, "same-turn duplicate clicks start only one valid request");
       assert.equal(await download.isDisabled(), true);
       assert.equal(await access.inputValue(), "SYNTHETIC_UNSAVED_ACCESS_DRAFT");
-      diagnostics.release.resolve();
+      credential.releasePut.resolve();
+    diagnostics.release.resolve();
       const observedDownload = await downloaded;
       if ("error" in observedDownload) throw observedDownload.error;
       const file = observedDownload.file;
@@ -381,6 +421,7 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
     await page?.screenshot({ path: join(evidenceDir, `${scenario}-${width}-failure.png`), fullPage: true }).catch(() => {});
     throw new Error(`${scenario} ${width}px: ${error.message}; ${JSON.stringify({ errors, unexpected, requests, external })}`, { cause: error });
   } finally {
+    credential.releasePut.resolve();
     diagnostics.release.resolve();
     streamState.all.slice(slotsBefore).forEach(slot => slot.finish("SYNTHETIC_CLEANUP"));
     streamState.queue.length = 0;
@@ -399,13 +440,13 @@ async function main() {
     browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } : {}) });
     server = await staticServer(streamState);
     const baseURL = `http://127.0.0.1:${server.address().port}`;
-    for (const width of [1440, 390]) for (const scenario of ["chat-drafts", "chat-unrelated", "chat-runtime", "chat-access", "chat-current", "chat-epoch", "chat-clear", "chat-controls", "settings-save", "settings-races", "settings-diagnostics"]) {
+    for (const width of [1440, 390]) for (const scenario of ["chat-drafts", "chat-unrelated", "chat-runtime", "chat-access", "chat-current", "chat-epoch", "chat-clear", "chat-controls", "settings-save", "settings-races", "settings-diagnostics", "credential-race"]) {
       try { result.results.push(await runScenario(browser, baseURL, width, scenario, streamState, evidenceDir)); console.log(`[AI-SET] ${scenario} ${width}px PASS`); }
       catch (error) { result.results.push({ scenario, width, status: "FAIL", error: error.message }); console.error(`[AI-SET] ${scenario} ${width}px FAIL: ${error.message}`); }
     }
-    assert.equal(result.results.length, 22);
+    assert.equal(result.results.length, 24);
     assert.equal(result.results.filter(row => row.status !== "PASS").length, 0, "all scenario groups must pass");
-    console.log("[AI-SET] 22/22 PASS");
+    console.log("[AI-SET] 24/24 PASS");
   } catch (error) { result.error = error.message; throw error; }
   finally {
     try { writeFileSync(join(evidenceDir, "results.json"), JSON.stringify(result, null, 2)); }

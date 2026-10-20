@@ -50,20 +50,21 @@ test("there is a way to clear a stored conversation", () => {
 });
 
 test("emptying the conversation removes the key rather than storing an empty shell", () => {
-  assert.match(source, /if \(!msgs\.length\)\s*\{\s*\n?\s*storageRemove\(key\)/);
+  assert.match(source, /if \(raw === null\) storageRemoveChecked\(key\)/);
 });
 
 test("key and messages are stored in one atomic state, not a ref", () => {
   // 分成 msgs + 归属 ref 是不够的：key 变化那一帧 ref 已指向新 key 而 msgs 仍是旧的
   // （setState 下一帧才生效），守卫会误放行、覆盖目标 key 已存的对话。
-  assert.match(source, /useState<\{ key: string; msgs: StoredMsg\[\] \}>/);
+  assert.match(source, /useState<ChatArchive>/);
+  assert.match(source, /type ChatArchive = \{ key: string; msgs: StoredMsg\[\]/);
   assert.match(source, /if \(chat\.key !== chatKey\) return;/);
   assert.doesNotMatch(source, /loadedKeyRef/);
 });
 
 test("switching keys aborts an in-flight stream", () => {
   // 否则迟到的 chunk 会被追加到目标页的对话上，且存的是用来源页上下文生成的回答。
-  const effect = source.match(/useEffect\(\(\) => \{[\s\S]*?setChat\(\{ key: chatKey[\s\S]*?\}, \[chatKey\]\);/);
+  const effect = source.match(/useEffect\(\(\) => \{[\s\S]*?setChat\(loadChat\(chatKey\)\)[\s\S]*?\}, \[chatKey\]\);/);
   assert.ok(effect, "未找到 chatKey 切换的 effect");
   assert.match(effect[0], /abortRef\.current\?\.abort\(\)/);
 });
@@ -101,10 +102,10 @@ test("streaming replies are partial from creation and only cleared on success", 
   // 回到该对话时还会以完整发言的身份进入下一轮 history。
   assert.match(source, /partial\?: boolean/);
   assert.match(source, /role: "assistant", content: "", tools: \[\], partial: true/); // 创建即标
-  assert.match(source, /boundedCompleteTurns\(current\.map/);                       // 成功即压回同一可见上限
+  assert.match(source, /hasOversizedTurn\(completed\) \? completed : boundedCompleteTurns\(completed\)/);                       // 超长完整回答保留在界面供导出
   assert.match(source, /const \{ partial: _drop, \.\.\.rest \} = msg;/);            // 成功才摘
-  assert.match(source, /const keep = boundedCompleteTurns\(msgs\)/);                 // 不落盘且同一上限
-  assert.match(source, /const visibleHistory = boundedCompleteTurns\(msgs\)/);       // 不进 history且同一上限
+  assert.match(source, /const keep = boundedCompleteTurns\(msgs\)/);                 // 不落盘且有预算上限
+  assert.match(source, /const visibleHistory = boundedCompleteTurns\(msgs\)/);       // 不进 history且有预算上限
 });
 
 test("an interrupted turn drops the question too, not just the half answer", () => {

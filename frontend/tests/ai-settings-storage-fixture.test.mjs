@@ -64,7 +64,7 @@ test("mounted draft scenario has distinct selectable reports without broadening 
   const browser = readFileSync(new URL("./e2e/ai-settings-storage.browser.mjs", import.meta.url), "utf8");
   assert.match(browser, /scenario === "chat-drafts"/);
   assert.match(browser, /for \(const width of \[1440, 390\]\)/);
-  assert.match(browser, /assert\.equal\(result\.results\.length, 22\)/);
+  assert.match(browser, /assert\.equal\(result\.results\.length, 24\)/);
 });
 
 test("platform startup is read-only and rejects update/contact subroutes", () => {

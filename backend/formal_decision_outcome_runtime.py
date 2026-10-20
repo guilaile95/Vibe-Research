@@ -318,8 +318,18 @@ def evaluate_outcome(
                 decision,
             )
 
-        attributions = _load_attributions(decision_id)
+        cutoff = fta.parse_utc_instant(evaluation, "evaluation_as_of")
+        attributions = [a for a in _load_attributions(decision_id)
+                        if fta.parse_utc_instant(a["created_at"], "attribution.created_at") <= cutoff]
         trades = _load_trade_rows(decision, attributions)
+        # Recorded-at and execution-time both bound what was known at evaluation.
+        eligible_ids = {
+            trade["trade_id"] for trade in trades
+            if fta.parse_utc_instant(trade["created_at"], "trade.created_at") <= cutoff
+            and fta.parse_utc_instant(trade.get("executed_at") or trade["created_at"], "trade.executed_at") <= cutoff
+        }
+        attributions = [a for a in attributions if a["trade_id"] in eligible_ids]
+        trades = [t for t in trades if t["trade_id"] in eligible_ids]
         trade_db_path = trade_ledger_service.resolve_db_path()
         executed_ids = [
             attribution["trade_id"]
@@ -336,6 +346,7 @@ def evaluate_outcome(
                 performance = performance_attribution_service.compute_attribution_for_trade_ids(
                     executed_ids,
                     trade_db_path=trade_db_path,
+                    evaluation_as_of=evaluation,
                 )
             except performance_attribution_service.PerformanceAttributionProvenanceError as exc:
                 raise FormalOutcomeRuntimeError(

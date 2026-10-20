@@ -145,7 +145,8 @@ def test_double_failure_is_not_reported_as_success_and_keeps_original_bytes(arch
         patch.setattr(reports.os, "replace", fail_rollback)
         patch.setattr(reports.fulltext, "remove_report", fail_cleanup)
         response = archive.delete(f"/api/myreports/{rid}")
-    assert response.status_code == 500
+    assert response.status_code == 409
+    assert "REPORT_DELETE_RECOVERY_REQUIRED" in response.json()["detail"]
     assert publishes == 2
     assert (reports.REPORTS_DIR / f"{rid}.txt").read_bytes() == b"synthetic catalyst evidence"
     # Explicit cross-store limit: both the operation and its rollback failed.

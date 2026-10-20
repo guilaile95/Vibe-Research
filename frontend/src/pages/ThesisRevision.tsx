@@ -53,31 +53,40 @@ export function ThesisRevision() {
   const thesisPath = `/thesis/${id}`;
   const returnTo = safeInternalReturnTo(searchParams.get("return_to"), thesisPath);
   const revNum = rev ? Number(rev) : NaN;
-  const [data, setData] = useState<ThesisRevisionData | null>(null);
+  const identity = JSON.stringify([id, rev]);
+  const [result, setResult] = useState<{ key: string; data: ThesisRevisionData } | null>(null);
+  const data = result?.key === identity ? result.data : null;
   const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
+  const err = failure?.key === identity ? failure.message : null;
 
   const runIdRef = useRef(0);
 
   const load = useCallback(async () => {
-    if (!id || !Number.isFinite(revNum)) return;
     const rid = ++runIdRef.current;
+    setResult(null);
+    if (!id || !Number.isSafeInteger(revNum) || revNum < 1) {
+      setLoading(false);
+      setFailure({ key: identity, message: "版本参数无效" });
+      return;
+    }
     setLoading(true);
-    setErr(null);
+    setFailure(null);
     try {
       const r = await api.thesisRevision(id, revNum);
       if (rid !== runIdRef.current) return;
-      setData(r);
+      setResult({ key: identity, data: r });
     } catch (e) {
       if (rid !== runIdRef.current) return;
-      setErr(e instanceof ApiError ? e.message : "加载版本快照失败");
+      setFailure({ key: identity, message: e instanceof ApiError ? e.message : "加载版本快照失败" });
     } finally {
       if (rid === runIdRef.current) setLoading(false);
     }
-  }, [id, revNum]);
+  }, [id, revNum, identity]);
 
   useEffect(() => {
     void load();
+    return () => { runIdRef.current += 1; };
   }, [load]);
 
   return (

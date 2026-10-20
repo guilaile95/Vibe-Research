@@ -49,6 +49,7 @@ def _reader(rows: list[dict[str, Any]], *, page_size: int | None = None):
         next_offset = offset + len(page) if offset + len(page) < len(rows) else None
         return {
             "status": "normal",
+            "snapshot_id": "a" * 64,
             "dataset_id": "ashare_daily_unadjusted",
             "provider_id": "local_bulk_dump",
             "adjustment": "UNADJUSTED",

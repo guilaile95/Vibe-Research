@@ -43,6 +43,10 @@ class CashEventValidationError(ValueError):
     pass
 
 
+class CashEventBootstrapRequiredError(ValueError):
+    pass
+
+
 class CashEventNotFoundError(LookupError):
     pass
 
@@ -106,7 +110,23 @@ def create_cash_event(payload: dict[str, Any]) -> dict[str, Any]:
         "amount": amount,  # _validate_amount 已归一化 2dp
         "created_at": _utc_now(),
     }
-    account_event_store.insert_event(resolve_db_path(), event_record)
+    db_path = resolve_db_path()
+    account_event_store.ensure_migrated(db_path)
+    conn = trade_ledger_store.open_write_connection(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        count = conn.execute(
+            "SELECT COUNT(*) FROM account_events WHERE event_type = 'ACCOUNT_OPENING' AND voided_at IS NULL"
+        ).fetchone()[0]
+        if count != 1:
+            raise CashEventBootstrapRequiredError("现金事件需要唯一有效的账户期初记录，请先完成账户初始化")
+        account_event_store.insert_event_on_connection(conn, event_record)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
     return event_record
 
 

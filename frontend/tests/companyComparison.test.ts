@@ -1,3 +1,4 @@
+import { installCredentialFixture, withCredentialStatus } from './credentialTransportFixture.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -5,7 +6,8 @@ import { comparisonRefs, generateComparison, parseComparisonRecord, readComparis
 const golden = JSON.parse(readFileSync(new URL('../../backend/tests/fixtures/company_comparison/US-AAPL--HK-00700.json', import.meta.url), 'utf8'));
 const bundles = golden.bundles;
 const refs = comparisonRefs(bundles), day = golden.request.as_of, H = 'b'.repeat(64), I = golden.record.run_id;
-const llm = golden.request.llm;
+const llm = { ...golden.request.llm, revision: '1' };
+test.beforeEach(t => installCredentialFixture(t, llm));
 function record(): ComparisonRecord { return structuredClone(golden.record); }
 const start = () => ({ type: 'run_started', run_id: I, pair_sha256: golden.record.pair_sha256, subjects: refs, as_of: day, max_model_calls: 1 });
 test('qualified pair context accepts production bundle fixtures without inferring comparability', () => { assert.equal(parseComparisonRecord(record()).comparability, 'NOT_ESTABLISHED'); });
@@ -32,20 +34,20 @@ for (const kind of ['ok','truncated','duplicate','wrongPair','wrongDate','wrongB
   if (kind === 'wrongDate') events[0].as_of = '2026-09-29'; if (kind === 'wrongBudget') events[0].max_model_calls = 2;
   if (kind === 'crossCitation') events[1].record.output.subjects[0].citations[0].symbol = bundles[1].subject.symbol;
   let calls = 0;
-  t.mock.method(globalThis, 'fetch', async (url, init) => { calls++; assert.equal(String(url), '/api/company-comparison/generate'); assert.equal(init?.method, 'POST'); const body = JSON.parse(String(init?.body)); assert.deepEqual(body.subjects, refs); assert.equal(body.as_of, day); assert.equal(body.confirm_model_calls, true); if (kind === 'cancelled') controller.abort(); return new Response(events.map(e => JSON.stringify(e)).join('\n') + '\n'); });
+  t.mock.method(globalThis, 'fetch', withCredentialStatus(async (url, init) => { calls++; assert.equal(String(url), '/api/company-comparison/generate'); assert.equal(init?.method, 'POST'); const body = JSON.parse(String(init?.body)); assert.deepEqual(body.subjects, refs); assert.equal(body.as_of, day); assert.equal(body.confirm_model_calls, true); if (kind === 'cancelled') controller.abort(); return new Response(events.map(e => JSON.stringify(e)).join('\n') + '\n'); }));
   if (kind === 'ok') assert.equal((await generateComparison(bundles, day, llm, controller.signal)).run_id, I);
   else await assert.rejects(generateComparison(bundles, day, llm, controller.signal));
   assert.equal(calls, 1);
 });
 test('invalid cutoff, same identity and CLI runtime fail before network', async t => {
-  t.mock.method(globalThis, 'fetch', async () => { throw new Error('OUTBOUND_FORBIDDEN'); });
+  t.mock.method(globalThis, 'fetch', withCredentialStatus(async () => { throw new Error('OUTBOUND_FORBIDDEN'); }));
   await assert.rejects(generateComparison([bundles[0], bundles[0]], day, llm, new AbortController().signal), /不同股票/);
   await assert.rejects(generateComparison(bundles, '2026-09-29', llm, new AbortController().signal), /截止日/);
   await assert.rejects(generateComparison(bundles, day, { ...llm, provider: 'cli-codex' as any }, new AbortController().signal), /仅支持 API/);
 });
 test('selector and readback are exact subject/date/hash bound', async t => {
   const b = bundles[0], choice = { ...b.subject, bundle_id: b.bundle_id, bundle_sha256: b.bundle_sha256, archive_cutoff: day, captured_at: b.captured_at, available_source_count: 1, missing_source_count: 1, limitations: ['synthetic'] };
-  const calls: string[] = []; t.mock.method(globalThis, 'fetch', async url => { calls.push(String(url)); return new Response(JSON.stringify({ data: String(url).includes('/bundles?') ? [choice] : b })); });
+  const calls: string[] = []; t.mock.method(globalThis, 'fetch', withCredentialStatus(async url => { calls.push(String(url)); return new Response(JSON.stringify({ data: String(url).includes('/bundles?') ? [choice] : b })); }));
   assert.deepEqual(await readComparisonBundles(b.subject, day, new AbortController().signal), [choice]);
   assert.equal((await readComparisonBundle(choice, new AbortController().signal)).bundle_id, b.bundle_id);
   assert.deepEqual(calls, [`/api/company-comparison/bundles?market=US&symbol=AAPL&as_of=${day}`, `/api/company-research/bundles/${b.bundle_id}`]);
@@ -72,17 +74,17 @@ test('same bundle ID, unavailable ledger and false source provenance are rejecte
  ]){const r=record();mutate(r);assert.throws(()=>parseComparisonRecord(r));}
 });
 test('duplicate history run IDs fail closed',async t=>{
- t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({data:[record(),record()]})));
+ t.mock.method(globalThis,'fetch',withCredentialStatus(async()=>new Response(JSON.stringify({data:[record(),record()]}))));
  await assert.rejects(readComparisonRuns(new AbortController().signal),/重复/);
 });
 for(const field of ['provider','name'])test('done model metadata binds requested '+field,async t=>{
  const r=record();r.model[field as 'provider'|'name']='different';
- t.mock.method(globalThis,'fetch',async()=>new Response([start(),{type:'done',record:r}].map(e=>JSON.stringify(e)).join('\n')+'\n'));
+ t.mock.method(globalThis,'fetch',withCredentialStatus(async()=>new Response([start(),{type:'done',record:r}].map(e=>JSON.stringify(e)).join('\n')+'\n')));
  await assert.rejects(generateComparison(bundles,day,llm,new AbortController().signal),/回执不匹配/);
 });
 test('selector rejects capture before common cutoff',async t=>{
  const choice={...golden.bundle_lists[0][0],captured_at:'2026-09-29T00:00:00Z'};
- t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({data:[choice]})));
+ t.mock.method(globalThis,'fetch',withCredentialStatus(async()=>new Response(JSON.stringify({data:[choice]}))));
  await assert.rejects(readComparisonBundles(bundles[0].subject,day,new AbortController().signal),/截止日/);
 });
 
@@ -108,7 +110,7 @@ test('total-record UTF-8 bound rejects large ledger even with individually bound
 test('history page sends ordered pair and cutoff before limit and rejects mixed history',async t=>{
  const {readComparisonRunPage}=await import('../src/lib/companyComparison.ts');
  let data:any={records:[record()],next_cursor:'51'};
- t.mock.method(globalThis,'fetch',async url=>{assert.equal(String(url),`/api/company-comparison/runs?first_market=US&first_symbol=AAPL&second_market=HK&second_symbol=00700&as_of=${day}&before=100`);return new Response(JSON.stringify({data}));});
+ t.mock.method(globalThis,'fetch',withCredentialStatus(async url=>{assert.equal(String(url),`/api/company-comparison/runs?first_market=US&first_symbol=AAPL&second_market=HK&second_symbol=00700&as_of=${day}&before=100`);return new Response(JSON.stringify({data}));}));
  const read=()=>readComparisonRunPage(bundles[0].subject,bundles[1].subject,day,new AbortController().signal,'100');
  assert.equal((await read()).records[0].run_id,I);
  data.next_cursor='100';await assert.rejects(read());
@@ -118,7 +120,7 @@ test('history page sends ordered pair and cutoff before limit and rejects mixed 
 
 for(const category of ['TIMEOUT','UPSTREAM','OUTPUT_INVALID','PERSISTENCE','secret-in-category','wrong-run']) test(`failure category and run ownership ${category}`,async t=>{
  const event={type:'error',run_id:category==='wrong-run'?'f'.repeat(32):I,code:'COMPARISON_INCOMPLETE',category:category==='wrong-run'?'TIMEOUT':category,message:'https://private.example/secret'};
- let calls=0;t.mock.method(globalThis,'fetch',async()=>{calls++;return new Response([start(),event].map(e=>JSON.stringify(e)).join('\n')+'\n');});
+ let calls=0;t.mock.method(globalThis,'fetch',withCredentialStatus(async()=>{calls++;return new Response([start(),event].map(e=>JSON.stringify(e)).join('\n')+'\n');}));
  await assert.rejects(generateComparison(bundles,day,llm,new AbortController().signal),e=>{
    assert.doesNotMatch(String(e),/private.example|secret-in-category|ffffffff/);
    assert.match(String(e),/可能已产生模型费用/);
@@ -130,7 +132,7 @@ for(const category of ['TIMEOUT','UPSTREAM','OUTPUT_INVALID','PERSISTENCE','secr
 test('exact frozen citation read binds subject bundle hash ledger and never calls generation',async t=>{
  const {readComparisonEvidence}=await import('../src/lib/companyComparison.ts');
  let response=structuredClone(bundles[0]);let calls=0;
- t.mock.method(globalThis,'fetch',async(url,init)=>{calls++;assert.equal(String(url),`/api/company-research/bundles/${bundles[0].bundle_id}`);assert.ok(!init?.method || init.method==='GET');return new Response(JSON.stringify({data:response}));});
+ t.mock.method(globalThis,'fetch',withCredentialStatus(async(url,init)=>{calls++;assert.equal(String(url),`/api/company-research/bundles/${bundles[0].bundle_id}`);assert.ok(!init?.method || init.method==='GET');return new Response(JSON.stringify({data:response}));}));
  const source=golden.record.output.subjects[0].citations[0].evidence_id;
  assert.deepEqual(await readComparisonEvidence(record(),0,source,new AbortController().signal),bundles[0]);
  await assert.rejects(readComparisonEvidence(record(),0,'not_in_this_bundle',new AbortController().signal));assert.equal(calls,1);

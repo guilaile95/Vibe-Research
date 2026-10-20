@@ -1,3 +1,4 @@
+import { withCredentialStatus } from './credentialTransportFixture.mjs';
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -29,7 +30,7 @@ Object.defineProperty(globalThis, "localStorage", {
   },
 });
 
-globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+globalThis.fetch = withCredentialStatus(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   requests.push({
     url,
@@ -93,7 +94,7 @@ test("Decision Challenge read maps only 404 to ABSENT and preserves other failur
     () => api.getDecisionChallengeForProposal("campaign_" + "a".repeat(32), "a".repeat(64)),
     (err: unknown) => err instanceof ApiError && err.status === 0,
   );
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = withCredentialStatus(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     requests.push({
       url,
@@ -185,7 +186,7 @@ test("Committed Decision HTTP and network failures preserve ApiError", async () 
     () => api.getCommittedDecisionRuntime(COMMITTED_CAMPAIGN_ID, COMMITTED_DECISION_ID),
     (err: unknown) => err instanceof ApiError && err.status === 0,
   );
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = withCredentialStatus(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     requests.push({ url, method: (init?.method || "GET").toUpperCase(), body: typeof init?.body === "string" ? init.body : null });
     return new Response(JSON.stringify(nextResponse.body), { status: nextResponse.status, headers: { "Content-Type": "application/json" } });
@@ -357,7 +358,9 @@ test("Campaign AI consent preview is model-free and generation serializes exact 
   assert.match(lastRequest().url, /campaign-one\/ai-draft\/consent-preview$/);
   assert.equal(lastRequest().body, null);
   reset();
-  const llm = { provider: "api", model: "synthetic", baseURL: "https://model.example/v1", apiKey: "synthetic" };
+  const llm = { revision: "1", provider: "api", model: "synthetic", baseURL: "https://model.example/v1", apiKey: "synthetic" };
+  store["vr-llm"] = JSON.stringify(llm);
   await api.generateCampaignAIDraft("campaign-one", llm, "a".repeat(64));
-  assert.deepEqual(JSON.parse(lastRequest().body!), { llm, confirm_private_context: true, expected_context_fingerprint: "a".repeat(64) });
+  const { revision: _revision, ...wireLlm } = llm;
+  assert.deepEqual(JSON.parse(lastRequest().body!), { llm: wireLlm, confirm_private_context: true, expected_context_fingerprint: "a".repeat(64) });
 });

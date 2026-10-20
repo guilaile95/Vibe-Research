@@ -93,6 +93,11 @@ Vibe Native Mapping:
   - Parses response using regex / bracket inspection matching `[idx]`.
   - Exact index-based reconstruction (`idx_to_text[idx]`):
     If input has 3 items and AI returns only `[1]` and `[3]`, item 2 receives empty string, which is then safely filled with original text `Text B`. Position 3 is NOT shifted to position 2.
+- Completion and cache contract:
+  - Nonempty input with empty/whitespace model output is `ERROR`, preserves the original, and is not a cache hit on retry.
+  - Missing, duplicate, out-of-range or malformed batch numbering yields `PARTIAL`; ambiguous/missing items preserve their original positions and text.
+  - Only complete `SUCCESS` payloads are reusable. Version `v5_trans_1.1` does not reuse earlier incomplete-success artifacts; old artifacts remain intact. Failures expose stable nonsecret messages. Retries are explicit user actions, never automatic model calls.
+  - Analysis cache version `v5_analysis_2.2` fingerprints the exact coverage counts used in the prompt and result, including total items outside the top-N budget.
 - Data Authority:
   - Translations are stored as derived `intel_ai_artifacts`.
   - Never mutates `intel_items.title` or `intel_items.summary`. Original text remains authoritative truth.

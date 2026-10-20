@@ -481,12 +481,44 @@ test('credential helpers reject failed writes/removals rather than notifying suc
 });
 function settingsHarness(overrides = {}, llmOverrides = {}) {
   const messages = [];
+  let revision = llm.loadLlm()?.revision ?? '0';
+  let configured = Boolean(llm.loadLlm());
+  let backend = llm.loadLlm();
+  const controlledApi = {
+    getAiCredentialStatus: async () => ({ configured, revision }),
+    putAiCredential: async config => {
+      assert.equal(config.expectedRevision, revision);
+      revision = String(BigInt(revision) + 1n); configured = true;
+      const { expectedRevision, ...fields } = config;
+      backend = { ...fields, revision };
+      return { configured, revision };
+    },
+    deleteAiCredential: async observed => {
+      assert.ok(BigInt(observed) <= BigInt(revision));
+      revision = String(BigInt(revision) + 1n); configured = false; backend = null;
+      return { configured, revision };
+    },
+    ...overrides,
+  };
+  // Run the production queue and receipt validation, not a save/clear stub.
+  const mutations = {};
+  const source = ts.transpileModule(readFileSync(new URL('../src/lib/credentialMutations.ts', import.meta.url), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  vm.runInNewContext(source, { exports: mutations, Error, AbortSignal,
+    require: path => {
+      if (path === './api.ts') return { api: controlledApi };
+      if (path === './llm.ts') return { ...llm, ...llmOverrides };
+      throw Error('Unexpected credential dependency: ' + path);
+    },
+  });
   const h = harness('pages/Settings.tsx', 'Settings', {
     '@/lib/llm': { ...llm, ...llmOverrides }, '@/lib/ai-models': models,
+    '@/lib/credentialMutations': mutations,
     sonner: { toast: { success: message => messages.push(['success', message]), error: message => messages.push(['error', message]) } },
-    '@/lib/api': { ...apiClient, api: { getAiCredentialStatus: async () => ({ configured:true }), putAiCredential: async () => {}, deleteAiCredential: async () => {}, ...overrides } },
+    '@/lib/api': { ...apiClient, api: controlledApi },
   });
-  return { h, messages };
+  return { h, messages, backend: () => backend };
 }
 test('settings report backend-save/local-failure and backend-clear/local-failure explicitly', async () => {
   llm.saveLlm(dummyConfig);
@@ -499,12 +531,15 @@ test('settings report backend-save/local-failure and backend-clear/local-failure
   assert.deepEqual(llm.loadLlm(), dummyConfig);
   assert.equal(messages.some(([kind]) => kind === 'success'), false);
 });
-test('settings backend failure leaves existing browser credentials unchanged', async () => {
+test('settings backend save failure preserves browser credentials but explicit clear removes them even offline', async () => {
   llm.saveLlm(dummyConfig);
   const { h, messages } = settingsHarness({ putAiCredential: async () => { throw Error('offline'); }, deleteAiCredential: async () => { throw Error('offline'); } });
   testId(h.render(), 'wave5-save-api-btn').props.onClick(); await tick();
-  testId(h.render(), 'wave5-forget-btn').props.onClick(); await tick();
   assert.deepEqual(llm.loadLlm(), dummyConfig);
+  testId(h.render(), 'wave5-forget-btn').props.onClick();
+  assert.equal(llm.loadLlm(), null, 'explicit clear invalidates browser authority immediately');
+  await tick();
+  assert.equal(llm.loadLlm(), null);
   assert.equal(messages.filter(([kind]) => kind === 'error').length, 2);
   assert.equal(messages.some(([kind]) => kind === 'success'), false);
 });
@@ -523,13 +558,14 @@ test('silent storage no-ops and readback failures cannot claim save/clear succes
 });
 test('normal settings save and clear finish in both stores and report success', async () => {
   llm.saveLlm(dummyConfig);
-  let backend = dummyConfig;
-  const { h, messages } = settingsHarness({ putAiCredential: async config => { backend = config; }, deleteAiCredential: async () => { backend = null; } });
+  const { h, messages, backend } = settingsHarness();
   testId(h.render(), 'wave5-save-api-btn').props.onClick(); await tick();
-  assert.deepEqual(llm.loadLlm(), JSON.parse(JSON.stringify(backend)));
+  assert.deepEqual(llm.loadLlm(), backend());
+  assert.equal(llm.loadLlm().revision, '1');
+  assert.equal(llm.loadLlm().model, dummyConfig.model);
   assert.equal(messages.at(-1)[0], 'success');
   testId(h.render(), 'wave5-forget-btn').props.onClick(); await tick();
-  assert.equal(llm.loadLlm(), null); assert.equal(backend, null);
+  assert.equal(llm.loadLlm(), null); assert.equal(backend(), null);
   assert.equal(messages.at(-1)[0], 'success');
 });
 test('full-market partial/stale results label retained observations and excluded breadth', async () => {
@@ -1011,7 +1047,7 @@ test('explicit page chat aborts old scope and preserves only matching complete h
   const calls = [];
   const h = harness('components/ui/AskAiButton.tsx', 'AskAiButton', {
     'react-router-dom': { useLocation: () => ({ pathname: '/my-reports' }), Link: 'link' },
-    '@/lib/storage': { storageGet: key => storage.get(key) ?? null, storageSet: (key, value) => storage.set(key, value), storageRemove: key => storage.delete(key) },
+    '@/lib/storage': { storageGet: key => storage.get(key) ?? null, storageGetChecked: key => storage.get(key) ?? null, storageSetChecked: (key, value) => storage.set(key, value), storageRemoveChecked: key => storage.delete(key) },
     '@/lib/llm': { ...llm, loadLlm: () => ({ provider: 'api', model: 'synthetic' }), hasLlm: () => true,
       llmIdentity: () => 'synthetic', runtimeLabel: () => 'Synthetic', chatStream: (...args) => { const d = deferred(); calls.push({ args, d }); return d.promise; } },
   });

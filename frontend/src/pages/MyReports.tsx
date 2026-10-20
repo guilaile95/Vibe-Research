@@ -209,7 +209,8 @@ export function MyReports() {
       if (editingId === r.id) setEditingId(null);
       await refreshAll();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : "删除失败");
+      const refreshed = await refreshAll();
+      setErr(`${e instanceof ApiError ? e.message : "删除失败，请重试"}${refreshed ? "" : "；列表刷新失败，请刷新页面核对状态。"}`);
     }
   };
 

@@ -16,7 +16,6 @@ import re
 import selectors
 import signal
 import socket
-import stat
 import struct
 import subprocess
 import sys
@@ -24,6 +23,10 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+from validation_environment import (
+    AUTOMATIC_TASK_FLAGS, PATH_NAMES, legacy_private_inputs_present, storage_environment,
+)
 GATES = {
     "metadata_diagnostics": ("tests/test_myreports_metadata.py", "tests/test_runtime_diagnostics.py"),
     "runtime_contracts": ("tests/test_runtime_info_api.py",),
@@ -43,20 +46,7 @@ def isolated_env(root: Path, node=None) -> dict[str, str]:
            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
            "VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH": "1",
            "VIBE_NATIVE_INTEL_DISABLE_SCHEDULER": "1"}
-    for name, directory in {"HOME": "home", "TMPDIR": "tmp", "XDG_CONFIG_HOME": "config",
-                            "XDG_CACHE_HOME": "cache", "XDG_DATA_HOME": "xdg-data",
-                            "XDG_STATE_HOME": "state", "USERPROFILE": "home",
-                            "APPDATA": "appdata", "LOCALAPPDATA": "localappdata",
-                            "TEMP": "tmp", "TMP": "tmp",
-                            "VR_DATA_DIR": "data", "VR_REPORTS_DIR": "reports",
-                            "VR_FACT_LAKE_ROOT": "fact-lake",
-                            "VIBE_RESEARCH_RESEARCH_DATA_DIR": "research-data"}.items():
-        path = root / directory
-        if path.resolve() != path:
-            raise ValueError("isolation directory must not be a symlink")
-        path.mkdir(mode=0o700, parents=True, exist_ok=True)
-        env[name] = str(path)
-    env["VIBE_RESEARCH_REVIEW_DB"] = str(root / "data" / "daily_reviews.sqlite3")
+    env.update(storage_environment(root))
     # Resolve executable directories explicitly, not the caller's arbitrary PATH.
     env["PATH"] = os.pathsep.join(dict.fromkeys([str(Path(sys.executable).parent), os.defpath]))
     if node is not None:
@@ -77,10 +67,7 @@ sys.path.insert(0, sys.argv[1])
 from review_db_path import resolve_review_db_path
 from research_data_plane_path import resolve_research_data_root
 root = Path(sys.argv[2]).resolve()
-names = ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TMPDIR", "TEMP", "TMP",
-         "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
-         "VR_DATA_DIR", "VR_REPORTS_DIR", "VR_FACT_LAKE_ROOT",
-         "VIBE_RESEARCH_REVIEW_DB", "VIBE_RESEARCH_RESEARCH_DATA_DIR")
+names = json.loads(sys.argv[3])
 for name in names:
     raw = os.environ.get(name, "")
     if not raw or not Path(raw).is_absolute():
@@ -94,35 +81,13 @@ if review != Path(os.environ["VIBE_RESEARCH_REVIEW_DB"]).resolve():
     raise ValueError("review resolver mismatch")
 if research != Path(os.environ["VIBE_RESEARCH_RESEARCH_DATA_DIR"]).resolve():
     raise ValueError("research resolver mismatch")
-for flag in ("VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH", "VIBE_NATIVE_INTEL_DISABLE_SCHEDULER"):
+for flag in json.loads(sys.argv[4]):
     if os.environ.get(flag) != "1":
         raise ValueError("automatic fetch is not disabled")
 print(json.dumps({"status": "pass", "scope": "PATH_RESOLUTION_ONLY_NO_DATABASE_OPEN",
                   "explicit_review_db": True, "explicit_research_root": True,
                   "configured_paths_contained": len(names)}))
 """
-
-
-def legacy_private_inputs_present(repository: Path) -> bool:
-    """Metadata only: never follow a legacy cache link or open private inputs.
-
-    Portfolio can copy its legacy JSON on import. Reports have a separate legacy
-    directory; reject it too rather than relying on a later import-time override.
-    """
-    cache = repository / "backend" / ".cache"
-    try:
-        mode = cache.lstat().st_mode
-    except FileNotFoundError:
-        return False
-    if not stat.S_ISDIR(mode):
-        return True  # Includes dangling/live symlinks; do not traverse them.
-    for name in ("portfolio.json", "myreports"):
-        try:
-            (cache / name).lstat()
-        except FileNotFoundError:
-            continue
-        return True  # Any existing entry, including a dangling symlink.
-    return False
 
 
 def verify_isolated_env(root: Path, env: dict[str, str], repository: Path = ROOT):
@@ -135,7 +100,8 @@ def verify_isolated_env(root: Path, env: dict[str, str], repository: Path = ROOT
         if legacy_private_inputs_present(repository):
             return {"status": "blocked", "reason": "LEGACY_PRIVATE_INPUT_PRESENT"}
         completed = subprocess.run(
-            [sys.executable, "-c", _ISOLATION_PROBE, str(repository / "backend"), str(root)],
+            [sys.executable, "-c", _ISOLATION_PROBE, str(repository / "backend"), str(root),
+             json.dumps(PATH_NAMES), json.dumps(AUTOMATIC_TASK_FLAGS)],
             cwd=repository, env=env, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10, check=True)
         return json.loads(completed.stdout)

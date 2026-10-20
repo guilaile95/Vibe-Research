@@ -140,6 +140,8 @@ const marketCloud = (scope, status = "normal") => ({
 });
 
 let scenario = "normal";
+let quoteMode = "unknown";
+let quoteRequests = 0;
 let nativeRefreshCalls = 0;
 let radarRefreshCalls = 0;
 const requestedScopes = [];
@@ -273,7 +275,11 @@ async function handleApi(route) {
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: {status: "valid", data: {codes: scenario === "daily-populated" ? ["600519", "000001", "000002", "300750"] : [], updated_at: now}, etag: "1111111111111111"} }) });
   }
   if (pathName === "/api/quote") {
-    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: Object.fromEntries(["600519", "000001", "000002", "300750"].map((code) => [code, {code, name: `样本 ${code}`, price: 1456.78, change_pct: 1.25}])) }) });
+    quoteRequests++;
+    if (quoteMode === "failure") return route.fulfill({ status: 503, json: { detail: "SYNTHETIC_QUOTE_FAILURE" } });
+    const codes = quoteMode === "partial" ? ["600519"] : ["600519", "000001", "000002", "300750"];
+    const data_time = quoteMode === "future" ? "2999-01-01T00:00:00Z" : quoteMode === "unknown" ? undefined : "2026-08-28T07:00:00Z";
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: Object.fromEntries(codes.map((code) => [code, {code, name: `样本 ${code}`, price: 1456.78, change_pct: 1.25, data_time}])) }) });
   }
   if (pathName === "/api/intel-digests/latest") {
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ digest: null }) });
@@ -830,6 +836,33 @@ try {
   assert.equal(await watchCards.locator(":scope > div").count(), 4);
   assert.equal(await watchCards.locator(":scope > div").evaluateAll((cards) => cards.every((card) => card.scrollWidth <= card.clientWidth)), true, "expanded watch quotes must fit the 300px side column");
   assert.equal(await watchCards.locator("p.font-mono").evaluateAll((prices) => prices.every((price) => price.scrollWidth <= price.clientWidth)), true, "quote prices must not overlap adjacent cards");
+  // Both quote consumers must disclose provider time and failed refreshes.
+  const compactQuotes = page.getByTestId("today-watch-compact-quotes");
+  await watchCards.getByText("快照 · 行情时间未知", {exact: true}).first().waitFor();
+  await compactQuotes.getByText("快照 · 行情时间未知", {exact: true}).first().waitFor();
+  const beforeQuoteRefresh = quoteRequests;
+  quoteMode = "valid";
+  await page.getByTitle("刷新价格", {exact: true}).click();
+  await watchCards.getByText(/快照 · 行情时间 2026/).first().waitFor();
+  assert.equal(quoteRequests, beforeQuoteRefresh + 1, "one manual refresh starts exactly one quote request");
+  quoteMode = "failure";
+  await page.getByTitle("刷新价格", {exact: true}).click();
+  await watchCards.getByText(/旧快照 · 刷新失败/).first().waitFor();
+  await compactQuotes.getByText(/旧快照 · 刷新失败/).first().waitFor();
+  assert.equal(await watchCards.getByText("1456.78", {exact: true}).count(), 4, "failed refresh retains prior prices only as stale snapshots");
+  await page.getByText(/请求完成于.*非行情时间/).waitFor();
+  quoteMode = "partial";
+  await page.getByTitle("刷新价格", {exact: true}).click();
+  await page.getByRole("alert").filter({hasText: "部分行情刷新失败"}).waitFor();
+  assert.equal(await watchCards.getByText(/旧快照 · 刷新失败/).count(), 3);
+  assert.equal(await compactQuotes.getByText(/旧快照 · 刷新失败/).count(), 3);
+  quoteMode = "future";
+  await page.getByTitle("刷新价格", {exact: true}).click();
+  await watchCards.getByText(/时间晚于本机时钟，时效未知/).first().waitFor();
+  await compactQuotes.getByText(/时间晚于本机时钟，时效未知/).first().waitFor();
+  assert.equal(await watchCards.getByText(/旧快照 · 刷新失败/).count(), 0);
+  assert.equal(quoteRequests, beforeQuoteRefresh + 4, "there is no automatic quote polling or retry");
+  quoteMode = "unknown";
   scenario = "truth-current";
   await page.goto(`http://127.0.0.1:${port}/daily-review`, {waitUntil: "domcontentloaded"});
   const marketSummary = page.getByRole("region", {name: "市场摘要", exact: true});

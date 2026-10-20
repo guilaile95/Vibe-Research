@@ -23,8 +23,8 @@ import native_intel_store as store
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION_ANALYSIS = "v5_analysis_2.1"
-PROMPT_VERSION_TRANSLATION = "v5_trans_1.0"
+PROMPT_VERSION_ANALYSIS = "v5_analysis_2.2"
+PROMPT_VERSION_TRANSLATION = "v5_trans_1.1"
 PROMPT_VERSION_ENTITIES = "v5_entities_1.1"
 PROMPT_VERSION_SENTIMENT = "v5_sentiment_1.1"
 PROMPT_VERSION_DEEP_READ = "v5_deep_read_1.0"
@@ -252,6 +252,7 @@ def analyze_deep_read(
 
     content_sha256 = hashlib.sha256(raw_content.encode("utf-8")).hexdigest()
     input_facts = {
+        "fetch_policy": "public-pinned-v1",
         "item_id": item.get("item_id"),
         "title": str(item.get("title") or ""),
         "original_url": original_url,
@@ -531,6 +532,7 @@ def _prepare_analysis_facts(
         "provider": provider,
         "model": model,
         "prompt_version": PROMPT_VERSION_ANALYSIS,
+        "counts": dict(counts),
         "hotlist_items": [
             {
                 "source_id": it.get("source_id"),
@@ -761,6 +763,29 @@ def analyze_report(
 # 2. AI Multi-language Translation
 # ---------------------------------------------------------------------------
 
+def _complete_single_translation(payload: Any, original: str) -> bool:
+    return (isinstance(payload, dict) and payload.get("status") == "SUCCESS"
+            and payload.get("original_text") == original
+            and isinstance(payload.get("translated_text"), str)
+            and bool(payload["translated_text"].strip()))
+
+
+def _complete_batch_translation(payload: Any, originals: list[str]) -> bool:
+    if not isinstance(payload, dict) or payload.get("status") != "SUCCESS":
+        return False
+    results = payload.get("results")
+    if not isinstance(results, list) or len(results) != len(originals):
+        return False
+    return all(
+        isinstance(row, dict) and row.get("index") == i
+        and row.get("original") == original and row.get("status") == "SUCCESS"
+        and isinstance(row.get("translated"), str)
+        and (bool(row["translated"].strip()) if (original or "").strip()
+             else row["translated"] == original)
+        for i, (row, original) in enumerate(zip(results, originals), 1)
+    )
+
+
 def translate_text(
     text: str,
     target_language: str = "Chinese",
@@ -788,7 +813,7 @@ def translate_text(
     )
 
     cached = store.find_cached_ai_artifact("translation_single", input_fingerprint, provider, model, path)
-    if cached:
+    if cached and _complete_single_translation(cached.get("payload"), raw_text):
         payload = dict(cached["payload"])
         payload["cached"] = True
         return payload
@@ -804,12 +829,14 @@ def translate_text(
     try:
         raw_resp = invoke_llm_text(effective_cfg, messages, model_runner=model_runner)
         clean = raw_resp.strip()
+        if not clean:
+            raise ValueError("empty translation")
         status = "SUCCESS"
         err = None
-    except Exception as e:
+    except Exception:
         clean = raw_text
         status = "ERROR"
-        err = str(e)
+        err = "TRANSLATION_FAILED: 翻译未完成，已保留原文，请重试。"
 
     artifact_id = f"ai_trans_{uuid.uuid4().hex[:12]}"
     payload = {
@@ -886,7 +913,7 @@ def translate_batch(
     )
 
     cached = store.find_cached_ai_artifact("translation_batch", input_fingerprint, provider, model, path)
-    if cached:
+    if cached and _complete_batch_translation(cached.get("payload"), texts):
         payload = dict(cached["payload"])
         payload["cached"] = True
         return payload
@@ -911,13 +938,15 @@ def translate_batch(
         raw_resp = invoke_llm_text(effective_cfg, messages, model_runner=model_runner)
         status = "SUCCESS"
         err = None
-    except Exception as e:
+    except Exception:
         raw_resp = ""
         status = "ERROR"
-        err = str(e)
+        err = "TRANSLATION_FAILED: 翻译未完成，已保留原文，请重试。"
 
     # 精确编号解析
     idx_to_text: dict[int, str] = {}
+    duplicate_indexes: set[int] = set()
+    invalid_numbering = False
     if raw_resp:
         for line in raw_resp.strip().split("\n"):
             line = line.strip()
@@ -925,18 +954,30 @@ def translate_batch(
             if match:
                 idx = int(match.group(1))
                 val = match.group(2).strip()
-                idx_to_text[idx] = val
+                if idx < 1 or idx > len(texts):
+                    invalid_numbering = True
+                elif idx in idx_to_text:
+                    duplicate_indexes.add(idx)
+                    invalid_numbering = True
+                else:
+                    idx_to_text[idx] = val
+            elif line:
+                invalid_numbering = True
 
     # 结果回填（缺失保留原文，绝不数组错位）
     results = []
     for i, orig in enumerate(texts, 1):
         if not orig or not orig.strip():
             results.append({"index": i, "original": orig, "translated": orig, "status": "SUCCESS"})
-        elif i in idx_to_text and idx_to_text[i]:
+        elif i in idx_to_text and idx_to_text[i] and i not in duplicate_indexes:
             results.append({"index": i, "original": orig, "translated": idx_to_text[i], "status": "SUCCESS"})
         else:
             # 缺失译文：诚实保留原文并标明缺失
             results.append({"index": i, "original": orig, "translated": orig, "status": "MISSING_FALLBACK_ORIGINAL"})
+
+    if status == "SUCCESS" and (invalid_numbering or any(r["status"] != "SUCCESS" for r in results)):
+        status = "PARTIAL"
+        err = "TRANSLATION_INCOMPLETE: 部分译文缺失或编号无效，缺失项已保留原文，请重试。"
 
     artifact_id = f"ai_batch_trans_{uuid.uuid4().hex[:12]}"
     payload = {
