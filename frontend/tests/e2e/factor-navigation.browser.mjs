@@ -76,6 +76,8 @@ try {
   // Router remains live after its own search update and a subsequent real tab navigation.
   await page.getByRole('button', { name: /历史验证/ }).click();
   await page.waitForURL('**/signals/validation');
+  // Router URL changes can precede the React commit that unmounts the old panel.
+  await page.getByTestId('factor-validation').waitFor({ state: 'detached', timeout: 5000 });
   assert.equal(await page.getByTestId('factor-validation').count(), 0);
   console.log('PASS: delayed navigation, input invalidation, current result, preserved query, router tab transition');
 } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }
