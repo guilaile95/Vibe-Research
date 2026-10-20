@@ -61,3 +61,30 @@ test('readback audit never borrows another viewport or workflow evidence', () =>
   assert.equal(missing.length, 8);
   assert.ok(!missing.some(row => row.case === 'annotation-375'));
 });
+
+test('subject reset waits for value and historical read-only check opens remounted details', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const runner = await readFile(new URL('./e2e/adoption-workflows.browser.mjs', import.meta.url), 'utf8');
+  const subjectSwitch = runner.slice(runner.indexOf("await nav('Switch subject');"));
+  const wait = subjectSwitch.indexOf('await page.waitForFunction(');
+  const emptyAssertion = subjectSwitch.indexOf("assert.equal(await dcf.getByLabel('参考股价数值', { exact: true }).inputValue(), '');");
+  assert.ok(wait >= 0 && emptyAssertion > wait, 'wait for reset value before asserting empty');
+  assert.ok(subjectSwitch.includes("input[aria-label=\"参考股价数值\"]')?.value === ''"));
+  const history = runner.slice(runner.indexOf(".fill('2031-01-01T00:00');"));
+  const open = history.indexOf("await record.getByText('追加人工结果 / 修正（不重写原预测）', { exact: true }).click();");
+  const visible = history.indexOf("await shown(record.getByRole('button', { name: '追加结果修订' }));");
+  const disabled = history.indexOf("assert.equal(await record.getByRole('button', { name: '追加结果修订' }).isDisabled(), true);");
+  assert.ok(open >= 0 && visible > open && disabled > visible, 'open reloaded details and assert visible button remains disabled');
+});
+
+test('DCF fixture preserves production subject-key remount and blank-submit boundary', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const production = await readFile(new URL('../src/components/research/CompanyResearchPanel.tsx', import.meta.url), 'utf8');
+  const fixture = await readFile(new URL('./e2e/fixtures/adoption-workflows.tsx', import.meta.url), 'utf8');
+  const boundary = '<ReverseDcfCard key={`${subject.market}:${subject.symbol}`} subject={subject} />';
+  assert.ok(production.includes(boundary), 'production isolates every subject with a React key');
+  assert.ok(fixture.includes(boundary), 'fixture must use the same identity boundary');
+  const runner = await readFile(new URL('./e2e/adoption-workflows.browser.mjs', import.meta.url), 'utf8');
+  assert.ok(runner.includes("for (const input of await dcf.locator('input').all()) assert.equal(await input.inputValue(), ''"));
+  assert.ok(runner.includes("assert.equal(state.calls.length, callsBeforeSubjectSwitch, 'old-company inputs must not submit for a new subject')"));
+});

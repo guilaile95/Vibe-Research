@@ -108,11 +108,19 @@ if (process.argv.includes('--build-only')) {
     await dcf.getByRole('button', { name: '计算价格隐含增长率', exact: true }).click();
     await shown(dcf.getByRole('alert'));
     assert.match(await dcf.getByRole('alert').innerText(), /回执与输入不一致/);
+    const callsBeforeSubjectSwitch = state.calls.length;
     await nav('Switch subject');
-    await shown(dcf.getByLabel('参考股价数值', { exact: true }));
+    // Match the production subject-key remount and reopen the new native details.
+    await dcf.locator('summary').click();
+    // Wait for the observable reset, never merely for an already-visible input.
+    await page.waitForFunction(() => document.querySelector('[data-testid="reverse-dcf"] input[aria-label="参考股价数值"]')?.value === '');
     assert.equal(await dcf.getByLabel('参考股价数值', { exact: true }).inputValue(), '');
     assert.equal(await dcf.getByRole('alert').count(), 0);
+    for (const input of await dcf.locator('input').all()) assert.equal(await input.inputValue(), '', 'subject remount clears observations, sources, dates and assumptions');
+    await dcf.getByRole('button', { name: '计算价格隐含增长率', exact: true }).click();
+    assert.equal(state.calls.length, callsBeforeSubjectSwitch, 'old-company inputs must not submit for a new subject');
     await nav('Switch subject');
+    await dcf.locator('summary').click();
     await layout('dcf');
 
     });
@@ -201,6 +209,11 @@ if (process.argv.includes('--build-only')) {
     await journal.getByLabel('历史可见时间（本机时区；留空看当前）', { exact: true }).fill('2031-01-01T00:00');
     await shown(journal.getByText('历史视图只含', { exact: false }));
     assert.equal(await journal.getByRole('button', { name: '锁定预测到本地归档' }).isDisabled(), true);
+    // Historical reload clears data and remounts the record with closed details.
+    // Open it through the UI before checking the visible read-only control.
+    await shown(record.getByRole('heading', { name: 'Synthetic subject · Synthetic binary outcome?', exact: true }));
+    await record.getByText('追加人工结果 / 修正（不重写原预测）', { exact: true }).click();
+    await shown(record.getByRole('button', { name: '追加结果修订' }));
     assert.equal(await record.getByRole('button', { name: '追加结果修订' }).isDisabled(), true);
     await layout('prediction');
 

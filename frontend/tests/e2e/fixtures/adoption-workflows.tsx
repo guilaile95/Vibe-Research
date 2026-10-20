@@ -20,11 +20,12 @@ const bars = registerAnnotationContext([
 function Fixture() {
   const [view, setView] = useState('dcf');
   const [code, setCode] = useState('000001');
+  const subject = { market: 'A' as const, symbol: code };
   const evidence = { id: code === '000001' ? 'anchor' : 'other', edit_token: 'v1', subject_type: 'stock', subject_id: code, evidence_type: 'financial_filing', source_title: 'Synthetic filing', claim: 'Synthetic claim', source_date: '2026-01-01', source_url: null, updated_at: '2026-01-01T00:00:00Z' } as EvidenceRecord;
   return <main className="max-w-3xl p-3 space-y-3">
     <p>SYNTHETIC COMPONENT ACCEPTANCE · no live providers or application-route coverage</p>
     <nav className="flex flex-wrap gap-3">{['dcf', 'filing', 'annotation', 'prediction', 'allocation', 'groups'].map(name => <button key={name} onClick={() => setView(name)}>{name}</button>)}<button onClick={() => setCode(code === '000001' ? '000002' : '000001')}>Switch subject</button></nav>
-    {view === 'dcf' && <ReverseDcfCard subject={{ market: 'A', symbol: code }} />}
+    {view === 'dcf' && <ReverseDcfCard key={`${subject.market}:${subject.symbol}`} subject={subject} />}
     {view === 'filing' && <FilingEvidenceCard key={code} evidence={evidence} />}
     {view === 'groups' && <AnnouncementGroupsCard key={code} evidence={evidence} />}
     {view === 'annotation' && <ResearchKlineChart code={code} bars={bars} indicators={null} barPeriod="day" />}

@@ -11,14 +11,16 @@ export function ExperimentLedger({ kind, input }: { kind: string; input: string 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
+  const archive = useRef(new ExperimentGeneration());
   const run = useRef(new ExperimentGeneration());
   const compare = useRef(new ExperimentGeneration());
   useEffect(() => { run.current.next(); setMessage(""); setBusy(false); return () => { run.current.next(); }; }, [kind, input]);
   useEffect(() => {
     let alive = true;
+    const token = archive.current.next();
     request<{ records: ExperimentRecord[] }>("/research-experiments").then(data => {
-      if (alive) { setRecords(data.records); setError(""); }
-    }).catch(() => { if (alive) { setRecords([]); setComparison(null); compare.current.next(); setError("实验归档读取失败，未显示旧列表"); } });
+      if (alive && archive.current.current(token)) { setRecords(data.records); setError(""); }
+    }).catch(() => { if (alive && archive.current.current(token)) { setRecords([]); setComparison(null); compare.current.next(); setError("实验归档读取失败，未显示旧列表"); } });
     return () => { alive = false; };
   }, [revision]);
   useEffect(() => {
@@ -36,7 +38,10 @@ export function ExperimentLedger({ kind, input }: { kind: string; input: string 
       const body = JSON.parse(input);
       const created = await request<ExperimentRecord>("/research-experiments", "POST", { kind, input: body });
       id = created.id;
-      setRevision(v => v + 1);
+      // The create response is already authoritative for this pending record.
+      // Avoid racing a snapshot GET against the execution status writes.
+      archive.current.next();
+      setRecords(previous => [created, ...previous.filter(item => item.id !== created.id)]);
       await request<unknown>(`${experimentEndpoint(kind)}?record_id=${encodeURIComponent(id)}`, "POST", body, { unwrapData: false });
       if (run.current.current(token)) setMessage(`实验已归档：${id}；状态与指标见下方记录`);
     } catch {

@@ -185,3 +185,27 @@ def test_metric_units_are_explicit_and_not_cross_compared():
     units = {x['name']: x['left_unit'] for x in result['metrics']}
     assert units['total_return'] == 'fraction' and units['final_value'] == 'CNY'
     assert units['trade_count'] == 'count'
+
+
+def test_archive_get_fails_closed_when_execution_transitions_during_snapshot_read(monkeypatch):
+    """The mid-execution UI GET can encounter a real source transition, not invalid input."""
+    app = FastAPI(); app.include_router(experiment_ledger_router.router)
+    client = TestClient(app)
+    body = example_input('simulation')
+    record = ledger.create('simulation', body)
+    assert client.get('/api/research-experiments').status_code == 200
+    original = ledger._rows
+    transitioned = False
+    def rows_with_execution(conn):
+        nonlocal transitioned
+        rows = original(conn)
+        if not transitioned and conn.execute('PRAGMA query_only').fetchone()[0]:
+            transitioned = True
+            ledger.execute(record['id'], 'simulation', body, lambda: simulate(SimulationRequest.model_validate(body)))
+        return rows
+    monkeypatch.setattr(ledger, '_rows', rows_with_execution)
+    response = client.get('/api/research-experiments')
+    assert response.status_code == 422
+    assert response.json()['detail'] == '实验记录无法核对；检查输入合同或归档状态，原记录已保留'
+    after = client.get('/api/research-experiments')
+    assert after.status_code == 200 and after.json()['records'][0]['status'] == 'COMPLETED'

@@ -150,6 +150,10 @@ async function run() {
     PYTHONUNBUFFERED: "1",
   };
   const backend = spawn(python.command, [...python.prefix, "-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", String(backendPort)], { cwd: backendDir, env, stdio: ["ignore", "pipe", "pipe"] });
+  let backendLog = "";
+  const captureBackend = chunk => { backendLog = (backendLog + chunk.toString()).slice(-32768); };
+  backend.stdout.on("data", captureBackend);
+  backend.stderr.on("data", captureBackend);
   let staticServer;
   let browser;
   try {
@@ -170,6 +174,21 @@ async function run() {
     const page = await context.newPage();
     const consoleErrors = [];
     const pageErrors = [];
+    const failedResponses = [];
+    const responseDiagnostics = [];
+    page.on("response", response => {
+      if (response.status() < 400) return;
+      responseDiagnostics.push((async () => {
+        const url = new URL(response.url());
+        const payload = await response.json().catch(() => null);
+        const detail = typeof payload?.detail === "string" ? payload.detail.slice(0, 500)
+          : Array.isArray(payload?.detail) ? payload.detail.slice(0, 8).map(item => ({ loc: item.loc, type: item.type, msg: String(item.msg).slice(0, 200) }))
+          : "NON_JSON_OR_NO_DETAIL";
+        const entry = { method: response.request().method(), path: url.pathname, query_keys: [...url.searchParams.keys()], status: response.status(), detail };
+        failedResponses.push(entry);
+        console.error("[E2E] failed HTTP response: " + JSON.stringify(entry));
+      })());
+    });
     page.on("console", (message) => { if (["error", "warning"].includes(message.type())) consoleErrors.push(message.text()); });
     page.on("pageerror", (error) => pageErrors.push(error.message));
 
@@ -248,12 +267,16 @@ async function run() {
     await page.screenshot({ path: path.join(screenshotDir, "historical-signal-validation-mobile.png"), fullPage: false });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 2);
     assert.equal(overflow, true, "narrow viewport has no page-level horizontal overflow");
+    await Promise.all(responseDiagnostics);
+    await writeFile(path.join(screenshotDir, "historical-http-errors.json"), JSON.stringify(failedResponses, null, 2));
+    assert.deepEqual(failedResponses, [], "unexpected HTTP failure; see historical-http-errors.json");
     assert.deepEqual(consoleErrors, [], `console warnings/errors: ${consoleErrors.join(" | ")}`);
     assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join(" | ")}`);
     console.log(`[E2E] Historical Signal Validation passed; screenshots=${screenshotDir}`);
   } finally {
     try { if (browser) await browser.close(); } catch { /* ignore */ }
     try { if (staticServer) staticServer.close(); } catch { /* ignore */ }
+    await writeFile(path.join(screenshotDir, "historical-backend.log"), backendLog.replaceAll(tempDir, "[synthetic-data]").replaceAll(root, "[repo]"));
     backend.kill();
     await sleep(300);
     try { backend.kill("kill"); } catch { /* already gone */ }
