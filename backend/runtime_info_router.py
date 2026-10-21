@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter, Response
+
+from runtime_diagnostics import build_report
 
 _SOURCE_DIRECTORY = Path(__file__).resolve().parent.parent
 
@@ -64,5 +67,19 @@ def create_router(version: str) -> APIRouter:
     def runtime_info(response: Response):
         response.headers["Cache-Control"] = "no-store"
         return {"data": snapshot}
+
+    @router.get("/runtime-diagnostics")
+    def runtime_diagnostics(response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        return {"data": build_report(snapshot)}
+
+    @router.get("/runtime-diagnostics/export")
+    def export_runtime_diagnostics():
+        return Response(
+            content=json.dumps({"data": build_report(snapshot)}, ensure_ascii=False, indent=2),
+            media_type="application/json",
+            headers={"Cache-Control": "no-store",
+                     "Content-Disposition": 'attachment; filename="vibe-runtime-diagnostics.json"'},
+        )
 
     return router

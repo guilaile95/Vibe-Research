@@ -36,18 +36,45 @@ Linux 后端（从仓库根目录开始，使用开发 lock）：
 cd backend
 python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev-linux-py311.lock.txt
-TEST_ROOT=$(mktemp -d)
-VR_DATA_DIR="$TEST_ROOT/data" \
-VR_REPORTS_DIR="$TEST_ROOT/reports" \
-VIBE_RESEARCH_REVIEW_DB="$TEST_ROOT/review.db" \
-  .venv/bin/python -m pytest -m "not live"
+.venv/bin/python -m pytest -m "not live"
 ```
 
-上面的数据目录是新的测试目录；不要换成真实 `VR_DATA_DIR`、研报目录或数据库。
-测试结束后先检查输出再按需清理自己的临时目录，勿清理未知目录。
-Windows 使用 Python 3.12 与 `requirements-dev-windows-py312.lock.txt`，
-为同样三个环境变量指定新的临时路径，再用虚拟环境 Python 执行
-`-m pytest -m "not live"`。Linux 通过不能代替 Windows 文件名/依赖合同验证。
+直接 pytest 在收集应用模块前，由 backend/conftest.py 创建独立临时根目录，
+隔离 HOME、Windows USERPROFILE/APPDATA、XDG、数据库、研报、事实湖及研究数据目录。
+继承的 VR_/VIBE_ 配置（包括逐库覆盖）、常见供应商凭据、代理和 golden 输出目录会被清除；
+启动抓取与定时调度两个开关都强制关闭。测试需修改配置时，应使用测试内的合成 fixture。
+同一份无应用导入的隔离策略也供离线 runner 使用，避免两套目录名单漂移。
+
+若检出目录存在旧 backend/.cache/portfolio.json 或 myreports，测试会在应用导入前阻断，
+不会读取、迁移或删除这些文件；应换用不含用户数据的干净检出目录。
+测试临时目录仅用于本次验证，不要填入真实数据库或研报路径。
+Windows 使用 Python 3.12 与 requirements-dev-windows-py312.lock.txt，
+用虚拟环境 Python 执行相同的 -m pytest -m "not live" 即可，无需 POSIX shell 命令。
+Linux 通过不能代替 Windows 文件名/依赖合同验证。
+
+此策略不是网络或文件系统沙箱，不能撤销 conftest 运行前第三方 pytest 插件的副作用。
+不要在启动 pytest 前导入应用；可设置 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 禁止自动加载外部插件。
+-m "not live" 只过滤测试标记，不是防火墙。严格离线运行仍需外部网络隔离。
+
+## 有界离线验收 runner
+
+从仓库根目录，用上述开发环境的 Python 执行：
+
+```sh
+backend/.venv/bin/python tools/acceptance/offline_acceptance.py --timeout 120
+```
+
+`--timeout` 是每个门的期限，不是总耗时。需要指定 Node 时传入
+`--node /absolute/path/to/node`；路径应指向已安装、可信的 Node 可执行文件。
+六个门为 `metadata_diagnostics`、`runtime_contracts`、`data_health`、
+`synthetic_ai`、`linux_package`、`saved_research_journey`。
+读取 JSON 中每一门的 `pass` / `fail` / `blocked`，不能只看总状态。
+
+离线门全部通过仍不等于发布验收：`real_provider`、`real_model`、
+`natural_next_day`、`deployment` 与 `release_acceptance` 保持 `blocked`；
+未进行的来源能力检查保持 `NOT_EVALUATED`。合成 AI、回环 HTTP、
+进程重启和合成次日只证明对应工程合同。
+真实验收范围与授权前置条件见 [2026-10-19 清单](research/ACCEPTANCE_CHECKLIST_20261019.md)。
 
 ## 浏览器验证
 

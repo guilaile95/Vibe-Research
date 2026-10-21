@@ -7,6 +7,7 @@ on:
     paths:
       - "Start-Vibe.cmd"
       - "start-vibe.ps1"
+      - "tools/windows/**"
       - "backend/app.py"
       - "backend/agent_runtime.py"
       - "agent-runtime/**"
@@ -23,6 +24,7 @@ on:
     paths:
       - "Start-Vibe.cmd"
       - "start-vibe.ps1"
+      - "tools/windows/**"
       - "backend/app.py"
       - "backend/agent_runtime.py"
       - "agent-runtime/**"
@@ -52,6 +54,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      - name: Check runtime endpoint resolution and fail-closed validation
+        shell: pwsh
+        run: pwsh -NoProfile -File tools/windows/test_start_vibe.ps1
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
         with:
@@ -68,7 +74,7 @@ jobs:
             frontend/package-lock.json
             agent-runtime/package-lock.json
 
-      - name: Run the real double-click entry in smoke mode
+      - name: Run the real entry with default and custom runtime endpoints
         shell: pwsh
         env:
           VR_DATA_DIR: ${{ runner.temp }}/vr-launcher-data
@@ -79,15 +85,30 @@ jobs:
           VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH: "1"
           VIBE_NATIVE_INTEL_DISABLE_SCHEDULER: "1"
         run: |
-          & .\Start-Vibe.cmd -SmokeTest -NoBrowser
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
+          # Each launch owns and cleans up its services. Dependency markers are
+          # reused; no model, login or external provider endpoint is exercised.
+          $variants = @(
+            @{ Name = "default"; Port = $null; Url = $null },
+            @{ Name = "port-only"; Port = "18302"; Url = $null },
+            @{ Name = "url-only"; Port = $null; Url = "http://127.0.0.1:18303" }
+          )
+          foreach ($variant in $variants) {
+            Remove-Item Env:VR_AGENT_RUNTIME_PORT -ErrorAction SilentlyContinue
+            Remove-Item Env:VR_AGENT_RUNTIME_URL -ErrorAction SilentlyContinue
+            if ($null -ne $variant.Port) { $env:VR_AGENT_RUNTIME_PORT = $variant.Port }
+            if ($null -ne $variant.Url) { $env:VR_AGENT_RUNTIME_URL = $variant.Url }
+            Write-Host "Runtime endpoint smoke: $($variant.Name)"
+            & .\Start-Vibe.cmd -SmokeTest -NoBrowser
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
           }
 
-      - name: Prove launcher cleaned up its ports
+      - name: Prove launcher cleaned up default and custom ports
+        if: always()
         shell: pwsh
         run: |
-          foreach ($port in 8911, 8900, 5899) {
+          foreach ($port in 8911, 18302, 18303, 8900, 5899) {
             $connected = $false
             $client = [System.Net.Sockets.TcpClient]::new()
             try {

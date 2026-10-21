@@ -1,3 +1,4 @@
+import { installCredentialFixture, withCredentialStatus } from './credentialTransportFixture.mjs';
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -58,10 +59,12 @@ test("api.dailyReviewRefresh uses POST /api/daily-review/refresh", async () => {
   }
 });
 
-test("portfolioAdvice body only user_request + llm", async () => {
+test("portfolioAdvice body only user_request + llm", async t => {
+  const llm = { provider: "cli-codex", baseURL: "", apiKey: "", model: "codex", revision: "1" };
+  installCredentialFixture(t, llm);
   let body: any = null;
   const orig = globalThis.fetch;
-  globalThis.fetch = (async (_url: any, init?: any) => {
+  globalThis.fetch = withCredentialStatus(async (_url: any, init?: any) => {
     body = JSON.parse(init?.body || "{}");
     return new Response(JSON.stringify({ data: { schema_version: "portfolio-advice-v0.1" } }), {
       status: 200,
@@ -71,11 +74,12 @@ test("portfolioAdvice body only user_request + llm", async () => {
     const { api } = await import("../src/lib/api.ts");
     await api.portfolioAdvice({
       user_request: null,
-      llm: { provider: "cli-codex", baseURL: "", apiKey: "", model: "codex" },
+      llm,
     });
     assert.deepEqual(Object.keys(body).sort(), ["llm", "user_request"]);
     assert.equal(body.user_request, null);
     assert.equal(body.llm.provider, "cli-codex");
+    assert.equal(Object.hasOwn(body.llm, "revision"), false);
     assert.equal(body.holdings, undefined);
     assert.equal(body.context, undefined);
     assert.equal(body.messages, undefined);

@@ -17,6 +17,7 @@ from typing import Any
 
 import astock
 import research_data_plane as rdp
+from rdp_page_identity import FullMarketPageIdentity, PageIdentityError
 
 
 SCHEMA_VERSION = "sector_industry_context.v0.2"
@@ -100,6 +101,7 @@ def _normalize_snapshot(snapshot: Any) -> tuple[dict[str, list[dict[str, Any]]],
 def _read_rdp_rows(rdp_reader: RdpReader) -> tuple[dict[str, dict[str, Any]], str | None, dict[str, Any] | None]:
     rows_by_code: dict[str, dict[str, Any]] = {}
     offset = 0
+    identity = FullMarketPageIdentity()
     as_of: str | None = None
     provenance: dict[str, Any] | None = None
 
@@ -111,6 +113,7 @@ def _read_rdp_rows(rdp_reader: RdpReader) -> tuple[dict[str, dict[str, Any]], st
                 sort_order="asc",
                 limit=_RDP_PAGE_SIZE,
                 offset=offset,
+                **identity.query(),
             )
         except Exception as exc:  # noqa: BLE001 — read-only boundary becomes unavailable
             raise _RdpUnavailable(type(exc).__name__) from exc
@@ -118,6 +121,11 @@ def _read_rdp_rows(rdp_reader: RdpReader) -> tuple[dict[str, dict[str, Any]], st
             raise _RdpUnavailable("invalid_envelope")
         if envelope.get("status") != "normal":
             raise _RdpUnavailable(str(envelope.get("status") or "unavailable"))
+
+        try:
+            identity.accept(envelope)
+        except PageIdentityError as exc:
+            raise _RdpUnavailable(str(exc)) from exc
 
         as_of = as_of or (str(envelope.get("as_of")) if envelope.get("as_of") else None)
         if provenance is None and isinstance(envelope.get("provenance"), Mapping):
@@ -135,10 +143,8 @@ def _read_rdp_rows(rdp_reader: RdpReader) -> tuple[dict[str, dict[str, Any]], st
         next_offset = envelope.get("next_offset")
         if next_offset is None:
             return rows_by_code, as_of, provenance
-        try:
-            next_offset = int(next_offset)
-        except (TypeError, ValueError) as exc:
-            raise _RdpUnavailable("invalid_pagination") from exc
+        if type(next_offset) is not int:
+            raise _RdpUnavailable("invalid_pagination")
         if next_offset <= offset:
             raise _RdpUnavailable("non_progressing_pagination")
         offset = next_offset

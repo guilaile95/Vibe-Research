@@ -79,3 +79,12 @@ for (const [name, patch] of [['wrong universe',{universe_count:2}], ['wrong curr
   assert.throws(()=>checkBrowserSummary(summaryText({...fullFixture,coverage:{...fullFixture.coverage,...patch}}),{manifest:{artifact_sha256:'synthetic-hash'}}),/normal summary missing/);
  });
 }
+
+test('stale count and row label cannot masquerade as current matches',()=>{
+ const html=render({...base,batch_coverage:{...base.batch_coverage,stale_count:1,fully_evaluable_count:0}});
+ assert.match(html,/过期排除 1 股/);assert.match(html,/全部条件可评估 0 股/);
+ const item={code:'000003',trade_date:'2026-03-21',technical_status:'stale',limitations:['陈旧样本，不作为当前匹配'],data_coverage:{status:'available',freshness:'stale',returned_rows:80,start:'2026-01-01',end:'2026-03-21',cutoff:'2026-05-30',snapshot_id:'snapshot'},condition_results:[{id:'price_gt_sma20',evaluable:false,passed:null,evidence:{reason:'STALE',last_known:{passed:true}}}]};
+ const row=renderToStaticMarkup(createElement(ResultGroup,{title:'不可评估',items:[item]}));
+ assert.match(row,/过期样本（非当前信号）/);assert.match(row,/查询截止：2026-05-30/);
+ assert.match(row,/不可评估/);assert.doesNotMatch(row,/>通过</);
+});

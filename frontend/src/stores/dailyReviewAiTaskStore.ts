@@ -94,6 +94,7 @@ export function recordSuccessfulDuration(llm: LlmConfig, elapsedMs: number): voi
 
 export function makeStreamLlmConfig(llm: LlmConfig): StreamLlmConfig {
   return {
+    revision: llm.revision,
     provider: llm.provider,
     baseURL: llm.baseURL,
     apiKey: llm.apiKey,

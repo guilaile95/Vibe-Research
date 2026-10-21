@@ -1,4 +1,6 @@
+import { validQuoteRows, quoteSnapshotStates, quoteSnapshotLabel } from "@/lib/quoteSnapshot";
 import { ShortlineReviewCard } from "@/components/dailyReview/ShortlineReviewCard";
+import { AiTaskBudgetNotice } from "@/components/AiTaskBudgetNotice";
 import { DailyReviewAiBasis } from "@/components/dailyReview/DailyReviewAiBasis";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -178,6 +180,11 @@ export function DailyReview() {
   const [watchQuotes, setWatchQuotes] = useState<Record<string, Quote>>({});
   const [watchInput, setWatchInput] = useState("");
   const [watchLoading, setWatchLoading] = useState(false);
+  const [watchQuoteFailures, setWatchQuoteFailures] = useState<string[]>([]);
+  const [watchQuoteError, setWatchQuoteError] = useState<string | null>(null);
+  const [watchRequestCompletedAt, setWatchRequestCompletedAt] = useState<number | null>(null);
+  const watchRequest = useRef(0);
+  const watchQuoteStates = quoteSnapshotStates(watchQuotes, watchCodes, watchQuoteFailures, Date.now());
 
   const [boardTab, setBoardTab] = useState<"industry" | "concept" | "region">("industry");
 
@@ -418,9 +425,31 @@ export function DailyReview() {
   );
 
   const refreshWatch = (codes: string[]) => {
-    if (!codes.length) { setWatchQuotes({}); return; }
+    const generation = ++watchRequest.current;
+    const requestedCodes = [...codes];
+    const active = () => mountedRef.current && generation === watchRequest.current;
+    setWatchQuotes((previous) => Object.fromEntries(requestedCodes.filter((code) => previous[code]).map((code) => [code, previous[code]])));
+    setWatchQuoteError(null);
+    setWatchQuoteFailures((previous) => previous.filter((code) => requestedCodes.includes(code)));
+    setWatchRequestCompletedAt(null);
+    if (!requestedCodes.length) { setWatchLoading(false); return; }
     setWatchLoading(true);
-    api.quote(codes.join(",")).then(setWatchQuotes).catch(() => {}).finally(() => setWatchLoading(false));
+    api.quote(requestedCodes.join(",")).then((data) => {
+      if (!active()) return;
+      const valid = validQuoteRows(data, requestedCodes);
+      const failed = requestedCodes.filter((code) => !valid[code]);
+      setWatchQuotes((previous) => ({ ...previous, ...valid }));
+      setWatchQuoteFailures(failed);
+      setWatchQuoteError(failed.length ? `部分行情刷新失败：${failed.join("、")}` : null);
+    }).catch(() => {
+      if (!active()) return;
+      setWatchQuoteFailures(requestedCodes);
+      setWatchQuoteError("行情刷新失败，已有价格仅为旧快照");
+    }).finally(() => {
+      if (!active()) return;
+      setWatchRequestCompletedAt(Date.now());
+      setWatchLoading(false);
+    });
   };
 
   useEffect(() => {
@@ -431,17 +460,21 @@ export function DailyReview() {
     loadHistory({ trade_date: "", offset: 0 });
     loadWatchAuthoritative()
       .then((r) => {
+        if (!mountedRef.current) return;
         setWatchCodes(r.codes);
         setWatchEtag(r.etag);
         refreshWatch(r.codes);
       })
       .catch(() => {
+        if (!mountedRef.current) return;
+        refreshWatch([]);
         setWatchCodes([]);
         setWatchEtag(null);
       });
     // 仅首次挂载：不自动保存、不自动 AI
     return () => {
       mountedRef.current = false;
+      watchRequest.current += 1;
       historyRequestRef.current += 1;
       detailRequestRef.current += 1;
       comparisonRequestRef.current += 1;
@@ -1079,8 +1112,10 @@ export function DailyReview() {
             <Plus className="h-4 w-4" /> 增加
           </button>
         </div>
+        {watchQuoteError && <p role="alert" className="mb-2 text-xs text-warning">{watchQuoteError}</p>}
+        {watchRequestCompletedAt && <p className="mb-2 text-xs text-muted-foreground">请求完成于 {new Date(watchRequestCompletedAt).toLocaleTimeString("zh-CN")}（非行情时间）</p>}
         {watchCodes.length === 0 ? (
-          <p className="text-sm text-muted-foreground/60">加上你关注的股票，随时看它们的实时价格与涨跌。数据存本地，不上传。</p>
+          <p className="text-sm text-muted-foreground/60">加上你关注的股票，手动刷新价格快照与涨跌。</p>
         ) : (
           <div className="grid grid-cols-2 gap-2" data-testid="today-watch-manager-quotes">
             {watchCodes.map((c) => {
@@ -1096,6 +1131,7 @@ export function DailyReview() {
                   <p className={cn("text-xs", q ? pctColor(q.change_pct) : "text-muted-foreground/40")}>
                     {q ? pctCell(q.change_pct) : c}
                   </p>
+                  <p className="mt-1 text-xs text-muted-foreground">{quoteSnapshotLabel(watchQuoteStates[c])}{!q && watchQuoteFailures.includes(c) ? " · 刷新失败" : ""}</p>
                 </div>
               );
             })}
@@ -1123,6 +1159,7 @@ export function DailyReview() {
             </button>
           )}
         </div>
+        <AiTaskBudgetNotice task="daily" />
         {taskStatus === "restoring" && (
           <p className="mt-3 inline-flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" /> 正在恢复已保存的 AI 复盘…
@@ -1761,9 +1798,9 @@ export function DailyReview() {
                 <RecentResearch />
                 <section className="rounded-xl border border-border/60 bg-card/40 p-4">
                   <div className="mb-2 flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">关注股票</h2><Link to="/watchlist" className="text-xs text-primary hover:underline">全部自选 →</Link></div>
-                  {watchCodes.length ? <ul className="divide-y divide-border/40">{watchCodes.slice(0, 5).map((code) => {
+                  {watchCodes.length ? <ul data-testid="today-watch-compact-quotes" className="divide-y divide-border/40">{watchCodes.slice(0, 5).map((code) => {
                     const quote = watchQuotes[code];
-                    return <li key={code} className="flex items-center justify-between gap-2 py-2 text-sm"><Link to={candidateWorkspaceHref(code)} className="min-w-0 truncate hover:text-primary">{quote?.name || code}</Link><span className={cn("shrink-0 font-mono text-xs", quote ? pctColor(quote.change_pct) : "text-muted-foreground")}>{quote ? pctCell(quote.change_pct) : "行情未读取"}</span></li>;
+                    return <li key={code} className="py-2 text-sm"><div className="flex items-center justify-between gap-2"><Link to={candidateWorkspaceHref(code)} className="min-w-0 truncate hover:text-primary">{quote?.name || code}</Link><span className={cn("shrink-0 font-mono text-xs", quote ? pctColor(quote.change_pct) : "text-muted-foreground")}>{quote ? pctCell(quote.change_pct) : "行情未读取"}</span></div><p className="mt-1 text-xs text-muted-foreground">{quoteSnapshotLabel(watchQuoteStates[code])}{!quote && watchQuoteFailures.includes(code) ? " · 刷新失败" : ""}</p></li>;
                   })}</ul> : <p className="py-3 text-xs text-muted-foreground">还没有关注股票，可从市场发现挑选研究对象。</p>}
                   <details className="mt-2 border-t border-border/40 pt-2"><summary className="cursor-pointer text-xs text-muted-foreground">管理关注股票</summary><div className="mt-3">{marketSections.find((item) => item.order === 9)?.node}</div></details>
                 </section>

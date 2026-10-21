@@ -3,6 +3,8 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
+import { createElement, Fragment } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 const source = readFileSync(new URL('../src/pages/PerformanceAttribution.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const startIndex = source.indexOf('  useEffect(() => {\n    mountedRef.current = true;');
@@ -20,7 +22,7 @@ function harness() {
     toast: { success: (message) => notifications.push(['success', message]), error: (message) => notifications.push(['error', message]) },
     api: new Proxy({}, { get: (_, kind) => (params) => new Promise((resolve, reject) => calls.push({ kind, params, resolve, reject })) }),
   };
-  for (const key of ['Loading', 'Error', 'Result', 'ViewingSnapshotId', 'Snapshots', 'SnapshotListError', 'Freezing', 'Notice', 'FreezeError', 'SnapshotsOpen']) scope['set' + key] = (value) => { state[key] = value; };
+  for (const key of ['Loading', 'Error', 'Result', 'ViewingSnapshotId', 'SnapshotApplicability', 'Snapshots', 'SnapshotListError', 'Freezing', 'Notice', 'FreezeError', 'SnapshotsOpen']) scope['set' + key] = (value) => { state[key] = value; };
   scope.setDateFrom = (value) => { scope.dateFrom = value; };
   scope.setDateTo = (value) => { scope.dateTo = value; };
   vm.runInNewContext(ts.transpileModule(body + ';globalThis.actions={fetchAttribution,handleOpenSnapshot,handleFreeze,loadSnapshots,changeDate};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, scope);
@@ -112,4 +114,48 @@ for (const fail of [false, true]) test(`older list ${fail ? 'failure' : 'success
   h.calls[1].resolve({ items: [{ snapshot_id: 'NEW' }] }); await b;
   if (fail) h.calls[0].reject(new Error('OLD')); else h.calls[0].resolve({ items: [{ snapshot_id: 'OLD' }] }); await a;
   assert.equal(h.state.Snapshots[0].snapshot_id, 'NEW'); assert.equal(h.state.SnapshotListError, null);
+});
+
+test('snapshot applicability is an outer warning, not a mutation of the frozen payload', async () => {
+  const h = harness(); const request = h.handleOpenSnapshot('corrected');
+  const payload = { marker: 'immutable', totals: { total_realized_pnl: 500 } };
+  h.calls[0].resolve({snapshot: {payload, current_applicability: {state: 'REQUIRES_RECONCILIATION'}}, positions: []});
+  await request;
+  assert.equal(h.state.SnapshotApplicability, 'REQUIRES_RECONCILIATION');
+  assert.equal(h.state.Result.totals.total_realized_pnl, 500);
+  assert.equal(payload.measurement_state, undefined);
+  const live = h.fetchAttribution();
+  assert.equal(h.state.SnapshotApplicability, null);
+  h.calls[1].resolve({measurement_state: 'UNAVAILABLE', totals: null, positions: []}); await live;
+  assert.equal(h.state.Result.totals, null);
+});
+test('a definitive reconciliation conflict is not described as an uncertain snapshot write', async () => {
+  const h = harness(); const request = h.handleFreeze();
+  h.calls[0].reject({status: 409, detail: {code: 'ATTRIBUTION_REQUIRES_RECONCILIATION'}});
+  await request;
+  assert.match(h.state.FreezeError, /本次没有生成快照/);
+  assert.equal(h.calls.length, 1);
+});
+
+function renderResultBranch(result) {
+  const start = source.indexOf('{loading ? (');
+  const end = source.indexOf('\n\n      <div className={CARD}>', start);
+  assert.ok(start >= 0 && end > start, 'result branch boundaries must exist');
+  const expression = source.slice(start + 1, end).trim().slice(0, -1);
+  const scope = { result, positions: result?.positions ?? [], loading: false, CARD: 'card', React: { createElement, Fragment } };
+  vm.runInNewContext(ts.transpileModule('globalThis.node = (' + expression + ');', {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React },
+  }).outputText, scope);
+  return renderToStaticMarkup(scope.node);
+}
+test('reconciliation unavailable renders a dedicated state rather than empty trade wording', () => {
+  const html = renderResultBranch({measurement_state: 'UNAVAILABLE', selected_trade_count: 2, totals: null, positions: []});
+  assert.match(html, /盈亏暂不可计量/);
+  assert.match(html, /待对账后再计算/);
+  assert.doesNotMatch(html, /没有可归因的交易流水/);
+});
+test('a genuinely empty available selection retains the empty-trade message', () => {
+  const html = renderResultBranch({positions: [], selected_trade_count: 0});
+  assert.match(html, /当前结果没有可归因的交易流水/);
+  assert.doesNotMatch(html, /待对账/);
 });

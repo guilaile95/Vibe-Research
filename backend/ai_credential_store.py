@@ -16,7 +16,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-SCHEMA_VERSION = "ai_credential.v1"
+SCHEMA_VERSION = "ai_credential.v2"
+LEGACY_SCHEMA_VERSION = "ai_credential.v1"
+MAX_REVISION = 2**63 - 1
 CLI_PROVIDER = "cli-codex"
 DEFAULT_CODEX_MODEL = "gpt-5-codex"
 UNAVAILABLE_CREDENTIAL = "UNAVAILABLE_CREDENTIAL"
@@ -135,123 +137,127 @@ def _validate_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def save(payload: dict[str, Any]) -> dict[str, Any]:
-    record = _validate_payload(payload)
-    with _LOCK:
-        _atomic_write(credential_path(), record)
-    _LOGGER.info(
-        "AI credential mirror saved provider=%s model=%s",
-        record["provider"],
-        record["model"],
-    )
-    return status()
+class CredentialConflict(CredentialStoreError):
+    pass
 
 
-def delete() -> dict[str, Any]:
-    path = credential_path()
-    with _LOCK:
-        try:
-            if path.exists():
-                path.unlink()
-        except OSError as exc:
-            raise CredentialStoreError("后台凭据删除失败") from exc
-    _LOGGER.info("AI credential mirror deleted")
-    return status()
+def _revision(value: Any) -> int:
+    if not isinstance(value, str) or not value or not value.isascii() or not value.isdecimal() or len(value) > 19:
+        raise CredentialStoreError("CREDENTIAL_REVISION_INVALID")
+    number = int(value)
+    if str(number) != value or number > MAX_REVISION:
+        raise CredentialStoreError("CREDENTIAL_REVISION_INVALID")
+    return number
 
 
 def _read_raw() -> dict[str, Any] | None:
     path = credential_path()
-    if not path.exists():
-        return None
     try:
-        text = path.read_text(encoding="utf-8")
-        data = json.loads(text)
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return {"_corrupt": True}
+        raise CredentialStoreError("CREDENTIAL_STATE_UNAVAILABLE") from None
     if not isinstance(data, dict):
-        return {"_corrupt": True}
+        raise CredentialStoreError("CREDENTIAL_STATE_UNAVAILABLE")
     return data
+
+
+def _state() -> tuple[int, dict[str, Any] | None, str | None]:
+    """Read once under _LOCK. Legacy records are read-only generation zero."""
+    raw = _read_raw()
+    if raw is None:
+        return 0, None, None
+    schema = raw.get("schema_version")
+    if schema == LEGACY_SCHEMA_VERSION:
+        revision = 0
+    elif schema == SCHEMA_VERSION:
+        revision = raw.get("revision")
+        if type(revision) is not int or not 0 <= revision <= MAX_REVISION or type(raw.get("configured")) is not bool:
+            raise CredentialStoreError("CREDENTIAL_STATE_UNAVAILABLE")
+        if raw["configured"] is False:
+            if any(key in raw for key in ("provider", "model", "baseURL", "apiKey", "api_key", "base_url")):
+                raise CredentialStoreError("CREDENTIAL_STATE_UNAVAILABLE")
+            return revision, None, raw.get("updated_at")
+    else:
+        raise CredentialStoreError("CREDENTIAL_STATE_UNAVAILABLE")
+    try:
+        record = _validate_payload(raw)
+    except CredentialStoreError:
+        raise CredentialStoreError("CREDENTIAL_STATE_UNAVAILABLE") from None
+    record["updated_at"] = str(raw.get("updated_at") or "")
+    return revision, record, record["updated_at"]
+
+
+def _status(revision: int | None, cfg: dict[str, Any] | None, updated_at=None) -> dict[str, Any]:
+    return {
+        "revision": str(revision) if revision is not None else None,
+        "configured": cfg is not None,
+        "provider": cfg["provider"] if cfg else None,
+        "model": cfg["model"] if cfg else None,
+        "baseURL": _sanitize_base_url(cfg.get("baseURL", "") if cfg else ""),
+        "updated_at": updated_at,
+        "scheduled_available": cfg is not None,
+        "scheduled_credential_available": cfg is not None,
+        "error": None if cfg else UNAVAILABLE_CREDENTIAL,
+    }
+
+
+def save(payload: dict[str, Any], *, expected_revision: str) -> dict[str, Any]:
+    expected = _revision(expected_revision)
+    record = _validate_payload(payload)
+    with _LOCK:
+        revision, _, _ = _state()
+        if expected != revision or revision == MAX_REVISION:
+            raise CredentialConflict("CREDENTIAL_REVISION_CONFLICT")
+        revision += 1
+        record.update(revision=revision, configured=True)
+        _atomic_write(credential_path(), record)
+        return _status(revision, record, record["updated_at"])
+
+
+def delete(*, observed_revision: str) -> dict[str, Any]:
+    """Clear barrier: stale observations may clear, future observations cannot.
+
+    Never unlink: the nonsecret tombstone prevents old saves reviving a key.
+    This lock assumes the documented single backend writer process.
+    """
+    observed = _revision(observed_revision)
+    with _LOCK:
+        revision, _, _ = _state()
+        if observed > revision or revision == MAX_REVISION:
+            raise CredentialConflict("CREDENTIAL_REVISION_CONFLICT")
+        revision += 1
+        timestamp = utc_now_iso()
+        _atomic_write(credential_path(), {
+            "schema_version": SCHEMA_VERSION, "revision": revision,
+            "configured": False, "updated_at": timestamp,
+        })
+        return _status(revision, None, timestamp)
 
 
 def load() -> dict[str, Any] | None:
     """Return the full record including apiKey. Scheduled AI only."""
     with _LOCK:
-        data = _read_raw()
-    if data is None or data.get("_corrupt"):
-        return None
-    if data.get("schema_version") != SCHEMA_VERSION:
-        return None
-    provider = str(data.get("provider") or "").strip()
-    model = str(data.get("model") or "").strip()
-    if provider == CLI_PROVIDER:
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "provider": CLI_PROVIDER,
-            "baseURL": "",
-            "model": model or DEFAULT_CODEX_MODEL,
-            "apiKey": "",
-            "updated_at": str(data.get("updated_at") or ""),
-        }
-    if provider not in _API_PROVIDERS:
-        return None
-    base_url = str(data.get("baseURL") or "")
-    api_key = str(data.get("apiKey") or "")
-    if not base_url or not api_key or not model:
-        return None
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "provider": provider,
-        "baseURL": base_url,
-        "model": model,
-        "apiKey": api_key,
-        "updated_at": str(data.get("updated_at") or ""),
-    }
+        try:
+            _, record, _ = _state()
+            return record
+        except CredentialStoreError:
+            return None
 
 
 def scheduled_config() -> tuple[dict[str, Any] | None, str | None]:
-    """Return (cfg, error_code). cfg is suitable for chat.stream_messages."""
-    with _LOCK:
-        data = _read_raw()
-    if data is None:
+    record = load()
+    if record is None:
         return None, UNAVAILABLE_CREDENTIAL
-    if data.get("_corrupt") or data.get("schema_version") != SCHEMA_VERSION:
-        return None, UNAVAILABLE_CREDENTIAL
-    provider = str(data.get("provider") or "").strip()
-    model = str(data.get("model") or "").strip()
-    if provider == CLI_PROVIDER:
-        return {
-            "provider": CLI_PROVIDER,
-            "model": model or DEFAULT_CODEX_MODEL,
-            "baseURL": "",
-            "apiKey": "",
-        }, None
-    if provider not in _API_PROVIDERS:
-        return None, UNAVAILABLE_CREDENTIAL
-    base_url = str(data.get("baseURL") or "").strip()
-    api_key = str(data.get("apiKey") or "").strip()
-    if not base_url or not api_key or not model:
-        return None, UNAVAILABLE_CREDENTIAL
-    return {
-        "provider": provider,
-        "model": model,
-        "baseURL": base_url,
-        "apiKey": api_key,
-    }, None
+    return {key: record[key] for key in ("provider", "model", "baseURL", "apiKey")}, None
 
 
 def status() -> dict[str, Any]:
-    cfg, error = scheduled_config()
-    record = load()
-    configured = cfg is not None
-    provider = cfg["provider"] if cfg else None
-    model = cfg["model"] if cfg else None
-    return {
-        "configured": configured,
-        "provider": provider,
-        "model": model,
-        "baseURL": _sanitize_base_url(cfg.get("baseURL", "") if cfg else ""),
-        "updated_at": record.get("updated_at") if record else None,
-        "scheduled_available": configured,
-        "scheduled_credential_available": configured,
-        "error": error,
-    }
+    with _LOCK:
+        try:
+            return _status(*_state())
+        except CredentialStoreError:
+            result = _status(None, None)
+            result["error"] = "CREDENTIAL_STATE_UNAVAILABLE"
+            return result

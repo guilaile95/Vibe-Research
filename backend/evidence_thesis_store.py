@@ -1645,3 +1645,19 @@ def validate_persisted_delta_chain(conn: sqlite3.Connection, thesis_id: str) -> 
             _require_canonical_timestamp(accessed_at)
             _require_canonical_timestamp(captured_at)
         expected_seq += 1
+
+
+# Optional workflow extension in the canonical ledger. No GET/import migrations.
+# Both original expectation and confirmed judgment are append-only records.
+def ensure_event_review_tables(conn: sqlite3.Connection) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS event_research_reviews (
+        id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL,
+        thesis_id TEXT NOT NULL REFERENCES investment_theses(id),
+        event_id TEXT NOT NULL, observation_hash TEXT NOT NULL,
+        payload TEXT NOT NULL, version INTEGER NOT NULL CHECK(version = 1),
+        UNIQUE(campaign_id, thesis_id, event_id, observation_hash)
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS event_research_judgments (
+        review_id TEXT PRIMARY KEY REFERENCES event_research_reviews(id),
+        payload TEXT NOT NULL
+    )""")

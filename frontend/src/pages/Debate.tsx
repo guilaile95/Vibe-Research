@@ -1,3 +1,6 @@
+import { AiTaskBudgetNotice } from "@/components/AiTaskBudgetNotice";
+import { useLocation } from "react-router-dom";
+import { debateCodeFromSearch } from "@/lib/debateHandoff";
 import { useEffect, useRef, useState } from "react";
 import { Swords, Play, Square, Save, CheckCircle2, Circle, AlertTriangle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -30,7 +33,10 @@ const STAGE_TONE: Record<DebateStage, string> = {
 const DOSSIER_HINT = "多空双方使用同一份接口返回的数据；部分、过期、空结果和截断均须保留限制，不能补造数字。";
 
 export function Debate() {
-  const [code, setCode] = useState("");
+  const { search } = useLocation();
+  const owner = useRef(search);
+  owner.current = search;
+  const [code, setCode] = useState(() => debateCodeFromSearch(search));
   const [rounds, setRounds] = useState(1);
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState("");
@@ -55,6 +61,16 @@ export function Debate() {
     setStatus(""); setProgress([]); setMissing([]); setPartial([]); setStages([]); setError(""); setSaved(false);
   };
 
+  useEffect(() => {
+    const old = abortRef.current;
+    abortRef.current = null;
+    old?.abort();
+    reset();
+    setAnalyzedCode("");
+    setRunning(false);
+    setCode(debateCodeFromSearch(search));
+  }, [search]);
+
   async function start() {
     if (abortRef.current) return;
     const c = code.trim();
@@ -64,7 +80,9 @@ export function Debate() {
     setRunning(true);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    const active = () => abortRef.current === ctrl && !ctrl.signal.aborted;
+    const navigationOwner = search;
+    const owns = () => abortRef.current === ctrl && owner.current === navigationOwner;
+    const active = () => owns() && !ctrl.signal.aborted;
     let streamFailed = false;
     try {
       await debateStream(c, rounds, {
@@ -90,14 +108,14 @@ export function Debate() {
       }, ctrl.signal);
       if (active()) { setStatus(streamFailed ? "辩论失败" : "辩论完成"); setCompleted(!streamFailed); }
     } catch (e) {
-      if (abortRef.current !== ctrl) return;
+      if (!owns()) return;
       if (e instanceof DOMException && e.name === "AbortError") setStatus("已中止");
       else {
         setStatus("辩论失败");
         if (!streamFailed) setError(e instanceof ApiError ? e.message : String(e));
       }
     } finally {
-      if (abortRef.current === ctrl) {
+      if (owns()) {
         setRunning(false);
         abortRef.current = null;
       }
@@ -178,16 +196,7 @@ export function Debate() {
           )}
         </div>
 
-        {/* 开销提示：辩论比问答重得多，让用户在点下去之前就知道要花多久、调几次模型 */}
-        {!running && !status && (
-          <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground/70">
-            ⏱ {rounds === 2
-              ? "两轮约 3 分钟 · 5 次模型调用 · 约 6 万字进上下文"
-              : "一轮约 100 秒 · 3 次模型调用 · 约 3.5 万字进上下文"}
-            （每个角色都会带上同一份底稿及其限制）。其中拉底稿约 35 秒、走公开数据接口，不消耗 token。
-            省额度可用 Codex Subscription，或选中档 API 模型——模型基于已返回数据组织和表达。
-          </p>
-        )}
+        <AiTaskBudgetNotice task="debate" rounds={rounds} />
 
         {status && <p className="mt-3 text-xs text-muted-foreground">{status}</p>}
         {error && (

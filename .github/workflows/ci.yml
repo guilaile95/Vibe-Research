@@ -21,6 +21,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      - name: Set up Node.js for saved research replay
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -185,6 +190,43 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Run layout navigation and mobile scroll acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          LAYOUT_NAV_EVIDENCE_DIR: ${{ runner.temp }}/layout-navigation-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/layout-navigation.browser.mjs
+
+      - name: Preserve layout navigation geometry evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: layout-navigation-evidence
+          path: |
+            ${{ runner.temp }}/layout-navigation-evidence/*.png
+            ${{ runner.temp }}/layout-navigation-evidence/*.html
+            ${{ runner.temp }}/layout-navigation-evidence/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Run two-company comparison mounted-page acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          COMPANY_COMPARISON_BROWSER_OUTPUT_DIR: ${{ runner.temp }}/company-comparison-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/company-comparison.browser.mjs
+
+      - name: Preserve two-company comparison synthetic evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: company-comparison-evidence
+          path: ${{ runner.temp }}/company-comparison-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Run research analytics production page acceptance
         if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
@@ -242,6 +284,79 @@ jobs:
         env:
           PYTHON: python
         run: npm run test:e2e:factor-validation
+
+      - name: Run bounded workflow recovery E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          WORKFLOW_RECOVERY_EVIDENCE_DIR: ${{ runner.temp }}/workflow-recovery-evidence
+          WORKFLOW_RECOVERY_PR_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: npm run test:e2e:workflow-recovery
+
+      - name: Preserve workflow recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: workflow-recovery-evidence
+          path: ${{ runner.temp }}/workflow-recovery-evidence
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Run delayed factor navigation regression E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          E2E_SCREENSHOT_DIR: ${{ runner.temp }}/factor-navigation-evidence
+        run: npm run test:e2e:factor-navigation
+
+      - name: Preserve factor navigation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: factor-navigation-evidence
+          path: ${{ runner.temp }}/factor-navigation-evidence
+          if-no-files-found: warn
+
+      - name: Run historical signal experiment save and comparison E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          VR_E2E_PYTHON: python
+          E2E_SCREENSHOT_DIR: ${{ runner.temp }}/historical-experiment-evidence
+        run: npm run test:e2e:historical-signal-validation
+
+      - name: Preserve historical experiment evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: historical-experiment-evidence
+          path: ${{ runner.temp }}/historical-experiment-evidence
+          if-no-files-found: warn
+
+      - name: Run synthetic K-line inspection component E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/kline-inspection.browser.mjs
+
+      - name: Run synthetic adoption component workflows E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          E2E_ARTIFACT_DIR: ${{ runner.temp }}/adoption-workflow-evidence
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/adoption-workflows.browser.mjs
+
+      - name: Preserve synthetic adoption component evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: adoption-workflow-evidence
+          path: ${{ runner.temp }}/adoption-workflow-evidence
+          if-no-files-found: warn
 
       - name: Run Full-Market Discovery E2E
         if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
@@ -1007,6 +1122,11 @@ jobs:
         env:
           PYTHON: python
         run: npm run test:e2e:research-event-calendar
+      - name: Run synthetic event expectation and judgment component E2E
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/event-review.browser.mjs
       - name: Run DCR1 Decision Commit valid readback E2E
         if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
@@ -1165,6 +1285,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      - name: Set up Node.js for saved research replay
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -1195,6 +1320,30 @@ jobs:
 
       - name: Install backend dependencies (exact Windows lock)
         run: python -m pip install -r backend/requirements-dev-windows-py312.lock.txt
+
+      # Fail early on the affected portability modules; the complete
+      # offline selection below remains unchanged and still runs after success.
+      - name: Windows adoption portability preflight
+        working-directory: backend
+        env:
+          VR_DATA_DIR: ${{ runner.temp }}/vr-data
+          VR_REPORTS_DIR: ${{ runner.temp }}/vr-reports
+          VIBE_RESEARCH_REVIEW_DB: ${{ runner.temp }}/review.db
+        run: >-
+          python -m pytest -m "not live" -q
+          tests/test_company_research_audit.py
+          tests/test_test_environment_isolation.py
+          tests/test_safe_deep_read_fetch.py
+          tests/test_ai_credential_store.py
+          tests/test_formal_account_authority_regressions.py
+          tests/test_global_metrics_semantics.py
+          tests/test_allocation_targets.py
+          tests/test_experiment_ledger.py
+          tests/test_prediction_journal.py
+          tests/test_research_annotations.py
+          tests/test_research_quality_diagnostics.py
+          tests/test_valuation_digestion_contract.py
+          tests/test_filing_evidence.py
 
       - name: Run offline backend tests
         working-directory: backend

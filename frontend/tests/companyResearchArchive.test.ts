@@ -1,13 +1,15 @@
+import { installCredentialFixture, withCredentialStatus } from './credentialTransportFixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parseResearchBundle, parseResearchRecord, generateCompanyResearch } from '../src/lib/companyResearch.ts';
-const llm={provider:'deepseek' as const,model:'fixture',baseURL:'https://fixture.example',apiKey:'synthetic'};
+const llm={revision:'1',provider:'deepseek' as const,model:'fixture',baseURL:'https://fixture.example',apiKey:'synthetic'};
+test.beforeEach(t => installCredentialFixture(t, llm));
 const fixtures=['A-600000','US-AAPL','HK-00700','US-AAPL-failed-quote'].map(name=>JSON.parse(readFileSync(new URL(`../../backend/tests/fixtures/company_research/${name}.json`,import.meta.url),'utf8')));
 for(const data of fixtures){
  test(`actual registered API golden traverses production parser/stream ${data.subject.market}`,async t=>{
   const b=parseResearchBundle(data.bundle,data.subject,data.as_of);const stages:string[]=[];
-  t.mock.method(globalThis,'fetch',async()=>new Response(data.events.map((x:unknown)=>JSON.stringify(x)).join('\n')+'\n'));
+  t.mock.method(globalThis,'fetch',withCredentialStatus(async()=>new Response(data.events.map((x:unknown)=>JSON.stringify(x)).join('\n')+'\n')));
   const final=await generateCompanyResearch(b,llm,(s,v)=>{if(v)stages.push(s);},new AbortController().signal);
   assert.equal(stages.length,6);assert.deepEqual(parseResearchRecord(final),data.events.at(-1).record);
  });

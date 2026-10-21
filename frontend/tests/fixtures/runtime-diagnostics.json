@@ -1,0 +1,105 @@
+{
+  "schema": "runtime_diagnostics.v1",
+  "mode": "READ_ONLY_NO_PROBES",
+  "startup": {
+    "service": "vibe-research-api",
+    "version": "1.2.3",
+    "git_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_state": "clean"
+  },
+  "agent_runtime": {
+    "backend_target_port": 8911,
+    "backend_target_provenance": "DEFAULT",
+    "declared_runtime_port": 8911,
+    "declared_runtime_port_provenance": "DEFAULT",
+    "configuration_status": "PORTS_MATCH",
+    "declaration_scope": "BACKEND_PROCESS_ENVIRONMENT_NOT_RUNNING_SIDECAR",
+    "availability": "NOT_EVALUATED",
+    "probe_performed": false
+  },
+  "configuration_presence": [
+    {
+      "name": "VR_AGENT_RUNTIME_URL",
+      "present": false
+    },
+    {
+      "name": "VR_AGENT_RUNTIME_PORT",
+      "present": false
+    },
+    {
+      "name": "VR_DATA_DIR",
+      "present": true
+    },
+    {
+      "name": "VR_REPORTS_DIR",
+      "present": true
+    },
+    {
+      "name": "VR_API_KEY",
+      "present": false
+    },
+    {
+      "name": "HITHINK_FINANCE_API_KEY",
+      "present": false
+    },
+    {
+      "name": "TUSHARE_TOKEN",
+      "present": false
+    },
+    {
+      "name": "VR_SEC_CONTACT",
+      "present": false
+    },
+    {
+      "name": "VIBE_NATIVE_INTEL_DISABLE_STARTUP_FETCH",
+      "present": false
+    },
+    {
+      "name": "VIBE_NATIVE_INTEL_DISABLE_SCHEDULER",
+      "present": false
+    }
+  ],
+  "directories": {
+    "data": "MISSING",
+    "reports": "MISSING",
+    "write_verification": "NOT_EVALUATED"
+  },
+  "source_capabilities": [
+    {
+      "capability": "public_market_adapters",
+      "configuration": "BUILTIN",
+      "verification": "NOT_EVALUATED"
+    },
+    {
+      "capability": "hithink",
+      "configuration": "ENV_NAME_ABSENT",
+      "verification": "NOT_EVALUATED"
+    },
+    {
+      "capability": "tushare",
+      "configuration": "ENV_NAME_ABSENT",
+      "verification": "NOT_EVALUATED"
+    },
+    {
+      "capability": "sec",
+      "configuration": "PRIVATE_SETTINGS_NOT_INSPECTED",
+      "verification": "NOT_EVALUATED"
+    },
+    {
+      "capability": "model_provider",
+      "configuration": "PRIVATE_SETTINGS_NOT_INSPECTED",
+      "verification": "NOT_EVALUATED"
+    },
+    {
+      "capability": "native_intel_sources",
+      "configuration": "PRIVATE_SETTINGS_NOT_INSPECTED",
+      "verification": "NOT_EVALUATED"
+    }
+  ],
+  "limitations": [
+    "ENV_PRESENCE_IS_NOT_VALIDITY",
+    "DECLARED_PORT_IS_NOT_LISTENING_PORT",
+    "DIRECTORY_ACCESS_IS_NOT_WRITE_VERIFICATION",
+    "NO_CREDENTIAL_OR_USER_DATA_READS"
+  ]
+}

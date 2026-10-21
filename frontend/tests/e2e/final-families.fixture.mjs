@@ -1,3 +1,4 @@
+import { credentialStatus, storedCredential } from './credential-generation.fixture.mjs';
 import { readFileSync } from "node:fs";
 
 // Actual service-generated empty responses under an intentionally unavailable
@@ -11,6 +12,7 @@ export const ANCILLARY_TRADE_DATE = "2026-10-08";
 export const ANCILLARY_CLOCK = ancillaryGolden.clock;
 
 export const syntheticLlm = { provider: "cli-codex", model: "SYNTHETIC_OFFLINE" };
+export const syntheticStoredLlm = storedCredential(syntheticLlm);
 export const plan = rounds => rounds >= 2 ? ["bull", "bear", "bull_rebut", "bear_rebut", "referee"] : ["bull", "bear", "referee"];
 export const encode = events => events.map(event => JSON.stringify(event)).join("\n") + "\n";
 export function debateEvents(rounds, mode = "complete") {
@@ -22,6 +24,7 @@ export function debateEvents(rounds, mode = "complete") {
 }
 export function ancillaryReply(method, path, search = "") {
   if (method !== "GET") return null;
+  if (path === "/api/ai/credential-status" && !search) return credentialStatus(syntheticLlm);
   if (path === `/api/observation-workflows/${ANCILLARY_TRADE_DATE}` && search === "") return { data: structuredClone(ancillaryGolden.observations) };
   if (path === "/api/shortline-review/versions" && search === `?trade_date=${ANCILLARY_TRADE_DATE}&mode=daily`) return structuredClone(segmentedVersions[ANCILLARY_TRADE_DATE]);
   if (path === `/api/next-day-verification/${ANCILLARY_TRADE_DATE}` && search === "") return { data: structuredClone(ancillaryGolden.journal) };

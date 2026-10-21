@@ -50,7 +50,7 @@ _gen_counter = {"n": 0}
 _fail_next_build = {"on": False}
 _pool_scenario = {"name": "qualified"}
 _POOL_AS_OF = "2026-10-10T04:10:00Z"
-_real_build_daily_review = daily_review._build_daily_review
+_real_build_daily_review = lambda: daily_review._assemble_daily_review(None, _test_provider_calls=True)
 
 
 def _now() -> str:

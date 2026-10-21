@@ -1534,6 +1534,7 @@ export interface DataHealthOverviewResult {
 }
 
 export interface DataHealthDetailResult {
+  impact?: import("../dataHealthView").DataHealthImpact;
   record: DataHealthRecordDto;
   calculation: {
     quality_basis?: string[];
@@ -1656,6 +1657,11 @@ export interface GlobalQuote {
 
 export interface GlobalMetrics {
   report_date: string;
+  reporting_currency?: "CNY" | "HKD" | "USD" | null;
+  source_reporting_currency?: string | null;
+  amount_unit?: "PROVIDER_RAW_SCALE_UNVERIFIED" | "CURRENCY_UNITS";
+  amount_scale_to_currency_units?: number | null;
+  eps_unit?: "REPORTING_CURRENCY_PER_SHARE";
   revenue: number | null; revenue_yoy: number | null; net_profit: number | null;
   eps: number | null; roe: number | null; gross_margin: number | null;
   net_margin: number | null; debt_ratio: number | null;
@@ -1805,6 +1811,7 @@ export interface HistoricalSignalValidationData {
   source_kind: string | null;
   source_name: string | null;
   license_status: string | null;
+  snapshot_id?: string | null;
   artifact_sha256?: string | null;
   as_of: string | null;
   coverage: { start: string; end: string; row_count: number; code_count: number } | null;
@@ -2166,6 +2173,7 @@ export type TopRiskAnalysis = {
 
 /** 与后端 LLMConfig / 前端 LlmConfig 字段对齐（避免 api↔llm 循环依赖） */
 export interface StreamLlmConfig {
+  revision?: string;
   provider: string;
   baseURL: string;
   apiKey: string;
@@ -2984,17 +2992,21 @@ export interface AttributionTotals {
 }
 
 export interface AttributionResult {
+  measurement_state?: 'UNAVAILABLE';
+  reason_codes?: string[];
+  affected_trade_ids?: string[];
   // Existing backend provenance field; older saved payloads may omit it.
   selected_trade_count?: number;
   as_of_date: string;
   date_from: string | null;
   date_to: string | null;
   positions: AttributionPosition[];
-  totals: AttributionTotals;
+  totals: AttributionTotals | null;
   data_limitations: string[];
 }
 
 export interface AttributionSnapshotSummary {
+  current_applicability?: { state: 'APPLICABLE' | 'REQUIRES_RECONCILIATION' | 'UNVERIFIABLE'; reason_codes: string[]; affected_trade_ids?: string[] };
   snapshot_id: string;
   as_of_date: string;
   created_at: string;

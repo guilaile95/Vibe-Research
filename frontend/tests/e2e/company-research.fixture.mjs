@@ -1,10 +1,13 @@
+import { storedCredential, routeCredentialStatus } from './credential-generation.fixture.mjs';
 import assert from 'node:assert/strict';
 const stages = ['profile', 'financials', 'estimates', 'valuation', 'risk', 'report'];
 const H = 'a'.repeat(64), B = 'b'.repeat(32), R = 'c'.repeat(32);
 export async function runCompanyResearch({ page, baseUrl, fillCode, clickQuery, waitForStockHeader }) {
   let captures = 0, generations = 0;
   const bundle = {schema_version:'company_research.v1',classification:'PUBLIC_ADAPTER_INPUT_UNVERIFIED',bundle_id:B,bundle_sha256:H,subject:{market:'A',symbol:'000001'},captured_at:'2026-10-12T00:00:00Z',limitations:['Synthetic fixture'],sources:[{evidence_id:'facts',source:'synthetic fixture',status:'AVAILABLE',captured_at:'2026-10-12T00:00:00Z',source_as_of:null,payload_sha256:H,stages,payload:{value:0},scope:'fixture'}]};
-  await page.addInitScript(() => localStorage.setItem('vr-llm', JSON.stringify({provider:'deepseek',model:'synthetic',baseURL:'https://fixture.example',apiKey:'synthetic'})));
+  const model = {provider:'deepseek',model:'synthetic',baseURL:'https://fixture.example',apiKey:'synthetic'};
+  await page.addInitScript(config => localStorage.setItem('vr-llm', JSON.stringify(config)), storedCredential(model));
+  await routeCredentialStatus(page, model);
   await page.route('**/api/company-research/**', async route => {
     const p = new URL(route.request().url()).pathname;
     if (p.endsWith('/capture')) { captures++; assert.equal(route.request().postDataJSON().confirm_public_fetch,true); return route.fulfill({json:{data:bundle}}); }

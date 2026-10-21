@@ -7,6 +7,7 @@
 | 安装、启动、检查本机服务 | [运行指南](GETTING_STARTED.md) | Windows / Linux、三个服务、AI 配置与常见问题 |
 | 了解当前进度和验证缺口 | [恢复坐标](CURRENT_STAGE.md) / 下文 GitHub 入口 | 回读当前 PR 与 exact-head CI；历史快照不充当实时状态 |
 | 运行本地工程验证 | [测试指南](TESTING.md) | 离线测试、构建、隔离浏览器用例与验证边界 |
+| 导出运行配置、排查端口 | [脱敏运行自检](RUNTIME_DIAGNOSTICS.md) | 只读元数据，无来源/模型探测；配置存在不代表可用 |
 | 检测当前 API 配置 | [AI 连接检测](AI_CONNECTION_TEST.md) | 手动合成请求、费用与取消；不评价回答质量 |
 | 制作 Linux 用户目录安装包 | [Linux 打包与运行](LINUX_INSTALL.md) | 独立安装/生命周期路径；不等于云端部署验收 |
 | 接管工程任务 | [恢复坐标](CURRENT_STAGE.md) → [AGENTS.md](../AGENTS.md) | 当前授权、实际 Git 状态和协作边界 |
@@ -28,6 +29,14 @@
 - [Notion 项目主页](https://app.notion.com/p/3be55152dfe881fd8552e356a79c7cf6) 与 [详细文档](https://app.notion.com/p/3e355152dfe881ee9effcfa720040127) 保留长期产品判断、评估和历史，访问需要对应工作区权限。
 - 本地源码、远端稳定分支和正在运行的服务分别核验；其中一个更新不证明另外两个已更新。
 
+## 选择性吸收的范围
+
+[Vibe-Astock 决策与后续证据索引](VIBE_ASTOCK_ADOPTION_PLAN.md) 区分已采用的软件合同、
+未接通的生产采集/部署能力与待真实验证的范围；八月暂停结论保留为历史，不覆盖后续证据。
+
+- [2026-10-19 四批研究改进入口与边界](acceptance/RESEARCH_ADOPTION_MATRIX_20261019.md)：累计已实现切片、用户前置条件和未完成范围
+- [2026-10-19 有界验收清单](research/ACCEPTANCE_CHECKLIST_20261019.md)：离线工程门与待授权的真实数据 / AI 案例
+
 ## 历史资料
 
 `research/` 下的评估、实验、执行记录按各自日期、基线和数据范围阅读。
@@ -44,3 +53,5 @@
 - [Trade-list read ownership](TRADE_LIST_READ_OWNERSHIP.md): applied-filter identity and stale-response protection
 
 - [RDP snapshot replay](research/RDP_SNAPSHOT_REPLAY_20261009.md): reopen an imported research generation, retain receipts, and run the offline two-generation example
+
+- [Explicit experiment comparison](research/EXPERIMENT_COMPARISON.md): persisted research manifests, exact receipts, and incomparable metrics.

@@ -1,3 +1,5 @@
+import { AnnouncementGroupsCard } from "@/components/research/AnnouncementGroupsCard";
+import { FilingEvidenceCard } from "@/components/research/FilingEvidenceCard";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Pencil, Save, X, Trash2, Loader2, ExternalLink } from "lucide-react";
@@ -676,6 +678,8 @@ export function EvidenceDetail() {
           </div>
         )}
       </GlassCard>
+      {!editing && !record.deleted && record.subject_type === "stock" && <AnnouncementGroupsCard key={`group:${record.id}:${record.edit_token}`} evidence={record} />}
+      {!editing && !record.deleted && record.subject_type === "stock" && ["financial_filing", "announcement"].includes(record.evidence_type) && <FilingEvidenceCard key={`${record.id}:${record.edit_token}`} evidence={record} />}
     </div>
   );
 }

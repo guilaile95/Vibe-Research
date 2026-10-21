@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { config, chatKey, readReply, validSyntheticStream, observeSyntheticStreams } from "./ai-settings-storage.fixture.mjs";
+import { config, chatKey, readReply, validSyntheticStream, observeSyntheticStreams, readDiagnosticsReply } from "./ai-settings-storage.fixture.mjs";
 const frontend = fileURLToPath(new URL("../../", import.meta.url));
 const dist = join(frontend, "dist");
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { resolve, promise }; };
@@ -68,6 +68,8 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
   let context, page, peer;
   const errors = [], unexpected = [], requests = [], external = [], storageEvidence = [], streamEvidence = [];
   const slotsBefore = streamState.all.length;
+  const credential = { revision: 1, configured: true, putStarted: deferred(), releasePut: deferred(), cleared: deferred() };
+  const diagnostics = { mode: "malicious", count: 0, started: deferred(), release: deferred() };
   try {
     context = await browser.newContext({ baseURL, viewport: { width, height: 960 }, serviceWorkers: "block" });
     await context.addInitScript(observeSyntheticStreams);
@@ -78,6 +80,39 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
       if (url.origin !== baseURL) { external.push(url.origin); return route.abort(); }
       if (!url.pathname.startsWith("/api/")) return route.continue();
       requests.push(`${request.method()} ${url.pathname}${url.search}`);
+      if (url.pathname === "/api/runtime-diagnostics/export") {
+        const reply = readDiagnosticsReply(request.method(), url.pathname, url.search);
+        if (scenario !== "settings-diagnostics" || !reply || request.headers().authorization !== "Bearer SYNTHETIC_DIAGNOSTIC_ACCESS") {
+          unexpected.push("INVALID_DIAGNOSTICS_REQUEST");
+          return route.fulfill({ status: 503, json: { detail: "UNEXPECTED_SYNTHETIC_REQUEST" } });
+        }
+        diagnostics.count++;
+        if (diagnostics.mode === "malicious") reply.data.startup.source_directory = "SYNTHETIC_PRIVATE_PATH";
+        else { diagnostics.started.resolve(); await diagnostics.release.promise; }
+        return route.fulfill({ json: reply });
+      }
+      if (scenario === "credential-race" && request.method() === "GET" && url.pathname === "/api/thesis" && url.search === "?limit=50&offset=0") {
+        return route.fulfill({ json: { items: [], total: 0 } });
+      }
+      if (scenario === "credential-race" && url.pathname === "/api/ai/credential-status") {
+        return route.fulfill({ json: { revision: String(credential.revision), configured: credential.configured, provider: credential.configured ? config.provider : null, scheduled_available: credential.configured } });
+      }
+      if (scenario === "credential-race" && url.pathname === "/api/ai/credential") {
+        const body = request.postDataJSON();
+        if (request.method() === "PUT") {
+          assert.equal(body.apiKey, config.apiKey);
+          assert.equal(body.expectedRevision, "1");
+          credential.putStarted.resolve();
+          await credential.releasePut.promise;
+          if (body.expectedRevision !== String(credential.revision)) return route.fulfill({ status: 409, json: { detail: "CREDENTIAL_REVISION_CONFLICT" } });
+          credential.revision++; credential.configured = true;
+        } else if (request.method() === "DELETE") {
+          assert.ok(Number(body.observedRevision) <= credential.revision);
+          credential.revision++; credential.configured = false;
+          credential.cleared.resolve();
+        } else throw new Error("Unexpected credential method");
+        return route.fulfill({ json: { revision: String(credential.revision), configured: credential.configured } });
+      }
       const reply = readReply(request.method(), url.pathname, url.search);
       if (reply) return route.fulfill({ json: reply });
       if (!url.search && validSyntheticStream(request.method(), url.pathname, request.postDataJSON())) return route.continue();
@@ -108,7 +143,44 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
     };
     const aborted = index => page.waitForFunction(i => window.__streams[i]?.aborted, index);
     const stored = () => page.evaluate(() => JSON.stringify(Object.fromEntries(Object.entries(localStorage))));
-    if (scenario === "chat-drafts") {
+    if (scenario === "credential-race") {
+      await page.goto("/settings");
+      await page.getByTestId("wave5-save-api-btn").click();
+      await bounded(credential.putStarted.promise);
+      await page.getByTestId("wave5-forget-btn").click();
+      await page.waitForFunction(() => localStorage.getItem("vr-llm") === null);
+      // Wait for the closed drawer before opening it: waitForURL alone can
+      // precede React's route-change effect, which closes mobile navigation.
+      const sidebarLink = async path => {
+        if (width < 768) {
+          await page.getByRole("button", { name: "打开导航菜单", exact: true }).click();
+          await page.getByRole("dialog", { name: "导航菜单", exact: true }).locator(`a[href="${path}"]:visible`).click();
+        } else {
+          await page.getByTestId("app-sidebar").locator(`a[href="${path}"]:visible`).click();
+        }
+      };
+      // Unmount/remount cannot discard the queue or let old save completion own UI.
+      await sidebarLink("/thesis");
+      await page.waitForURL("**/thesis");
+      await page.locator('a[href="/my-reports"]').first().click();
+      await page.waitForURL("**/my-reports");
+      assert.equal(await page.getByTestId("wave5-save-api-btn").count(), 0);
+      // Remount in the same document while the PUT still owns the queue.
+      // A page.goto/reload here would discard the module-scoped queue.
+      await page.getByRole("checkbox", { name: "选择 Synthetic report", exact: true }).waitFor();
+      await sidebarLink("/settings");
+      await page.waitForURL("**/settings");
+      assert.equal(credential.revision, 1, "save remains pending across SPA unmount/remount");
+      credential.releasePut.resolve();
+      await bounded(credential.cleared.promise);
+      await page.getByText("接入 AI", { exact: true }).first().waitFor();
+      assert.equal(await page.evaluate(() => localStorage.getItem("vr-llm")), null);
+      assert.equal(credential.configured, false);
+      assert.equal(credential.revision, 3);
+      assert.equal(requests.filter(row => row === "PUT /api/ai/credential").length, 1);
+      assert.equal(requests.filter(row => row === "DELETE /api/ai/credential").length, 1);
+      assert.equal(await streamCount(), 0);
+    } else if (scenario === "chat-drafts") {
       await page.goto("/my-reports");
       const a = page.getByRole("checkbox", { name: "选择 Synthetic report", exact: true });
       const b = page.getByRole("checkbox", { name: "选择 Synthetic report B", exact: true });
@@ -156,6 +228,51 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
       await panel.getByRole("button", { name: "关闭", exact: true }).click();
       await b.check(); await a.uncheck(); await open(); assert.equal(await input.inputValue(), "");
       assert.equal(await streamCount(), 0, "reload does not automatically send");
+    } else if (scenario === "settings-diagnostics") {
+      await peer.evaluate(() => localStorage.setItem("vr-access-key", "SYNTHETIC_DIAGNOSTIC_ACCESS"));
+      await page.goto("/settings");
+      const access = page.getByPlaceholder("与后端 VR_API_KEY 保持一致", { exact: true });
+      const download = page.getByTestId("runtime-diagnostics-export");
+      await access.waitFor();
+      await page.getByTestId("backend-connection-status").filter({ hasText: "已连接" }).waitFor();
+      const beforeStorage = await stored();
+      await access.fill("SYNTHETIC_UNSAVED_ACCESS_DRAFT");
+      const downloads = [];
+      page.on("download", item => downloads.push(item));
+      assert.equal(diagnostics.count, 0, "opening Settings must not request diagnostics");
+      await download.click();
+      await page.getByRole("status").filter({ hasText: "诊断导出失败" }).waitFor();
+      assert.equal(diagnostics.count, 1);
+      assert.equal(downloads.length, 0, "schema-valid private extras must never become a download");
+      assert.equal(await access.inputValue(), "SYNTHETIC_UNSAVED_ACCESS_DRAFT");
+      assert.equal(await stored(), beforeStorage);
+      diagnostics.mode = "valid";
+      const downloaded = page.waitForEvent("download").then(file => ({ file }), error => ({ error }));
+      await download.evaluate(node => { node.click(); node.click(); });
+      await bounded(diagnostics.started.promise);
+      assert.equal(diagnostics.count, 2, "same-turn duplicate clicks start only one valid request");
+      assert.equal(await download.isDisabled(), true);
+      assert.equal(await access.inputValue(), "SYNTHETIC_UNSAVED_ACCESS_DRAFT");
+      credential.releasePut.resolve();
+    diagnostics.release.resolve();
+      const observedDownload = await downloaded;
+      if ("error" in observedDownload) throw observedDownload.error;
+      const file = observedDownload.file;
+      assert.equal(file.suggestedFilename(), "vibe-runtime-diagnostics.json");
+      assert.equal(await file.failure(), null);
+      const stream = await file.createReadStream();
+      assert.ok(stream, "download must have readable bytes");
+      const chunks = [];
+      for await (const chunk of stream) chunks.push(chunk);
+      const bytes = Buffer.concat(chunks).toString("utf8");
+      assert.equal(bytes, JSON.stringify(readDiagnosticsReply("GET", "/api/runtime-diagnostics/export"), null, 2));
+      assert.doesNotMatch(bytes, /SYNTHETIC_PRIVATE_PATH|SYNTHETIC_DIAGNOSTIC_ACCESS|SYNTHETIC_UNSAVED_ACCESS_DRAFT/);
+      await page.getByRole("status").filter({ hasText: "已生成脱敏诊断文件" }).waitFor();
+      assert.equal(downloads.length, 1);
+      assert.equal(await download.isEnabled(), true);
+      assert.equal(await access.inputValue(), "SYNTHETIC_UNSAVED_ACCESS_DRAFT");
+      assert.equal(await stored(), beforeStorage);
+      assert.equal(await streamCount(), 0, "diagnostics never starts a model stream");
     } else if (scenario.startsWith("chat-")) {
       const openChat = async () => {
         await page.getByRole("checkbox", { name: "选择 Synthetic report", exact: true }).check();
@@ -215,6 +332,22 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
         const retry = await send("SYNTHETIC_RETRY_QUESTION");
         assert.equal(retry.slot.body.messages.length, 1, "cancelled turn cannot become retry history");
         await finished(retry.slot, retry.index, "SYNTHETIC_RETRY_COMPLETE");
+        if (scenario === "chat-current") {
+          // A peer changed the exact archive bytes. The stale view must not
+          // overwrite them, even after its next model response completes.
+          await panel.getByRole("alert").filter({ hasText: "本地存档已在其他窗口更改" }).waitFor();
+          assert.equal(await page.evaluate(key => localStorage.getItem(key), chatKey), "[]");
+          await panel.getByRole("button", { name: "重试保存对话", exact: true }).click();
+          assert.equal(await page.evaluate(key => localStorage.getItem(key), chatKey), "[]");
+          const exported = await panel.getByRole("link", { name: "导出当前对话", exact: true }).getAttribute("href");
+          assert.match(decodeURIComponent(exported), /SYNTHETIC_RETRY_COMPLETE/);
+          // Explicit reload adopts the peer's archive; only a fresh user send
+          // may then persist against that newly observed version.
+          await page.reload(); await openChat();
+          const recovered = await send("SYNTHETIC_RELOADED_QUESTION");
+          assert.equal(recovered.slot.body.messages.length, 1);
+          await finished(recovered.slot, recovered.index, "SYNTHETIC_RETRY_COMPLETE");
+        }
         await page.waitForFunction(key => localStorage.getItem(key)?.includes("SYNTHETIC_RETRY_COMPLETE"), chatKey);
         assert.doesNotMatch(await stored(), /SYNTHETIC_LATE_CANCELLED|SYNTHETIC_FIRST_QUESTION/);
         await page.reload(); await openChat();
@@ -309,13 +442,24 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
     assert.deepEqual(errors, []);
     assert.deepEqual(streamState.unexpected, []);
     assert.equal(streamState.queue.length, 0);
+    if (scenario === "settings-diagnostics") {
+      await page.getByTestId("backend-runtime-card").screenshot({ path: join(evidenceDir, `${scenario}-${width}-card-pass.png`), timeout: 3000 });
+      await page.screenshot({ path: join(evidenceDir, `${scenario}-${width}-viewport-pass.png`), fullPage: false, timeout: 3000 });
+    }
     await page.screenshot({ path: join(evidenceDir, `${scenario}-${width}-pass.png`), fullPage: true });
     return { scenario, width, status: "PASS", streamCount: streamState.all.length - slotsBefore, requests, storageEvidence, streamEvidence,
       boundary: "Native trusted localStorage events; sessionStorage event uses same-tab iframe; synthetic HTTP stream transport deliberately ignores abort to test ownership" };
   } catch (error) {
+    if (page && scenario === "settings-diagnostics") {
+      await page.content().then(html => writeFileSync(join(evidenceDir, `${scenario}-${width}-failure.html`), html)).catch(() => {});
+      await page.getByTestId("backend-runtime-card").screenshot({ path: join(evidenceDir, `${scenario}-${width}-card-failure.png`), timeout: 3000 }).catch(() => {});
+      await page.screenshot({ path: join(evidenceDir, `${scenario}-${width}-viewport-failure.png`), fullPage: false, timeout: 3000 }).catch(() => {});
+    }
     await page?.screenshot({ path: join(evidenceDir, `${scenario}-${width}-failure.png`), fullPage: true }).catch(() => {});
     throw new Error(`${scenario} ${width}px: ${error.message}; ${JSON.stringify({ errors, unexpected, requests, external })}`, { cause: error });
   } finally {
+    credential.releasePut.resolve();
+    diagnostics.release.resolve();
     streamState.all.slice(slotsBefore).forEach(slot => slot.finish("SYNTHETIC_CLEANUP"));
     streamState.queue.length = 0;
     await context?.close();
@@ -333,13 +477,13 @@ async function main() {
     browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } : {}) });
     server = await staticServer(streamState);
     const baseURL = `http://127.0.0.1:${server.address().port}`;
-    for (const width of [1440, 390]) for (const scenario of ["chat-drafts", "chat-unrelated", "chat-runtime", "chat-access", "chat-current", "chat-epoch", "chat-clear", "chat-controls", "settings-save", "settings-races"]) {
+    for (const width of [1440, 390]) for (const scenario of ["chat-drafts", "chat-unrelated", "chat-runtime", "chat-access", "chat-current", "chat-epoch", "chat-clear", "chat-controls", "settings-save", "settings-races", "settings-diagnostics", "credential-race"]) {
       try { result.results.push(await runScenario(browser, baseURL, width, scenario, streamState, evidenceDir)); console.log(`[AI-SET] ${scenario} ${width}px PASS`); }
       catch (error) { result.results.push({ scenario, width, status: "FAIL", error: error.message }); console.error(`[AI-SET] ${scenario} ${width}px FAIL: ${error.message}`); }
     }
-    assert.equal(result.results.length, 20);
+    assert.equal(result.results.length, 24);
     assert.equal(result.results.filter(row => row.status !== "PASS").length, 0, "all scenario groups must pass");
-    console.log("[AI-SET] 20/20 PASS");
+    console.log("[AI-SET] 24/24 PASS");
   } catch (error) { result.error = error.message; throw error; }
   finally {
     try { writeFileSync(join(evidenceDir, "results.json"), JSON.stringify(result, null, 2)); }

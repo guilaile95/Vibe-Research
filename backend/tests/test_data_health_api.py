@@ -451,3 +451,13 @@ def test_last_error_summary_mismatch_500(client, monkeypatch):
     r = c.get("/api/data-health")
     assert r.status_code == 500
     assert r.json()["detail"] == "数据健康服务暂不可用"
+
+
+def test_detail_exposes_only_registered_impact(client):
+    c, _ = client
+    provider = c.get("/api/data-health/quotes").json()["data"]["impact"]
+    assert provider["source_id"] == "quotes"
+    assert provider["mapping_state"] == "unmapped" and provider["items"] == []
+    ledger = c.get("/api/data-health/evidence_ledger").json()["data"]["impact"]
+    assert ledger["source_id"] == "evidence_ledger"
+    assert ledger["mapping_state"] == "unknown" and ledger["items"] == []

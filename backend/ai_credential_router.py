@@ -15,6 +15,7 @@ router = APIRouter(prefix="/api/ai", tags=["ai-credential"])
 class CredentialIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    expectedRevision: str = Field(strict=True, pattern=r"^(0|[1-9][0-9]{0,18})$")
     provider: str
     model: str
     baseURL: str = ""
@@ -24,7 +25,9 @@ class CredentialIn(BaseModel):
 @router.put("/credential")
 def put_credential(payload: CredentialIn) -> dict[str, Any]:
     try:
-        return store.save(payload.model_dump())
+        return store.save(payload.model_dump(exclude={"expectedRevision"}), expected_revision=payload.expectedRevision)
+    except store.CredentialConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except store.CredentialStoreError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
@@ -36,10 +39,17 @@ def get_credential_status() -> dict[str, Any]:
     return store.status()
 
 
+class ClearCredentialIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    observedRevision: str = Field(strict=True, pattern=r"^(0|[1-9][0-9]{0,18})$")
+
+
 @router.delete("/credential")
-def delete_credential() -> dict[str, Any]:
+def delete_credential(payload: ClearCredentialIn) -> dict[str, Any]:
     try:
-        return store.delete()
+        return store.delete(observed_revision=payload.observedRevision)
+    except store.CredentialConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except store.CredentialStoreError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception:

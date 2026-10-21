@@ -2,7 +2,8 @@
 
 The module owns dataset semantics only.  It is deliberately not wired into
 production runtime, never performs an implicit migration and never implements
-point-in-time/as-of behavior.
+point-in-time/as-of retrieval. Historical requests run a fail-closed release-time
+admission diagnostic; they remain unsupported without a trusted source.
 """
 
 from __future__ import annotations
@@ -966,8 +967,6 @@ def query_financial_indicators(
     publication_id: str | None = None,
     as_of: str | None = None,
 ) -> tuple[dict[str, Any], ...]:
-    if as_of is not None:
-        raise DataContractError("financial indicators do not support as_of/PIT")
     contract = FinancialRequestContract(ts_code, report_period)
     canonical_key = f"{DATASET_ID}:{contract.ts_code}:{contract.report_period}"
     publications = tuple(
@@ -978,6 +977,33 @@ def query_financial_indicators(
         )
         if item.canonical_key == canonical_key
     )
+    if as_of is not None:
+        # This route has no authoritative exact-version release evidence. Run
+        # the shared admission policy rather than substituting ann_date,
+        # report_period, capture time, or a later canonical vintage. Do not
+        # select the latest vintage first: an older revision may be the only
+        # historically eligible one once a trusted source is integrated.
+        from financial_asof_admission import (
+            FinancialAsOfUnavailable, evaluate_financial_time_admission,
+        )
+
+        observations = tuple(
+            lake.get_observation(item.source_observation_id)
+            for item in publications
+        )
+        admissions = tuple(
+            evaluate_financial_time_admission(
+                stored.observation if stored is not None else None,
+                provider_symbol=contract.ts_code,
+                report_period=contract.report_period,
+                as_of=as_of,
+            )
+            for stored in (observations or (None,))
+        )
+        # A future trusted adapter still requires separate dataset/PIT and
+        # report-period applicability integration. This shadow API cannot
+        # turn temporal eligibility alone into a historical fact query.
+        raise FinancialAsOfUnavailable(admissions)
     if selection == "latest":
         selected = publications[-1:] if publications else ()
     elif selection == "all":

@@ -1,0 +1,511 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "kind": "synthetic_constructed",
+    "captured_at": null,
+    "source": "Repository parser contracts and existing offline tests; no HTTP capture",
+    "boundary": "akshare_dataframe_records_not_raw_http"
+  },
+  "cases": [
+    {
+      "id": "normal_units",
+      "tables": {
+        "summary": [
+          {
+            "报告期": "2025-12-31",
+            "营业总收入": "100亿",
+            "净利润": "20亿",
+            "净资产收益率": "15%",
+            "销售毛利率": "40%",
+            "销售净利率": "20%"
+          }
+        ],
+        "income": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "operating_income_total",
+            "value": "1000"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "net_profit",
+            "value": "200"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "parent_holder_net_profit",
+            "value": "190"
+          }
+        ],
+        "cashflow": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "act_cash_flow_net",
+            "value": "300"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "pay_fixed_assets_etc_cash",
+            "value": "40"
+          }
+        ],
+        "balance": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "assets_total",
+            "value": "2000"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "cash",
+            "value": "500"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "accounts_receivable",
+            "value": "100"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "total_debt",
+            "value": "800"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "holder_equity_total",
+            "value": "1200"
+          }
+        ]
+      },
+      "rate_limited_table": null,
+      "reason": "Summary strings retain their units; numeric statement fields are not rescaled"
+    },
+    {
+      "id": "empty",
+      "tables": {
+        "summary": [],
+        "income": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "operating_income_total",
+            "value": "1000"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "net_profit",
+            "value": "200"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "parent_holder_net_profit",
+            "value": "190"
+          }
+        ],
+        "cashflow": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "act_cash_flow_net",
+            "value": "300"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "pay_fixed_assets_etc_cash",
+            "value": "40"
+          }
+        ],
+        "balance": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "assets_total",
+            "value": "2000"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "cash",
+            "value": "500"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "accounts_receivable",
+            "value": "100"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "total_debt",
+            "value": "800"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "holder_equity_total",
+            "value": "1200"
+          }
+        ]
+      },
+      "rate_limited_table": null,
+      "reason": "Empty summary does not fabricate financial facts"
+    },
+    {
+      "id": "missing_summary_date",
+      "tables": {
+        "summary": [
+          {
+            "营业总收入": "100亿",
+            "净利润": "20亿",
+            "净资产收益率": "15%",
+            "销售毛利率": "40%",
+            "销售净利率": "20%"
+          }
+        ],
+        "income": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "operating_income_total",
+            "value": "1000"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "net_profit",
+            "value": "200"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "parent_holder_net_profit",
+            "value": "190"
+          }
+        ],
+        "cashflow": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "act_cash_flow_net",
+            "value": "300"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "pay_fixed_assets_etc_cash",
+            "value": "40"
+          }
+        ],
+        "balance": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "assets_total",
+            "value": "2000"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "cash",
+            "value": "500"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "accounts_receivable",
+            "value": "100"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "total_debt",
+            "value": "800"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "holder_equity_total",
+            "value": "1200"
+          }
+        ]
+      },
+      "rate_limited_table": null,
+      "reason": "Missing report period cannot join statement facts"
+    },
+    {
+      "id": "missing_statement_date",
+      "tables": {
+        "summary": [
+          {
+            "报告期": "2025-12-31",
+            "营业总收入": "100亿",
+            "净利润": "20亿",
+            "净资产收益率": "15%",
+            "销售毛利率": "40%",
+            "销售净利率": "20%"
+          }
+        ],
+        "income": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "operating_income_total",
+            "value": "1000"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "net_profit",
+            "value": "200"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "parent_holder_net_profit",
+            "value": "190"
+          }
+        ],
+        "cashflow": [
+          {
+            "metric_name": "act_cash_flow_net",
+            "value": "300"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "pay_fixed_assets_etc_cash",
+            "value": "40"
+          }
+        ],
+        "balance": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "assets_total",
+            "value": "2000"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "cash",
+            "value": "500"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "accounts_receivable",
+            "value": "100"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "total_debt",
+            "value": "800"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "holder_equity_total",
+            "value": "1200"
+          }
+        ]
+      },
+      "rate_limited_table": null,
+      "reason": "Missing statement period disables that table"
+    },
+    {
+      "id": "field_drift",
+      "tables": {
+        "summary": [
+          {
+            "报告期": "2025-12-31",
+            "营业总收入": "100亿",
+            "净利润": "20亿",
+            "净资产收益率": "15%",
+            "销售毛利率": "40%",
+            "销售净利率": "20%"
+          }
+        ],
+        "income": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "operating_income_total",
+            "value": "1000"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "net_profit",
+            "value": "200"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "parent_holder_net_profit",
+            "value": "190"
+          }
+        ],
+        "cashflow": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "renamed_cash_flow",
+            "value": "300"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "pay_fixed_assets_etc_cash",
+            "value": "40"
+          }
+        ],
+        "balance": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "assets_total",
+            "value": "2000"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "cash",
+            "value": "500"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "accounts_receivable",
+            "value": "100"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "total_debt",
+            "value": "800"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "holder_equity_total",
+            "value": "1200"
+          }
+        ]
+      },
+      "rate_limited_table": null,
+      "reason": "Renamed source metric must not become a known cash-flow fact"
+    },
+    {
+      "id": "malformed_units",
+      "tables": {
+        "summary": [
+          {
+            "报告期": "2025-12-31",
+            "营业总收入": "100亿",
+            "净利润": "20亿",
+            "净资产收益率": "15%",
+            "销售毛利率": "40%",
+            "销售净利率": "20%"
+          }
+        ],
+        "income": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "operating_income_total",
+            "value": "1000"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "net_profit",
+            "value": "200"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "parent_holder_net_profit",
+            "value": "190"
+          }
+        ],
+        "cashflow": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "act_cash_flow_net",
+            "value": "300亿"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "pay_fixed_assets_etc_cash",
+            "value": "40"
+          }
+        ],
+        "balance": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "assets_total",
+            "value": "2000"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "cash",
+            "value": "500"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "accounts_receivable",
+            "value": "100"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "total_debt",
+            "value": "800"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "holder_equity_total",
+            "value": "1200"
+          }
+        ]
+      },
+      "rate_limited_table": null,
+      "reason": "Unexpected unit suffix in numeric statement field disables that table"
+    },
+    {
+      "id": "rate_limit",
+      "tables": {
+        "summary": [
+          {
+            "报告期": "2025-12-31",
+            "营业总收入": "100亿",
+            "净利润": "20亿",
+            "净资产收益率": "15%",
+            "销售毛利率": "40%",
+            "销售净利率": "20%"
+          }
+        ],
+        "income": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "operating_income_total",
+            "value": "1000"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "net_profit",
+            "value": "200"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "parent_holder_net_profit",
+            "value": "190"
+          }
+        ],
+        "cashflow": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "act_cash_flow_net",
+            "value": "300"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "pay_fixed_assets_etc_cash",
+            "value": "40"
+          }
+        ],
+        "balance": [
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "assets_total",
+            "value": "2000"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "cash",
+            "value": "500"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "accounts_receivable",
+            "value": "100"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "total_debt",
+            "value": "800"
+          },
+          {
+            "report_date": "2025-12-31",
+            "metric_name": "holder_equity_total",
+            "value": "1200"
+          }
+        ]
+      },
+      "rate_limited_table": "cashflow",
+      "reason": "Optional statement rate limit preserves summary with an unavailable diagnostic"
+    }
+  ]
+}

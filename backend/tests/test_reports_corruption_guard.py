@@ -416,8 +416,8 @@ def test_delete_save_failure_keeps_entity():
         import shutil; shutil.rmtree(tmp, ignore_errors=True)
 
 
-def test_delete_unlink_failure_keeps_ok():
-    """模拟实体文件 unlink 失败：索引已更新，函数仍返回 True，实体留在磁盘。"""
+def test_delete_unlink_failure_restores_retryable_archive():
+    """Late unlink failure is never success and leaves a manageable retry target."""
     tmp, rdir = _make_reports_dir()
     try:
         os.makedirs(rdir, exist_ok=True)
@@ -440,21 +440,26 @@ def test_delete_unlink_failure_keeps_ok():
 
         with patch.object(mr, "REPORTS_DIR", Path(rdir)):
             with patch.object(pathlib.Path, "unlink", mock_unlink):
-                res = mr.delete_report(target_id)
-
-        assert res is True, "delete_report 应返回 True"
+                with pytest.raises(mr.ReportDeleteError, match="REPORT_DELETE_RETRYABLE"):
+                    mr.delete_report(target_id)
 
         with patch.object(mr, "REPORTS_DIR", Path(rdir)):
             current_reports = mr.list_reports()
-            assert not any(r["id"] == target_id for r in current_reports), "新索引中不应包含该条目"
+            assert any(r["id"] == target_id for r in current_reports)
+            assert current_reports[0]["text_index_status"] == "NOT_INDEXED"
 
-        assert os.path.exists(entity_path), "实体文件因 unlink 失败仍存在，成为孤儿文件"
+        assert os.path.exists(entity_path), "Source remains managed by restored archive index"
 
         bak_path = os.path.join(rdir, "index.json.bak")
         assert os.path.exists(bak_path)
         with open(bak_path, "r", encoding="utf-8") as f:
             bak_data = json.load(f)
         assert bak_data == initial_data, ".bak 应等于删除前的索引"
+
+        with patch.object(mr, "REPORTS_DIR", Path(rdir)):
+            assert mr.delete_report(target_id) is True
+            assert mr.delete_report(target_id) is False
+        assert not os.path.exists(entity_path)
 
         tmp_files = [f for f in os.listdir(rdir) if ".tmp." in f]
         assert len(tmp_files) == 0, f"不应残留临时文件: {tmp_files}"
@@ -595,3 +600,137 @@ def test_save_duplicate_report_ids_preserves_index_and_backup(tmp_path, monkeypa
             {"id": "duplicate", "ext": ".md"},
         ])
     assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == before
+
+
+@pytest.mark.parametrize("failure", ["external_change", "rollback_io"])
+def test_delete_late_failure_never_overwrites_unexpected_index(tmp_path, monkeypatch, failure):
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path)
+    index = tmp_path / "index.json"
+    initial = [{"id": "target", "ext": ".txt", "name": "target.txt"}]
+    index.write_text(json.dumps(initial), encoding="utf-8")
+    source = tmp_path / "target.txt"
+    source.write_text("synthetic only", encoding="utf-8")
+    original_unlink = Path.unlink
+    original_replace = os.replace
+    external = json.dumps([{ "id": "external", "ext": ".txt"}]).encode()
+
+    def unlink(path, *args, **kwargs):
+        if path == source:
+            if failure == "external_change":
+                index.write_bytes(external)
+            raise OSError("private-path-not-for-response")
+        return original_unlink(path, *args, **kwargs)
+
+    replacements = 0
+    def replace(src, dst):
+        nonlocal replacements
+        if Path(dst) == index:
+            replacements += 1
+            if replacements > 1 and failure == "rollback_io":
+                raise OSError("private-path-not-for-response")
+        return original_replace(src, dst)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    monkeypatch.setattr(os, "replace", replace)
+    with pytest.raises(mr.ReportDeleteError) as error:
+        mr.delete_report("target")
+    assert error.value.code == "REPORT_DELETE_RECOVERY_REQUIRED"
+    assert error.value.status_code == 409
+    assert "private-path" not in str(error.value)
+    assert source.exists()
+    assert json.loads((tmp_path / "index.json.bak").read_text()) == initial
+    if failure == "external_change":
+        assert index.read_bytes() == external
+    assert not list(tmp_path.glob("*.tmp.*"))
+
+
+def test_delete_route_returns_typed_non_success(monkeypatch):
+    def fail(_):
+        raise mr.ReportDeleteError()
+    monkeypatch.setattr(mr, "delete_report", fail)
+    with TestClient(app) as client:
+        response = client.delete("/api/myreports/synthetic")
+    assert response.status_code == 503
+    assert "REPORT_DELETE_RETRYABLE" in response.json()["detail"]
+
+
+def test_delete_indexed_source_late_failure_is_not_indexed_then_retry(tmp_path, monkeypatch):
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path)
+    entry = mr.save_report("synthetic.txt", __import__("base64").b64encode(b"unique synthetic searchable evidence").decode())
+    assert mr.list_reports()[0]["text_index_status"] == "SEARCHABLE"
+    source = tmp_path / f"{entry['id']}{entry['ext']}"
+    original = Path.unlink
+    def fail(path, *args, **kwargs):
+        if path == source:
+            raise PermissionError("synthetic sharing violation")
+        return original(path, *args, **kwargs)
+    with monkeypatch.context() as patcher:
+        patcher.setattr(Path, "unlink", fail)
+        with pytest.raises(mr.ReportDeleteError):
+            mr.delete_report(entry["id"])
+    assert source.exists()
+    assert mr.list_reports()[0]["text_index_status"] == "NOT_INDEXED"
+    assert mr.search_report_text("unique synthetic") == []
+    assert mr.delete_report(entry["id"]) is True
+    assert not source.exists() and mr.list_reports() == []
+
+
+@pytest.mark.parametrize("mutation", ["upload", "edit"])
+def test_late_delete_rollback_serializes_concurrent_archive_mutation(tmp_path, monkeypatch, mutation):
+    """A competing same-process writer cannot publish between delete and rollback."""
+    import base64
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path)
+    entry = mr.save_report("original.txt", base64.b64encode(b"synthetic original evidence").decode())
+    source = tmp_path / f"{entry['id']}{entry['ext']}"
+    unlink_entered = threading.Event()
+    writer_attempted = threading.Event()
+    release_unlink = threading.Event()
+    original_lock = mr._LOCK
+    original_unlink = Path.unlink
+
+    class ObservedLock:
+        def __enter__(self):
+            if threading.current_thread().name.startswith("writer"):
+                writer_attempted.set()
+            original_lock.acquire()
+        def __exit__(self, *args):
+            original_lock.release()
+
+    def late_failure(path, *args, **kwargs):
+        if path == source:
+            unlink_entered.set()
+            assert release_unlink.wait(5), "test must release the held delete"
+            raise PermissionError("synthetic sharing violation")
+        return original_unlink(path, *args, **kwargs)
+
+    def mutate():
+        if mutation == "upload":
+            return mr.save_report("new.txt", base64.b64encode(b"synthetic new evidence").decode())
+        return mr.update_report_meta(entry["id"], {"title": "concurrently edited"})
+
+    monkeypatch.setattr(mr, "_LOCK", ObservedLock())
+    monkeypatch.setattr(Path, "unlink", late_failure)
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="deleter") as deleter, ThreadPoolExecutor(max_workers=1, thread_name_prefix="writer") as writer:
+        deletion = deleter.submit(mr.delete_report, entry["id"])
+        try:
+            assert unlink_entered.wait(5)
+            change = writer.submit(mutate)
+            assert writer_attempted.wait(5), "competing writer must attempt the held lock"
+            assert not change.done(), "writer must be blocked until rollback finishes"
+        finally:
+            release_unlink.set()
+        with pytest.raises(mr.ReportDeleteError, match="REPORT_DELETE_RETRYABLE"):
+            deletion.result(timeout=5)
+        changed = change.result(timeout=5)
+    rows = {row["id"]: row for row in mr.list_reports()}
+    assert source.exists() and entry["id"] in rows
+    assert rows[entry["id"]]["text_index_status"] == "NOT_INDEXED"
+    if mutation == "upload":
+        assert len(rows) == 2 and changed["id"] in rows
+        assert rows[changed["id"]]["text_index_status"] == "SEARCHABLE"
+    else:
+        assert len(rows) == 1 and rows[entry["id"]]["title"] == "concurrently edited"
+    assert not list(tmp_path.glob("*.tmp.*"))

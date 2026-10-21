@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { PredictionJournal } from "./PredictionJournal";
 import { PriceBasisImport } from "./PriceBasisImport";
 import { Link } from "react-router-dom";
 import { parsePersonalReview, parseSavedAssessment, parseSavedPattern, parseExcursion, ReviewResponseError } from "@/lib/personalReviewValidation";
@@ -114,6 +115,7 @@ export function PersonalReviewPanel({ trade, refreshKey = "" }: { trade?: { trad
           {excursion?.id === e.episode_id && <div className="mt-2 text-xs"><p>精确 MFE / MAE：未知。日线不能证明成交机会，企业行动可比性未证明。</p><p>不含买入和卖出当天的原始价格区间：{reviewNumber(excursion.data.raw_interior_low)} – {reviewNumber(excursion.data.raw_interior_high)} 元/股（不复权）；不计算收益率代理。</p><p>证据状态 {excursion.data.state} · 完整覆盖会话数 {excursion.data.source?.sessions ?? "未知"} · 数据时间 {excursion.data.source?.as_of ?? "未知"}</p>{excursion.data.adjusted_bound && <div className="mt-2"><p>同基准内部日线有利幅度下界 {reviewNumber(excursion.data.adjusted_bound.bounded_mfe_pct)}% / 不利幅度下界 {reviewNumber(excursion.data.adjusted_bound.bounded_mae_pct)}%</p><p>状态 {excursion.data.adjusted_bound.state} · 调整后入场参考 {reviewNumber(excursion.data.adjusted_bound.adjusted_entry_reference)} · 内部会话 {excursion.data.adjusted_bound.interior_sessions ?? "未知"}</p><p>供应商版本 {excursion.data.adjusted_bound.source?.provider_revision ?? "未知"} · 采集 {excursion.data.adjusted_bound.source?.captured_at ?? "未知"}</p><p>{excursion.data.adjusted_bound.limitations}</p></div>}</div>}
         </article>)}
       </div></details>
+      <PredictionJournal />
       <PriceBasisImport onSaved={() => setReload(n => n + 1)} />
       <details><summary className="cursor-pointer">模式卡 · 版本历史与复用</summary><div className="space-y-3 py-3">
         <div className="block text-sm"><label htmlFor={`${formId}-pattern-choice`}>编辑已有模式或新建</label><select id={`${formId}-pattern-choice`} className={input} value={patternId} onChange={e => { const p = latestPatterns.find(v => v.pattern_id === e.target.value); setPatternId(p?.pattern_id ?? ""); setPatternRevision(p?.revision ?? 0); setPattern(p?.content ?? emptyPattern()); }}><option value="">新建模式</option>{latestPatterns.map(p => <option key={p.pattern_id} value={p.pattern_id}>{p.content.name} v{p.revision}</option>)}</select></div>

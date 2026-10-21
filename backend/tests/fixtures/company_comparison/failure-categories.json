@@ -1,0 +1,150 @@
+{
+  "fixture_only": true,
+  "authority": "Registered generation API with offline synthetic transport/output/persistence faults; no real model invocation",
+  "request": {
+    "subjects": [
+      {
+        "market": "US",
+        "symbol": "AAPL",
+        "bundle_id": "00000000000000000000000000000007",
+        "expected_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e"
+      },
+      {
+        "market": "HK",
+        "symbol": "00700",
+        "bundle_id": "00000000000000000000000000000064",
+        "expected_bundle_sha256": "e01f7f31879e0cd0bf59125f5b3f8ddbefd2a09bf33e8e6bf1fb0441c8da9f7d"
+      }
+    ],
+    "as_of": "2026-09-30",
+    "confirm_model_calls": true,
+    "llm": {
+      "provider": "deepseek",
+      "model": "offline-fixture",
+      "baseURL": "https://fixture.example/v1",
+      "apiKey": "synthetic-only"
+    }
+  },
+  "events": {
+    "TIMEOUT": [
+      {
+        "type": "run_started",
+        "run_id": "00000000000000000000000000000065",
+        "pair_sha256": "a260a41ee33270d29e117b44f1a3244c0249b4c96cd77d9b561693263fa34c14",
+        "subjects": [
+          {
+            "market": "US",
+            "symbol": "AAPL",
+            "bundle_id": "00000000000000000000000000000007",
+            "expected_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e"
+          },
+          {
+            "market": "HK",
+            "symbol": "00700",
+            "bundle_id": "00000000000000000000000000000064",
+            "expected_bundle_sha256": "e01f7f31879e0cd0bf59125f5b3f8ddbefd2a09bf33e8e6bf1fb0441c8da9f7d"
+          }
+        ],
+        "as_of": "2026-09-30",
+        "max_model_calls": 1
+      },
+      {
+        "type": "error",
+        "run_id": "00000000000000000000000000000065",
+        "code": "COMPARISON_INCOMPLETE",
+        "category": "TIMEOUT",
+        "message": "对比未完成；未保存完整对比报告"
+      }
+    ],
+    "UPSTREAM": [
+      {
+        "type": "run_started",
+        "run_id": "00000000000000000000000000000067",
+        "pair_sha256": "a260a41ee33270d29e117b44f1a3244c0249b4c96cd77d9b561693263fa34c14",
+        "subjects": [
+          {
+            "market": "US",
+            "symbol": "AAPL",
+            "bundle_id": "00000000000000000000000000000007",
+            "expected_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e"
+          },
+          {
+            "market": "HK",
+            "symbol": "00700",
+            "bundle_id": "00000000000000000000000000000064",
+            "expected_bundle_sha256": "e01f7f31879e0cd0bf59125f5b3f8ddbefd2a09bf33e8e6bf1fb0441c8da9f7d"
+          }
+        ],
+        "as_of": "2026-09-30",
+        "max_model_calls": 1
+      },
+      {
+        "type": "error",
+        "run_id": "00000000000000000000000000000067",
+        "code": "COMPARISON_INCOMPLETE",
+        "category": "UPSTREAM",
+        "message": "对比未完成；未保存完整对比报告"
+      }
+    ],
+    "OUTPUT_INVALID": [
+      {
+        "type": "run_started",
+        "run_id": "00000000000000000000000000000069",
+        "pair_sha256": "a260a41ee33270d29e117b44f1a3244c0249b4c96cd77d9b561693263fa34c14",
+        "subjects": [
+          {
+            "market": "US",
+            "symbol": "AAPL",
+            "bundle_id": "00000000000000000000000000000007",
+            "expected_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e"
+          },
+          {
+            "market": "HK",
+            "symbol": "00700",
+            "bundle_id": "00000000000000000000000000000064",
+            "expected_bundle_sha256": "e01f7f31879e0cd0bf59125f5b3f8ddbefd2a09bf33e8e6bf1fb0441c8da9f7d"
+          }
+        ],
+        "as_of": "2026-09-30",
+        "max_model_calls": 1
+      },
+      {
+        "type": "error",
+        "run_id": "00000000000000000000000000000069",
+        "code": "COMPARISON_INCOMPLETE",
+        "category": "OUTPUT_INVALID",
+        "message": "对比未完成；未保存完整对比报告"
+      }
+    ],
+    "PERSISTENCE": [
+      {
+        "type": "run_started",
+        "run_id": "0000000000000000000000000000006b",
+        "pair_sha256": "a260a41ee33270d29e117b44f1a3244c0249b4c96cd77d9b561693263fa34c14",
+        "subjects": [
+          {
+            "market": "US",
+            "symbol": "AAPL",
+            "bundle_id": "00000000000000000000000000000007",
+            "expected_bundle_sha256": "61286480918c12aea2da4da36102333f369cd5af8d16de031ae8a4a8e1acd57e"
+          },
+          {
+            "market": "HK",
+            "symbol": "00700",
+            "bundle_id": "00000000000000000000000000000064",
+            "expected_bundle_sha256": "e01f7f31879e0cd0bf59125f5b3f8ddbefd2a09bf33e8e6bf1fb0441c8da9f7d"
+          }
+        ],
+        "as_of": "2026-09-30",
+        "max_model_calls": 1
+      },
+      {
+        "type": "error",
+        "run_id": "0000000000000000000000000000006b",
+        "code": "COMPARISON_INCOMPLETE",
+        "category": "PERSISTENCE",
+        "message": "对比状态保存失败；请手动查看历史，勿假定已完成"
+      }
+    ]
+  }
+}

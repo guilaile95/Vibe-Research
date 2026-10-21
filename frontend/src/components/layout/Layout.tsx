@@ -314,10 +314,10 @@ export function Layout() {
         </div>
       </aside>
 
-      <main ref={mainRef} className="flex-1 overflow-auto bg-background">
+      <main ref={mainRef} className="mt-16 flex-1 overflow-auto bg-background md:mt-0">
         <div
           className={cn(
-            "mx-auto w-full px-6 pb-12 pt-16 sm:px-6 md:px-6 md:pt-7",
+            "mx-auto w-full px-6 pb-12 pt-0 sm:px-6 md:px-6 md:pt-7",
             WIDE_WORKSPACE_PATHS.includes(pathname) ? "max-w-[1760px]" : "max-w-[1320px]",
           )}
         >

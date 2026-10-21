@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { saveHarnessCredential } from "./real-credential-mirror.fixture.mjs";
 
 const root = path.resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const backendDir = join(root, "backend");
@@ -139,14 +140,8 @@ try {
   browser = await launchBrowser();
 
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
-  await page.addInitScript(() => {
-    localStorage.setItem(
-      "vr-llm",
-      JSON.stringify({
-        provider: "cli-codex",
-        model: "gpt-5-codex",
-      }),
-    );
+  const cliCredential = await saveHarnessCredential(`http://127.0.0.1:${backendPort}`, {
+    provider: "cli-codex", model: "gpt-5-codex",
   });
 
   const pageErrors = [];
@@ -189,6 +184,9 @@ try {
   // =========================================================================
   console.log("--- Starting Scenario 1: Settings UI Toggle & Persistence ---");
   await page.goto(`http://127.0.0.1:${frontendPort}/settings`, { waitUntil: "domcontentloaded" });
+
+  await page.evaluate(credential => localStorage.setItem("vr-llm", JSON.stringify(credential)), cliCredential);
+  await page.reload({ waitUntil: "domcontentloaded" });
 
   const aiRegionToggle = page.locator('[data-testid="wave5-region-toggle-ai_analysis"]');
   await aiRegionToggle.waitFor({ state: "visible", timeout: 10000 });
@@ -260,6 +258,7 @@ try {
   assert.ok(capturedAnalysisReqBody !== null, "Analysis request body must be captured");
   assert.equal(capturedAnalysisReqBody.llm?.provider, "cli-codex");
   assert.equal(capturedAnalysisReqBody.llm?.model, "gpt-5-codex");
+  assert.equal("revision" in capturedAnalysisReqBody.llm, false);
 
   // Wait for 6 section tabs to be visible
   const tabs = [
@@ -307,18 +306,15 @@ try {
   // Scenario 4: Single Item AI Translation with Global API Compatible Configuration
   // =========================================================================
   console.log("--- Starting Scenario 4: Single Item AI Translation (API Compatible Mode) ---");
-  // Set global AI configuration to API Compatible mode in localStorage
-  await page.evaluate(() => {
-    localStorage.setItem(
-      "vr-llm",
-      JSON.stringify({
-        provider: "deepseek",
-        baseURL: "https://api.deepseek.com/v1",
-        apiKey: "sk-test-deepseek-12345",
-        model: "deepseek-chat",
-      }),
-    );
+  // Advance the real backend generation before installing the matching browser mirror.
+  const apiCredential = await saveHarnessCredential(`http://127.0.0.1:${backendPort}`, {
+    provider: "deepseek",
+    baseURL: "https://api.deepseek.com/v1",
+    apiKey: "sk-test-deepseek-12345",
+    model: "deepseek-chat",
   });
+  assert.notEqual(apiCredential.revision, cliCredential.revision);
+  await page.evaluate(credential => localStorage.setItem("vr-llm", JSON.stringify(credential)), apiCredential);
 
   // Item 1 has title: "Data center liquid cooling demand rises"
   const item1Title = page.locator("text=Data center liquid cooling demand rises");
@@ -351,6 +347,7 @@ try {
   assert.equal(capturedTranslateReqBody.llm?.baseURL, "https://api.deepseek.com/v1");
   assert.equal(capturedTranslateReqBody.llm?.model, "deepseek-chat");
   assert.equal(capturedTranslateReqBody.llm?.apiKey, "sk-test-deepseek-12345");
+  assert.equal("revision" in capturedTranslateReqBody.llm, false);
 
   // Verify original text is still intact and visible!
   assert.ok((await page.locator("text=Data center liquid cooling demand rises").count()) > 0);
@@ -495,6 +492,8 @@ try {
 
   const statusJson2 = await (await fetch(`http://127.0.0.1:${backendPort}/api/ai/credential-status`)).json();
   assert.equal(statusJson2.configured, true);
+  assert.equal(stored.revision, statusJson2.revision);
+  assert.notEqual(stored.revision, apiCredential.revision);
   assert.equal(statusJson2.scheduled_credential_available, true);
   assert.equal("apiKey" in statusJson2, false);
   assert.equal(JSON.stringify(statusJson2).includes("e2e-secret-never-log"), false);
@@ -505,6 +504,7 @@ try {
   assert.equal(afterClear, null);
   const afterDel = await (await fetch(`http://127.0.0.1:${backendPort}/api/ai/credential-status`)).json();
   assert.equal(afterDel.configured, false);
+  assert.notEqual(afterDel.revision, stored.revision);
 
   failCredentialPut = true;
   await page.locator('[data-testid="wave5-api-mode-card"]').click();
@@ -512,7 +512,7 @@ try {
   await page.locator('[data-testid="wave5-model-input"]').fill("fixture-model");
   await page.locator('[data-testid="wave5-api-key-input"]').fill("e2e-secret-never-log");
   await page.locator('[data-testid="wave5-save-api-btn"]').click();
-  await page.getByText("后台凭据保存失败").waitFor({ timeout: 10000 });
+  await page.getByText("保存未确认或配置已变化，请刷新后重试；不会自动覆盖新配置", { exact: true }).waitFor({ timeout: 10000 });
   const afterFail = JSON.parse(await page.evaluate(() => localStorage.getItem("vr-llm") || "null"));
   assert.equal(afterFail, null);
   failCredentialPut = false;

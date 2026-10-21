@@ -58,7 +58,10 @@ def tmp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     store.finish_run(run_id, status=store.RUN_STATUS_OK, source_ok=3, source_failed=0, item_seen=4, item_new=4, db_path=db_file)
 
     import ai_credential_store as cred_store
-    cred_store.save({"provider": "cli-codex", "model": "gpt-5-codex"})
+    cred_store.save(
+        {"provider": "cli-codex", "model": "gpt-5-codex"},
+        expected_revision=cred_store.status()["revision"],
+    )
     cred_path = cred_store.credential_path().resolve()
     assert tmp_path.resolve() in cred_path.parents
 
@@ -526,12 +529,18 @@ def test_batch_missing_index_no_shift_corruption(tmp_db):
 
     texts = ["原标题A", "原标题B", "原标题C"]
     res = ai.translate_batch(texts, target_language="English", model_runner=mock_runner, path=tmp_db)
-    assert res["status"] == "SUCCESS"
+    assert res["status"] == "PARTIAL"
     assert len(res["results"]) == 3
     assert res["results"][0]["translated"] == "Translated A"
     assert res["results"][1]["translated"] == "原标题B"  # Preserved original, NOT shifted!
     assert res["results"][1]["status"] == "MISSING_FALLBACK_ORIGINAL"
     assert res["results"][2]["translated"] == "Translated C"
+
+
+    retry = ai.translate_batch(texts, target_language="English", path=tmp_db,
+                               model_runner=lambda *_: "[1] A\n[2] B\n[3] C")
+    assert retry["status"] == "SUCCESS"
+    assert retry["cached"] is False
 
 
 # 20. translation empty string
@@ -846,7 +855,7 @@ def test_req_02_global_api_selection_uses_request_config(tmp_db):
 def test_req_03_native_intel_no_second_provider_authority(tmp_db):
     import ai_credential_store as cred_store
 
-    cred_store.delete()
+    cred_store.delete(observed_revision=cred_store.status()["revision"])
     cfg = store.get_native_intel_config(tmp_db)
     assert "ai_analysis_provider" not in cfg or cfg.get("ai_analysis_provider") is None
     with pytest.raises(ValueError, match="UNAVAILABLE_CREDENTIAL"):
@@ -875,13 +884,21 @@ def test_credential_ops_do_not_touch_real_user_path(
     cred_path = cred_store.credential_path().resolve()
     assert tmp_path.resolve() in cred_path.parents
     assert fake_home.resolve() not in cred_path.parents
-    cred_store.save({"provider": "cli-codex", "model": "gpt-5-codex"})
-    cred_store.delete()
+    cred_store.save(
+        {"provider": "cli-codex", "model": "gpt-5-codex"},
+        expected_revision=cred_store.status()["revision"],
+    )
+    cleared = cred_store.delete(observed_revision=cred_store.status()["revision"])
+    assert cleared["configured"] is False
+    assert cleared["revision"] == "2"
     cred_path.write_text("{not-json", encoding="utf-8")
     cfg, error = cred_store.scheduled_config()
     assert cfg is None
     assert error == cred_store.UNAVAILABLE_CREDENTIAL
-    cred_store.delete()
+    # Corrupt state cannot be cleared without a valid observed generation.
+    with pytest.raises(cred_store.CredentialStoreError, match="CREDENTIAL_STATE_UNAVAILABLE"):
+        cred_store.delete(observed_revision=cleared["revision"])
+    assert cred_path.read_text(encoding="utf-8") == "{not-json"
 
     assert sentinel.read_bytes() == before
 
@@ -1105,3 +1122,81 @@ def test_req_20_invalid_entity_type_confidence_dropped(tmp_db):
     entity_names = [e["name"] for e in res["entities"]]
     assert "外星科技" not in entity_names
     assert "比亚迪" in entity_names
+
+
+@pytest.mark.parametrize("response", ["", "   ", "\n\t"])
+def test_single_empty_output_not_cached_and_explicit_retry(tmp_db, response):
+    first = ai.translate_text("original", model_runner=lambda *_: response, path=tmp_db)
+    assert first["status"] == "ERROR"
+    assert first["translated_text"] == "original"
+    retry = ai.translate_text("original", model_runner=lambda *_: "译文", path=tmp_db)
+    assert retry["status"] == "SUCCESS" and retry["cached"] is False
+    cached = ai.translate_text("original", model_runner=lambda *_: pytest.fail("cache miss"), path=tmp_db)
+    assert cached["cached"] is True
+
+
+@pytest.mark.parametrize("response", ["[1] A\n[1] B\n[2] C", "[1] A\n[2] B\n[3] C", "[1] A\n[2] B\nnotes"])
+def test_batch_invalid_numbering_is_partial(tmp_db, response):
+    result = ai.translate_batch(["one", "two"], model_runner=lambda *_: response, path=tmp_db)
+    assert result["status"] == "PARTIAL"
+    if response.startswith("[1] A\n[1]"):
+        assert result["results"][0]["translated"] == "one"
+
+
+def test_translation_error_does_not_leak_provider_details(tmp_db):
+    def fail(*_):
+        raise RuntimeError("secret-key-and-local-path")
+    for operation, value in [(ai.translate_text, "one"), (ai.translate_batch, ["one"])]:
+        result = operation(value, model_runner=fail, path=tmp_db)
+        assert result["status"] == "ERROR"
+        assert "secret-key" not in json.dumps(result)
+
+
+def test_analysis_coverage_counts_invalidate_capped_input(tmp_db):
+    runner = MagicMock(return_value=json.dumps({
+        "core_trends": "test", "sentiment_controversy": "test", "signals": "test",
+        "rss_insights": "test", "outlook_strategy": "test", "standalone_summaries": {}
+    }))
+    item = {"item_key": "top", "source_type": "hotlist", "title": "same top", "ordering_score": 10}
+    report = {"mode": "CURRENT", "scope": "all", "items": [item]}
+    first = ai.analyze_report(report, max_news=1, include_standalone=False, model_runner=runner, path=tmp_db)
+    report["items"].append({**item, "item_key": "below", "title": "outside cap", "ordering_score": 1})
+    second = ai.analyze_report(report, max_news=1, include_standalone=False, model_runner=runner, path=tmp_db)
+    assert runner.call_count == 2
+    assert first["counts"]["total_news"] == 1
+    assert second["counts"]["total_news"] == 2
+    assert second["counts"]["analyzed_news"] == 1
+    third = ai.analyze_report(report, max_news=1, include_standalone=False, model_runner=runner, path=tmp_db)
+    assert third["cached"] is True and runner.call_count == 2
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_malformed_success_cache_is_ignored(tmp_db, monkeypatch, batch):
+    monkeypatch.setattr(store, "find_cached_ai_artifact", lambda *_: {
+        "payload": {"status": "SUCCESS", "original_text": "one", "translated_text": " ", "results": []}
+    })
+    runner = MagicMock(return_value="[1] 译文" if batch else "译文")
+    result = (ai.translate_batch(["one"], model_runner=runner, path=tmp_db) if batch
+              else ai.translate_text("one", model_runner=runner, path=tmp_db))
+    assert result["status"] == "SUCCESS" and result["cached"] is False
+    assert runner.call_count == 1
+
+
+def test_translation_whitespace_production_sse_never_success_cache(tmp_db, monkeypatch):
+    from contextlib import contextmanager
+    import chat
+    calls = []
+    class Response:
+        def iter_content(self, chunk_size=None):
+            yield b'data: {"choices":[{"delta":{"content":"   "},"finish_reason":null}]}\n\ndata: [DONE]\n\n'
+    @contextmanager
+    def source(*args, **kwargs):
+        calls.append(1)
+        yield Response()
+    monkeypatch.setattr(chat, "_open_stream", source)
+    cfg = {"provider": "openai-compatible", "model": "fixture", "baseURL": "https://fixture.invalid", "apiKey": "synthetic"}
+    first = ai.translate_text("Synthetic headline", cfg=cfg, path=tmp_db)
+    second = ai.translate_text("Synthetic headline", cfg=cfg, path=tmp_db)
+    assert first["status"] == second["status"] == "ERROR"
+    assert len(calls) == 2 and second["cached"] is False
+    assert second["translated_text"] == "Synthetic headline"

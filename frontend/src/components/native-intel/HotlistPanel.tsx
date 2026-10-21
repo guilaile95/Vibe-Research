@@ -61,6 +61,7 @@ export function HotlistPanel() {
 
   // Wave 5 AI Item Actions State
   const [itemTranslations, setItemTranslations] = useState<Record<number, string>>({});
+  const [itemTranslationErrors, setItemTranslationErrors] = useState<Record<number, string>>({});
   const [itemEntities, setItemEntities] = useState<Record<number, Array<{ name: string; type: string; code?: string | null }>>>({});
   const [itemSentiments, setItemSentiments] = useState<Record<number, { sentiment: string; confidence: number; reason: string }>>({});
   const [deepReadItemId, setDeepReadItemId] = useState<number | null>(null);
@@ -79,9 +80,12 @@ export function HotlistPanel() {
     try {
       const llm = loadLlm();
       const res = await api.nativeIntelAiTranslate({ text, llm });
-      setItemTranslations((prev) => ({ ...prev, [itemId]: res.translated_text || text }));
+      const complete = res.status === "SUCCESS" && Boolean(res.translated_text?.trim());
+      setItemTranslations((prev) => ({ ...prev, [itemId]: complete ? res.translated_text! : text }));
+      setItemTranslationErrors((prev) => ({ ...prev, [itemId]: complete ? "" : "翻译未完成，显示原文；可点击翻译重试。" }));
     } catch {
-      setItemTranslations((prev) => ({ ...prev, [itemId]: "翻译失败" }));
+      setItemTranslations((prev) => ({ ...prev, [itemId]: text }));
+      setItemTranslationErrors((prev) => ({ ...prev, [itemId]: "翻译失败，显示原文；可点击翻译重试。" }));
     }
   };
 
@@ -867,6 +871,7 @@ export function HotlistPanel() {
                     <div data-testid={`wave5-trans-result-${item.item_id}`} className="rounded bg-primary/5 border border-primary/20 px-2.5 py-1 text-xs text-primary flex items-center gap-1.5">
                       <Languages className="h-3.5 w-3.5 shrink-0" />
                       <span>{itemTranslations[item.item_id]}</span>
+                      {itemTranslationErrors[item.item_id] && <span role="status">{itemTranslationErrors[item.item_id]}</span>}
                     </div>
                   )}
                   {itemEntities[item.item_id] && itemEntities[item.item_id].length > 0 && (

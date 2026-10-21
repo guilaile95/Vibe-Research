@@ -6,7 +6,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium} from 'playwright';
 import {captureBrowserFailure} from './browser-failure-evidence.mjs';
-import {createExtendedPageFixture,marketGolden,companyGolden,failureGolden,missingGolden,researchGolden,subjects,syntheticLlm,CLOCK,CUTOFF} from './extended-page.fixture.mjs';
+import {createExtendedPageFixture,marketGolden,companyGolden,failureGolden,missingGolden,researchGolden,subjects,syntheticStoredLlm,CLOCK,CUTOFF} from './extended-page.fixture.mjs';
 if(process.env.CI!=='true')throw Error('Browser execution is CI-only');
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..'),dist=path.join(root,'dist');
 const output=process.env.EXTENDED_PUBLIC_BROWSER_OUTPUT_DIR;assert.ok(output);mkdirSync(output,{recursive:true});
@@ -43,7 +43,7 @@ try{
    const reply=fixture.handle(req.url(),req.method(),body);if(reply.kind==='deny')return route.abort();if(reply.kind==='static')return route.continue();
    return reply.kind==='stream'?route.fulfill({contentType:'application/x-ndjson',body:reply.body}):route.fulfill({status:reply.status||200,json:reply.body});
   });
-  await context.addInitScript(llm=>{localStorage.clear();localStorage.setItem('vr-llm',JSON.stringify(llm));},syntheticLlm);
+  await context.addInitScript(llm=>{localStorage.clear();localStorage.setItem('vr-llm',JSON.stringify(llm));},syntheticStoredLlm);
   await context.addInitScript(observer);page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));await page.clock.setFixedTime(new Date(CLOCK));
   const settle=()=>page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
   const shot=async(card,name)=>{await card.evaluate(el=>el.scrollIntoView({block:'start',behavior:'instant'}));await settle();const bounds=await card.boundingBox();assert.ok(bounds);const text=await card.innerText();await page.screenshot({path:path.join(output,`${width}-${name}.png`),clip:{x:Math.max(0,bounds.x),y:Math.max(0,bounds.y),width:Math.min(bounds.width,width-Math.max(0,bounds.x)),height:Math.min(bounds.height,1000-Math.max(0,bounds.y))}});captures.push({width,name,text});};

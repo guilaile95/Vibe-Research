@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 import public_research_contract as C
 import public_research_extended_contract as E
 import trade_calendar
+from reporting_currency import reporting_currency
 
 
 def num(value, *, lo=-1e18, hi=1e18):
@@ -281,7 +282,6 @@ def global_quote(raw, market, symbol, cutoff, captured):
 
 
 PERIOD_CODES={'001':('annual_ytd',12),'002':('ytd',6),'003':('ytd',3),'004':('ytd',9),'006':('quarter',3),'007':('quarter',3),'008':('quarter',3)}
-CCY={'美元':'USD','港元':'HKD','人民币':'CNY','USD':'USD','HKD':'HKD','CNY':'CNY'}
 
 
 def financials(payload, market, symbol, cutoff, *, cn=False):
@@ -308,7 +308,7 @@ def financials(payload, market, symbol, cutoff, *, cn=False):
             span=(date.fromisoformat(end)-date.fromisoformat(start)).days+1
             if not contract or span<=0 or round(span/30.44)!=contract[1]: counts['unclassified']+=1; continue
             kind,months=contract
-        currency='CNY' if cn else CCY.get(r.get('CURRENCY'))
+        currency='CNY' if cn else reporting_currency(r.get('CURRENCY'))
         if cn and r.get('CURRENCY') not in (None,'人民币','CNY'): raise ValueError('CN reporting currency mismatch')
         revenue=num(r.get('TOTAL_OPERATE_INCOME') if cn else r.get('OPERATE_INCOME'))
         profit=num(r.get('PARENT_NETPROFIT') if cn else r.get('PARENT_HOLDER_NETPROFIT') if market=='US' else r.get('HOLDER_PROFIT'))

@@ -900,6 +900,13 @@ def _ol1_actual_outcome(
         raise OutcomeValidationError(
             "PA1 结果的 selected_trade_ids 必须精确等于 Formal Attribution 执行交易集"
         )
+    if actual_performance.get("measurement_state") == "UNAVAILABLE":
+        return {
+            "state": "EVALUATED", "pnl_state": "NOT_EVALUATED",
+            "trade_count": len(executed_trade_ids), "trade_ids": list(executed_trade_ids),
+            "pnl": None, "authority_refs": ["tar1:formal_trade_attribution", "trade_ledger"],
+            "reason_codes": list(actual_performance.get("reason_codes") or ["CANONICAL_PNL_NOT_AVAILABLE"]),
+        }
     positions = actual_performance.get("positions")
     if not isinstance(positions, list):
         raise OutcomeValidationError("PA1 结果 positions 不合法")
@@ -1024,9 +1031,20 @@ def project_ol1_outcome(
 
     executed_ids: list[str] = []
     included_attributions: list[str] = []
+    historical_ids: list[str] = []
     for attribution in validated_attributions:
         trade = trade_by_id[attribution["trade_id"]]
+        if any(parse_utc_instant(value, field) > evaluation_dt for value, field in (
+            (attribution["created_at"], "attribution.created_at"),
+            (trade["created_at"], "trade.created_at"),
+            (trade.get("executed_at") or trade["created_at"], "trade.executed_at"),
+        )):
+            continue
         if trade.get("voided_at") is not None:
+            if (parse_utc_instant(trade["voided_at"], "trade.voided_at") > evaluation_dt
+                    and attribution["trade_execution_status"] in ("full", "partial")):
+                historical_ids.append(attribution["trade_id"])
+                included_attributions.append(attribution["attribution_id"])
             continue
         if attribution["trade_execution_status"] in ("full", "partial"):
             executed_ids.append(attribution["trade_id"])
@@ -1036,6 +1054,14 @@ def project_ol1_outcome(
         executed_trade_ids=executed_ids,
         actual_performance=actual_performance,
     )
+    if historical_ids:
+        actual.update({
+            "state": "EVALUATED", "pnl_state": "NOT_EVALUATED", "pnl": None,
+            "trade_ids": executed_ids + historical_ids,
+            "trade_count": len(executed_ids) + len(historical_ids),
+            "authority_refs": ["tar1:formal_trade_attribution", "trade_ledger"],
+            "reason_codes": ["HISTORICAL_ACTUAL_NOT_RECONSTRUCTIBLE"],
+        })
     cf = dict(counterfactual or {
         "state": "NOT_EVALUATED",
         "authority_refs": ["ol1:no-authoritative-future-price-path"],

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -462,7 +463,9 @@ def create_correction(payload: dict[str, Any]) -> dict[str, Any]:
             # 与契约一致：零数量交易不参与推导，修正不允许把数量改成 0（P2-3）
             _require_int(value, "actual_quantity", min_value=1)
         elif key in ("actual_price", "fee", "other_cost"):
-            _require_number(value, key)
+            number = _require_number(value, key)
+            if key == "actual_price" and number <= 0:
+                raise PositionValidationError("actual_price 必须大于 0")
         elif key == "amount":
             # cash 事件修正：复用与 create_cash_event 完全相同的归一化规则（DRY）
             try:
@@ -532,6 +535,17 @@ def create_correction(payload: dict[str, Any]) -> dict[str, Any]:
         before = _prior_effective_values_on_connection(
             conn, target_event_type, target_event_id, base, list(after_payload.keys())
         )
+
+        if target_event_type == "trade":
+            effective = _prior_effective_values_on_connection(
+                conn, target_event_type, target_event_id, base, list(_CORRECTION_TRADE_KEYS)
+            )
+            effective.update(after_payload)
+            if _require_number(effective.get("actual_price"), "actual_price") <= 0:
+                raise PositionValidationError("actual_price 必须大于 0")
+            _require_int(effective.get("actual_quantity"), "actual_quantity", min_value=1)
+            for field in ("fee", "other_cost"):
+                _require_number(effective.get(field), field)
 
         event_record = {
             "event_id": _new_id("aev"),
@@ -854,6 +868,8 @@ def derive_positions() -> dict[str, Any]:
         if qty == 0:
             continue
         price = float(event.get("actual_price") or 0.0)
+        if not math.isfinite(price) or price <= 0:
+            raise PositionDerivationError("交易有效价格必须为有限正数，需人工核对历史修正")
         fee = float(event.get("fee") or 0.0)
         other = float(event.get("other_cost") or 0.0)
 
@@ -882,6 +898,8 @@ def derive_positions() -> dict[str, Any]:
             raise PositionDerivationError(f"非法 operation: {operation}")
 
     limitations: list[str] = []
+    if not openings and any(event["event_type"] in account_event_store.CASH_EVENT_TYPES for event in events):
+        limitations.append("CASH_WITHOUT_ACCOUNT_OPENING：初始化冲突，已有现金事件但无账户期初记录；保留原记录，需人工核对，不自动初始化。")
     positions: list[dict[str, Any]] = []
     for code in sorted(states):
         st = states[code]

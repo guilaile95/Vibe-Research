@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   ShieldCheck,
@@ -46,10 +46,18 @@ export default function DecisionEvidence() {
   const limit = 10;
 
   // List State
-  const [runs, setRuns] = useState<DecisionRunRecord[]>([]);
-  const [total, setTotal] = useState(0);
+  const queryKey = JSON.stringify([code.trim(), tradeDate.trim(), qualityStatus, traceStatus, page]);
+  const currentQuery = useRef(queryKey);
+  currentQuery.current = queryKey;
+  const listRequest = useRef(0);
+  const detailRequest = useRef(0);
+  const [listResult, setListResult] = useState<{ key: string; runs: DecisionRunRecord[] }>({ key: queryKey, runs: [] });
+  const runs = listResult.key === queryKey ? listResult.runs : [];
+  const [totalCount, setTotal] = useState(0);
+  const total = listResult.key === queryKey ? totalCount : 0;
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [listError, setListError] = useState<{ key: string; message: string } | null>(null);
+  const error = listError?.key === queryKey ? listError.message : null;
 
   // Detail Modal State
   const [detailModalOpen, setDetailModalOpen] = useState(false);
@@ -59,8 +67,10 @@ export default function DecisionEvidence() {
 
   // Fetch runs list
   const fetchList = useCallback(async () => {
+    const generation = ++listRequest.current;
+    const active = () => generation === listRequest.current && queryKey === currentQuery.current;
     setLoading(true);
-    setError(null);
+    setListError(null);
     try {
       const res = await api.listDecisionEvidence({
         code: code.trim() || undefined,
@@ -90,17 +100,22 @@ export default function DecisionEvidence() {
         created_at: item.created_at,
       }));
 
-      setRuns(normalizedRuns);
-      setTotal(res.total || normalizedRuns.length);
+      if (!active()) return;
+      setListResult({ key: queryKey, runs: normalizedRuns });
+      setTotal(res.total ?? normalizedRuns.length);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "获取决策依据列表失败");
+      if (!active()) return;
+      setListError({ key: queryKey, message: e instanceof ApiError ? e.message : "获取决策依据列表失败" });
     } finally {
-      setLoading(false);
+      if (active()) setLoading(false);
     }
-  }, [code, tradeDate, qualityStatus, traceStatus, page]);
+  }, [code, tradeDate, qualityStatus, traceStatus, page, queryKey]);
 
   // Load single run detail
   const loadDetail = useCallback(async (runId?: string, adviceQuery?: { trade_date: string; generated_at: string }) => {
+    const generation = ++detailRequest.current;
+    const active = () => generation === detailRequest.current;
+    setSelectedDetail(null);
     setDetailLoading(true);
     setDetailError(null);
     setDetailModalOpen(true);
@@ -113,12 +128,26 @@ export default function DecisionEvidence() {
       } else {
         throw new Error("未指定查询参数");
       }
-      setSelectedDetail(detail);
+      if (active()) setSelectedDetail(detail);
     } catch (e) {
+      if (!active()) return;
       setDetailError(e instanceof ApiError ? e.message : "获取决策依据详情失败");
     } finally {
-      setDetailLoading(false);
+      if (active()) setDetailLoading(false);
     }
+  }, []);
+
+  const closeDetail = () => {
+    detailRequest.current += 1;
+    setDetailModalOpen(false);
+    setSelectedDetail(null);
+    setDetailLoading(false);
+    setDetailError(null);
+  };
+
+  useEffect(() => () => {
+    listRequest.current += 1;
+    detailRequest.current += 1;
   }, []);
 
   // Handle URL query parameters on initial load
@@ -135,13 +164,14 @@ export default function DecisionEvidence() {
   }, []);
 
   useEffect(() => {
-    fetchList();
+    void fetchList();
+    return () => { listRequest.current += 1; };
   }, [fetchList]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    setPage(1);
-    fetchList();
+    if (page === 1) void fetchList();
+    else setPage(1);
   };
 
   const handleReset = () => {
@@ -398,7 +428,7 @@ export default function DecisionEvidence() {
       {detailModalOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-          onClick={() => setDetailModalOpen(false)}
+          onClick={closeDetail}
         >
           <div
             className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-xl border border-border bg-background shadow-2xl overflow-hidden"
@@ -411,7 +441,7 @@ export default function DecisionEvidence() {
                 <h3 className="font-bold text-base">决策依据与链条详情</h3>
               </div>
               <button
-                onClick={() => setDetailModalOpen(false)}
+                onClick={closeDetail}
                 className="rounded-lg p-1 text-muted-foreground hover:bg-black/30 hover:text-foreground"
               >
                 <X className="h-5 w-5" />

@@ -12,6 +12,32 @@ import agent_runtime
 import app as app_module
 
 
+@pytest.fixture(autouse=True)
+def loopback_transport_double(monkeypatch):
+    """Existing API tests remain synthetic while exercising the Session wrapper."""
+    from contextlib import contextmanager
+    originals = {"GET": agent_runtime.requests.get, "POST": agent_runtime.requests.post}
+
+    class Session:
+        trust_env = True
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            pass
+        @contextmanager
+        def request(self, method, url, **kwargs):
+            assert self.trust_env is False
+            assert kwargs.pop("allow_redirects") is False
+            method_fn = getattr(agent_runtime.requests, method.lower())
+            assert method_fn is not originals[method], "real loopback calls forbidden"
+            response = method_fn(url, **kwargs)
+            if not hasattr(response, "status_code"):
+                response.status_code = 200
+            yield response
+
+    monkeypatch.setattr(agent_runtime.requests, "Session", Session)
+
+
 client = TestClient(app_module.app)
 
 
@@ -452,3 +478,14 @@ def test_runtime_inner_timeout_survives_http_projection(monkeypatch):
     assert result["status"] == "probe_failed"
     assert result["probe_error"] == "timeout"
     assert "PRIVATE_SENTINEL" not in json.dumps(result)
+
+
+def test_loopback_redirect_is_rejected_without_followup(monkeypatch):
+    calls = []
+    def redirect(*args, **kwargs):
+        calls.append(args)
+        return _StreamResponse(status_code=302)
+    monkeypatch.setattr(agent_runtime.requests, "post", redirect)
+    with pytest.raises(agent_runtime.AgentRuntimeError, match="当前不可用"):
+        agent_runtime.start_login()
+    assert len(calls) == 1

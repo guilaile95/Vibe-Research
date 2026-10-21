@@ -1,3 +1,4 @@
+import { saveCredential, clearCredential, CredentialMutationError, credentialIntentVersion } from "@/lib/credentialMutations";
 import { useEffect, useState } from "react";
 import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal, Loader2, RefreshCw, Rss, Plus, SlidersHorizontal, Tag, Globe, Layers, ArrowUp, ArrowDown } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -8,12 +9,10 @@ import { FirstResearchStatusCard } from "@/components/settings/FirstResearchStat
 import { toast } from "sonner";
 import { createModelConnectionProbe, modelProbeDestination, canonicalModelProbeURL, type ProbeState } from "@/lib/modelConnectionProbe";
 import {
-  clearLlm,
   LLM_CHANGED_EVENT,
   testModelConnection,
   getAgentRuntimeStatus,
   loadLlm,
-  saveLlm,
   startAgentRuntimeLogin,
   type AgentRuntimeStatus,
 } from "@/lib/llm";
@@ -103,16 +102,19 @@ export function Settings() {
   };
 
   const [scheduledStatus, setScheduledStatus] = useState<{
+    revision?: string | null;
     configured: boolean;
     provider: string | null;
     scheduled_available: boolean;
   } | null>(null);
 
   const refreshScheduledStatus = async () => {
+    const owner = credentialIntentVersion();
     try {
-      setScheduledStatus(await api.getAiCredentialStatus());
+      const status = await api.getAiCredentialStatus();
+      if (owner === credentialIntentVersion()) setScheduledStatus(status);
     } catch {
-      setScheduledStatus(null);
+      if (owner === credentialIntentVersion()) setScheduledStatus(null);
     }
   };
 
@@ -127,19 +129,15 @@ export function Settings() {
     }
     const cfg = { provider: providerOf(apiId), baseURL: baseURL.trim(), apiKey: apiKey.trim(), model: modelName.trim() };
     try {
-      await api.putAiCredential(cfg);
-    } catch {
-      toast.error("后台凭据保存失败");
-      return;
-    }
-    try {
-      saveLlm(cfg);
-    } catch {
+      if (!await saveCredential(cfg, scheduledStatus?.revision ?? existing?.revision ?? "0")) return;
+    } catch (error) {
       await refreshScheduledStatus();
-      toast.error("后台凭据已保存，但浏览器保存失败；请检查存储权限或空间后重试");
+      toast.error(error instanceof CredentialMutationError ? error.message : "保存未确认或配置已变化，请刷新后重试；不会自动覆盖新配置");
       return;
     }
+    const completion = credentialIntentVersion();
     await refreshScheduledStatus();
+    if (completion !== credentialIntentVersion()) return;
     toast.success("配置已保存到本机浏览器和后台；尚未验证模型调用");
   };
 
@@ -155,19 +153,15 @@ export function Settings() {
     }
     const cfg = { provider: m.provider, baseURL: "", apiKey: "", model: m.id };
     try {
-      await api.putAiCredential(cfg);
-    } catch {
-      toast.error("后台凭据保存失败");
-      return;
-    }
-    try {
-      saveLlm(cfg);
-    } catch {
+      if (!await saveCredential(cfg, scheduledStatus?.revision ?? existing?.revision ?? "0")) return;
+    } catch (error) {
       await refreshScheduledStatus();
-      toast.error("后台凭据已保存，但浏览器保存失败；请检查存储权限或空间后重试");
+      toast.error(error instanceof CredentialMutationError ? error.message : "保存未确认或配置已变化，请刷新后重试；不会自动覆盖新配置");
       return;
     }
+    const completion = credentialIntentVersion();
     await refreshScheduledStatus();
+    if (completion !== credentialIntentVersion()) return;
     toast.success(`已保存「${m.name}」订阅配置；尚未验证模型调用`);
   };
 
@@ -187,21 +181,17 @@ export function Settings() {
   const forget = async () => {
     probe.invalidate();
     try {
-      await api.deleteAiCredential();
-    } catch {
-      toast.error("后台凭据删除失败");
-      return;
-    }
-    try {
-      clearLlm();
-    } catch {
+      if (!await clearCredential()) return;
+    } catch (error) {
       await refreshScheduledStatus();
-      toast.error("后台凭据已清除，但浏览器凭据仍未清除；请检查存储权限后重试");
+      toast.error(error instanceof CredentialMutationError ? error.message : "清除尚未确认，请刷新核对后重试；旧配置不会自动恢复");
       return;
     }
     setApiKey("");
     setCliId("");
+    const completion = credentialIntentVersion();
     await refreshScheduledStatus();
+    if (completion !== credentialIntentVersion()) return;
     toast.success("已清除本机浏览器和后台凭据");
   };
 
@@ -322,7 +312,7 @@ export function Settings() {
               <button data-testid="wave5-save-subscription-btn" onClick={() => void saveSubscription()} className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25">
                 保存
               </button>
-              {existing && (
+              {(existing || scheduledStatus?.configured) && (
                 <button data-testid="wave5-forget-btn" onClick={() => void forget()} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:text-destructive">
                   <Trash2 className="h-4 w-4" /> 清除
                 </button>
@@ -378,7 +368,7 @@ export function Settings() {
               <button data-testid="wave5-save-api-btn" onClick={() => void saveApi()} className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25">
                 保存（存本地）
               </button>
-              {existing && (
+              {(existing || scheduledStatus?.configured) && (
                 <button data-testid="wave5-forget-btn" onClick={() => void forget()} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:text-destructive">
                   <Trash2 className="h-4 w-4" /> 清除
                 </button>

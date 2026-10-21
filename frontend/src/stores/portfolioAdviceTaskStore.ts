@@ -52,6 +52,7 @@ let activeController: AbortController | null = null;
 
 function makeStreamLlmConfig(llm: LlmConfig): StreamLlmConfig {
   return {
+    revision: llm.revision,
     provider: llm.provider,
     baseURL: llm.baseURL,
     apiKey: llm.apiKey,

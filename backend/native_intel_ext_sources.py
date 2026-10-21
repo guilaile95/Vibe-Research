@@ -21,6 +21,7 @@ from typing import Any
 
 import native_intel_store as store
 import newsradar
+import safe_deep_read_fetch
 
 GITHUB_TRENDING_URL = "https://github.com/trending?since=daily"
 HF_DAILY_PAPERS_URL = "https://huggingface.co/api/daily_papers"
@@ -724,7 +725,7 @@ def read_source_content(
             raw = (
                 fetcher(url)
                 if fetcher is not None
-                else _http_get(
+                else safe_deep_read_fetch.fetch(
                     url,
                     timeout=timeout,
                     accept="text/html,application/xhtml+xml,text/plain,application/json;q=0.8,*/*;q=0.1",
@@ -751,8 +752,11 @@ def read_source_content(
                 "fetched_at": store.utc_now_iso(),
             }
         except Exception as exc:  # noqa: BLE001 - source failure remains explicit and isolated
-            error_kind, _detail = _classify_error(exc)
-            failures.append({"kind": error_kind, "detail": type(exc).__name__})
+            if isinstance(exc, safe_deep_read_fetch.UnsafeDestination):
+                failures.append({"kind": "security", "detail": str(exc)})
+            else:
+                error_kind, _detail = _classify_error(exc)
+                failures.append({"kind": error_kind, "detail": type(exc).__name__})
 
     summary = str(item.get("summary") or "").strip()
     if summary:

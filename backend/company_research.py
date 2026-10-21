@@ -5,6 +5,7 @@ background task runtime. Every stage consumes one frozen adapter-input bundle.
 """
 from __future__ import annotations
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -138,8 +139,56 @@ def _strings(value, max_items=30, max_chars=1000):
     for item in value: _text(item, max_chars)
 
 
+NATIVE_BOUND_SOURCES = {"astock.financials", "astock.announcements", "astock.lockup_expiry"}
+
+
+def _native_payload(provider, value, subject):
+    """Request binding is not independently returned provider identity."""
+    if value in (None, {}, []): return None
+    def check(item):
+        if not isinstance(item, dict) or not item: raise ValueError("SOURCE_SHAPE_INVALID")
+        for key in ("code", "symbol", "股票代码", "SECURITY_CODE"):
+            if item.get(key) is not None and str(item[key]) != subject["symbol"]:
+                raise ValueError("SOURCE_IDENTITY_CONFLICT")
+        if item.get("market") is not None and item["market"] != subject["market"]:
+            raise ValueError("SOURCE_IDENTITY_CONFLICT")
+        if item.get("error") or item.get("status") in ("error", "unavailable", "failed"):
+            raise ValueError("SOURCE_PROVIDER_FAILED")
+    if provider == "astock.announcements":
+        if not isinstance(value, list): raise ValueError("SOURCE_SHAPE_INVALID")
+        rows = value
+        for row in rows:
+            check(row); _text(row.get("title"), 10000); _source_date(row.get("date"))
+    elif provider == "astock.lockup_expiry":
+        check(value)
+        if not {"history", "upcoming"} <= set(value): raise ValueError("SOURCE_SHAPE_INVALID")
+        if not isinstance(value["history"], list) or not isinstance(value["upcoming"], list): raise ValueError("SOURCE_SHAPE_INVALID")
+        rows = value["history"] + value["upcoming"]
+        for row in rows: check(row); _source_date(row.get("date"))
+    else:
+        check(value)
+        rows = value.get("history")
+        if not isinstance(rows, list) or not isinstance(value.get("data_quality"), dict): raise ValueError("SOURCE_SHAPE_INVALID")
+        for row in rows:
+            check(row); _source_date(row.get("period_end"))
+    return value if rows else None
+
+
+def _native_envelope(provider, symbol, reader):
+    subject = identity("A", symbol)
+    value = _native_payload(provider, reader(), subject)
+    if value is None: return None
+    return {"schema_version": "company-native-request.v1", "adapter": provider,
+            "requested_subject": subject, "identity_basis": "ADAPTER_REQUEST_CONTRACT_NOT_PROVIDER_IDENTITY",
+            "payload": value}
+
+
 def _adapter_receipt(provider, value, subject):
     if not provider.startswith(("astock.", "gstock.")): return
+    if provider in NATIVE_BOUND_SOURCES and isinstance(value, dict) and value.get("schema_version") == "company-native-request.v1":
+        if set(value) != {"schema_version", "adapter", "requested_subject", "identity_basis", "payload"} or value["adapter"] != provider or value["requested_subject"] != subject or value["identity_basis"] != "ADAPTER_REQUEST_CONTRACT_NOT_PROVIDER_IDENTITY": raise ValueError("SOURCE_IDENTITY_CONFLICT")
+        if _native_payload(provider, value["payload"], subject) is None: raise ValueError("SOURCE_EMPTY_AVAILABLE")
+        return
     symbol = subject["symbol"]
     if provider == "astock.tencent_quote":
         if not isinstance(value, dict) or set(value) != {symbol}: raise ValueError("SOURCE_IDENTITY_CONFLICT")
@@ -190,11 +239,11 @@ def source_plan(market, symbol, as_of=None):
     if market == "A":
         return archived + [
             ("company_profile", ("profile",), "astock.individual_info", lambda: astock.individual_info(symbol)),
-            ("financials", ("financials", "risk"), "astock.financials", lambda: astock.financials(symbol, include_health=True)),
+            ("financials", ("financials", "risk"), "astock.financials", lambda: _native_envelope("astock.financials", symbol, lambda: astock.financials(symbol, include_health=True, strict=True))),
             ("valuation", ("valuation",), "astock.full_valuation", lambda: astock.full_valuation(symbol)),
             ("quote", ("valuation",), "astock.tencent_quote", lambda: astock.tencent_quote([symbol])),
-            ("announcements", ("risk",), "astock.announcements", lambda: astock.announcements(symbol, strict=True)),
-            ("lockup", ("risk",), "astock.lockup_expiry", lambda: astock.lockup_expiry(symbol)),
+            ("announcements", ("risk",), "astock.announcements", lambda: _native_envelope("astock.announcements", symbol, lambda: astock.announcements(symbol, strict=True))),
+            ("lockup", ("risk",), "astock.lockup_expiry", lambda: _native_envelope("astock.lockup_expiry", symbol, lambda: astock.lockup_expiry(symbol, strict=True))),
         ]
     def global_company():
         data = gstock.us_hk_stock(symbol)
@@ -371,6 +420,8 @@ def stage_messages(stage, bundle, previous):
 
 
 def _terminal(run_id, owner, status, record, *, cancelled=lambda: False):
+    # Validate the exact stored shape before attempting any state transition.
+    validate_record(record, {"id": run_id, "owner": owner, "status": status, "bundle_id": record["bundle_id"]}, read_bundle(record["bundle_id"]))
     # Only the live owner may make the single terminal transition.
     with _connect(True) as conn:
         if cancelled(): raise asyncio.CancelledError()
@@ -380,20 +431,60 @@ def _terminal(run_id, owner, status, record, *, cancelled=lambda: False):
         if cancelled(): raise asyncio.CancelledError()
 
 
+def model_meta(cfg):
+    provider = cfg.get("provider")
+    if provider is None: provider = ""
+    if not isinstance(provider, str): raise ValueError("RUN_MODEL_INVALID")
+    provider = provider.strip() or "api"  # generic compatible API, not a vendor assertion
+    name = cfg.get("model")
+    if provider.startswith("cli-"): raise ValueError("API_RUNTIME_REQUIRED")
+    for value in (provider, name):
+        _text(value)
+        if not value.strip() or any(ord(c) < 32 for c in value): raise ValueError("RUN_MODEL_INVALID")
+    secret = cfg.get("apiKey") or ""
+    if secret and (secret in provider or secret in name): raise ValueError("RUN_MODEL_INVALID")
+    return {"provider": provider, "name": name}
+
+
+def _terminal_record(record, status):
+    result = {k: v for k, v in record.items() if k not in {"result_sha256", "finished_at"}}
+    result.update(status=status, finished_at=now())
+    if status == "COMPLETED": result["result_sha256"] = digest(result)
+    else: result["stages"] = []
+    return result
+
+
+def _persist_terminal(record, owner, *, cancelled=lambda: False):
+    try:
+        _terminal(record["run_id"], owner, record["status"], record, cancelled=cancelled)
+        return record
+    except BaseException:
+        # A COMMIT may have succeeded before its acknowledgement was lost.
+        # Only a validated readback can establish that; never blindly overwrite.
+        with _snapshot() as conn:
+            row = conn.execute("SELECT owner FROM runs WHERE id=?", (record["run_id"],)).fetchone() if conn else None
+            if row is None or row["owner"] != owner: raise ValueError("RUN_PERSISTENCE_UNCERTAIN")
+            saved = _read_record(conn, record["run_id"])
+            if saved["status"] != "RUNNING":
+                if saved == record: return saved
+                raise ValueError("RUN_OWNER_OR_STATE_CONFLICT")
+        raise
+
+
 async def generate(bundle, cfg, cancel_event, *, stream=None):
     validate_bundle(bundle)
     if not any(r["status"] == "AVAILABLE" for r in bundle["sources"]): raise ValueError("NO_USABLE_EVIDENCE")
-    if str(cfg.get("provider", "")).startswith("cli-"):
-        raise ValueError("API_RUNTIME_REQUIRED")
+    metadata = model_meta(cfg)
     if not _ACTIVE.acquire(blocking=False):
         raise ValueError("RESEARCH_BUSY")
     stream = stream or chat.stream_api_messages
     run_id = uuid.uuid4().hex; owner = uuid.uuid4().hex
     record = {"schema_version": SCHEMA, "run_id": run_id, "bundle_id": bundle["bundle_id"], "bundle_sha256": bundle["bundle_sha256"],
-        "subject": bundle["subject"], "status": "RUNNING", "started_at": now(), "model": {"provider": cfg.get("provider"), "name": cfg.get("model")},
+        "subject": bundle["subject"], "status": "RUNNING", "started_at": now(), "model": metadata,
         "classification": "NON_AUTHORITATIVE_AI_DRAFT", "stages": [], "completed_stage_count": 0, "numeric_claim_verification": "NOT_EVALUATED"}
     source = None; terminal = False; created = False; failed = False
     try:
+        validate_record(record, {"id": run_id, "owner": owner, "status": "RUNNING", "bundle_id": bundle["bundle_id"]}, bundle)
         with _connect(True) as conn:
             conn.execute("INSERT INTO runs VALUES(?,?,?,?,?)", (run_id, bundle["bundle_id"], owner, "RUNNING", canonical(record)))
         created = True
@@ -424,9 +515,8 @@ async def generate(bundle, cfg, cancel_event, *, stream=None):
             record["stages"].append(output); record["completed_stage_count"] += 1
             yield {"type": "stage_done", "run_id": run_id, "stage": stage, "output": output}
         if cancel_event.is_set(): raise asyncio.CancelledError()
-        record.update(status="COMPLETED", finished_at=now())
-        record["result_sha256"] = digest(record)
-        _terminal(run_id, owner, "COMPLETED", record, cancelled=cancel_event.is_set); terminal=True
+        record = _terminal_record(record, "COMPLETED")
+        record = _persist_terminal(record, owner, cancelled=cancel_event.is_set); terminal=True
         yield {"type": "done", "record": record}
     except asyncio.CancelledError:
         raise
@@ -440,8 +530,14 @@ async def generate(bundle, cfg, cancel_event, *, stream=None):
                 with anyio.CancelScope(shield=True):
                     await source.aclose()
             if created and not terminal:
-                record.update(status="FAILED" if failed else "CANCELLED" if cancel_event.is_set() else "FAILED", finished_at=now(), stages=[])
-                _terminal(run_id, owner, record["status"], record)
+                # Inspect before fallback as well: never replace a committed terminal.
+                with _snapshot() as conn:
+                    row = conn.execute("SELECT owner FROM runs WHERE id=?", (run_id,)).fetchone() if conn else None
+                    if row is None or row["owner"] != owner: raise ValueError("RUN_OWNER_OR_STATE_CONFLICT")
+                    saved = _read_record(conn, run_id)
+                if saved["status"] == "RUNNING":
+                    record = _terminal_record(record, "FAILED" if failed else "CANCELLED" if cancel_event.is_set() else "FAILED")
+                    _persist_terminal(record, owner)
         finally:
             _ACTIVE.release()
 
@@ -459,7 +555,9 @@ def validate_record(value, row, bundle):
     if value["run_id"]!=row["id"] or value["bundle_id"]!=row["bundle_id"] or status!=row["status"] or value["subject"]!=bundle["subject"] or value["bundle_sha256"]!=bundle["bundle_sha256"]: raise ValueError("RUN_COLUMN_OR_BUNDLE_CONFLICT")
     if value["classification"]!="NON_AUTHORITATIVE_AI_DRAFT" or value["numeric_claim_verification"]!="NOT_EVALUATED": raise ValueError("RUN_CLASSIFICATION_INVALID")
     if not isinstance(value["model"],dict) or set(value["model"])!={"provider","name"}: raise ValueError("RUN_MODEL_INVALID")
-    for item in value["model"].values(): _text(item)
+    try:
+        for item in value["model"].values(): _text(item)
+    except ValueError: raise ValueError("RUN_MODEL_INVALID") from None
     count=value["completed_stage_count"]
     if type(count) is not int or not 0<=count<=6: raise ValueError("RUN_COUNT_INVALID")
     if status=="COMPLETED":
@@ -484,3 +582,97 @@ def list_runs():
             value=_json(conn.execute("SELECT payload FROM runs WHERE id=?",(row["id"],)).fetchone()[0])
             out.append(validate_record(value,row,_read_bundle(conn,row["bundle_id"])))
     return out
+
+
+def _read_record(conn, run_id):
+    _hex(run_id, 32)
+    row = conn.execute("SELECT id,bundle_id,owner,status,typeof(payload) AS kind,length(CAST(payload AS BLOB)) AS size FROM runs WHERE id=?", (run_id,)).fetchone()
+    if row is None: raise ValueError("RUN_NOT_FOUND")
+    if row["kind"] != "text" or row["size"] > 128*1024: raise ValueError("RUN_TOO_LARGE")
+    value = _json(conn.execute("SELECT payload FROM runs WHERE id=?", (run_id,)).fetchone()[0])
+    return validate_record(value, row, _read_bundle(conn, row["bundle_id"]))
+
+
+def read_run(run_id, market, symbol):
+    subject = identity(market, symbol)
+    with _snapshot() as conn:
+        if conn is None: raise ValueError("RUN_NOT_FOUND")
+        record = _read_record(conn, run_id)
+        if record["subject"] != subject: raise ValueError("RUN_SUBJECT_CONFLICT")
+        return record
+
+
+def _history_subject(payload):
+    """Discovery identity only; strict parsing also rejects duplicate-key ambiguity.
+
+    The SQL CASE bounds bytes before calling this function. Report admission
+    still requires _read_record's complete hash and source-bundle validation.
+    """
+    try:
+        value = _json(payload)
+        subject = value["subject"]
+        if not isinstance(subject, dict) or set(subject) != {"market", "symbol"} or identity(**subject) != subject:
+            return None
+        return canonical(subject)
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        return None
+
+
+def list_run_page(market, symbol, *, cursor=None, limit=50):
+    """Read-only keyset history; damaged rows are diagnostics, never reports.
+
+    Cursor binds subject and the first-page high-water mark. Existing archives
+    are neither migrated nor rehashed; the legacy strict list stays unchanged.
+    """
+    subject = identity(market, symbol)
+    if type(limit) is not int or not 1 <= limit <= 50: raise ValueError("HISTORY_LIMIT_INVALID")
+    before = ceiling = None
+    if cursor is not None:
+        try:
+            if not isinstance(cursor, str) or len(cursor) > 400: raise ValueError()
+            token = _json(base64.urlsafe_b64decode(cursor.encode()).decode())
+            if set(token) != {"subject", "before", "ceiling"} or token["subject"] != subject: raise ValueError()
+            before, ceiling = token["before"], token["ceiling"]
+            if any(type(x) is not int or not 1 <= x <= 9223372036854775807 for x in (before, ceiling)) or before > ceiling: raise ValueError()
+        except Exception: raise ValueError("HISTORY_CURSOR_INVALID") from None
+    with _snapshot() as conn:
+        if conn is None: return {"records": [], "diagnostics": [], "unassigned_corrupt_count": 0, "next_cursor": None}
+        ceiling = ceiling or conn.execute("SELECT COALESCE(MAX(rowid),0) FROM runs").fetchone()[0]
+        # SQL filtering is discovery only. Each selected record still validates
+        # its complete source bundle, result hash, stages and column identity.
+        conn.create_function("research_history_subject", 1, _history_subject, deterministic=True)
+        binding = "CASE WHEN typeof(b.payload)='text' AND length(CAST(b.payload AS BLOB))<=? THEN research_history_subject(b.payload) ELSE NULL END"
+        rows = conn.execute("SELECT r.id,r.rowid AS position FROM runs r JOIN bundles b ON b.id=r.bundle_id WHERE r.rowid<=? AND (? IS NULL OR r.rowid<?) AND (" + binding + ")=? ORDER BY r.rowid DESC LIMIT ?", (ceiling,before,before,MAX_BUNDLE_BYTES+100,canonical(subject),limit+1)).fetchall()
+        unassigned = conn.execute("SELECT COUNT(*) FROM runs r LEFT JOIN bundles b ON b.id=r.bundle_id WHERE r.rowid<=? AND (" + binding + ") IS NULL", (ceiling,MAX_BUNDLE_BYTES+100)).fetchone()[0]
+        records, diagnostics = [], []
+        for row in rows[:limit]:
+            try:
+                record = _read_record(conn, row["id"])
+                if record["subject"] != subject: raise ValueError("RUN_SUBJECT_CONFLICT")
+                records.append(record)
+            except (ValueError, TypeError, KeyError):
+                diagnostics.append({"run_id": row["id"] if isinstance(row["id"],str) and re.fullmatch(r"[0-9a-f]{32}",row["id"]) else None, "status": "CORRUPTED_OR_UNSUPPORTED"})
+        next_cursor = None
+        if len(rows) > limit:
+            next_cursor = base64.urlsafe_b64encode(canonical({"subject": subject, "before": rows[limit-1]["position"], "ceiling": ceiling}).encode()).decode()
+        return {"records": records, "diagnostics": diagnostics, "unassigned_corrupt_count": unassigned, "next_cursor": next_cursor}
+
+
+def diagnose_runs():
+    """Explicit read-only integrity inventory; never mutates legacy bytes/hashes."""
+    counts = {"VALID": 0, "MODEL_METADATA_INVALID": 0, "TERMINAL_SCHEMA_INVALID": 0,
+              "BUNDLE_INVALID_OR_UNAVAILABLE": 0, "OTHER_INVALID_OR_UNSUPPORTED": 0}
+    with _snapshot() as conn:
+        if conn is not None:
+            for row in conn.execute("SELECT id,bundle_id FROM runs"):
+                try: _read_bundle(conn, row["bundle_id"])
+                except (ValueError, TypeError, KeyError):
+                    counts["BUNDLE_INVALID_OR_UNAVAILABLE"] += 1; continue
+                try: _read_record(conn, row["id"])
+                except (ValueError, TypeError, KeyError) as exc:
+                    # Known legacy defects are reported, not repaired. A string
+                    # edit on a completed report would invalidate its result hash.
+                    category = "TERMINAL_SCHEMA_INVALID" if str(exc) == "RUN_SCHEMA_INVALID" else "MODEL_METADATA_INVALID" if str(exc) == "RUN_MODEL_INVALID" else "OTHER_INVALID_OR_UNSUPPORTED"
+                    counts[category] += 1
+                else: counts["VALID"] += 1
+    return {"schema_version": "company-research-diagnostics.v1", "counts": counts, "repair_performed": False}

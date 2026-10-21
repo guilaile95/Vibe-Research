@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import vm from "node:vm";
 import { readFileSync } from "node:fs";
-import { config, chatKey, readPaths, readReply, validSyntheticStream, observeSyntheticStreams } from "./e2e/ai-settings-storage.fixture.mjs";
+import { config, chatKey, readPaths, readReply, validSyntheticStream, observeSyntheticStreams, readDiagnosticsReply } from "./e2e/ai-settings-storage.fixture.mjs";
 
 test("read whitelist covers actual MyReports and Settings startup contracts only", () => {
   for (const path of readPaths) {
@@ -64,7 +64,7 @@ test("mounted draft scenario has distinct selectable reports without broadening 
   const browser = readFileSync(new URL("./e2e/ai-settings-storage.browser.mjs", import.meta.url), "utf8");
   assert.match(browser, /scenario === "chat-drafts"/);
   assert.match(browser, /for \(const width of \[1440, 390\]\)/);
-  assert.match(browser, /assert\.equal\(result\.results\.length, 20\)/);
+  assert.match(browser, /assert\.equal\(result\.results\.length, 24\)/);
 });
 
 test("platform startup is read-only and rejects update/contact subroutes", () => {
@@ -76,4 +76,27 @@ test("platform startup is read-only and rejects update/contact subroutes", () =>
     for (const method of ["GET", "PUT", "POST", "DELETE"]) assert.equal(readReply(method, path), null);
   value.data.sec_contact.configured = true;
   assert.equal(readReply("GET", "/api/settings/platform").data.sec_contact.configured, false);
+});
+
+test("diagnostics fixture is explicit export-only and preserves the strict golden contract", () => {
+  const expected = { data: JSON.parse(readFileSync(new URL("./fixtures/runtime-diagnostics.json", import.meta.url), "utf8")) };
+  assert.deepEqual(readDiagnosticsReply("GET", "/api/runtime-diagnostics/export"), expected);
+  for (const method of ["POST", "PUT", "PATCH", "DELETE", "HEAD"])
+    assert.equal(readDiagnosticsReply(method, "/api/runtime-diagnostics/export"), null);
+  for (const path of ["/api/runtime-diagnostics", "/api/runtime-diagnostics/export/", "/api/agent-runtime/status"])
+    assert.equal(readDiagnosticsReply("GET", path), null);
+  assert.equal(readDiagnosticsReply("GET", "/api/runtime-diagnostics/export", "?probe=true"), null);
+  assert.equal(readReply("GET", "/api/runtime-diagnostics/export"), null, "not a startup request");
+  const copy = readDiagnosticsReply("GET", "/api/runtime-diagnostics/export");
+  copy.data.startup.source_directory = "SYNTHETIC_PRIVATE_PATH";
+  assert.deepEqual(readDiagnosticsReply("GET", "/api/runtime-diagnostics/export"), expected);
+  const browser = readFileSync(new URL("./e2e/ai-settings-storage.browser.mjs", import.meta.url), "utf8");
+  assert.match(browser, /scenario === "settings-diagnostics"/);
+  assert.match(browser, /file\.createReadStream\(\)/);
+  assert.match(browser, /assert\.equal\(bytes, JSON\.stringify\(readDiagnosticsReply/);
+  assert.match(browser, /node\.click\(\); node\.click\(\)/);
+  assert.ok(browser.includes('page.waitForEvent("download").then(file => ({ file }), error => ({ error }))'));
+  assert.ok(browser.includes('-failure.html'));
+  assert.ok(browser.includes('-card-failure.png'));
+  assert.ok(browser.includes('-viewport-failure.png'));
 });

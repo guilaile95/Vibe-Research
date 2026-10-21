@@ -62,7 +62,13 @@ another release root. No PATH, desktop, login, browser or OS settings are change
 ## Data, upgrades and removal
 
 Application data stays in the application's existing `~/.vibe-research` directory,
-or an explicitly supplied `VR_DATA_DIR`. Existing browser localStorage remains in
+or an explicitly supplied `VR_DATA_DIR`, but this does **not** move the shared
+review database. `VIBE_RESEARCH_REVIEW_DB` selects that database explicitly; without
+it, Linux keeps `$XDG_DATA_HOME/vibe-research/daily_reviews.sqlite3` (or
+`~/.local/share/vibe-research/daily_reviews.sqlite3` when XDG is unset). Personal
+reports may use `VR_REPORTS_DIR`; Fact Lake and Research Data Plane roots have their
+own overrides. No default path or existing data is migrated by these instructions.
+Existing browser localStorage remains in
 that browser profile. Credentials keep their existing application/CLI locations;
 they are never put in the distributable. Terminal logs can contain operational
 information; do not publish them without checking for private information.
@@ -75,6 +81,17 @@ migration rollback: a code rollback alone is not a data rollback.
 To uninstall, stop the launcher and remove only its release directory. User data,
 browser storage and separately managed CLI authentication are intentionally
 retained; delete those only if you explicitly intend to lose them.
+
+## Isolated acceptance is separate from normal launch
+
+The install/run commands above are normal user launches, not an isolation mode.
+For a trial, do not merely choose a new `VR_DATA_DIR` or installation prefix:
+follow [the shared isolation preflight](GETTING_STARTED.md#隔离启动准备独立存储与暂停自动抓取),
+including an explicit, separate `VIBE_RESEARCH_REVIEW_DB`, reports, Fact Lake,
+Research Data Plane and HOME/XDG paths. Use the allowlisted test environment and
+verify its real resolver paths before any database-writing process. The Native
+Intel flags pause automatic fetches, not all networking or all background writes.
+Keep each instance's storage distinct; do not use real user data as test fixtures.
 
 ## Packaging tests from the checkout (no services, browser or providers)
 

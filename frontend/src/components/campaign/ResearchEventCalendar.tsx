@@ -1,3 +1,4 @@
+import { EventResearchReview, CampaignEventReviewHistory } from "./EventResearchReview";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { AlertCircle, CalendarDays, Loader2, RefreshCw } from "lucide-react";
@@ -180,6 +181,7 @@ function EventRow({ event }: { event: ResearchEventCalendarEvent }) {
           </div>
         </details>
       </div>
+      <EventResearchReview event={event} />
     </article>
   );
 }
@@ -299,6 +301,8 @@ export function ResearchEventCalendar({
       {windowError && (
         <p role="alert" data-testid="research-event-window-error" className="text-xs text-red-600">{windowError}</p>
       )}
+
+      <CampaignEventReviewHistory key={securityCode || filters.securityCode || "all"} securityCode={securityCode || filters.securityCode || undefined} reloadEpoch={reloadEpoch} />
 
       {loading && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true">

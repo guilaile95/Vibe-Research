@@ -1,4 +1,7 @@
+import { financialAmount, financialEps } from "@/lib/globalFinancials";
+import { stockDebateHrefForResult } from "@/lib/debateHandoff";
 import { CompanyResearchPanel } from "@/components/research/CompanyResearchPanel";
+import { CompanyComparisonCard } from "@/components/research/CompanyComparisonCard";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -48,6 +51,7 @@ import {
   type EvidenceListState, type EvidenceState, resolveEvidenceList, evidenceListStatusText, evidenceStatusText, loadEvidenceSource,
   type ReportEvidenceState, resolveReportEvidence, reportEvidenceStatusText,
   reportEvidenceContext, announcementEvidenceContext, quoteEvidenceContext, summarizeStockFundFlow, formatStockCapitalValue,
+  financialEvidenceContext,
 } from "@/lib/stockDataEvidence";
 
 // 金额格式化（后端资金单位：元 / 万元）
@@ -502,7 +506,7 @@ export function StockData() {
       `26E EPS ${val.eps_26e ?? "—"} · 前向PE ${val.pe_26e ?? "—"} · PEG ${val.peg ?? "—"} · 消化 ${val.digest_years ?? "—"}年 · 机构覆盖 ${val.analyst_count ?? "未知"} 家\n` +
       `估值历史分位：${evidenceStatusText(pctlResult)}\n` +
       (pctl?.metrics.pe_ttm ? `估值历史分位(近5年)：PE-TTM 处于 ${pctl.metrics.pe_ttm.percentile}% 分位、PB 处于 ${pctl.metrics.pb?.percentile ?? "—"}% 分位\n` : "") +
-      (fin?.revenue ? `财务快照(报告期末${fin.period_end ?? "未知"}，披露日期未知，非PIT)：营收 ${fin.revenue}(同比${fin.revenue_yoy ?? "未知"})、净利润 ${fin.net_profit ?? "未知"}(同比${fin.net_profit_yoy ?? "未知"})、扣非净利润同比 ${fin.deduct_net_profit_yoy ?? "未知"}、ROE ${fin.roe ?? "未知"}、毛利率 ${fin.gross_margin ?? "未知"}、经营现金流 ${fin.operating_cash_flow ?? "未知"}、现金转化率 ${fin.cash_conversion_ratio ?? "未知"}、自由现金流 ${fin.free_cash_flow ?? "未知"}、资产负债率 ${fin.debt_ratio ?? "未知"}\n` : "") +
+      financialEvidenceContext(fin) + "\n" +
       `${quoteEvidenceContext(val)}\n` +
       `${announcementEvidenceContext(announcementResult)}\n` +
       reportEvidenceContext(reportResult)
@@ -512,7 +516,7 @@ export function StockData() {
     ? `个股（${mktName(gstock.market)}）：${gstock.name}（${gstock.code}）\n` +
       `现价 ${gstock.quote.price ?? "—"} · 涨跌 ${pctStr(gstock.quote.change_pct)} · 总市值 ${bigMoney(gstock.quote.mcap, gstock.market)}\n` +
       (gstock.metrics
-        ? `财务(${gstock.metrics.report_date})：营收 ${bigMoney(gstock.metrics.revenue, gstock.market)}(同比${round2(gstock.metrics.revenue_yoy, "%")})、归母净利 ${bigMoney(gstock.metrics.net_profit, gstock.market)}、EPS ${gstock.metrics.eps ?? "—"}、ROE ${round2(gstock.metrics.roe, "%")}、毛利率 ${round2(gstock.metrics.gross_margin, "%")}、净利率 ${round2(gstock.metrics.net_margin, "%")}、资产负债率 ${round2(gstock.metrics.debt_ratio, "%")}`
+        ? `财务(${gstock.metrics.report_date})：营收 ${financialAmount(gstock.metrics.revenue, gstock.metrics)}(同比${round2(gstock.metrics.revenue_yoy, "%")})、归母净利 ${financialAmount(gstock.metrics.net_profit, gstock.metrics)}、EPS ${financialEps(gstock.metrics.eps, gstock.metrics)}、ROE ${round2(gstock.metrics.roe, "%")}、毛利率 ${round2(gstock.metrics.gross_margin, "%")}、净利率 ${round2(gstock.metrics.net_margin, "%")}、资产负债率 ${round2(gstock.metrics.debt_ratio, "%")}`
         : "")
     : "";
   const stockReturnPath = (() => {
@@ -528,6 +532,7 @@ export function StockData() {
   // 资金卡常驻以显示各来源状态；龙虎榜明细仅在本次接口返回数据时展示。
   const fundFlowSummary = summarizeStockFundFlow(fundFlow);
   const capitalCardVisible = /^\d{6}$/.test(activeCode);
+  const debateHref = stockDebateHrefForResult(activeCode, val, gstock);
   const dragonTigerVisible = !!dt && (dt.records.length > 0 || dt.seats.buy.length > 0 || dt.seats.sell.length > 0);
   // 页签正文是否有块可渲染；仅用于正文为空时给一句占位说明，不加载任何数据
   const financialsTabHasBlocks = !!val || !!gstock?.metrics || !!(cashflow && cashflow.periods.length > 0);
@@ -566,9 +571,13 @@ export function StockData() {
         >
           <span className="truncate">研究 · 个股数据</span>
           <nav aria-label="个股数据工具" className="ml-auto flex shrink-0 items-center gap-3">
-            <Link to="/debate" className="hover:text-foreground" data-testid="stock-context-link-debate">
-              多空辩论
-            </Link>
+            {debateHref ? (
+              <Link to={debateHref} className="hover:text-foreground" data-testid="stock-context-link-debate">
+                多空辩论
+              </Link>
+            ) : (
+              <span aria-disabled="true" title="仅支持当前已返回的六位 A 股代码">多空辩论暂不可用</span>
+            )}
           </nav>
         </div>
       ) : (
@@ -628,7 +637,10 @@ export function StockData() {
       )}
 
       {(val || (gstock && (gstock.market === "HK" || gstock.market === "US"))) && (
-        <CompanyResearchPanel key={gstock ? `${gstock.market}:${gstock.code}` : `A:${val!.code}`} subject={gstock ? { market: gstock.market as "HK" | "US", symbol: gstock.code } : { market: "A", symbol: val!.code }} />
+        <>
+          <CompanyResearchPanel key={gstock ? `research:${gstock.market}:${gstock.code}` : `research:A:${val!.code}`} subject={gstock ? { market: gstock.market as "HK" | "US", symbol: gstock.code } : { market: "A", symbol: val!.code }} />
+          <CompanyComparisonCard key={gstock ? `comparison:${gstock.market}:${gstock.code}` : `comparison:A:${val!.code}`} subject={gstock ? { market: gstock.market as "HK" | "US", symbol: gstock.code } : { market: "A", symbol: val!.code }} />
+        </>
       )}
       {activeCode && ((gstock && gstock.code === activeCode && ["US", "HK"].includes(gstock.market)) || (val && val.code === activeCode)) &&
         <CompanyArchiveCard key={activeCode} market={gstock?.code === activeCode && ["US", "HK"].includes(gstock.market) ? gstock.market : "A"} symbol={activeCode} />}
@@ -856,12 +868,12 @@ export function StockData() {
                       <BarChart3 className="h-4 w-4 text-primary" /> 关键财务指标
                       <span className="text-xs font-normal text-muted-foreground/60">· {gstock.metrics.report_date}</span>
                     </h3>
-                    <p className="mb-3 text-[11px] text-muted-foreground/60">东财 GMAININDICATOR，最新报告期。金额为原生币种。</p>
+                    <p className="mb-3 text-[11px] text-muted-foreground/60">东财 GMAININDICATOR，最新报告期。采用报告币种，不按上市地推断；金额单位比例未验证时保留原始值，不换算为亿。</p>
                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                       {[
-                        { k: "营业收入", v: bigMoney(gstock.metrics.revenue, gstock.market), yoy: gstock.metrics.revenue_yoy != null ? round2(gstock.metrics.revenue_yoy, "%") : "" },
-                        { k: "归母净利", v: bigMoney(gstock.metrics.net_profit, gstock.market), yoy: "" },
-                        { k: "每股收益 EPS", v: round2(gstock.metrics.eps), yoy: "" },
+                        { k: "营业收入", v: financialAmount(gstock.metrics.revenue, gstock.metrics), yoy: gstock.metrics.revenue_yoy != null ? round2(gstock.metrics.revenue_yoy, "%") : "" },
+                        { k: "归母净利", v: financialAmount(gstock.metrics.net_profit, gstock.metrics), yoy: "" },
+                        { k: "每股收益 EPS", v: financialEps(gstock.metrics.eps, gstock.metrics), yoy: "" },
                         { k: "ROE", v: round2(gstock.metrics.roe, "%"), yoy: "" },
                         { k: "毛利率", v: round2(gstock.metrics.gross_margin, "%"), yoy: "" },
                         { k: "净利率", v: round2(gstock.metrics.net_margin, "%"), yoy: "" },

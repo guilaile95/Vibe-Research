@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { ExperimentLedger } from "@/components/research/ExperimentLedger";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AlertCircle, Database, FlaskConical, Loader2, ShieldAlert, Table2 } from "lucide-react";
 import { api, ApiError, type FactorValidationReport, type FactorValidationRequest } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -12,6 +13,8 @@ import {
   factorValidationStatusLabel,
 } from "@/lib/factorValidationView";
 
+import { useLocation, useSearchParams } from "react-router-dom";
+
 const WINDOWS = [5, 20];
 
 function FactorMetric({ label, value, format }: { label: string; value: number | null | undefined; format: (value: number | null | undefined) => string }) {
@@ -24,6 +27,9 @@ function FactorMetric({ label, value, format }: { label: string; value: number |
 }
 
 export function FactorValidationPanel() {
+  const location = useLocation();
+  const [, setSearchParams] = useSearchParams();
+  const evaluation = useRef<AbortController | null>(null);
   const [registry, setRegistry] = useState<FactorValidationReport["factor"][] | null>(null);
   const [selectedFactor, setSelectedFactor] = useState("return_5d");
   const [dateFrom, setDateFrom] = useState("");
@@ -33,6 +39,15 @@ export function FactorValidationPanel() {
   const [loadingRegistry, setLoadingRegistry] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const context = JSON.stringify([location.key, location.pathname, location.search, location.hash, selectedFactor, dateFrom, dateTo]);
+  const currentContext = useRef(context);
+  currentContext.current = context;
+  useLayoutEffect(() => {
+    setLoading(false);
+    return () => { evaluation.current?.abort(); evaluation.current = null; };
+  }, [context]);
+  useEffect(() => { setReport(null); setError(null); }, [selectedFactor, dateFrom, dateTo]);
 
   useEffect(() => {
     let mounted = true;
@@ -52,24 +67,32 @@ export function FactorValidationPanel() {
   }, []);
 
   const evaluate = async (payload: FactorValidationRequest, persist: boolean) => {
+    evaluation.current?.abort();
+    const controller = new AbortController();
+    evaluation.current = controller;
+    const owner = context;
+    const current = () => evaluation.current === controller && !controller.signal.aborted && currentContext.current === owner;
     setLoading(true);
     setError(null);
     try {
-      const next = await api.factorValidationEvaluate({ ...payload, forward_windows: WINDOWS });
+      const next = await api.factorValidationEvaluate({ ...payload, forward_windows: WINDOWS }, controller.signal);
+      if (!current()) return;
       setReport(next);
       const availableWindows = Object.keys(next.results);
       if (availableWindows.length && !availableWindows.includes(activeWindow)) setActiveWindow(availableWindows[0]);
       if (persist) {
-        const params = new URLSearchParams({ factor: payload.factor_id });
-        if (payload.date_from) params.set("from", payload.date_from);
-        if (payload.date_to) params.set("to", payload.date_to);
-        window.history.replaceState({}, "", `/signals/factor-validation?${params.toString()}`);
+        const params = new URLSearchParams(location.search);
+        params.set("factor", payload.factor_id);
+        if (payload.date_from) params.set("from", payload.date_from); else params.delete("from");
+        if (payload.date_to) params.set("to", payload.date_to); else params.delete("to");
+        setSearchParams(params, { replace: true, state: location.state });
       }
     } catch (reason) {
+      if (!current()) return;
       setReport(null);
       setError(reason instanceof ApiError ? reason.message : "因子有效性验证失败");
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
   };
 
@@ -131,6 +154,7 @@ export function FactorValidationPanel() {
         </div>
       </form>
 
+      <ExperimentLedger kind="factor" input={JSON.stringify({ factor_id: selectedFactor, forward_windows: WINDOWS, date_from: dateFrom || null, date_to: dateTo || null })} />
       {error && <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"><AlertCircle className="mr-1 inline h-4 w-4" />{error}</div>}
       {loadingRegistry && <div role="status" className="rounded-lg border border-dashed border-border/70 p-6 text-center text-sm text-muted-foreground">正在读取透明 Factor 目录…</div>}
 

@@ -35,6 +35,8 @@ async def create_cash_event(request: Request):
         event = await run_in_threadpool(svc.create_cash_event, payload)
     except HTTPException:
         raise
+    except svc.CashEventBootstrapRequiredError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except svc.CashEventValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except account_event_store.AccountEventCorruptedError:

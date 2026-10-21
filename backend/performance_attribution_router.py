@@ -77,6 +77,13 @@ def create_snapshot(body: SnapshotRequest):
             date_from=date_from, date_to=date_to, price_map=body.price_map
         )
         snapshot = _svc.save_attribution_snapshot(result)
+    except _svc.PerformanceAttributionUnavailableError as exc:
+        raise HTTPException(status_code=409, detail={
+            "code": "ATTRIBUTION_REQUIRES_RECONCILIATION",
+            "message": str(exc),
+            "reason_codes": exc.result.get("reason_codes", []),
+            "affected_trade_ids": exc.result.get("affected_trade_ids", []),
+        })
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     payload = dict(snapshot)

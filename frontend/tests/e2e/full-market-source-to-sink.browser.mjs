@@ -790,6 +790,43 @@ async function runCandidateCoverageScenario(browser, fixture) {
   }
 }
 
+async function runConditionCardScenario(browser, fixture) {
+  const port = await getFreePort();
+  const origin = `http://127.0.0.1:${port}`;
+  const backend = await startBackend(fixture.rdpRoot, fixture.tempDir, origin);
+  const server = await startStaticServer(frontendDist, port, backend.port);
+  const page = await newOfflinePage(browser, origin);
+  try {
+    await page.goto(`${origin}/screener?mode=full-market`);
+    const panel = page.getByTestId('screen-condition-cards');
+    await panel.getByRole('button', { name: '刷新已存记录' }).waitFor();
+    await page.getByLabel('Full Market filter metric', { exact: true }).selectOption('latest_close');
+    await page.getByLabel('Full Market filter value', { exact: true }).fill('0');
+    await panel.getByLabel('条件卡名称').fill('浏览器条件卡');
+    await panel.getByRole('button', { name: '保存新版本' }).click();
+    await page.waitForFunction(() => document.querySelector('[aria-label="已存条件卡"]')?.value);
+    await panel.getByRole('button', { name: '运行选定版本并保存' }).click();
+    await page.waitForFunction(() => document.querySelector('[aria-label="之后的运行"]')?.value);
+    const first = await panel.getByLabel('之后的运行').inputValue();
+    await panel.getByLabel('之前的运行').selectOption(first);
+    await page.getByLabel('Full Market filter value', { exact: true }).fill('999999');
+    await panel.getByRole('button', { name: '保存新版本' }).click();
+    await page.waitForFunction(() => document.querySelector('[aria-label="已存条件卡"]')?.selectedOptions[0]?.text.includes('v2'));
+    await panel.getByRole('button', { name: '运行选定版本并保存' }).click();
+    await page.waitForFunction(old => { const el = document.querySelector('[aria-label="之后的运行"]'); return el?.value && el.value !== old; }, first);
+    await panel.getByRole('button', { name: '比较入选 / 退出' }).click();
+    await panel.getByText(/规则变化：有/).waitFor();
+    await panel.getByText(/EXITED/).first().waitFor();
+    await page.reload();
+    await panel.getByLabel('之前的运行').selectOption(first);
+    if (await panel.getByLabel('已存条件卡').locator('option').count() !== 3) throw new Error('saved card versions lost on refresh');
+    await page.screenshot({ path: path.join(screenshotDir, 'condition-cards-saved.png'), fullPage: true });
+    console.log('[E2E] condition cards: save versions, pinned runs, exited explanation, refresh persistence OK');
+  } finally {
+    await page.close(); await new Promise(resolve => server.close(resolve)); await stopProcess(backend.child);
+  }
+}
+
 async function main() {
   if (!existsSync(frontendDist)) throw new Error(`Frontend dist missing: ${frontendDist}; run npm run build first`);
   await mkdir(screenshotDir, { recursive: true });
@@ -805,6 +842,7 @@ async function main() {
     console.log(`[E2E] browser=${label}`);
     const result = await runNormalScenario(browser, normal);
     console.log(`[E2E] normal result=${result.payload.status} rows=${result.payload.rows.length} artifact=${result.payload.provenance.artifact_sha256}`);
+    await runConditionCardScenario(browser, normal);
     await runFailureClearsScenario(browser, normal);
     await runModeSwitchScenario(browser, normal);
     await runCandidateCoverageScenario(browser, candidate);

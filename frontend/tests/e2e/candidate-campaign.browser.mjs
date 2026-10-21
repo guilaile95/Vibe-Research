@@ -1,3 +1,4 @@
+import { storedCredential, routeCredentialStatus } from './credential-generation.fixture.mjs';
 import assert from "node:assert/strict";
 import { createReadStream, existsSync, readdirSync } from "node:fs";
 import { createServer } from "node:http";
@@ -1714,12 +1715,14 @@ try {
       JSON.stringify({ type: "done", trace: [], rounds: 1 }),
     ].join("\n") + "\n" }).catch(() => {}); // A navigation may already have aborted the synthetic request.
   });
+  const syntheticModel = { provider: "cli-codex", model: "synthetic-test", baseURL: "", apiKey: "" };
+  await routeCredentialStatus(page, syntheticModel);
   const noteResearchPath = `/candidates/600519?${new URLSearchParams({ return_to: discoveryReturnTo })}#candidate-research-note`;
   await page.goto(`http://127.0.0.1:${port}${noteResearchPath}`, { waitUntil: "networkidle" });
-  await page.evaluate(() => {
-    localStorage.setItem("vr-llm", JSON.stringify({ provider: "cli-codex", model: "synthetic-test", baseURL: "", apiKey: "" }));
+  await page.evaluate(config => {
+    localStorage.setItem("vr-llm", JSON.stringify(config));
     window.dispatchEvent(new Event("vr-llm-change"));
-  });
+  }, storedCredential(syntheticModel));
   const researchNote = page.getByTestId("candidate-research-note");
   await researchNote.getByText("选择给 AI 看的证据", { exact: false }).click();
   const chosenSource = researchNote.getByRole("checkbox", { name: /合成研究资料：利润需要现金流核验/ });

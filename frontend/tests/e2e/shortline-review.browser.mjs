@@ -1,3 +1,4 @@
+import { storedCredential, routeCredentialStatus } from './credential-generation.fixture.mjs';
 /** Full production page, strict synthetic API/NDJSON; actual router/store parity is tested separately. */
 import {observedBrowserAction} from './observed-browser-action.mjs';
 import {captureBrowserFailure} from './browser-failure-evidence.mjs';
@@ -33,7 +34,9 @@ try{
     return route.fulfill({status:r.status||200,json:r.body});
    }catch(e){if(!/closed|cancel|handled|interception/i.test(String(e)))throw e;}
   });
-  await context.addInitScript(()=>{localStorage.clear();localStorage.setItem('vr-llm',JSON.stringify({provider:'cli-codex',baseURL:'',apiKey:'',model:'SYNTHETIC_OFFLINE'}));});
+  const model={provider:'cli-codex',baseURL:'',apiKey:'',model:'SYNTHETIC_OFFLINE'};
+  await routeCredentialStatus(context,model);
+  await context.addInitScript(config=>{localStorage.clear();localStorage.setItem('vr-llm',JSON.stringify(config));},storedCredential(model));
   page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));await page.clock.setFixedTime(new Date(CLOCK));await page.goto(origin+'/daily-review',{waitUntil:'domcontentloaded'});
   const card=page.getByTestId('shortline-segmented-review'),inspect=card.getByRole('button',{name:'查看生成材料',exact:true}),generate=()=>card.getByRole('button',{name:/^手动生成/});
   phase='open actual short-history disclosure';

@@ -10,7 +10,7 @@ const compiled = ts.transpileModule(source, { compilerOptions: {
 export const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 export function componentModule() {
   let active;
-  const context = { exports: {}, AbortController,
+  const context = { exports: {}, AbortController, Error,
     require: name => new Proxy({}, { get: (_, key) => active.modules[name]?.[key] ?? String(key) }),
     window: new Proxy({}, { get: (_, key) => active.events[key] }),
     document: new Proxy({}, { get: (_, key) => active.events[key] }),
@@ -41,6 +41,7 @@ export function harness(initial = {}, module = componentModule()) {
     addEventListener(name, fn) { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(fn); },
     removeEventListener(name, fn) { listeners.get(name)?.delete(fn); },
   };
+  const failures = { read: false, write: false, remove: false };
   const modules = {
     react: hooks,
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }), Fragment: 'fragment' },
@@ -52,9 +53,14 @@ export function harness(initial = {}, module = componentModule()) {
     },
     '@/lib/storage': {
       storageGet: key => storage.get(key) ?? null,
+      storageGetChecked: key => { if (failures.read) throw new Error("synthetic read failure"); return storage.get(key) ?? null; },
+      storageSetChecked: (key, value) => { if (failures.write) throw new Error("synthetic quota failure"); writes.push([key, value]); storage.set(key, value); },
+      storageRemoveChecked: key => { if (failures.remove) throw new Error("synthetic remove failure"); writes.push([key, null]); storage.delete(key); },
       storageSet: (key, value) => { writes.push([key, value]); storage.set(key, value); },
       storageRemove: key => { writes.push([key, null]); storage.delete(key); },
     },
+    '@/lib/chatToolStatus': { parseStoredChatTools: value => value, chatToolStatusLabel: () => '', applyChatToolResult: value => value },
+    '@/lib/reportChatCoverage': { parseReportChatCoverage: value => value },
     '@/lib/researchNote': { conversationNoteMetadata: metadata => {
       if (metadata.invalid) throw new Error('synthetic invalid metadata'); return metadata;
     }, parseNoteResearchMetadata: value => value },
@@ -83,7 +89,7 @@ export function harness(initial = {}, module = componentModule()) {
   const input = () => find(node => node.type === 'textarea');
   render();
   return {
-    render, requests, writes, storage, all: () => all(tree),
+    render, requests, writes, storage, failures, all: () => all(tree),
     open() { activate(); find(node => node.type === 'button').props.onClick(); render(); },
     input: () => input()?.props.value,
     type(value) { activate(); input().props.onChange({ target: { value } }); render(); },

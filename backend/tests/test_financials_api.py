@@ -10,7 +10,8 @@ client = TestClient(app_module.app)
 def test_financials_api_explicitly_requests_health_enrichment(monkeypatch, tmp_path):
     calls = []
 
-    def financials(code: str, *, include_health: bool = False):
+    def financials(code: str, *, include_health: bool = False, on_summary=None):
+        assert callable(on_summary)
         calls.append((code, include_health))
         return {
             "period": "2025-12-31",

@@ -13,7 +13,7 @@ const source = ts.transpileModule(readFileSync(new URL('../src/pages/MyReports.t
 const tick = () => new Promise(done => setImmediate(done));
 function nodes(v) { return !v || typeof v !== 'object' ? [] : Array.isArray(v) ? v.flatMap(nodes) : [v, ...nodes(v.props?.children)]; }
 function text(v) { return v == null || typeof v === 'boolean' ? '' : typeof v === 'string' || typeof v === 'number' ? String(v) : Array.isArray(v) ? v.map(text).join('') : text(v.props?.children); }
-function harness({ deferRefresh = false } = {}) {
+function harness({ deferRefresh = false, deleteError = null } = {}) {
   let cursor = 0, dirty = true, tree, writes = 0;
   const cells = [], effects = [], calls = [], reads = [];
   const reports = ['A', 'B'].map(id => ({ id, name: `${id}.pdf`, title: id, size: 100 }));
@@ -29,10 +29,10 @@ function harness({ deferRefresh = false } = {}) {
     react, 'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
     'react-router-dom': { Link: 'link', useSearchParams: () => [params, () => {}] },
     '@/lib/myReportsView': view, '@/data/sectors.json': { default: { sectors: [] } }, '@/lib/utils': { cn: () => '' },
-    '@/lib/api': { ApiError: Error, api: { myReports: () => { if (!reads.length || !deferRefresh) { reads.push(true); return Promise.resolve(reports); } return new Promise((resolve, reject) => reads.push({ resolve, reject })); }, patchReport: (id, payload) => new Promise((resolve, reject) => calls.push({ id, payload, resolve, reject })) } },
+    '@/lib/api': { ApiError: Error, api: { deleteReport: () => deleteError ? Promise.reject(new Error(deleteError)) : Promise.resolve({ ok: true }), myReports: () => { if (!reads.length || !deferRefresh) { reads.push(true); return Promise.resolve(reports); } return new Promise((resolve, reject) => reads.push({ resolve, reject })); }, patchReport: (id, payload) => new Promise((resolve, reject) => calls.push({ id, payload, resolve, reject })) } },
   };
   const exports = {}, generic = new Proxy({}, { get: (_, key) => key === '__esModule' ? true : String(key) });
-  vm.runInNewContext(source, { exports, URLSearchParams, Error, require: name => modules[name] ?? generic });
+  vm.runInNewContext(source, { exports, URLSearchParams, Error, confirm: () => true, require: name => modules[name] ?? generic });
   const row = id => nodes(tree).find(n => n.props?.id === `report-${id}`);
   const button = (id, label) => nodes(row(id)).find(n => n.type === 'button' && (n.props.title === label || text(n).trim() === label));
   return { calls, reads, get tree() { return tree; }, get writes() { return writes; }, row, button,
@@ -174,4 +174,32 @@ test('earlier list readback cannot erase a newer detached PATCH failure', async 
   h.edit('B'); await h.flush(); h.button('B', '保存').props.onClick(); await h.flush();
   assert.doesNotMatch(text(h.tree), /DETACHED SECOND FAILURE/, 'retrying the failed report clears its old error');
   h.calls[3].resolve({}); await h.flush(); h.unmount();
+});
+
+
+test('failed delete refreshes restored archive and displays retry error', async () => {
+  const h = harness({ deleteError: 'REPORT_DELETE_RETRYABLE: 请重试删除' });
+  await h.flush();
+  const checkbox = () => nodes(h.row('A')).find(n => n.type === 'input' && n.props.type === 'checkbox');
+  checkbox().props.onChange({ target: { checked: true } });
+  await h.flush();
+  assert.equal(checkbox().props.checked, true);
+  h.button('A', '删除').props.onClick();
+  await h.flush();
+  assert.equal(checkbox().props.checked, true, 'failed deletion retains the selected report');
+  assert.equal(h.reads.length, 2);
+  assert.ok(h.row('A'), 'restored report remains manageable');
+  assert.match(text(h.tree), /REPORT_DELETE_RETRYABLE/);
+  h.unmount();
+});
+
+
+test('successful delete clears selection even before refreshed row disappears', async () => {
+  const h = harness(); await h.flush();
+  const checkbox = () => nodes(h.row('A')).find(n => n.type === 'input' && n.props.type === 'checkbox');
+  checkbox().props.onChange({ target: { checked: true } }); await h.flush();
+  assert.equal(checkbox().props.checked, true);
+  h.button('A', '删除').props.onClick(); await h.flush();
+  assert.equal(checkbox().props.checked, false);
+  assert.equal(h.reads.length, 2); h.unmount();
 });

@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 import data_health_adapters as adapters
 import data_health_service as svc
+import data_health_impact as impact
 
 router = APIRouter(prefix="/api", tags=["data-health"])
 
@@ -97,7 +98,7 @@ def get_data_health_source(source_id: str) -> dict[str, Any]:
         detail = adapters.get_source_detail(source_id)
         if detail is None:
             raise HTTPException(status_code=404, detail="未知数据来源")
-        return {"data": detail}
+        return {"data": {**detail, "impact": impact.get_source_impact(source_id)}}
     except HTTPException:
         raise
     except Exception:

@@ -1,3 +1,4 @@
+import { installCredentialFixture, withCredentialStatus } from './credentialTransportFixture.mjs';
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -13,7 +14,7 @@ const bundle = await build({
 const { debateStream } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
 
 test("debate stream preserves partial/empty/error status and separate gaps, including legacy events", async (t) => {
-  t.mock.method(globalThis, "fetch", async () => new Response([
+  t.mock.method(globalThis, "fetch", withCredentialStatus(async () => new Response([
     { type: "dossier_progress", title: "部分", ok: false, loaded: 1, total: 5, status: "partial", truncated: true },
     { type: "dossier_progress", title: "空", ok: true, loaded: 2, total: 5, status: "empty", truncated: false },
     { type: "dossier_progress", title: "失败", ok: false, loaded: 3, total: 5, status: "error", truncated: false },
@@ -26,9 +27,9 @@ test("debate stream preserves partial/empty/error status and separate gaps, incl
       { type: "stage_done", stage, label: stage, content: "synthetic" },
     ]),
     { type: "done", code: "600519", stages: ["bull", "bear", "referee"].map(stage => ({ stage, content: "synthetic" })) },
-  ].map((event) => JSON.stringify(event)).join("\n") + "\n"));
+  ].map((event) => JSON.stringify(event)).join("\n") + "\n")));
   const previousStorage = globalThis.localStorage;
-  globalThis.localStorage = { getItem: (key) => key === "vr-llm" ? JSON.stringify({ provider: "codex-subscription", model: "fixture", baseURL: "https://example.invalid", apiKey: "fixture" }) : null };
+  globalThis.localStorage = { getItem: (key) => key === "vr-llm" ? JSON.stringify({ revision: "1", provider: "codex-subscription", model: "fixture", baseURL: "https://example.invalid", apiKey: "fixture" }) : null };
   t.after(() => { if (previousStorage === undefined) delete globalThis.localStorage; else globalThis.localStorage = previousStorage; });
   const progress = [], dossiers = [];
   await debateStream("600519", 1, {

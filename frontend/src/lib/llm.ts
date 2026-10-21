@@ -5,6 +5,7 @@ import { isCliProvider, type ProviderId } from "./ai-models.ts";
 import { storageSetChecked, storageRemoveChecked } from "./storage.ts";
 
 export interface LlmConfig {
+  revision?: string; // Server CAS generation; old configs require explicit re-save.
   provider: ProviderId;
   baseURL: string; // Codex Subscription 时留空
   apiKey: string;  // Codex Subscription 时留空
@@ -23,6 +24,21 @@ export type ChatResult = NdjsonStreamResult;
 
 const KEY = "vr-llm";
 export const LLM_CHANGED_EVENT = "vr-llm-change";
+
+// Cross-tab changes and returning to an old tab invalidate UI snapshots. The
+// transport still reads backend generation before each real model submission.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", event => { if (event.storageArea === localStorage && (event.key === KEY || event.key === null)) notifyLlmChanged(); });
+  let lastSeen: string | null | undefined;
+  try { lastSeen = localStorage.getItem(KEY); } catch { /* unavailable storage stays unusable */ }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    try {
+      const current = localStorage.getItem(KEY);
+      if (current !== lastSeen) { lastSeen = current; notifyLlmChanged(); }
+    } catch { notifyLlmChanged(); }
+  });
+}
 
 function notifyLlmChanged() {
   if (typeof window !== "undefined") window.dispatchEvent(new Event(LLM_CHANGED_EVENT));

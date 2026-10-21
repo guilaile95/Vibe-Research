@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
-import { ANCILLARY_CLOCK, ancillaryReply, encode, syntheticLlm } from './final-families.fixture.mjs';
+import { ANCILLARY_CLOCK, ancillaryReply, encode, syntheticStoredLlm } from './final-families.fixture.mjs';
 
 const dist = fileURLToPath(new URL('../../dist/', import.meta.url));
 assert.ok(process.env.E2E_MARKDOWN_IMAGES_OUTPUT_DIR, 'Set E2E_MARKDOWN_IMAGES_OUTPUT_DIR');
@@ -70,7 +70,7 @@ try {
       new MutationObserver(records => records.forEach(record => {
         inspect(record.target); record.addedNodes.forEach(inspect);
       })).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['src', 'srcset', 'href', 'imagesrcset'] });
-    }, { markdown: markdown('note'), llm: syntheticLlm, sentinel });
+    }, { markdown: markdown('note'), llm: syntheticStoredLlm, sentinel });
     await context.routeWebSocket('**/*', socket => { unexpected.push(`WebSocket ${socket.url()}`); socket.close(); });
     await context.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url()), method = request.method();

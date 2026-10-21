@@ -7,6 +7,8 @@ import { cn } from "@/lib/utils";
 import { api, ApiError } from "@/lib/api";
 import type { DataHealthDetailResult, DataHealthOverviewResult, DataHealthRecordDto } from "@/lib/api/types";
 import {
+  currentSourceImpact,
+  type DataHealthImpact,
   cacheDetailText,
   cacheTag,
   confirmedUnavailableCount,
@@ -430,6 +432,7 @@ export function DataHealth() {
                     )}
                   </p>
                 )}
+                <ImpactPanel impact={currentSourceImpact(selectedId, detail.impact)} />
                 {detail.related_pages?.length > 0 && (
                   <div className="flex flex-wrap gap-2 pt-1">
                     {detail.related_pages.map((p) => (
@@ -467,4 +470,30 @@ function Metric({
       <p className="text-lg font-semibold tabular-nums">{value}</p>
     </div>
   );
+}
+
+function ImpactPanel({ impact }: { impact: DataHealthImpact | null }) {
+  return <section aria-label="影响范围与下一步" className="space-y-2 rounded-lg border border-border p-3">
+    <h3 className="font-semibold">影响范围与下一步</h3>
+    <p className="text-muted-foreground">仅展示已登记的关联；来源异常不代表所有股票或研究对象受影响，也不改变证据结论、FrozenGate 或历史冻结结果。</p>
+    {!impact || impact.mapping_state === "unknown" ? <p>影响范围未知：当前无法读取可靠关联。可重新读取健康状态后再核对。</p>
+      : impact.mapping_state === "unmapped" ? <p>尚未登记此来源到股票、研究对象或证据的关联，无法确认具体影响范围。请通过下方来源页面人工核对。</p>
+      : <>
+        <p>已登记范围：证据账本中的投资逻辑 → 证据链接。关联不等于已确认受损；此处核对当前记录可访问性，不评估内容质量；不包含未关联证据或 Campaign 的完整依赖。</p>
+        {impact.items.length === 0 && <p>未找到已登记的投资逻辑 → 证据链接；不代表没有影响。</p>}
+        {impact.truncated && <p className="text-amber-300">仅显示前 200 条关联，请进入证据账本查看其余记录。</p>}
+        {impact.items.map(item => <div key={item.thesis_id} className="space-y-1 rounded bg-black/10 p-2">
+          <p>{item.subject_type === "stock" ? "股票" : item.subject_type === "sector" ? "板块" : "主题"}：{item.subject_id} · {item.title}</p>
+          {item.frozen && <p className="text-amber-200">已冻结：这里只提示当前关联情况，冻结快照保持不变；查看后由你决定是否另建后续研究。</p>}
+          <ul className="space-y-1">
+            {item.evidence.map(evidence => <li key={evidence.evidence_id}>
+              证据 {evidence.evidence_id}：{evidence.state === "available" ? "当前记录可读取" : evidence.state === "missing" ? "当前记录缺失或已删除，历史快照不受此检查改写" : "主体不一致，不能归因给此标的"}
+              {evidence.state === "available" && evidence.path && <Link className="ml-2 text-primary hover:underline" to={evidence.path}>查看证据</Link>}
+            </li>)}
+          </ul>
+          <Link className="inline-block text-primary hover:underline" to={item.path}>查看投资逻辑并人工核对</Link>
+        </div>)}
+      </>}
+    <p className="text-muted-foreground">这里仅提供查看与人工核对入口，不忽略异常、不绕过门禁、不自动重新生成模型结果。</p>
+  </section>;
 }

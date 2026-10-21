@@ -1,0 +1,36 @@
+{
+  "schema_version": "research-noise-case.v1",
+  "fixture_only": true,
+  "case_id": "synthetic-missing",
+  "noise_label": "missing",
+  "subjects": [
+    "US:SYNTHETIC_A"
+  ],
+  "baseline_evidence_sha256": "5c274c0e191807ad116bfadbefc700fa70b3b83c21c5179617fe306c771b91c3",
+  "baseline_input": {
+    "subjects": [
+      "US:SYNTHETIC_A"
+    ],
+    "task": "Summarize the labeled synthetic revenue evidence and state conflicts and gaps.",
+    "as_of": "2026-09-30",
+    "evidence": [
+      {
+        "source_id": "synthetic-revenue",
+        "subject": "US:SYNTHETIC_A",
+        "period_end": "2026-06-30",
+        "value": 100,
+        "unit": "USD",
+        "fixture_only": true
+      }
+    ]
+  },
+  "perturbed_input": {
+    "subjects": [
+      "US:SYNTHETIC_A"
+    ],
+    "task": "Summarize the labeled synthetic revenue evidence and state conflicts and gaps.",
+    "as_of": "2026-09-30",
+    "evidence": []
+  },
+  "expected_behavior": "Human review required: preserve supported subject and period, identify missing/conflicting evidence, ignore irrelevant instructions. No saved model responses supplied."
+}

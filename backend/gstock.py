@@ -14,6 +14,9 @@
 from __future__ import annotations
 
 import re
+import math
+
+from reporting_currency import reporting_currency
 
 import astock
 
@@ -219,16 +222,29 @@ def _key_metrics(secucode: str) -> dict | None:
     if not rows:
         return None
     m = rows[0]
+    primary, fallback = ("HOLDER_PROFIT", "PARENT_HOLDER_NETPROFIT") if market == "HK" else ("PARENT_HOLDER_NETPROFIT", "HOLDER_PROFIT")
+    def finite_number(value):
+        # Match the existing extended-financial adapter's numeric string contract.
+        if isinstance(value, str) and re.fullmatch(r"-?\d+(?:\.\d+)?", value):
+            value = float(value)
+        return value if type(value) in (int, float) and math.isfinite(value) else None
+    raw_profit = m.get(primary)
+    profit = finite_number(m.get(fallback) if raw_profit is None else raw_profit)
     return {
         "report_date": str(m.get("REPORT_DATE") or "")[:10],
-        "revenue": m.get("OPERATE_INCOME"),
-        "revenue_yoy": m.get("OPERATE_INCOME_YOY"),
-        "net_profit": m.get("PARENT_HOLDER_NETPROFIT") or m.get("HOLDER_PROFIT"),
-        "eps": m.get("BASIC_EPS"),
-        "roe": m.get("ROE_AVG"),
-        "gross_margin": m.get("GROSS_PROFIT_RATIO"),
-        "net_margin": m.get("NET_PROFIT_RATIO"),
-        "debt_ratio": m.get("DEBT_ASSET_RATIO"),
+        "reporting_currency": reporting_currency(m.get("CURRENCY")),
+        "source_reporting_currency": m.get("CURRENCY") if isinstance(m.get("CURRENCY"), str) else None,
+        "amount_unit": "PROVIDER_RAW_SCALE_UNVERIFIED",
+        "amount_scale_to_currency_units": None,
+        "eps_unit": "REPORTING_CURRENCY_PER_SHARE",
+        "revenue": finite_number(m.get("OPERATE_INCOME")),
+        "revenue_yoy": finite_number(m.get("OPERATE_INCOME_YOY")),
+        "net_profit": profit,
+        "eps": finite_number(m.get("BASIC_EPS")),
+        "roe": finite_number(m.get("ROE_AVG")),
+        "gross_margin": finite_number(m.get("GROSS_PROFIT_RATIO")),
+        "net_margin": finite_number(m.get("NET_PROFIT_RATIO")),
+        "debt_ratio": finite_number(m.get("DEBT_ASSET_RATIO")),
     }
 
 

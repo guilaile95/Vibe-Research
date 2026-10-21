@@ -1,3 +1,4 @@
+import { installCredentialFixture, withCredentialStatus } from './credentialTransportFixture.mjs';
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -22,13 +23,13 @@ const encode = value => value.map(event => JSON.stringify(event)).join("\n") + "
 
 test.beforeEach(t => {
   const storage = globalThis.localStorage;
-  globalThis.localStorage = { getItem: key => key === "vr-llm" ? JSON.stringify({ provider: "cli-codex", model: "synthetic" }) : null };
+  globalThis.localStorage = { getItem: key => key === "vr-llm" ? JSON.stringify({ revision: "1", provider: "cli-codex", model: "synthetic" }) : null };
   t.after(() => { if (storage === undefined) delete globalThis.localStorage; else globalThis.localStorage = storage; });
 });
 
 test("only complete one- and two-round terminal transcripts resolve", async t => {
   for (const rounds of [1, 2]) {
-    t.mock.method(globalThis, "fetch", async () => new Response(encode(events(rounds))));
+    t.mock.method(globalThis, "fetch", withCredentialStatus(async () => new Response(encode(events(rounds)))));
     const displayed = [];
     await debateStream("600519", rounds, { onStageDone: stage => displayed.push(stage) });
     assert.deepEqual(displayed, plan(rounds));
@@ -37,7 +38,7 @@ test("only complete one- and two-round terminal transcripts resolve", async t =>
 
 test("EOF retains partial display but rejects even after all stage_done events", async t => {
   for (const fixture of [[], events().slice(0, 3), events().slice(0, -1)]) {
-    t.mock.method(globalThis, "fetch", async () => new Response(encode(fixture)));
+    t.mock.method(globalThis, "fetch", withCredentialStatus(async () => new Response(encode(fixture))));
     const displayed = [];
     await assert.rejects(debateStream("600519", 1, { onStageDone: stage => displayed.push(stage) }), /辩论未完整结束/);
     assert.equal(displayed.length, fixture.filter(ev => ev.type === "stage_done").length);
@@ -61,7 +62,7 @@ test("malformed done, missing or duplicate stages, failed roles, and post-termin
     [...normal, { type: "stage", stage: "bull", label: "late" }],
   ];
   for (const fixture of failures) {
-    t.mock.method(globalThis, "fetch", async () => new Response(encode(fixture)));
+    t.mock.method(globalThis, "fetch", withCredentialStatus(async () => new Response(encode(fixture))));
     await assert.rejects(debateStream("600519", 1), /辩论未完整结束/);
   }
 });
@@ -72,7 +73,7 @@ test("truncated or broken transport rejects; retry starts with fresh protocol st
     new Response(new ReadableStream({ start(controller) { controller.error(new Error("synthetic disconnect")); } })),
     new Response(encode(events(2))),
   ];
-  t.mock.method(globalThis, "fetch", async () => responses.shift());
+  t.mock.method(globalThis, "fetch", withCredentialStatus(async () => responses.shift()));
   await assert.rejects(debateStream("600519", 1));
   await assert.rejects(debateStream("600519", 1), /synthetic disconnect/);
   await debateStream("600519", 2);
@@ -80,12 +81,12 @@ test("truncated or broken transport rejects; retry starts with fresh protocol st
 
 test("abort still rejects when transport delivers a late complete response", async t => {
   const controller = new AbortController();
-  t.mock.method(globalThis, "fetch", async () => { controller.abort(); return new Response(encode(events())); });
+  t.mock.method(globalThis, "fetch", withCredentialStatus(async () => { controller.abort(); return new Response(encode(events())); }));
   await assert.rejects(debateStream("600519", 1, {}, controller.signal), { name: "AbortError" });
 });
 
 test("Reflection retains its own terminal event contract", async t => {
-  t.mock.method(globalThis, "fetch", async () => new Response(encode([{ type: "done", content: "SYNTHETIC_REFLECTION", truncated: true }])));
+  t.mock.method(globalThis, "fetch", withCredentialStatus(async () => new Response(encode([{ type: "done", content: "SYNTHETIC_REFLECTION", truncated: true }]))));
   let done;
   await reflectStream("synthetic source", "synthetic title", { onDone: (...args) => { done = args; } });
   assert.deepEqual(done, ["SYNTHETIC_REFLECTION", true]);
@@ -101,7 +102,7 @@ for (const [name, fixture] of [
   ['post-completion delta', [{type:'done', content:'partial', truncated:false}, {type:'delta', text:'late'}]],
 ]) {
   test(`Reflection rejects ${name} without successful callback`, async t => {
-    t.mock.method(globalThis, 'fetch', async () => new Response(encode(fixture)));
+    t.mock.method(globalThis, 'fetch', withCredentialStatus(async () => new Response(encode(fixture))));
     let done = 0;
     await assert.rejects(reflectStream('synthetic source', 'title', {onDone:()=>done++}), /反思未完整结束/);
     assert.equal(done, 0);
@@ -110,7 +111,7 @@ for (const [name, fixture] of [
 
 test('Reflection rejects late completion after abort', async t => {
   const controller = new AbortController();
-  t.mock.method(globalThis, 'fetch', async () => { controller.abort(); return new Response(encode([{type:'done', content:'audit', truncated:false}])); });
+  t.mock.method(globalThis, 'fetch', withCredentialStatus(async () => { controller.abort(); return new Response(encode([{type:'done', content:'audit', truncated:false}])); }));
   let done=0;
   await assert.rejects(reflectStream('source', 'title', {onDone:()=>done++}, controller.signal), {name:'AbortError'});
   assert.equal(done,0);

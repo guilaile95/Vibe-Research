@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
+const diagnosticsGolden = JSON.parse(readFileSync(new URL("../fixtures/runtime-diagnostics.json", import.meta.url), "utf8"));
 const platformStartup = JSON.parse(readFileSync(new URL("../fixtures/platform-settings-startup.json", import.meta.url), "utf8"));
 // Synthetic-only contracts shared by offline checks and browser harness.
-export const config = { provider: "openai-compatible", baseURL: "https://synthetic.invalid/v1", apiKey: "SYNTHETIC_MODEL_KEY", model: "SYNTHETIC_MODEL" };
+export const config = { revision: "1", provider: "openai-compatible", baseURL: "https://synthetic.invalid/v1", apiKey: "SYNTHETIC_MODEL_KEY", model: "SYNTHETIC_MODEL" };
 export const chatKey = `vr-askai-chat:/my-reports#reports:synthetic-report@${config.provider}:${config.model}:${config.baseURL}`;
 export const readPaths = ["/api/settings/platform", "/api/myreports", "/api/health", "/api/runtime-info", "/api/ai/credential-status", "/api/native-intel/filter/profile", "/api/native-intel/sources", "/api/native-intel/config"];
 export function readReply(method, path, search = "") {
@@ -13,7 +14,7 @@ export function readReply(method, path, search = "") {
   ].map(report => ({ ...report, name: `${report.title}.pdf`, size: 100, ts: 1791417600000, sector_keys: [], institution: "Synthetic", publish_date: "2026-10-08", text_index_status: "SEARCHABLE" }));
   if (path === "/api/health" && !search) return { ok: true, service: "vibe-research-api", version: "synthetic" };
   if (path === "/api/runtime-info" && !search) return { service: "vibe-research-api", version: "synthetic", git_sha: null, source_state: "unknown", source_directory: null, working_directory: null };
-  if (path === "/api/ai/credential-status" && !search) return { configured: false, provider: null, scheduled_available: false };
+  if (path === "/api/ai/credential-status" && !search) return { revision: "1", configured: true, provider: config.provider, scheduled_available: true };
   if (path === "/api/native-intel/filter/profile" && search === "?profile_id=default") return { profile_id: "default", method: "keyword", interests_text: "", min_score: 0.7, keyword_rules: { global_excludes: [], filter_terms: [], groups: [] }, tags: [] };
   if (path === "/api/native-intel/sources" && !search) return { sources: [] };
   if (path === "/api/native-intel/config" && !search) return { region_order: ["hotlist", "rss", "standalone"], regions_enabled: { hotlist: false, rss: false, standalone: false } };
@@ -51,4 +52,9 @@ export function observeSyntheticStreams() {
     };
     return response;
   };
+}
+
+export function readDiagnosticsReply(method, path, search = "") {
+  if (method !== "GET" || path !== "/api/runtime-diagnostics/export" || search) return null;
+  return { data: structuredClone(diagnosticsGolden) };
 }

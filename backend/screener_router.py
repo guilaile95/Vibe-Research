@@ -109,3 +109,56 @@ def sector_representatives_endpoint():
             status_code=500,
             content={"detail": "读取板块代表公司失败"},
         )
+
+
+# Explicit local research saves; refresh/list/compare never generate a run.
+from pydantic import BaseModel, ConfigDict, Field
+import screening_conditions as screens
+
+
+class ScreenCardIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(min_length=1, max_length=80)
+    filters: list[dict] = Field(min_length=1, max_length=20)
+
+
+class ScreenRunIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    card_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    as_of: str | None = Field(default=None, pattern=r'^\d{4}-\d{2}-\d{2}$')
+
+
+def _screen_response(fn, *args):
+    try:
+        return fn(*args)
+    except LookupError:
+        raise HTTPException(status_code=404, detail='Saved screen not found')
+    except (ValueError, rdp.ResearchDataPlaneValidationError):
+        raise HTTPException(status_code=422, detail='Screen input or saved research data is unavailable or invalid')
+    except Exception:
+        raise HTTPException(status_code=503, detail='Screen archive is temporarily unavailable')
+
+
+@router.get('/condition-cards')
+def screen_catalog():
+    return _screen_response(screens.catalog)
+
+
+@router.post('/condition-cards')
+def save_screen_card(body: ScreenCardIn):
+    return _screen_response(screens.save_card, body.name, body.filters)
+
+
+@router.post('/condition-runs')
+def save_screen_run(body: ScreenRunIn):
+    return _screen_response(screens.execute, body.card_id, body.as_of)
+
+
+@router.get('/condition-runs/compare')
+def compare_screen_runs(before: str = Query(pattern=r'^[a-f0-9]{32}$'), after: str = Query(pattern=r'^[a-f0-9]{32}$')):
+    return _screen_response(screens.compare, before, after)
+
+
+@router.get('/condition-runs/{run_id}')
+def get_screen_run(run_id: str):
+    return _screen_response(screens.get, 'screening_runs', run_id)

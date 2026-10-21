@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
 
+import account_event_store
 import performance_attribution_store as store
 import trade_ledger_service as trade_svc
 
@@ -55,6 +56,12 @@ class PerformanceAttributionProvenanceError(ValueError):
 
     来源与指标必须一致：绝不静默跳过 ID 却使用该行参与数值计算。
     """
+
+
+class PerformanceAttributionUnavailableError(PerformanceAttributionProvenanceError):
+    def __init__(self, result: dict[str, Any]):
+        super().__init__("不可冻结尚待对账的绩效结果")
+        self.result = result
 
 
 def _deterministic_json(value: Any) -> str:
@@ -102,6 +109,7 @@ def _load_trades(
     date_from: str | None,
     date_to: str | None,
     trade_ids: list[str] | None = None,
+    evaluation_as_of: str | None = None,
 ) -> list[dict[str, Any]]:
     """读取计算投影（精确输入行集）。
 
@@ -163,6 +171,7 @@ def _load_trades(
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA query_only = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("BEGIN")
         table = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
             ("trade_records",),
@@ -174,6 +183,23 @@ def _load_trades(
                 )
             return []  # 普通全集查询：表缺失 = 有效空状态
         rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+        for row in rows:
+            corrections = account_event_store.list_corrections_on_connection(conn, "trade", row["trade_id"])
+            row["_requires_reconciliation"] = bool(corrections)
+            row["_historical_unavailable"] = False
+            if evaluation_as_of and account_event_store.table_exists_on_connection(conn, "account_events"):
+                cutoff = datetime.fromisoformat(evaluation_as_of.replace("Z", "+00:00"))
+                history = conn.execute(
+                    "SELECT created_at, voided_at FROM account_events "
+                    "WHERE event_type = 'CORRECTION' AND target_event_type = 'trade' AND target_event_id = ?",
+                    (row["trade_id"],),
+                ).fetchall()
+                row["_historical_unavailable"] = any(
+                    datetime.fromisoformat(c["created_at"].replace("Z", "+00:00")) > cutoff
+                    or (c["voided_at"] is not None and datetime.fromisoformat(c["voided_at"].replace("Z", "+00:00")) > cutoff)
+                    for c in history
+                )
+                row["_requires_reconciliation"] |= row["_historical_unavailable"]
     except sqlite3.DatabaseError as exc:
         raise PerformanceAttributionProvenanceError(
             f"交易流水读取失败，无法证明精确输入集：{exc}"
@@ -249,7 +275,20 @@ def _compute_attribution_from_trades(
     date_to: str | None = None,
     price_map: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
-    """Compute the existing PA1 algorithm over an already proven exact row set."""
+    """Compute PA1 only for a proven, uncorrected selected row set."""
+    affected = [row["trade_id"] for row in trades if row.get("_requires_reconciliation")]
+    if affected:
+        return {
+            "as_of_date": _today(), "date_from": date_from, "date_to": date_to,
+            "authority_version": AUTHORITY_VERSION,
+            "measurement_state": "UNAVAILABLE",
+            "reason_codes": (["HISTORICAL_ACTUAL_NOT_RECONSTRUCTIBLE"] if any(row.get("_historical_unavailable") for row in trades) else ["CORRECTED_TRADE_REQUIRES_RECONCILIATION"]),
+            "affected_trade_ids": affected,
+            "selected_trade_ids": [row["trade_id"] for row in trades],
+            "selected_trade_count": len(trades), "computation_fingerprint": None,
+            "positions": [], "totals": None,
+            "data_limitations": ["所选交易存在修正，盈亏待对账；未将不可用结果计为零。"],
+        }
     prices = validate_price_map(price_map) or {}
     selected_trade_ids = [row["trade_id"] for row in trades]
 
@@ -405,6 +444,7 @@ def compute_attribution_for_trade_ids(
     *,
     price_map: Mapping[str, float] | None = None,
     trade_db_path: str | Path | None = None,
+    evaluation_as_of: str | None = None,
 ) -> dict[str, Any]:
     """Reuse PA1 accounting over an exact, caller-proven Trade Ledger set.
 
@@ -417,7 +457,7 @@ def compute_attribution_for_trade_ids(
             "精确交易集必须是 list 或 tuple"
         )
     db_path = Path(trade_svc.resolve_db_path(trade_db_path))
-    trades = _load_trades(db_path, None, None, list(trade_ids))
+    trades = _load_trades(db_path, None, None, list(trade_ids), evaluation_as_of)
     return _compute_attribution_from_trades(
         trades=trades,
         date_from=None,
@@ -432,6 +472,8 @@ def save_attribution_snapshot(
     db_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Freeze a computed attribution result into the snapshot store."""
+    if result.get("measurement_state") == "UNAVAILABLE" or result.get("totals") is None:
+        raise PerformanceAttributionUnavailableError(result)
     path = store.resolve_db_path(db_path)
     snapshot_id = f"attr_{uuid4().hex}"
     now = _utc_now()
@@ -472,6 +514,19 @@ def save_attribution_snapshot(
     return snapshot
 
 
+def _snapshot_applicability(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("selected_trade_ids"), list):
+        return {"state": "UNVERIFIABLE", "reason_codes": ["SNAPSHOT_TRADE_PROVENANCE_UNAVAILABLE"]}
+    try:
+        rows = _load_trades(Path(trade_svc.resolve_db_path()), None, None, payload["selected_trade_ids"])
+    except PerformanceAttributionProvenanceError:
+        return {"state": "UNVERIFIABLE", "reason_codes": ["SNAPSHOT_TRADE_PROVENANCE_UNAVAILABLE"]}
+    affected = [row["trade_id"] for row in rows if row.get("_requires_reconciliation")]
+    return {"state": "REQUIRES_RECONCILIATION" if affected else "APPLICABLE",
+            "affected_trade_ids": affected,
+            "reason_codes": ["CORRECTED_TRADE_REQUIRES_RECONCILIATION"] if affected else []}
+
+
 def get_attribution_snapshot(
     snapshot_id: str,
     *,
@@ -490,6 +545,7 @@ def get_attribution_snapshot(
         except (TypeError, ValueError):
             payload = None
     snapshot["payload"] = payload
+    snapshot["current_applicability"] = _snapshot_applicability(payload)
     return {"snapshot": snapshot, "positions": record["positions"]}
 
 
@@ -510,6 +566,11 @@ def list_attribution_snapshots(
     out: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
-        item.pop("payload_json", None)
+        raw = item.pop("payload_json", None)
+        try:
+            payload = json.loads(raw) if raw else None
+        except (ValueError, TypeError):
+            payload = None
+        item["current_applicability"] = _snapshot_applicability(payload)
         out.append(item)
     return out

@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { ANCILLARY_CLOCK, syntheticLlm, plan, encode, debateEvents, ancillaryReply, realRouteAllowed, observeHistoryReads } from "./final-families.fixture.mjs";
+import { ANCILLARY_CLOCK, syntheticLlm, syntheticStoredLlm, plan, encode, debateEvents, ancillaryReply, realRouteAllowed, observeHistoryReads } from "./final-families.fixture.mjs";
 const frontend = fileURLToPath(new URL("../../", import.meta.url)), dist = join(frontend, "dist");
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { resolve, promise }; };
 async function bounded(promise, label) {
@@ -121,7 +121,7 @@ async function runScenario(browser, baseURL, backend, width, scenario, evidenceD
     const notes = () => page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes") || "[]"));
     if (scenario === "debate" || scenario === "notes-mobile") {
       await page.goto("/__storage_probe");
-      await page.evaluate(cfg => localStorage.setItem("vr-llm", JSON.stringify(cfg)), syntheticLlm);
+      await page.evaluate(cfg => localStorage.setItem("vr-llm", JSON.stringify(cfg)), syntheticStoredLlm);
       if (scenario === "debate") {
         await page.goto("/debate"); await page.getByRole("heading", { name: "多空辩论", exact: true }).waitFor();
         const start = async rounds => {

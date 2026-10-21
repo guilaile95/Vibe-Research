@@ -42,6 +42,7 @@ import shortline_review_service
 import shortline_review_sources
 import shortline_review_store
 import astock
+import public_data_budget
 import chat as chat_layer
 import agent_runtime
 import ai_credential_router
@@ -69,12 +70,15 @@ import sector_industry_context as sic
 import northbound_capital_flow as ncf
 import top_risk_service as trs
 import watchlist_store
+import research_annotations_router
+import research_annotations
 import evidence_thesis_router
 import evidence_temporal_authority_router
 import data_health_router
 import runtime_info_router
 import platform_settings
 import company_research_router
+import company_comparison_router
 import trade_ledger_router
 import personal_review_router
 import trade_attribution_router
@@ -100,6 +104,7 @@ import position_reality_router
 import position_reality_service as prs
 import account_reality_router
 import cash_event_router
+import allocation_targets_router
 import portfolio_risk_context_router
 import campaign_router
 import campaign_ai_draft_router
@@ -109,9 +114,13 @@ import decision_commit_router
 import decision_challenge_router
 import formal_decision_outcome_router
 import research_data_plane_router
+import prediction_journal_router
+import experiment_ledger_router
 import research_analytics_router
 import historical_signal_validation_router
 import factor_validation_router
+import filing_evidence_router
+import announcement_groups_router
 import research_event_calendar_router
 import stock_relative_context_router
 import stock_valuation_context_router
@@ -412,6 +421,7 @@ app = FastAPI(title="Vibe-Research API", version=__version__, lifespan=lifespan)
 
 # 投资逻辑与证据账本：独立路由模块最小接入
 app.include_router(local_ocr_router.router)
+app.include_router(research_annotations_router.router)
 app.include_router(evidence_thesis_router.router)
 app.include_router(evidence_temporal_authority_router.router)
 # 数据健康中心：只读聚合 API
@@ -421,6 +431,7 @@ app.include_router(runtime_info_router.create_router(__version__))
 app.include_router(platform_settings.router)
 # 交易流水：独立存储与 API
 app.include_router(company_research_router.router)
+app.include_router(company_comparison_router.router)
 app.include_router(trade_ledger_router.router)
 app.include_router(personal_review_router.router)
 # P0-TAR1: explicit Frozen Decision attribution / explicit UNPLANNED origin.
@@ -460,6 +471,7 @@ app.include_router(account_reality_router.router)
 app.include_router(cash_event_router.router)
 # PLANNING-PARITY-PORTFOLIO-RISK1-R1: current, read-only portfolio context.
 app.include_router(portfolio_risk_context_router.router)
+app.include_router(allocation_targets_router.router)
 app.include_router(campaign_router.router)
 # #206 explicit server-owned Campaign AI Draft; ephemeral witness only.
 app.include_router(campaign_ai_draft_router.router)
@@ -479,6 +491,8 @@ import public_research_router
 app.include_router(public_research_router.router)
 # Historical Signal Validation: read-only research computation; no formal writes.
 app.include_router(historical_signal_validation_router.router)
+app.include_router(prediction_journal_router.router)
+app.include_router(experiment_ledger_router.router)
 app.include_router(research_analytics_router.router)
 import next_day_verification_router
 app.include_router(next_day_verification_router.router)
@@ -488,6 +502,8 @@ app.include_router(observation_workflows_router.router)
 app.include_router(factor_validation_router.router)
 # PLANNING-PARITY-EVENT-CALENDAR1: bounded read-only aggregation over existing
 # Decision Calendar / StockData contracts; no event persistence or writes.
+app.include_router(filing_evidence_router.router)
+app.include_router(announcement_groups_router.router)
 app.include_router(research_event_calendar_router.router)
 # PLANNING-PARITY-STOCK-RELATIVE-CONTEXT1: current, read-only stock context.
 app.include_router(stock_relative_context_router.router)
@@ -1338,7 +1354,10 @@ def myreports_file(rid: str):
 
 @app.delete("/api/myreports/{rid}")
 def myreports_delete(rid: str):
-    return {"data": {"ok": mr.delete_report(rid)}}
+    try:
+        return {"data": {"ok": mr.delete_report(rid)}}
+    except mr.ReportDeleteError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
 
 
 @app.get("/api/myreports/browse")
@@ -2212,6 +2231,8 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
     cfg["_cancel_event"] = disconnect_event
 
     async def gen():
+        cfg["_task_budget"] = chat_layer.daily_review_task_budget()
+
         source = iter(chat_layer.stream_messages(cfg, messages, use_tools=False))
         try:
             parts: list[str] = []
@@ -2221,6 +2242,7 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
             async for ev in iterate_in_threadpool(source):
                 if disconnect_event.is_set():
                     return
+                cfg["_task_budget"].check()
                 if not isinstance(ev, dict):
                     continue
                 event_type = ev.get("type")
@@ -2242,6 +2264,7 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
                     saw_done = True
                     trace = ev.get("trace") if isinstance(ev.get("trace"), list) else []
                     rounds = ev.get("rounds") if isinstance(ev.get("rounds"), int) else 0
+            cfg["_task_budget"].check()
             if not saw_done:
                 raise chat_layer.ModelStreamIncompleteError()
             markdown = "".join(parts)
@@ -2254,21 +2277,22 @@ async def analyze_daily_review(req: DailyReviewAnalyzeRequest, request: Request)
                 review,
                 markdown,
                 cfg,
-                should_cancel=disconnect_event.is_set,
+                should_cancel=lambda: disconnect_event.is_set() or time.monotonic() >= cfg["_task_budget"].deadline,
                 input_basis=input_basis,
             )
             if disconnect_event.is_set():
                 return
+            cfg["_task_budget"].check()
             result = _safe_daily_review_ai_done_result(saved_record)
             yield json.dumps(
                 {"type": "done", "trace": trace, "rounds": rounds, "result": result},
                 ensure_ascii=False,
             ) + "\n"
-        except Exception:  # noqa: BLE001 — fixed safe stream error; old persisted row remains
+        except Exception as exc:  # noqa: BLE001 — sanitized error; old persisted row remains
             if disconnect_event.is_set():
                 return
             yield json.dumps(
-                {"type": "error", "message": "对话失败：每日复盘AI生成或保存失败"},
+                {"type": "error", "message": chat_layer.public_error_message(exc) if isinstance(exc, chat_layer.ModelTaskBudgetError) else "对话失败：每日复盘AI生成或保存失败"},
                 ensure_ascii=False,
             ) + "\n"
         finally:
@@ -2671,7 +2695,8 @@ def financials(code: str = Query(...)):
     try:
         import public_data_budget
         data = public_data_budget.run("financials", code)
-        _FIN_CACHE.set(code, data)
+        if isinstance(data, dict) and data.get("status") != "partial":
+            _FIN_CACHE.set(code, data)
         try:
             import data_health_event_store as _dhes
             if not isinstance(data, dict) or not data:
@@ -2783,11 +2808,17 @@ def disclosure(code: str = Query(...)):
 
 
 @app.get("/api/kline")
-def kline(code: str = Query(...), category: int = Query(4), offset: int = Query(60, ge=1, le=800)):
+def kline(code: str = Query(...), category: int = Query(4), offset: int = Query(60, ge=1, le=800), annotation_context: bool = Query(False)):
     """K线（需 mootdx）。category 4=日 5=周 6=月 11=60分钟。"""
     code = _validate(code)
     try:
-        return {"data": astock.kline(code, category=category, offset=offset)}
+        bars = astock.kline(code, category=category, offset=offset)
+        result = {"data": bars}
+        if annotation_context is True:
+            result["annotation_context"] = research_annotations.snapshot_context(code, bars) if category == 4 else None
+        return result
+    except public_data_budget.PublicDataUnavailable as e:
+        raise HTTPException(503, "K线来源暂不可用或超时，请稍后重试。") from e
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001

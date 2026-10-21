@@ -123,3 +123,36 @@ export function formatStockCapitalValue(value: unknown, kind: "balance" | "count
   if (kind === "percent") return `${number.toFixed(2)}%`;
   return number.toLocaleString();
 }
+
+/** Snapshot observations only. Missing or malformed values never become zero. */
+export function financialEvidenceContext(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "财务快照：未知；未取得合格来源。";
+  const f = value as Record<string, unknown>;
+  const q = f.data_quality as Record<string, unknown> | null;
+  if (!q || typeof q !== "object" || Array.isArray(q) ||
+      q.source !== "tonghuashun_via_akshare" || q.fetch_mode !== "snapshot" ||
+      q.report_basis !== "cumulative_report_period" || q.point_in_time_supported !== false ||
+      q.publication_date_known !== false || (q.status !== "normal" && q.status !== "partial"))
+    return "财务快照：未知；来源契约未通过校验。";
+  const scalar = (v: unknown): string => {
+    if (typeof v === "number") return Number.isFinite(v) ? String(v) : "未知";
+    if (typeof v !== "string" || v.length > 128) return "未知";
+    const s = v.trim();
+    const m = /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))(%|％|亿元|万元|亿|万|元)?$/.exec(s);
+    return m && Number.isFinite(Number(m[1])) ? s : "未知";
+  };
+  const date = (v: unknown): string => {
+    if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v) || Number(v.slice(0, 4)) < 1) return "未知";
+    const n = Date.parse(v + "T00:00:00Z");
+    return Number.isFinite(n) && new Date(n).toISOString().slice(0, 10) === v ? v : "未知";
+  };
+  const fields = [
+    ["营收", "revenue"], ["营收同比", "revenue_yoy"], ["净利润", "net_profit"],
+    ["净利润同比", "net_profit_yoy"], ["扣非净利润同比", "deduct_net_profit_yoy"],
+    ["ROE", "roe"], ["毛利率", "gross_margin"], ["经营现金流", "operating_cash_flow"],
+    ["现金转化率", "cash_conversion_ratio"], ["自由现金流", "free_cash_flow"], ["资产负债率", "debt_ratio"],
+  ];
+  return `财务快照（报告期末 ${date(f.period_end)}；披露日期未知；非PIT；来源 ${q.source}；状态 ${q.status}）：` +
+    fields.map(([label, key]) => `${label} ${scalar(f[key])}`).join("、") +
+    "。币种、单位、统计口径与修订版本未核验；不得据此跨公司或跨期间比较数字。";
+}

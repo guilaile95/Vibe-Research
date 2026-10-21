@@ -11,7 +11,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-SCHEMA_VERSION = "screener-v0.1"
+SCHEMA_VERSION = "screener-v0.2"
 SOURCES_SCHEMA_VERSION = "screener-sources-v0.1"
 MAX_CODES = 30
 MIN_CODES = 1
@@ -208,6 +208,7 @@ class ConditionResultOut(_StrictModel):
 
 
 class StockDataCoverageOut(_StrictModel):
+    freshness: Literal["current", "stale", "unknown"]
     status: Literal["available", "empty", "unavailable"]
     returned_rows: int | None
     start: str | None
@@ -218,6 +219,7 @@ class StockDataCoverageOut(_StrictModel):
 
 
 class BatchCoverageOut(_StrictModel):
+    stale_count: int
     requested_count: int
     with_data_count: int
     empty_count: int
@@ -275,7 +277,7 @@ class ScreenerEvaluateOut(_StrictModel):
     research_data: ResearchDataSourceOut
     batch_coverage: BatchCoverageOut
     limitations: list[str] = Field(default_factory=list)
-    schema_version: Literal["screener-v0.1"] = SCHEMA_VERSION
+    schema_version: Literal["screener-v0.2"] = SCHEMA_VERSION
 
 
 class SectorRepresentativesOut(_StrictModel):

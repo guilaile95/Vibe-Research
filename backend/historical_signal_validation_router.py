@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 import historical_signal_validation as hsv
 import research_data_plane as rdp
+import experiment_ledger
 
 router = APIRouter(prefix="/api/signals/validation", tags=["historical-signal-validation"])
 _CODE_RE = re.compile(r"^\d{6}$")
@@ -71,8 +72,7 @@ def registry():
     }
 
 
-@router.post("/evaluate")
-def evaluate(body: HistoricalSignalValidationRequest):
+def _evaluate(body: HistoricalSignalValidationRequest):
     if body.signal_id not in {item["id"] for item in hsv.SIGNAL_REGISTRY}:
         raise HTTPException(status_code=422, detail="unknown historical validation signal")
     request = body.model_dump()
@@ -82,3 +82,37 @@ def evaluate(body: HistoricalSignalValidationRequest):
         return hsv.unavailable_report(body.signal_id, request, str(exc))
     except rdp.ResearchDataPlaneValidationError as exc:
         return hsv.unavailable_report(body.signal_id, request, f"Research Runtime 数据校验失败：{exc}")
+
+
+@router.post("/evaluate")
+def evaluate(body: HistoricalSignalValidationRequest, record_id: str | None = None):
+    try:
+        return experiment_ledger.execute(record_id, 'signal', body.model_dump(), lambda: _evaluate(body))
+    except (ValueError, LookupError, experiment_ledger.store.StoreError):
+        raise HTTPException(status_code=422, detail="实验记录与请求不匹配") from None
+
+
+# Shares the same local-only read plane and existing experiment lifecycle.
+import rolling_signal_validation as rolling
+
+
+@router.post('/rolling')
+def evaluate_rolling(body: rolling.RollingSignalValidationRequest, record_id: str | None = None):
+    def cancelled():
+        if record_id is None:
+            return False
+        with experiment_ledger.store.read() as conn:
+            return experiment_ledger._find(conn, record_id)['status'] == 'CANCELLED'
+
+    def calculate():
+        try:
+            return rolling.evaluate_rdp(body, cancelled)
+        except (rdp.ResearchDataPlaneUnavailableError, rdp.ResearchDataPlaneValidationError):
+            report = rolling.evaluate_series(body, {}, None, None)
+            report['status'] = 'unavailable'
+            report['limitations'].insert(0, 'Research Runtime 数据不可用或未通过快照校验；没有计算结果')
+            return report
+    try:
+        return experiment_ledger.execute(record_id, 'rolling-signal', body.model_dump(), calculate)
+    except (ValueError, LookupError, experiment_ledger.store.StoreError):
+        raise HTTPException(status_code=422, detail='滚动验证输入、工作上限或实验记录不匹配') from None

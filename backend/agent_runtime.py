@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from contextlib import contextmanager
 from collections.abc import Iterator
 from urllib.parse import urlparse
 
@@ -32,6 +33,17 @@ def _base_url() -> str:
     if parsed.scheme != "http" or parsed.hostname not in _SAFE_HOSTS or parsed.username or parsed.password:
         raise AgentRuntimeError("RUNTIME_CONFIG_INVALID", "Codex Subscription Runtime 配置无效")
     return raw
+
+
+@contextmanager
+def _request(method: str, url: str, **kwargs):
+    # Loopback traffic must never inherit HTTP(S)_PROXY or follow redirects.
+    with requests.Session() as session:
+        session.trust_env = False
+        with session.request(method, url, allow_redirects=False, **kwargs) as response:
+            if 300 <= response.status_code < 400:
+                raise requests.RequestException("Loopback redirect rejected")
+            yield response
 
 
 def _safe_status_payload(payload: object) -> dict:
@@ -58,9 +70,9 @@ def _safe_status_payload(payload: object) -> dict:
 
 def status() -> dict:
     try:
-        response = requests.get(f"{_base_url()}/status", timeout=4)
-        response.raise_for_status()
-        return _safe_status_payload(response.json())
+        with _request("GET", f"{_base_url()}/status", timeout=4) as response:
+            response.raise_for_status()
+            return _safe_status_payload(response.json())
     except AgentRuntimeError:
         raise
     except requests.Timeout:
@@ -84,8 +96,8 @@ def status() -> dict:
 
 def start_login() -> dict:
     try:
-        response = requests.post(f"{_base_url()}/login", json={}, timeout=8)
-        payload = response.json()
+        with _request("POST", f"{_base_url()}/login", json={}, timeout=8) as response:
+            payload = response.json()
     except (requests.RequestException, ValueError) as exc:
         raise AgentRuntimeError("RUNTIME_UNAVAILABLE", "Codex Subscription Runtime 当前不可用") from exc
     if response.status_code >= 400 or not isinstance(payload, dict):
@@ -95,8 +107,8 @@ def start_login() -> dict:
 
 def cancel(session: str) -> bool:
     try:
-        response = requests.post(f"{_base_url()}/cancel", json={"session": session}, timeout=4)
-        return response.status_code < 400 and bool(response.json().get("cancelled"))
+        with _request("POST", f"{_base_url()}/cancel", json={"session": session}, timeout=4) as response:
+            return response.status_code < 400 and bool(response.json().get("cancelled"))
     except (requests.RequestException, ValueError, AttributeError):
         return False
 
@@ -104,13 +116,32 @@ def cancel(session: str) -> bool:
 def stream_chat(
     *, session: str, message: str, context: str, cancel_event: threading.Event,
     history: list[dict[str, str]] | tuple = (),
+    owned_cleanup: bool = False,
 ) -> Iterator[dict]:
     finished = threading.Event()
+    response = None
+    cancel_lock = threading.Lock()
+    cancellation_started = False
+
+    def request_cancel():
+        nonlocal cancellation_started
+        with cancel_lock:
+            if cancellation_started:
+                return
+            cancellation_started = True
+        try:
+            cancel(session)
+        finally:
+            if owned_cleanup and response is not None:
+                try:
+                    response.close()
+                except Exception:
+                    pass  # Cleanup cannot expose loopback transport internals.
 
     def _cancel_when_disconnected() -> None:
         while not finished.wait(timeout=0.1):
             if cancel_event.is_set():
-                cancel(session)
+                request_cancel()
                 return
 
     watcher = threading.Thread(
@@ -120,8 +151,8 @@ def stream_chat(
     )
     watcher.start()
     try:
-        with requests.post(
-            f"{_base_url()}/chat",
+        with _request(
+            "POST", f"{_base_url()}/chat",
             json={"session": session, "message": message, "context": context, "history": list(history)},
             stream=True,
             timeout=(4, 190),
@@ -151,4 +182,10 @@ def stream_chat(
     except requests.RequestException as exc:
         raise AgentRuntimeError("RUNTIME_UNAVAILABLE", "Codex Subscription Runtime 当前不可用") from exc
     finally:
-        finished.set()
+        try:
+            if owned_cleanup and cancel_event.is_set():
+                request_cancel()
+        finally:
+            finished.set()
+            if owned_cleanup:
+                watcher.join()  # Keep the task admission slot through cleanup.

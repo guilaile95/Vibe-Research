@@ -40,6 +40,7 @@
     "test:e2e:portfolio-advice-error": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/portfolio-advice-error.browser.mjs",
     "test:e2e:signals": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/signals-gpu-rent.browser.mjs",
     "test:e2e:historical-signal-validation": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/historical-signal-validation.browser.mjs",
+    "test:e2e:factor-navigation": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/factor-navigation.browser.mjs",
     "test:e2e:factor-validation": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/factor-validation.browser.mjs",
     "test:e2e:account-execution-policy": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/account-execution-policy.browser.mjs",
     "test:e2e:local-api-security": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/local-api-security.browser.mjs",
@@ -64,7 +65,8 @@
     "test:e2e:final-families": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/final-families.browser.mjs",
     "test:e2e:market02-empty-state": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/market02-empty-state.browser.mjs",
     "test:e2e:evidence-edit-conflict": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/evidence-edit-conflict.browser.mjs",
-    "test:e2e:public-research": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/public-research.browser.mjs"
+    "test:e2e:public-research": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/public-research.browser.mjs",
+    "test:e2e:workflow-recovery": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/workflow-recovery.browser.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.0",

@@ -429,6 +429,15 @@ def disclosure(code: str) -> list[dict]:
     return df.head(30).to_dict("records") if df is not None and not df.empty else []
 
 
+def _research_identity_rows(rows, code):
+    """Check identities actually supplied upstream, without inventing one."""
+    for row in rows:
+        if not isinstance(row, dict): raise ValueError("SOURCE_SHAPE_INVALID")
+        for key in ("code", "symbol", "股票代码", "SECURITY_CODE", "stock_code"):
+            if row.get(key) is not None and str(row[key]) != code:
+                raise ValueError("SOURCE_IDENTITY_CONFLICT")
+
+
 def announcements(code: str, limit: int = 15, *, strict: bool = False) -> list[dict]:
     """个股近期公告（东财公开接口，仅 requests，稳定）。返回 日期/标题/类型/详情链接。
 
@@ -455,6 +464,13 @@ def announcements(code: str, limit: int = 15, *, strict: bool = False) -> list[d
     if strict and any(not isinstance(item, dict) for item in lst):
         raise ValueError("announcement provider response contains malformed rows")
     out = []
+    if strict:
+        _research_identity_rows(lst, code)
+        for a in lst:
+            codes = a.get("codes")
+            if codes is not None:
+                if not isinstance(codes, list) or not codes: raise ValueError("SOURCE_IDENTITY_UNPROVEN")
+                if not any(isinstance(c, dict) and str(c.get("stock_code")) == code for c in codes): raise ValueError("SOURCE_IDENTITY_CONFLICT")
     for a in lst:
         cols = [c.get("column_name") for c in (a.get("columns") or []) if c.get("column_name")]
         art = a.get("art_code", "")
@@ -484,53 +500,74 @@ def _mootdx_client():
         raise DependencyMissing("mootdx 未安装：pip install mootdx") from e
 
 
-def kline(code: str, category: int = 4, offset: int = 60) -> list[dict]:
-    """HiThink daily first, mootdx next, bounded unadjusted Tencent fallback.
+def _kline_source(source: str, code: str, category: int, offset: int):
+    if source == "hithink":
+        import hithink_finance_client as hithink
+        if category != 4 or not hithink.is_configured():
+            raise hithink.HiThinkNotConfiguredError("HiThink daily source is not configured")
+        return hithink.fetch_daily_bars(code, offset)
+    if source == "mootdx":
+        client = _mootdx_client()
+        df = client.bars(symbol=code, frequency={4: 4, 5: 5, 6: 6, 11: 3}[category], offset=offset)
+        return df.to_dict("records") if df is not None and not df.empty else []
+    if source == "tencent":
+        import tencent_kline
+        return tencent_kline.unadjusted_bars(code, {4: "day", 5: "week", 6: "month"}[category], offset)
+    raise ValueError("unknown kline source")
 
-    Tencent only covers existing SH/SZ day/week/month HTTP routes. BSE and
-    60-minute failures remain explicit; financial/F10 mootdx paths are unchanged.
+
+def _bounded_kline_source(source, code, category, offset, timeout):
+    import public_data_budget
+    return public_data_budget.run("kline_" + source, (code, category, offset), timeout=timeout)
+
+
+def kline(code: str, category: int = 4, offset: int = 60) -> list[dict]:
+    """Shared 12-second work budget; each source owns a disposable process.
+    Final forced cleanup may add up to one second. No adjustment/period substitution.
     """
+    import time
+    import public_data_budget
     if not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code):
         raise ValueError("kline requires a six-digit security code")
     if type(category) is not int or category not in (4, 5, 6, 11):
         raise ValueError("unsupported kline category")
     if type(offset) is not int or not 1 <= offset <= 2000:
         raise ValueError("kline offset must be an integer between 1 and 2000")
+    deadline = time.monotonic() + 12
+    def stage(source):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise public_data_budget.PublicDataUnavailable("SOURCE_TIMEOUT")
+        return _bounded_kline_source(source, code, category, offset, min(4, remaining))
     if category == 4:
-        try:
-            import hithink_finance_client as hithink
-
-            if hithink.is_configured():
-                return hithink.fetch_daily_bars(code, offset)
-        except hithink.HiThinkClientError:
-            # A failed provider observation is never consumed.  Availability
-            # falls back to the pre-existing route without changing the
-            # Tushare Fact Lake or any formal investment authority.
-            # Current BSE 920xxx codes cannot use mootdx 0.11.7 as fallback:
-            # it misroutes them to Shanghai.  Fail closed instead.
-            if hithink.is_current_bse_security(code):
-                raise
+        import hithink_finance_client as hithink
+        if hithink.is_configured():
+            try:
+                rows = stage("hithink")
+                if rows:
+                    return rows
+            except public_data_budget.PublicDataUnavailable as exc:
+                if exc.code == "SOURCE_BUSY" or hithink.is_current_bse_security(code):
+                    raise
+            except Exception:
+                if hithink.is_current_bse_security(code):
+                    raise
         if hithink.is_current_bse_security(code):
-            raise hithink.HiThinkNotConfiguredError(
-                "HiThink is required for current BSE daily bars"
-            )
-    # Current BSE identifiers are unsupported by mootdx's exchange routing,
-    # and Tencent does not provide qualified BSE historical coverage.
+            raise hithink.HiThinkNotConfiguredError("HiThink is required for current BSE daily bars")
     if code.startswith("92"):
         raise RuntimeError("No qualified BSE provider for this K-line period")
     try:
-        client = _mootdx_client()
-        df = client.bars(symbol=code, category=category, offset=offset)
-        rows = df.to_dict("records") if df is not None and not df.empty else []
+        rows = stage("mootdx")
         if rows:
             return rows
+    except public_data_budget.PublicDataUnavailable as exc:
+        if exc.code == "SOURCE_BUSY":
+            raise
     except Exception:
         pass
     if category not in (4, 5, 6) or get_prefix(code) == "bj":
         raise RuntimeError("No qualified fallback for this K-line route")
-    import tencent_kline
-
-    return tencent_kline.unadjusted_bars(code, {4: "day", 5: "week", 6: "month"}[category], offset)
+    return stage("tencent")
 
 
 def finance(code: str) -> dict:
@@ -560,7 +597,7 @@ def pe_digestion(current_pe: float, cagr: float, target_pe: float = 30) -> float
     return math.log(current_pe / target_pe) / math.log(1 + cagr)
 
 
-def financials(code: str, *, include_health: bool = False) -> dict:
+def financials(code: str, *, include_health: bool = False, on_summary=None, strict: bool = False) -> dict:
     """同花顺财务体检：最新摘要 + 同报告期现金流/资产负债事实。
 
     注：mootdx finance() 的营收/净利数值不可靠(实测放大数倍)，故财务摘要走此源。
@@ -573,6 +610,7 @@ def financials(code: str, *, include_health: bool = False) -> dict:
     if df is None or df.empty:
         return {}
     summary_rows = df.to_dict("records")
+    if strict: _research_identity_rows(summary_rows, code)
 
     def present(value):
         if isinstance(value, bool) or value is None or value in ("false", ""):
@@ -617,13 +655,49 @@ def financials(code: str, *, include_health: bool = False) -> dict:
     if not include_health:
         return history[-1]
     warnings: list[str] = []
+    for item in history:
+        for field in ("revenue_amount", "net_profit_amount", "parent_holder_net_profit_amount",
+                      "operating_cash_flow", "capital_expenditure", "free_cash_flow",
+                      "assets_total", "cash", "accounts_receivable", "total_debt", "holder_equity_total",
+                      "cash_conversion_ratio", "free_cash_flow_margin", "accrual_ratio",
+                      "receivables_pressure", "net_cash_ratio"):
+            item[field] = None
+
+    def health_packet():
+        latest = history[-1]
+        required = (
+            "revenue", "net_profit", "roe", "gross_margin", "net_margin",
+            "operating_cash_flow", "capital_expenditure", "assets_total",
+            "accounts_receivable", "total_debt", "cash",
+        )
+        missing_fields = [field for field in required if latest.get(field) is None]
+        return {
+            **latest,
+            "history": list(reversed(history)),
+            "data_quality": {
+                "status": "partial" if warnings or missing_fields else "normal",
+                "source": "tonghuashun_via_akshare",
+                "fetch_mode": "snapshot",
+                "report_basis": "cumulative_report_period",
+                "point_in_time_supported": False,
+                "publication_date_known": False,
+                "missing_fields": missing_fields,
+                "warnings": list(dict.fromkeys(warnings)),
+            },
+        }
+
+
+    if on_summary is not None:
+        on_summary(health_packet())
 
     def metric_rows(frame, wanted: set[str], source: str) -> dict[str, dict[str, float | None]]:
         if frame is None or frame.empty:
             warnings.append(f"{source}_unavailable")
             return {}
         result: dict[str, dict[str, float | None]] = {}
-        for raw in frame.to_dict("records"):
+        raw_rows = frame.to_dict("records")
+        if strict: _research_identity_rows(raw_rows, code)
+        for raw in raw_rows:
             metric = raw.get("metric_name")
             if metric not in wanted:
                 continue
@@ -670,6 +744,10 @@ def financials(code: str, *, include_health: bool = False) -> dict:
         try:
             frame = getattr(ak, function_name)(symbol=code, indicator="按报告期")
             tables[source] = metric_rows(frame, wanted, source)
+        except ValueError as exc:
+            if strict and str(exc) == "SOURCE_IDENTITY_CONFLICT": raise
+            warnings.append(f"{source}_unavailable")
+            tables[source] = {}
         except Exception:  # one optional statement must not erase the reliable summary
             warnings.append(f"{source}_unavailable")
             tables[source] = {}
@@ -725,27 +803,7 @@ def financials(code: str, *, include_health: bool = False) -> dict:
             ),
         })
 
-    latest = history[-1]
-    required = (
-        "revenue", "net_profit", "roe", "gross_margin", "net_margin",
-        "operating_cash_flow", "capital_expenditure", "assets_total",
-        "accounts_receivable", "total_debt", "cash",
-    )
-    missing_fields = [field for field in required if latest.get(field) is None]
-    return {
-        **latest,
-        "history": list(reversed(history)),
-        "data_quality": {
-            "status": "partial" if warnings or missing_fields else "normal",
-            "source": "tonghuashun_via_akshare",
-            "fetch_mode": "snapshot",
-            "report_basis": "cumulative_report_period",
-            "point_in_time_supported": False,
-            "publication_date_known": False,
-            "missing_fields": missing_fields,
-            "warnings": list(dict.fromkeys(warnings)),
-        },
-    }
+    return health_packet()
 
 
 def valuation_percentile(code: str, period: str = "近五年") -> dict:
@@ -1947,23 +2005,26 @@ def lockup_expiry(code: str, trade_date: str | None = None, forward_days: int = 
     默认保持既有调用方的空结果降级语义。
     """
     trade_date = trade_date or datetime.now().strftime("%Y-%m-%d")
+    def checked(rows):
+        if strict: _research_identity_rows(rows, code)
+        return rows
     history = [{
         "date": str(r.get("FREE_DATE", ""))[:10], "type": r.get("FREE_SHARES_TYPE", ""),
         "shares": r.get("FREE_SHARES", 0), "able_shares": r.get("ABLE_FREE_SHARES", 0),
         "ratio": r.get("FREE_RATIO", 0),
-    } for r in eastmoney_datacenter(
+    } for r in checked(eastmoney_datacenter(
         "RPT_LIFT_STAGE", filter_str=f'(SECURITY_CODE="{code}")',
-        page_size=15, sort_columns="FREE_DATE", sort_types="-1", strict=strict)]
+        page_size=15, sort_columns="FREE_DATE", sort_types="-1", strict=strict))]
 
     end = (datetime.strptime(trade_date, "%Y-%m-%d") + timedelta(days=forward_days)).strftime("%Y-%m-%d")
     upcoming = [{
         "date": str(r.get("FREE_DATE", ""))[:10], "type": r.get("FREE_SHARES_TYPE", ""),
         "shares": r.get("FREE_SHARES", 0), "able_shares": r.get("ABLE_FREE_SHARES", 0),
         "ratio": r.get("FREE_RATIO", 0),
-    } for r in eastmoney_datacenter(
+    } for r in checked(eastmoney_datacenter(
         "RPT_LIFT_STAGE",
         filter_str=f'(SECURITY_CODE="{code}")(FREE_DATE>=\'{trade_date}\')(FREE_DATE<=\'{end}\')',
-        page_size=20, sort_columns="FREE_DATE", sort_types="1", strict=strict)]
+        page_size=20, sort_columns="FREE_DATE", sort_types="1", strict=strict))]
     return {"history": history, "upcoming": upcoming}
 
 

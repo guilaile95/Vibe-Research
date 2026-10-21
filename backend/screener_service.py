@@ -93,7 +93,10 @@ def _sample_coverage(rows: list[dict], envelope: dict[str, Any], cutoff: str | N
     readable = envelope.get("status") == "normal"
     dates = [row.get("trade_date") or row.get("datetime") for row in rows if isinstance(row, dict)]
     dates = [value for value in dates if isinstance(value, str) and value]
+    end = max(dates) if dates and readable else None
+    freshness = "unknown" if not end or not cutoff else "current" if end == cutoff else "stale"
     return {
+        "freshness": freshness,
         "status": ("available" if rows else "empty") if readable else "unavailable",
         "returned_rows": len(rows) if readable else None,
         "start": min(dates) if dates and readable else None,
@@ -113,6 +116,7 @@ def _batch_coverage(stocks: list[dict]) -> dict[str, int]:
     samples = [_stock_coverage(stock) for stock in stocks]
     return {
         "requested_count": len(stocks),
+        "stale_count": sum(sample.get("freshness") == "stale" for sample in samples),
         "with_data_count": sum(sample["status"] == "available" for sample in samples),
         "empty_count": sum(sample["status"] == "empty" for sample in samples),
         "failed_count": sum(sample["status"] == "unavailable" for sample in samples),
@@ -323,7 +327,7 @@ def evaluate_condition(condition: ScreenerCondition, envelope: dict) -> dict:
 
 def classify_stock(condition_results: list[dict], technical_status: str) -> str:
     """Return bucket: matched | rejected | unavailable."""
-    if technical_status == "unavailable":
+    if technical_status in {"unavailable", "stale"}:
         return "unavailable"
 
     has_false = False
@@ -409,11 +413,15 @@ def evaluate_one_stock(
         tech_status = str(envelope.get("status") or "unavailable")
         trade_date = envelope.get("trade_date")
         limitations = list(envelope.get("limitations") or [])
+        sample = research_data["_screener_sample"]
+        stale = sample.get("freshness") == "stale"
+        if stale:
+            limitations.append(f"陈旧样本：最后交易日 {sample['end']} 未达到冻结快照截止日 {cutoff}；不作为当前匹配")
 
         if tech_status == "unavailable":
             return _unavailable_stock(
                 code,
-                technical_status="unavailable",
+                technical_status="stale" if stale else "unavailable",
                 trade_date=trade_date if isinstance(trade_date, str) else None,
                 condition_results=[],
                 limitations=limitations or ["技术指标不可用"],
@@ -422,6 +430,16 @@ def evaluate_one_stock(
             )
 
         condition_results = [evaluate_condition(c, envelope) for c in conditions]
+        # Same policy as Full Market: latest observed date must equal the pinned
+        # snapshot cutoff. Artifact readability is not current signal evidence.
+        if stale:
+            condition_results = [
+                {"id": result["id"], "evaluable": False, "passed": None,
+                 "evidence": {"reason": "STALE", "last_trade_date": sample["end"],
+                              "cutoff": cutoff, "last_known": result}}
+                for result in condition_results
+            ]
+            tech_status = "stale"
         bucket = classify_stock(condition_results, tech_status)
         matched: bool | None
         if bucket == "matched":

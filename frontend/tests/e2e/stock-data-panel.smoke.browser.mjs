@@ -470,7 +470,7 @@ function technicalIndicatorsEnvelope(code, { status = "normal" } = {}) {
   const bars = klineBars(code);
   if (status === "unavailable") {
     return {
-      schema_version: "technical-indicators-v0.2",
+      schema_version: "technical-indicators-v0.3",
       code,
       period: "daily",
       trade_date: null,
@@ -519,7 +519,7 @@ function technicalIndicatorsEnvelope(code, { status = "normal" } = {}) {
   });
 
   return {
-    schema_version: "technical-indicators-v0.2",
+    schema_version: "technical-indicators-v0.3",
     code,
     period: "daily",
     trade_date: bars[bars.length - 1]?.date ?? "2026-07-24",

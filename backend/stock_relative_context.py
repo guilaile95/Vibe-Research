@@ -17,6 +17,7 @@ from typing import Any
 
 import astock
 import research_data_plane as rdp
+from rdp_page_identity import FullMarketPageIdentity, PageIdentityError
 import sector_industry_context
 
 
@@ -173,6 +174,7 @@ def _read_full_market(
 ) -> tuple[list[dict[str, Any]], date, dict[str, Any] | None, str, str, str]:
     rows: list[dict[str, Any]] = []
     offset = 0
+    identity = FullMarketPageIdentity()
     comparison_date: date | None = None
     provenance: dict[str, Any] | None = None
     dataset_id = rdp.DATASET_ID
@@ -187,12 +189,18 @@ def _read_full_market(
                 sort_order="asc",
                 limit=_RDP_PAGE_SIZE,
                 offset=offset,
+                **identity.query(),
             )
         except Exception as exc:  # noqa: BLE001 — source failure is fail-closed
             raise _RdpUnavailable(type(exc).__name__) from exc
 
         if not isinstance(envelope, Mapping) or envelope.get("status") not in {"normal", "partial"}:
             raise _RdpUnavailable("unavailable_envelope")
+
+        try:
+            identity.accept(envelope)
+        except PageIdentityError as exc:
+            raise _RdpUnavailable(str(exc)) from exc
 
         envelope_date = _date_value(envelope.get("latest_date") or envelope.get("as_of"))
         if envelope_date is None:
@@ -222,10 +230,8 @@ def _read_full_market(
         next_offset = envelope.get("next_offset")
         if next_offset is None:
             return rows, comparison_date, provenance, dataset_id, provider_id, adjustment
-        try:
-            next_offset = int(next_offset)
-        except (TypeError, ValueError) as exc:
-            raise _RdpUnavailable("invalid_pagination") from exc
+        if type(next_offset) is not int:
+            raise _RdpUnavailable("invalid_pagination")
         if next_offset <= offset:
             raise _RdpUnavailable("non_progressing_pagination")
         offset = next_offset

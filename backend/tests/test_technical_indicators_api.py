@@ -52,7 +52,7 @@ def test_normal_response(monkeypatch):
     assert env["code"] == "000001"
     assert env["period"] == "daily"
     assert env["status"] == "normal"
-    assert env["schema_version"] == "technical-indicators-v0.2"
+    assert env["schema_version"] == "technical-indicators-v0.3"
     assert env["latest"]["close"] is not None
     assert env["latest"]["sma20"] is not None
     assert env["latest"]["sma60"] is not None
@@ -248,3 +248,17 @@ def test_partial_missing_high_low_kdj_limitation(monkeypatch):
     assert env["status"] == "partial"
     assert any("KDJ(9,3,3)" in str(x) for x in env["limitations"])
     assert env["latest"]["sma20"] is not None
+
+
+@pytest.mark.parametrize('position, expected_status', [(-5, 'partial'), (-1, 'unavailable')])
+def test_dated_missing_close_stays_unknown_at_http_boundary(monkeypatch, position, expected_status):
+    klines = _make_klines(100)
+    klines[position]['close'] = None
+    monkeypatch.setattr(astock, 'kline', lambda *a, **kw: list(klines))
+    response = client.get('/api/market/technical-indicators?code=000001&period=daily&days=120')
+    assert response.status_code == 200
+    envelope = response.json()['data']
+    assert envelope['status'] == expected_status
+    assert envelope['trade_date'] == klines[-1]['datetime']
+    assert envelope['latest']['sma20'] is None
+    assert envelope['latest']['macd_histogram'] is None

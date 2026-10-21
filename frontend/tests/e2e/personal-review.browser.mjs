@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { chromium } from "playwright";
+import { personalReviewChildRead } from "./personal-review.fixture.mjs";
 if (process.env.CI !== "true") throw new Error("Actual-browser acceptance is CI-only; local browser launch is not authorized");
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const temporary = process.env.PERSONAL_REVIEW_BROWSER_OUTPUT_DIR || mkdtempSync(path.join(tmpdir(), "personal-review-browser-"));
@@ -38,6 +39,8 @@ try {
       const req = route.request(), url = new URL(req.url());
       if (url.origin !== origin) { forbidden.push(req.url()); return route.abort("blockedbyclient"); }
       if (!url.pathname.startsWith("/api/")) return route.continue();
+      const childRead = personalReviewChildRead(req.method(), url, fixture.as_of);
+      if (childRead) return route.fulfill({json:childRead});
       if (url.pathname === "/api/personal-review" && req.method() === "GET") { if(malformedRead){malformedRead=false;return route.fulfill({json:{data:{...fixture,windows:null}}});} return route.fulfill({json:{data:fixture}}); }
       if (url.pathname.startsWith("/api/personal-review/assessments/") && req.method() === "PUT") {
         const body = req.postDataJSON(); writes.push(body); assessmentWrites++;

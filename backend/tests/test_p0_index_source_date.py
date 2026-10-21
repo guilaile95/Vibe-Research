@@ -52,3 +52,12 @@ def test_actual_daily_builder_and_history_keep_unknown_breadth(monkeypatch, tmp_
     saved=review_history.save_current_daily_review(tmp_path/"history.db")
     assert saved["snapshot"]["trade_date"]=="2026-07-31"
     assert saved["review_status"]=="partial"
+
+
+@pytest.fixture(autouse=True)
+def _source_mocked_assembly(monkeypatch):
+    # These tests inject provider results in this process. Production collection
+    # is verified separately with disposable synthetic workers.
+    import daily_review as _review
+    monkeypatch.setattr(_review, "_build_daily_review",
+        lambda: _review._assemble_daily_review(None, _test_provider_calls=True))

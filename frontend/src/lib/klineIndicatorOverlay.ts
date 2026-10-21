@@ -7,6 +7,7 @@ export type KlineIndicatorOverlayPoint = {
   close: number;
   high: number;
   low: number;
+  volume?: number | null;
   sma20: number | null;
   sma60: number | null;
   bollinger_upper: number | null;
@@ -93,12 +94,13 @@ export function normalizeKlineIndicatorOverlay(
   if (!Array.isArray(bars) || maxPoints <= 0) return [];
 
   // First valid K-line per date (skip invalids; later valid can fill if earlier invalid).
-  const candleByDate = new Map<string, { open: number; close: number; high: number; low: number }>();
+  const candleByDate = new Map<string, { open: number; close: number; high: number; low: number; volume: number | null }>();
   for (const bar of bars) {
     const parsed = parseOhlc(bar);
     if (!parsed) continue;
     if (candleByDate.has(parsed.date)) continue;
     candleByDate.set(parsed.date, {
+      volume: typeof bar.volume === "number" && Number.isFinite(bar.volume) && bar.volume >= 0 ? bar.volume : null,
       open: parsed.open,
       close: parsed.close,
       high: parsed.high,
@@ -138,6 +140,7 @@ export function normalizeKlineIndicatorOverlay(
     const ind = indByDate.get(date);
     return {
       date,
+      volume: c.volume,
       open: c.open,
       close: c.close,
       high: c.high,
