@@ -1,3 +1,4 @@
+import { storedCredential, routeCredentialStatus } from './credential-generation.fixture.mjs';
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
@@ -91,7 +92,9 @@ try {
     if (route.request().url().startsWith("https://fonts.googleapis.com/")) return route.fulfill({ status: 200, contentType: "text/css", body: "/* offline font fixture */" });
     await route.abort();
   });
-  await context.addInitScript(() => localStorage.setItem("vr-llm", JSON.stringify({ provider: "cli-codex", model: "synthetic-offline" })));
+  const model = { provider: "cli-codex", model: "synthetic-offline" };
+  await routeCredentialStatus(context, model);
+  await context.addInitScript(config => localStorage.setItem("vr-llm", JSON.stringify(config)), storedCredential(model));
   page = await context.newPage();
   page.on("pageerror", error => report.errors.push(String(error)));
   page.on("console", message => { if (["warning", "error"].includes(message.type())) report.console.push({ type: message.type(), text: message.text() }); });

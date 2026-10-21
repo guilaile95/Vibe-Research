@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 
+import ai_credential_router
 import native_intel_router
 import native_intel_store as store
 import native_intel_ai
@@ -158,7 +159,10 @@ def _deep_read_fixture_llm(_cfg, messages, **_kwargs):
     return "摘要\n- fixture source was read\n关键点\n- facts stay non-authoritative\n待核验\n- verify the original source"
 
 
-native_intel_ext_sources._http_get = _deep_read_fixture_http_get
+# Replace the current transport seam, not the retired _http_get path.
+# Unexpected destinations fail in the fixture; no real public fetch is allowed.
+native_intel_ext_sources.safe_deep_read_fetch.fetch = _deep_read_fixture_http_get
 native_intel_ai.invoke_llm_text = _deep_read_fixture_llm
 app = FastAPI(title="Native Intel GH/HF E2E harness")
 app.include_router(native_intel_router.router)
+app.include_router(ai_credential_router.router)

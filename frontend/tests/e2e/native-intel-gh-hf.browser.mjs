@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { saveHarnessCredential } from "./real-credential-mirror.fixture.mjs";
 
 const root = path.resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const backendDir = join(root, "backend");
@@ -115,6 +116,7 @@ try {
       env: {
         ...process.env,
         PYTHONPATH: `${backendDir}${path.delimiter}${join(root, "frontend", "tests", "e2e")}`,
+        VR_DATA_DIR: tempDir,
         VIBE_NATIVE_INTEL_DB: join(tempDir, "native-intel.sqlite3"),
         PYTHONUNBUFFERED: "1",
       },
@@ -162,12 +164,19 @@ try {
   assert.match(hnFacts, /321/);
   assert.match(hnFacts, /87/);
 
-  await page.evaluate(() => localStorage.setItem("vr-llm", JSON.stringify({
+  const credential = await saveHarnessCredential(`http://127.0.0.1:${backendPort}`, {
     provider: "cli-codex",
     baseURL: "",
     apiKey: "",
     model: "native-intel-deep-read-fixture",
-  })));
+  });
+  await page.evaluate(value => localStorage.setItem("vr-llm", JSON.stringify(value)), credential);
+  let deepReadBody;
+  page.on("request", request => {
+    if (new URL(request.url()).pathname.includes("/deep-read") && request.method() === "POST") {
+      deepReadBody = request.postDataJSON();
+    }
+  });
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "实时热榜" }).click();
   await page.getByText("openai/whisper").waitFor({ timeout: 15000 });
@@ -177,6 +186,8 @@ try {
   await page.getByTestId("native-intel-deep-read-analysis").getByText(/fixture source was read/).waitFor();
   assert.match(await page.getByTestId("native-intel-deep-read-content").innerText(), /First-party repository README/);
   assert.match(await page.getByTestId("native-intel-deep-read-analysis").innerText(), /facts stay non-authoritative/);
+  assert.equal(deepReadBody.llm.model, credential.model);
+  assert.equal("revision" in deepReadBody.llm, false);
   console.log("Native Intel GitHub Trending + HF Daily Papers + HN: PASS");
 } finally {
   if (browser) await browser.close();

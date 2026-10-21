@@ -1,3 +1,4 @@
+import { routeCredentialStatus } from './credential-generation.fixture.mjs';
 /**
  * 研究记录备份真实浏览器路径：
  * localStorage 记录 → 下载 JSON → 清空浏览器记录 → 导入恢复。
@@ -230,7 +231,8 @@ try {
   assert.equal(finalStorage.chat, "SECRET_CHAT_HISTORY");
 
   // Synthetic Reflection responses exercise the production client and Notes UI.
-  await page.evaluate(() => localStorage.setItem("vr-llm", JSON.stringify({provider:"cli-codex", model:"synthetic"})));
+  await routeCredentialStatus(page, {provider:"cli-codex", model:"synthetic"});
+  await page.evaluate(() => localStorage.setItem("vr-llm", JSON.stringify({revision:"1",provider:"cli-codex", model:"synthetic"})));
   let completeReflection = false;
   await page.route("**/api/reflect", route => route.fulfill({status:200, contentType:"application/x-ndjson", body:
     JSON.stringify({type:"delta", text:"SYNTHETIC_AUDIT"}) + "\n" + (completeReflection ? JSON.stringify({type:"done", content:"SYNTHETIC_AUDIT", truncated:true}) + "\n" : "")
@@ -348,7 +350,8 @@ try {
     return route.fulfill({status:200,contentType:"application/x-ndjson",body:events.map(event=>JSON.stringify(event)).join("\n")+"\n"});
   });
   for(const provider of ["api","cli-codex"]){
-    await page.evaluate(provider=>localStorage.setItem("vr-llm",JSON.stringify({provider,model:"synthetic-citation",baseURL:"https://example.test",apiKey:"synthetic"})),provider);
+    await routeCredentialStatus(page, {provider,model:"synthetic-citation",baseURL:"https://example.test",apiKey:"synthetic"});
+    await page.evaluate(provider=>localStorage.setItem("vr-llm",JSON.stringify({revision:"1",provider,model:"synthetic-citation",baseURL:"https://example.test",apiKey:"synthetic"})),provider);
     await page.goto(`${frontend}/my-reports`,{waitUntil:"networkidle"});
     const openSelectedChat=async()=>{
       await page.getByRole("checkbox",{name:"选择 Selected PDF",exact:true}).check();
@@ -443,7 +446,8 @@ try {
     assert.equal(explicitCalls,before,"opening explicit chat must not invoke AI");
   };
   for(const provider of ["api","cli-codex"]){
-    await page.evaluate(provider=>localStorage.setItem("vr-llm",JSON.stringify({provider,model:"synthetic-page-context",baseURL:"https://example.test",apiKey:"synthetic"})),provider);
+    await routeCredentialStatus(page, {provider,model:"synthetic-page-context",baseURL:"https://example.test",apiKey:"synthetic"});
+    await page.evaluate(provider=>localStorage.setItem("vr-llm",JSON.stringify({revision:"1",provider,model:"synthetic-page-context",baseURL:"https://example.test",apiKey:"synthetic"})),provider);
     for(const width of [1440,390]){
       await page.setViewportSize({width,height:1000});
       await page.goto(`${frontend}/my-reports`,{waitUntil:"networkidle"});

@@ -74,8 +74,20 @@ def offline(monkeypatch):
     monkeypatch.setattr(chat, "_check_base_url", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(chat, "_TASK_STREAM_SLOTS", threading.BoundedSemaphore(4))
     monkeypatch.setattr(chat.requests, "post", forbidden)
+    monkeypatch.setattr(agent_runtime.requests.Session, "request", forbidden)
     monkeypatch.setattr(chat, "_exec_tool", forbidden)
     monkeypatch.setattr(debate.tools, "exec_tool", forbidden)
+
+
+def mock_runtime_post(monkeypatch, post):
+    """Stub only HTTP dispatch; retain runtime Session and response ownership."""
+    def request(session, method, url, **kwargs):
+        assert session.trust_env is False
+        assert method == "POST"
+        assert kwargs.pop("allow_redirects") is False
+        return post(url, **kwargs)
+
+    monkeypatch.setattr(agent_runtime.requests.Session, "request", request)
 
 
 def test_api_dispatch_limits_are_per_task_and_payload_is_bounded(monkeypatch):
@@ -316,7 +328,7 @@ def test_cli_adapter_closes_response_and_cancels_owned_session(monkeypatch, reas
         posts.append((url.rsplit("/", 1)[-1], kwargs["json"]))
         return response if url.endswith("/chat") else Response()
 
-    monkeypatch.setattr(agent_runtime.requests, "post", post)
+    mock_runtime_post(monkeypatch, post)
     task = budget(timeout=.2 if reason == "deadline" else 2,
                   max_chars=7 if reason == "output" else 1000)
     source = chat.stream_messages(cfg(task, provider="cli-codex", _cancel_event=stop), [])
@@ -354,7 +366,7 @@ def test_cli_cancel_cleanup_retains_admission(monkeypatch):
             return Response()
         return response
 
-    monkeypatch.setattr(agent_runtime.requests, "post", post)
+    mock_runtime_post(monkeypatch, post)
     source = chat.stream_messages(cfg(budget(timeout=.2), provider="cli-codex"), [])
     try:
         assert next(source)["text"] == "partial"

@@ -58,7 +58,10 @@ def tmp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     store.finish_run(run_id, status=store.RUN_STATUS_OK, source_ok=3, source_failed=0, item_seen=4, item_new=4, db_path=db_file)
 
     import ai_credential_store as cred_store
-    cred_store.save({"provider": "cli-codex", "model": "gpt-5-codex"})
+    cred_store.save(
+        {"provider": "cli-codex", "model": "gpt-5-codex"},
+        expected_revision=cred_store.status()["revision"],
+    )
     cred_path = cred_store.credential_path().resolve()
     assert tmp_path.resolve() in cred_path.parents
 
@@ -852,7 +855,7 @@ def test_req_02_global_api_selection_uses_request_config(tmp_db):
 def test_req_03_native_intel_no_second_provider_authority(tmp_db):
     import ai_credential_store as cred_store
 
-    cred_store.delete()
+    cred_store.delete(observed_revision=cred_store.status()["revision"])
     cfg = store.get_native_intel_config(tmp_db)
     assert "ai_analysis_provider" not in cfg or cfg.get("ai_analysis_provider") is None
     with pytest.raises(ValueError, match="UNAVAILABLE_CREDENTIAL"):
@@ -881,13 +884,21 @@ def test_credential_ops_do_not_touch_real_user_path(
     cred_path = cred_store.credential_path().resolve()
     assert tmp_path.resolve() in cred_path.parents
     assert fake_home.resolve() not in cred_path.parents
-    cred_store.save({"provider": "cli-codex", "model": "gpt-5-codex"})
-    cred_store.delete()
+    cred_store.save(
+        {"provider": "cli-codex", "model": "gpt-5-codex"},
+        expected_revision=cred_store.status()["revision"],
+    )
+    cleared = cred_store.delete(observed_revision=cred_store.status()["revision"])
+    assert cleared["configured"] is False
+    assert cleared["revision"] == "2"
     cred_path.write_text("{not-json", encoding="utf-8")
     cfg, error = cred_store.scheduled_config()
     assert cfg is None
     assert error == cred_store.UNAVAILABLE_CREDENTIAL
-    cred_store.delete()
+    # Corrupt state cannot be cleared without a valid observed generation.
+    with pytest.raises(cred_store.CredentialStoreError, match="CREDENTIAL_STATE_UNAVAILABLE"):
+        cred_store.delete(observed_revision=cleared["revision"])
+    assert cred_path.read_text(encoding="utf-8") == "{not-json"
 
     assert sentinel.read_bytes() == before
 

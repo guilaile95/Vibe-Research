@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { saveHarnessCredential } from "./real-credential-mirror.fixture.mjs";
 import { seedActiveCampaign } from "./campaign-active-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -250,15 +251,16 @@ async function run() {
     assert.ok(executablePath, "system Chrome executable not found");
     browser = await chromium.launch({ headless: true, executablePath });
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, timezoneId: "UTC" });
-    // Environment preparation only: configure a dummy local model endpoint in isolated browser storage.
-    await context.addInitScript(({ mockLlm }) => {
-      localStorage.setItem("vr-llm", JSON.stringify({
-        provider: "api-compatible",
-        baseURL: mockLlm,
-        apiKey: "local-test-key",
-        model: "local-test-model",
-      }));
-    }, { mockLlm });
+    // Synchronize the isolated real credential store with the dummy local model endpoint.
+    const credential = await saveHarnessCredential(backend, {
+      provider: "openai-compatible",
+      baseURL: mockLlm,
+      apiKey: "local-test-key",
+      model: "local-test-model",
+    });
+    await context.addInitScript(value => {
+      localStorage.setItem("vr-llm", JSON.stringify(value));
+    }, credential);
     const page = await context.newPage();
     const consoleErrors = [];
     const pageErrors = [];

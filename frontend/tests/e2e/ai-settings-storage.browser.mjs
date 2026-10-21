@@ -91,6 +91,9 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
         else { diagnostics.started.resolve(); await diagnostics.release.promise; }
         return route.fulfill({ json: reply });
       }
+      if (scenario === "credential-race" && request.method() === "GET" && url.pathname === "/api/thesis" && url.search === "?limit=50&offset=0") {
+        return route.fulfill({ json: { items: [], total: 0 } });
+      }
       if (scenario === "credential-race" && url.pathname === "/api/ai/credential-status") {
         return route.fulfill({ json: { revision: String(credential.revision), configured: credential.configured, provider: credential.configured ? config.provider : null, scheduled_available: credential.configured } });
       }
@@ -148,10 +151,19 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
       await page.waitForFunction(() => localStorage.getItem("vr-llm") === null);
       // Unmount/remount cannot discard the queue or let old save completion own UI.
       if (width < 768) await page.getByTestId("nav-drawer-trigger").click();
+      await page.locator('a[href="/thesis"]').first().click();
+      await page.waitForURL("**/thesis");
       await page.locator('a[href="/my-reports"]').first().click();
+      await page.waitForURL("**/my-reports");
+      assert.equal(await page.getByTestId("wave5-save-api-btn").count(), 0);
+      // Remount in the same document while the PUT still owns the queue.
+      // A page.goto/reload here would discard the module-scoped queue.
+      if (width < 768) await page.getByTestId("nav-drawer-trigger").click();
+      await page.locator('a[href="/settings"]').first().click();
+      await page.waitForURL("**/settings");
+      assert.equal(credential.revision, 1, "save remains pending across SPA unmount/remount");
       credential.releasePut.resolve();
       await bounded(credential.cleared.promise);
-      await page.goto("/settings");
       await page.getByText("接入 AI", { exact: true }).first().waitFor();
       assert.equal(await page.evaluate(() => localStorage.getItem("vr-llm")), null);
       assert.equal(credential.configured, false);
@@ -311,6 +323,22 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
         const retry = await send("SYNTHETIC_RETRY_QUESTION");
         assert.equal(retry.slot.body.messages.length, 1, "cancelled turn cannot become retry history");
         await finished(retry.slot, retry.index, "SYNTHETIC_RETRY_COMPLETE");
+        if (scenario === "chat-current") {
+          // A peer changed the exact archive bytes. The stale view must not
+          // overwrite them, even after its next model response completes.
+          await panel.getByRole("alert").filter({ hasText: "本地存档已在其他窗口更改" }).waitFor();
+          assert.equal(await page.evaluate(key => localStorage.getItem(key), chatKey), "[]");
+          await panel.getByRole("button", { name: "重试保存对话", exact: true }).click();
+          assert.equal(await page.evaluate(key => localStorage.getItem(key), chatKey), "[]");
+          const exported = await panel.getByRole("link", { name: "导出当前对话", exact: true }).getAttribute("href");
+          assert.match(decodeURIComponent(exported), /SYNTHETIC_RETRY_COMPLETE/);
+          // Explicit reload adopts the peer's archive; only a fresh user send
+          // may then persist against that newly observed version.
+          await page.reload(); await openChat();
+          const recovered = await send("SYNTHETIC_RELOADED_QUESTION");
+          assert.equal(recovered.slot.body.messages.length, 1);
+          await finished(recovered.slot, recovered.index, "SYNTHETIC_RETRY_COMPLETE");
+        }
         await page.waitForFunction(key => localStorage.getItem(key)?.includes("SYNTHETIC_RETRY_COMPLETE"), chatKey);
         assert.doesNotMatch(await stored(), /SYNTHETIC_LATE_CANCELLED|SYNTHETIC_FIRST_QUESTION/);
         await page.reload(); await openChat();

@@ -1,3 +1,4 @@
+import { routeCredentialStatus } from './credential-generation.fixture.mjs';
 // CI-only production component + exact API fixtures; no backend/provider/model.
 import assert from 'node:assert/strict';
 import { build } from 'vite';
@@ -78,8 +79,9 @@ try {
           await route.fulfill({ json: { data: generation(campaign) } });
         } catch (error) { audit.errors.push(String(error)); await route.abort().catch(() => {}); }
       });
+      await routeCredentialStatus(context, { provider: 'api-compatible', model: 'synthetic-model', baseURL: 'https://model.example/v1', apiKey: 'synthetic' });
       await context.addInitScript(() => {
-        localStorage.setItem('vr-llm', JSON.stringify({ provider: 'api-compatible', model: 'synthetic-model', baseURL: 'https://model.example/v1', apiKey: 'synthetic' }));
+        localStorage.setItem('vr-llm', JSON.stringify({ revision: '1', provider: 'api-compatible', model: 'synthetic-model', baseURL: 'https://model.example/v1', apiKey: 'synthetic' }));
         window.__consentParsed = { preview: 0, generate: 0 }; window.__consentAborts = 0;
         const original = window.fetch.bind(window);
         window.fetch = async (input, init) => {

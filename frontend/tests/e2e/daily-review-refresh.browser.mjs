@@ -3,6 +3,7 @@
  * Isolated VR_DATA_DIR / VIBE_RESEARCH_REVIEW_DB. Uses reverse-proxy + offline harness.
  */
 import { chromium } from "playwright";
+import { saveHarnessCredential } from "./real-credential-mirror.fixture.mjs";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -446,18 +447,14 @@ async function main() {
     // —— 持仓建议 ——
     await page.goto(`http://127.0.0.1:${frontendPort}/portfolio`, { waitUntil: "networkidle" });
     await page.waitForTimeout(1000);
-    // inject minimal llm config
-    await page.evaluate(() => {
-      localStorage.setItem(
-        "vr-llm",
-        JSON.stringify({
-          provider: "deepseek",
-          baseURL: "http://127.0.0.1/mock",
-          apiKey: "sk-test",
-          model: "deepseek-chat",
-        }),
-      );
+    // Use the isolated backend's real generation, not an unsynchronized browser seed.
+    const credential = await saveHarnessCredential(`http://127.0.0.1:${backendPort}`, {
+      provider: "deepseek",
+      baseURL: "http://127.0.0.1/mock",
+      apiKey: "sk-test",
+      model: "deepseek-chat",
     });
+    await page.evaluate(value => localStorage.setItem("vr-llm", JSON.stringify(value)), credential);
     await page.reload({ waitUntil: "networkidle" });
     await page.waitForTimeout(800);
 

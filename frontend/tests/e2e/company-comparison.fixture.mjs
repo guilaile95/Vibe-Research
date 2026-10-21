@@ -1,3 +1,4 @@
+import { credentialStatus } from './credential-generation.fixture.mjs';
 /** Registered API goldens only. Every comparison read/write needs an explicit UI expectation. */
 import { readFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
@@ -64,6 +65,7 @@ export function createComparisonFixture(origin) {
       calls.push(call);
       if (u.origin !== origin || u.username || u.password || u.hash) return deny('foreign origin or noncanonical URL');
       const key = u.pathname + u.search;
+      if (u.pathname === '/api/ai/credential-status') return method === 'GET' && !u.search && body === undefined ? { kind: 'json', status: 200, body: credentialStatus(comparisonLlm) } : deny('credential preflight method/query/body');
       if (u.pathname.startsWith('/api/company-comparison/') || u.pathname.startsWith('/api/company-research/')) {
         const index = expected.findIndex(item => item.method === method && item.key === key);
         const wanted = expected[index];

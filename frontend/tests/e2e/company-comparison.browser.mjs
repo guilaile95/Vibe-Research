@@ -1,3 +1,4 @@
+import { storedCredential } from './credential-generation.fixture.mjs';
 /** CI-only acceptance of the real built StockData and Debate pages, never a component adapter. */
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -82,7 +83,7 @@ try {
       if (reply.kind === 'static') return route.continue();
       return reply.kind === 'stream' ? route.fulfill({ contentType: 'application/x-ndjson', body: reply.body }) : route.fulfill({ status: reply.status || 200, json: reply.body });
     });
-    await context.addInitScript(llm => { localStorage.clear(); localStorage.setItem('vr-llm', JSON.stringify(llm)); }, comparisonLlm);
+    await context.addInitScript(llm => { localStorage.clear(); localStorage.setItem('vr-llm', JSON.stringify(llm)); }, storedCredential(comparisonLlm));
     await context.addInitScript(deliveryObserver);
     page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
     await page.clock.setFixedTime(new Date(CLOCK));

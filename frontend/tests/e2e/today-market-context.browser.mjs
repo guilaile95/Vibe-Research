@@ -1,3 +1,4 @@
+import { storedCredential, routeCredentialStatus } from './credential-generation.fixture.mjs';
 /** Today market context: layout, unified intel, and two-source failure isolation. */
 import assert from "node:assert/strict";
 import { createReadStream, existsSync, readdirSync } from "node:fs";
@@ -344,9 +345,9 @@ async function checkLeadAnalysis(page, todayWrites) {
   await dialog.getByRole("link", { name: "设置中接入 AI", exact: true }).waitFor();
   assert.equal(await requestCount(), 0, "missing configuration must not start analysis");
   await close();
-  await page.evaluate(() => localStorage.setItem("vr-llm", JSON.stringify({
-    provider: "cli-codex", model: "isolated-browser-model", baseURL: "", apiKey: "",
-  })));
+  const model = { provider: "cli-codex", model: "isolated-browser-model", baseURL: "", apiKey: "" };
+  await routeCredentialStatus(page, model);
+  await page.evaluate(config => localStorage.setItem("vr-llm", JSON.stringify(config)), storedCredential(model));
   const savedBefore = await page.evaluate(() => ({ ...localStorage }));
   const writesBefore = todayWrites.length;
 

@@ -1,3 +1,4 @@
+import { credentialStatus, storedCredential } from './credential-generation.fixture.mjs';
 import {isDeepStrictEqual} from 'node:util';
 import {readFileSync} from 'node:fs';
 import {createFixture} from './next-day-verification.fixture.mjs';
@@ -12,6 +13,7 @@ export const subjects=[['US','AAPL'],['HK','00700'],['A','600000']];
 export const researchGolden=Object.fromEntries(subjects.map(([market,symbol])=>[market,JSON.parse(readFileSync(new URL(`../../../backend/tests/fixtures/company_research/${market}-${symbol}.json`,import.meta.url),'utf8'))]));
 researchGolden['US-failed']=JSON.parse(readFileSync(new URL('../../../backend/tests/fixtures/company_research/US-AAPL-failed-quote.json',import.meta.url),'utf8'));
 export const syntheticLlm={provider:'deepseek',model:'synthetic',baseURL:'https://fixture.example',apiKey:'synthetic'};
+export const syntheticStoredLlm=storedCredential(syntheticLlm);
 const ancillary=['financials','reports','announcements','margin','block-trade','holders','dividend','fund-flow','dragon-tiger','lockup','blocks','hot-concepts','investor-qa','valuation/percentile','news','stock-relative-context','stock-valuation-context'];
 export function createExtendedPageFixture(origin){
  const base=createFixture(origin,{withSealQuality:true,fullReview:true});
@@ -21,6 +23,7 @@ export function createExtendedPageFixture(origin){
  return {base,calls,violations,expectedPosts,expectResearch(market,action){expectedPosts.push({market,action});},setNext(value){next=structuredClone(value);},handle(url,method='GET',body){
   const u=new URL(url);if(u.origin!==origin)return deny('foreign origin');
   calls.push({method,path:u.pathname,search:u.search});
+  if(u.pathname==='/api/ai/credential-status')return method==='GET'&&!u.search&&body===undefined?{kind:'json',status:200,body:credentialStatus(syntheticLlm)}:deny('credential preflight method/query/body');
   // Full-page initial renders observed in CI: before dr arrives, the journal
   // uses the fixed clock's Shanghai date; CN StockData mounts its event calendar.
   if(u.pathname==='/api/next-day-verification/2026-10-13')return method==='GET'&&u.search===''?{kind:'json',status:200,body:structuredClone(startupGolden.journal)}:deny('startup journal method/query');

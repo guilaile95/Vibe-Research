@@ -1,3 +1,4 @@
+import { storedCredential, routeCredentialStatus } from './credential-generation.fixture.mjs';
 /**
  * Product Reality vertical: Portfolio Advice error observability on the real frontend.
  *
@@ -236,12 +237,13 @@ async function run() {
     const context = await browser.newContext();
     const page = await context.newPage();
     // 注入本地 LLM 配置（fake 值；POST 被 route 拦截，不会真实外呼）
-    await page.addInitScript(() => {
+    const model = { provider: "api-compatible", baseURL: "http://10.255.255.1/v1", apiKey: "sk-not-a-real-key", model: "test-model" };
+    await page.addInitScript(config => {
       localStorage.setItem(
         "vr-llm",
-        JSON.stringify({ provider: "api-compatible", baseURL: "http://10.255.255.1/v1", apiKey: "sk-not-a-real-key", model: "test-model" }),
+        JSON.stringify(config),
       );
-    });
+    }, storedCredential(model));
 
     // 默认代理到真实 backend
     await page.route("**/api/**", async (route) => {
@@ -263,6 +265,7 @@ async function run() {
       }
     });
 
+    await routeCredentialStatus(page, model);
     await page.goto(`${frontend}/portfolio`, { waitUntil: "domcontentloaded" });
 
     // ---- PEX1. 不生成 AI 建议也能读取 Security Exposure ------------------

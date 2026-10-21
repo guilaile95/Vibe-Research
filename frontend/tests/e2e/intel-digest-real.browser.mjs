@@ -1,3 +1,4 @@
+import { storedCredential, routeCredentialStatus } from './credential-generation.fixture.mjs';
 /**
  * Intel Daily Digest v0.1 — Real Backend & Playwright Browser E2E Test
  *
@@ -234,9 +235,9 @@ async function main() {
 
     // Set LLM config in localStorage before navigating
     await page.goto(`http://127.0.0.1:${frontendPort}/intel`);
-    await page.evaluate(() => {
-      localStorage.setItem("vr-llm", JSON.stringify({ provider: "api-compatible", baseURL: "http://mock", apiKey: "mock", model: "mock-model" }));
-    });
+    const model = { provider: "api-compatible", baseURL: "http://mock", apiKey: "mock", model: "mock-model" };
+    await routeCredentialStatus(page, model);
+    await page.evaluate(config => localStorage.setItem("vr-llm", JSON.stringify(config)), storedCredential(model));
     await page.reload();
 
     // Test 1: Click generate digest -> normal stream & save POST
