@@ -149,17 +149,26 @@ async function runScenario(browser, baseURL, width, scenario, streamState, evide
       await bounded(credential.putStarted.promise);
       await page.getByTestId("wave5-forget-btn").click();
       await page.waitForFunction(() => localStorage.getItem("vr-llm") === null);
+      // Wait for the closed drawer before opening it: waitForURL alone can
+      // precede React's route-change effect, which closes mobile navigation.
+      const sidebarLink = async path => {
+        if (width < 768) {
+          await page.getByRole("button", { name: "打开导航菜单", exact: true }).click();
+          await page.getByRole("dialog", { name: "导航菜单", exact: true }).locator(`a[href="${path}"]:visible`).click();
+        } else {
+          await page.getByTestId("app-sidebar").locator(`a[href="${path}"]:visible`).click();
+        }
+      };
       // Unmount/remount cannot discard the queue or let old save completion own UI.
-      if (width < 768) await page.getByTestId("nav-drawer-trigger").click();
-      await page.locator('a[href="/thesis"]').first().click();
+      await sidebarLink("/thesis");
       await page.waitForURL("**/thesis");
       await page.locator('a[href="/my-reports"]').first().click();
       await page.waitForURL("**/my-reports");
       assert.equal(await page.getByTestId("wave5-save-api-btn").count(), 0);
       // Remount in the same document while the PUT still owns the queue.
       // A page.goto/reload here would discard the module-scoped queue.
-      if (width < 768) await page.getByTestId("nav-drawer-trigger").click();
-      await page.locator('a[href="/settings"]').first().click();
+      await page.getByRole("checkbox", { name: "选择 Synthetic report", exact: true }).waitFor();
+      await sidebarLink("/settings");
       await page.waitForURL("**/settings");
       assert.equal(credential.revision, 1, "save remains pending across SPA unmount/remount");
       credential.releasePut.resolve();
