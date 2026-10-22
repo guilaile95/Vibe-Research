@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { navigationEvidencePage } from './e2e/research-navigation.fixture.mjs';
 import { loadCandidateEvidence, CandidateEvidenceLoadError } from '../src/lib/candidateEvidence.ts';
 
@@ -21,4 +22,15 @@ test('fixture honors pagination including the actual loader head consistency che
 });
 test('missing offset from the original CI fixture remains rejected by production guard', async () => {
   await assert.rejects(() => loadCandidateEvidence(async () => ({ items: [record], total: 1 }), () => false), CandidateEvidenceLoadError);
+});
+
+test('browser cancellation targets the candidate-specific draft dialog, not the generic form dialog', () => {
+  const component = readFileSync(new URL('../src/components/campaign/CandidateResearchNote.tsx', import.meta.url), 'utf8');
+  const browser = readFileSync(new URL('./e2e/research-navigation.browser.mjs', import.meta.url), 'utf8');
+  assert.match(component, /<h2[^>]*>研究内容尚未保存<\/h2>/);
+  assert.match(component, /onClick=\{\(\) => \{ if \(blocker.state === "blocked"\) blocker.reset\(\); \}\}>留下继续编辑<\/button>/);
+  assert.ok(browser.includes("dialog.getByRole('button', { name: '留下继续编辑', exact: true }).click()"));
+  assert.ok(!browser.includes("name: '留在此页'"));
+  assert.ok(browser.includes('await page.goBack(); await dialog.waitFor();'));
+  assert.ok(browser.includes("dialog.getByRole('button', { name: '放弃未保存内容并离开', exact: true }).click()"));
 });

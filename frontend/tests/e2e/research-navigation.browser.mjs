@@ -83,8 +83,12 @@ try {
       await page.getByLabel('我的暂定看法', { exact: true }).fill('未保存的合成看法');
       await page.getByTestId('candidate-stock-data-entry').click();
       const dialog = page.getByRole('dialog', { name: '研究内容尚未保存' }); await dialog.waitFor();
-      await dialog.getByRole('button', { name: '留在此页', exact: true }).click();
+      await dialog.getByRole('button', { name: '留下继续编辑', exact: true }).click();
+      assert.equal(new URL(page.url()).pathname, '/candidates/600519');
+      assert.equal(await page.getByLabel('我的暂定看法', { exact: true }).inputValue(), '未保存的合成看法');
       await page.goBack(); await dialog.waitFor();
+      assert.equal(new URL(page.url()).pathname, '/candidates/600519');
+      assert.equal(await page.getByLabel('我的暂定看法', { exact: true }).inputValue(), '未保存的合成看法');
       await dialog.getByRole('button', { name: '放弃未保存内容并离开', exact: true }).click();
       await page.getByTestId('stock-data-candidate-entry').waitFor();
       await page.screenshot({ path: join(output, `quote-failure-${width}.png`) });
