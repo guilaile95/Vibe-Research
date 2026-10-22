@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import Counter
 from email.message import Message
 import errno
+import http.client
 from io import BytesIO
 import logging
 import socket
@@ -281,3 +282,47 @@ def test_run_fetch_retries_transport_only_preserves_history_and_empty_state(tmp_
     with store._connect(path) as conn:
         states = {row["source_id"]: (row["status"], row["error_kind"]) for row in conn.execute("SELECT * FROM intel_source_runs WHERE run_id = ?", (result["run_id"],))}
     assert states == {"recovered": (store.SOURCE_RUN_OK, None), "failed": (store.SOURCE_RUN_FAILED, store.ERROR_KIND_NETWORK), "empty": (store.SOURCE_RUN_EMPTY, None)}
+
+
+
+def http_response(headers, body):
+    """Exercise the real stdlib HTTPResponse framing without opening a socket."""
+    wire = b"HTTP/1.1 200 OK\r\n" + headers + b"\r\n" + body
+    response = http.client.HTTPResponse(SimpleNamespace(makefile=lambda _mode: BytesIO(wire)))
+    response.begin()
+    return response
+
+
+@pytest.mark.parametrize("payload", [EMPTY, FEED])
+def test_http_response_truncated_content_length_keeps_original_failure(monkeypatch, payload):
+    response = http_response(f"Content-Length: {len(payload) + 100}\r\n".encode(), payload)
+    opener = Mock(return_value=response)
+    monkeypatch.setattr(service.urllib.request, "urlopen", opener)
+    assert fetch() == ([], store.ERROR_KIND_UNKNOWN, "IncompleteRead")
+    assert opener.call_count == 1
+    assert response.isclosed()
+
+
+@pytest.mark.parametrize("transfer", ["fixed", "chunked", "close"])
+@pytest.mark.parametrize("payload, count", [(EMPTY, 0), (FEED, 1)])
+def test_http_response_complete_framing_remains_accepted(monkeypatch, transfer, payload, count):
+    if transfer == "fixed":
+        headers, body = f"Content-Length: {len(payload)}\r\n".encode(), payload
+    elif transfer == "chunked":
+        headers = b"Transfer-Encoding: chunked\r\n"
+        body = f"{len(payload):x}\r\n".encode() + payload + b"\r\n0\r\n\r\n"
+    else:
+        headers, body = b"Connection: close\r\n", payload
+    opener = Mock(return_value=http_response(headers, body))
+    monkeypatch.setattr(service.urllib.request, "urlopen", opener)
+    items, kind, detail = fetch()
+    assert kind is detail is None and len(items) == count
+    assert opener.call_count == 1
+
+
+def test_http_response_truncated_chunked_body_keeps_original_failure(monkeypatch):
+    body = f"{len(EMPTY):x}\r\n".encode() + EMPTY + b"\r\n"
+    opener = Mock(return_value=http_response(b"Transfer-Encoding: chunked\r\n", body))
+    monkeypatch.setattr(service.urllib.request, "urlopen", opener)
+    assert fetch() == ([], store.ERROR_KIND_UNKNOWN, "IncompleteRead")
+    assert opener.call_count == 1

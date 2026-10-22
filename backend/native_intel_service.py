@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import http.client
 import json
 import logging
 import os
@@ -226,6 +227,11 @@ def _read_rss_body(response: Any, deadline: float) -> bytes:
         if time.monotonic() >= deadline:
             raise TimeoutError()
         if not chunk:
+            # Unlike read(), HTTPResponse.read1() does not reject an early EOF
+            # against Content-Length. Preserve the original framing failure.
+            unread = getattr(response, "length", None)
+            if isinstance(unread, int) and unread > 0:
+                raise http.client.IncompleteRead(b"".join(chunks), unread)
             return b"".join(chunks)
         chunks.append(chunk)
         if read1 is None:
