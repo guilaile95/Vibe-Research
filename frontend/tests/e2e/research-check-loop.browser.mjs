@@ -8,7 +8,7 @@ import { join, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { readReply } from './ai-settings-storage.fixture.mjs';
-import { navigationEvidencePage } from './research-navigation.fixture.mjs';
+import { originalReport, revisedReport, originalText, revisedText, discoveryItem, discoverySnapshot, researchCheckReadReply, researchCheckPageReadReply } from './research-check-loop.fixture.mjs';
 const dist = fileURLToPath(new URL('../../dist/', import.meta.url));
 const output = process.env.RESEARCH_CHECK_LOOP_OUTPUT_DIR || mkdtempSync(join(tmpdir(), 'research-check-loop-'));
 mkdirSync(output, { recursive: true });
@@ -22,22 +22,6 @@ const server = createServer((req, res) => {
 });
 await new Promise(done => server.listen(0, '127.0.0.1', done));
 const baseURL = `http://127.0.0.1:${server.address().port}`;
-const report = (id, title, hash) => ({ id, title, name: `${id}.pdf`, size: 123, ext: '.pdf', ts: 1, industry: 'synthetic', source_url: `https://example.com/${id}.pdf`, publish_date: '2025-01-24', file_sha256: hash.repeat(64), page_count: 2, text_index_status: 'SEARCHABLE' });
-const originalReport = report('synthetic-original', '原预告（合成文本）', 'a');
-const revisedReport = report('synthetic-revised', '修订预告（合成文本）', 'b');
-const originalText = '合成证券600519，2024年全年，合并报表，归属于上市公司股东的净利润，单位：万元；预计盈利648.13至753.93万元。这是测试转录，不是实际原PDF。';
-const revisedText = '合成证券600519，2024年全年，合并报表，归属于上市公司股东的净利润，单位：万元；预计亏损594.25至891.37万元。修订预告不是实际业绩。测试转录，不是实际原PDF。';
-const discoveryItem = {
-  security_code: '600519', name: '合成公司', strategy: 'SWING', sector: '合成行业', themes: [], discovery_state: 'QUEUED', condition_match: 'FULL_CONDITIONS', research_priority: 'MEDIUM',
-  reason_codes: ['SYNTHETIC_RETURN_20D'], supporting_observations: [{ code: 'RETURN_20D', label: '20日收益（合成）', value: 0.12, source_ref: 'synthetic:history-source' }],
-  uncertainties: ['FUNDAMENTAL_FRESHNESS_UNKNOWN'], data_health: 'partial', catalyst_status: 'PARTIAL', fundamental_status: 'PARTIAL', evidence_gate: 'PARTIAL',
-  restricted_universe: { status: 'UNKNOWN', reason_codes: [], listing_age_status: 'UNKNOWN' }, discovered_at: '2026-10-22T02:00:00Z', as_of: '2026-10-21', provenance_refs: ['synthetic:market-source', 'synthetic:announcement-directory'],
-};
-const discoverySnapshot = {
-  schema_version: 'full-market-discovery.v0.1', status: 'partial', as_of: '2026-10-21', fetched_at: '2026-10-22T02:01:00Z', last_successful_at: null, refresh_attempted_at: null,
-  market_context: { status: 'partial', core_universe_count: 100, sector_count: 1 }, funnel: { core_universe: 100, cheap_scan_passed: 30, qualification_candidates: 24, queue_items: { SHORT: 0, SWING: 1, MEDIUM: 0 }, excluded: 0 },
-  datasets: [], queues: { SHORT: [], SWING: [discoveryItem], MEDIUM: [] }, excluded: [], limitations: ['合成目录；公告窗口未证明查全，不包含原文'], cache: { hit: false, age_seconds: null },
-};
 const results = []; let browser;
 const readDatabase = page => page.evaluate(() => new Promise((resolve, reject) => {
   const request = indexedDB.open('vr-research-workflow');
@@ -91,7 +75,6 @@ try {
       if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' });
       if (url.origin !== baseURL) { external.push(url.href); return route.abort(); }
       if (!path.startsWith('/api/')) return route.continue();
-      const ok = data => route.fulfill({ json: { data } });
       reads.push({ path, method: request.method() });
       if (path === '/api/myreports/page-read' && request.method() === 'POST') {
         const input = request.postDataJSON(), record = input.report_id === originalReport.id ? originalReport : revisedReport;
@@ -99,19 +82,11 @@ try {
         assert.equal(input.expected_file_sha256, record.file_sha256);
         assert.deepEqual(input.selected_report_ids, [record.id]);
         if (delayed && record.id === revisedReport.id) { delayed.started(); await delayed.promise; }
-        const text = record.id === originalReport.id ? originalText : revisedText;
-        const requested = Array.from({ length: input.page_to - input.page_from + 1 }, (_, i) => input.page_from + i);
-        return ok({ report_id: record.id, file_sha256: record.file_sha256, scope: 'INDEXED_PAGE_TEXT_ONLY', full_report_read: false, requested, returned_chars: text.length, complete_requested_text: requested.length === 1,
-          coverage: { readable: [requested[0]], omitted: requested.slice(1), invalid: [], unreadable: [], error: [] }, items: requested.map((page, i) => i ? ({ page, status: 'omitted', reason: 'BUDGET' }) : ({ page, status: 'readable', reason: 'AVAILABLE', text, returned_chars: text.length, indexed_chars: text.length, truncated: false })) });
+        return route.fulfill({ json: researchCheckPageReadReply(input, reportStage) });
       }
       if (request.method() !== 'GET') { writes.push({ path, method: request.method() }); return route.fulfill({ status: 503, json: { detail: 'Synthetic fixture rejects all mutation/model endpoints' } }); }
-      if (path === '/api/screener/discovery') return ok(discoverySnapshot);
-      if (path === '/api/myreports') return ok(reportStage ? [originalReport, revisedReport] : [originalReport]);
-      if (path === '/api/myreports/fulltext-search') return ok([{ report_id: url.searchParams.get('report_ids'), page: 1, snippet: '合成命中仅用于定位，不是已读正文。' }]);
-      if (path === '/api/evidence') return ok(navigationEvidencePage([], url.searchParams));
-      if (path === '/api/campaigns' || path === '/api/thesis') return ok({ items: [], total: 0 });
-      if (path === '/api/native-intel/security-context/600519') return ok({ status: 'normal', security: { code: '600519', company_name: '合成公司' }, mapping: { terms: [], errors: [] }, window_hours: 24, observation: { items: [], item_count: 0 }, rank_history: {} });
-      const reply = readReply('GET', path, url.search); if (reply) return route.fulfill({ json: reply });
+      const reply = researchCheckReadReply(path, url.search, reportStage) ?? readReply('GET', path, url.search);
+      if (reply !== null) return route.fulfill({ json: reply });
       return route.fulfill({ status: 503, json: { detail: 'Synthetic unavailable source' } });
     });
     let page = await context.newPage(); page.setDefaultTimeout(15000); page.on('pageerror', error => errors.push(error.message));
