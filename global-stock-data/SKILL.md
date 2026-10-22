@@ -755,6 +755,11 @@ def stock_kline_yahoo(symbol: str, interval: str = "1d",
         raise ValueError("invalid Yahoo chart response")
     chart = charts[0]
     meta = chart.get("meta") or {}
+    granularity = meta.get("dataGranularity") if isinstance(meta, dict) else None
+    # max 等范围可能被服务端改成粗周期；不能仅按请求给响应贴标签。
+    aliases = {"1h": "60m"}
+    if not isinstance(granularity, str) or aliases.get(granularity, granularity) != aliases.get(interval, interval):
+        raise ValueError("missing or mismatched chart granularity")
     timezone_name = meta.get("exchangeTimezoneName") if isinstance(meta, dict) else None
     try:
         exchange_tz = ZoneInfo(timezone_name)
@@ -808,7 +813,8 @@ def stock_kline_yahoo(symbol: str, interval: str = "1d",
 ```
 
 本项目该函数仅为内嵌示例，并未接入 `backend/gstock.py`、行情 API 或 AI K 线工具。
-示例按响应中的 IANA 交易所时区转换日期（系统须有对应时区数据库）；元数据缺失或无效即失败，不猜测本机时区。
+示例核对响应 `meta.dataGranularity` 与请求周期一致（仅 `1h` 与 `60m` 视为等价）；声明缺失或不匹配即失败，不把服务端降采样结果重贴标签。
+日期按响应中的 IANA 交易所时区转换（系统须有对应时区数据库）；时区元数据缺失或无效即失败，不猜测本机时区。
 空 `timestamp: []` 才是合法空序列；缺失 OHLC、错位数组、坏时间戳或冲突重复会带字段/行号拒绝整个载荷，不补零、不静默跳行。
 周/月标签仅转换到交易所日期，不重采样或标定完整周期。离线合成验证不代表 Yahoo 自动取数许可、实时可用性或全市场覆盖，也不扩大项目来源使用范围。
 

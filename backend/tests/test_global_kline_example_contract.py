@@ -25,12 +25,12 @@ def stamp(value):
     return int(datetime.fromisoformat(value).timestamp())
 
 
-def payload(timestamps=None, timezone="America/New_York", **columns):
+def payload(timestamps=None, timezone="America/New_York", granularity="1d", **columns):
     timestamps = [stamp("2024-03-11T09:30:00-04:00")] if timestamps is None else timestamps
     quote = {key: [1.123456] * len(timestamps) for key in ("open", "high", "low", "close")}
     quote["volume"] = [7] * len(timestamps)
     quote.update(columns)
-    return {"chart": {"error": None, "result": [{"meta": {"exchangeTimezoneName": timezone},
+    return {"chart": {"error": None, "result": [{"meta": {"exchangeTimezoneName": timezone, "dataGranularity": granularity},
             "timestamp": timestamps, "indicators": {"quote": [quote]}}]}}
 
 
@@ -82,7 +82,7 @@ def test_exchange_date_independent_of_host_timezone(example, exchange, instant, 
 ])
 def test_dst_intraday_offsets_are_explicit(example, instant, expected):
     fetch, response, _ = example
-    response.json.return_value = payload([stamp(instant)])
+    response.json.return_value = payload([stamp(instant)], granularity="1m")
     assert fetch("SYNTHETIC", "1m")[0]["date"] == expected
 
 
@@ -91,9 +91,43 @@ def test_dst_intraday_offsets_are_explicit(example, instant, expected):
     ("1d", "2024-03-11"), ("1wk", "2024-03-11"), ("1mo", "2024-03-11"),
 ])
 def test_explicit_interval_not_month_minute_substring(example, interval, expected):
-    fetch, _, get = example
+    fetch, response, get = example
+    response.json.return_value = payload(granularity=interval)
     assert fetch("SYNTHETIC", interval, "1mo")[0]["date"] == expected
     assert get.call_args.kwargs["params"] == {"interval": interval, "range": "1mo"}
+
+
+@pytest.mark.parametrize("requested,declared", [("1d", "1mo"), ("1m", "1d"),
+    ("1wk", "1d"), ("1mo", "1d"), ("1h", "1d")])
+def test_provider_granularity_must_match_request_even_for_max_range(example, requested, declared):
+    fetch, response, _ = example
+    response.json.return_value = payload(granularity=declared)
+    with pytest.raises(ValueError, match="granularity"):
+        fetch("SYNTHETIC", requested, "max")
+
+
+@pytest.mark.parametrize("declared", [None, "", "invalid", True, ["1d"]])
+def test_invalid_declared_granularity_is_not_assumed(example, declared):
+    fetch, response, _ = example
+    response.json.return_value = payload(granularity=declared)
+    with pytest.raises(ValueError, match="granularity"):
+        fetch("SYNTHETIC")
+
+
+def test_missing_declared_granularity_is_not_assumed(example):
+    fetch, response, _ = example
+    response.json.return_value = payload()
+    del response.json.return_value["chart"]["result"][0]["meta"]["dataGranularity"]
+    with pytest.raises(ValueError, match="granularity"):
+        fetch("SYNTHETIC")
+
+
+@pytest.mark.parametrize("declared", ["1h", "60m"])
+def test_one_hour_response_aliases_are_explicitly_equivalent(example, declared):
+    fetch, response, get = example
+    response.json.return_value = payload(granularity=declared)
+    assert fetch("SYNTHETIC", "1h")[0]["date"] == "2024-03-11 09:30-04:00"
+    assert get.call_args.kwargs["params"]["interval"] == "1h"
 
 
 @pytest.mark.parametrize("timezone", [None, "", "EST-not-an-IANA-zone"])
@@ -190,7 +224,7 @@ def test_sorting_deduplicates_identical_timestamps_without_summing_volume(exampl
 def test_source_period_labels_and_volume_are_preserved_without_aggregation(example, interval):
     fetch, response, _ = example
     instants = ["2024-12-30T09:30:00-05:00", "2025-01-01T09:30:00-05:00", "2025-02-03T09:30:00-05:00"]
-    response.json.return_value = payload([stamp(value) for value in instants], volume=[7, 8, 9])
+    response.json.return_value = payload([stamp(value) for value in instants], granularity=interval, volume=[7, 8, 9])
     rows = fetch("SYNTHETIC", interval)
     assert [row["date"] for row in rows] == [value[:10] for value in instants]
     assert [row["volume"] for row in rows] == [7, 8, 9]
