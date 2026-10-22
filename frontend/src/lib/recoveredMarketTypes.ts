@@ -400,6 +400,7 @@ export type DiscoveryRestrictedStatus = {
 };
 
 export type DiscoveryOpportunityItem = {
+  condition_match?: "FULL_CONDITIONS" | "DEGRADED_CLUE" | "UNKNOWN";
   security_code: string;
   name: string;
   strategy: DiscoveryStrategy;
@@ -431,6 +432,9 @@ export type DiscoveryExcludedItem = Partial<DiscoveryOpportunityItem> & {
 };
 
 export type DiscoveryDatasetStatus = {
+  request_status?: "NORMAL" | "PARTIAL" | "NOT_REQUESTED";
+  material_completeness?: "UNKNOWN";
+  source_coverage?: { scope: string; window_complete: boolean; full_text_included: boolean };
   dataset_id: string;
   status: "normal" | "partial" | "stale" | "unavailable" | "error";
   as_of: string | null;
@@ -440,6 +444,19 @@ export type DiscoveryDatasetStatus = {
 };
 
 export type DiscoverySnapshot = {
+  coverage?: {
+    universe: string;
+    qualification_limit: number;
+    qualification_omitted: number;
+    qualification_order: string;
+    queue_limit: number;
+    queue_eligible: Record<DiscoveryStrategy, number>;
+    queue_omitted: Record<DiscoveryStrategy, number>;
+    queue_order: string;
+    filter_scope: "RETURNED_QUEUE_ONLY";
+    excluded_total: number;
+    excluded_omitted: number;
+  };
   schema_version: string;
   status: "normal" | "partial" | "stale" | "unavailable" | "error";
   as_of: string | null;

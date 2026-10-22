@@ -1,6 +1,7 @@
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
+import { RESEARCH_NOTE_SOURCE_BOUNDARY, researchChatSourceBoundary } from '../../src/lib/researchNote.ts';
 
 // Actual component, synthetic hooks/JSX and module boundaries. No DOM, API or provider.
 const source = readFileSync(new URL('../../src/components/ui/AskAiButton.tsx', import.meta.url), 'utf8');
@@ -61,7 +62,7 @@ export function harness(initial = {}, module = componentModule()) {
     },
     '@/lib/chatToolStatus': { parseStoredChatTools: value => value, chatToolStatusLabel: () => '', applyChatToolResult: value => value },
     '@/lib/reportChatCoverage': { parseReportChatCoverage: value => value },
-    '@/lib/researchNote': { conversationNoteMetadata: metadata => {
+    '@/lib/researchNote': { RESEARCH_NOTE_SOURCE_BOUNDARY, researchChatSourceBoundary, conversationNoteMetadata: metadata => {
       if (metadata.invalid) throw new Error('synthetic invalid metadata'); return metadata;
     }, parseNoteResearchMetadata: value => value },
     '@/lib/utils': { cn: () => '' },

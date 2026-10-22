@@ -491,3 +491,74 @@ def test_partial_rdp_preserves_current_rows_and_temporal_guards():
     assert dataset["status"] == "partial"
     assert histories[rows[0]["code"]]["_discovery_stale"] is True
     assert any(not row["_discovery_stale"] for row in histories.values())
+
+
+def test_known_nonpositive_returns_are_failed_conditions_not_unknown():
+    for strategy, metric in (("SWING", "return_20d"), ("MEDIUM", "return_60d")):
+        for value in (-0.2, 0.0):
+            result = discovery._cheap_strategy(
+                strategy, _row("600001", "合成", "科技", change=1, amount=100, turnover=2),
+                _history("600001", value, value), {"status": "SUPPORTIVE", "average_change_pct": 1},
+                amount_median=100, turnover_upper=2,
+            )
+            assert result["passed"] is False
+            assert result["status"] == "NORMAL"
+            assert result["condition_match"] == "NOT_MATCHED"
+            assert result["failed_conditions"] == [f"{metric.upper()}_NOT_POSITIVE"]
+            assert f"{metric.upper()}_UNKNOWN" not in result["missing"]
+            assert "HISTORICAL_RETURN_UNAVAILABLE_SECTOR_FALLBACK" not in result["reason_codes"]
+
+
+def test_missing_stale_or_invalid_returns_preserve_explicit_degraded_fallback():
+    for strategy, metric in (("SWING", "return_20d"), ("MEDIUM", "return_60d")):
+        for value, status, temporal in ((None, "normal", None), (float("nan"), "normal", None),
+                                         (float("inf"), "normal", None), (0.2, "unknown", None),
+                                         (0.2, "normal", "RDP_LATEST_DATE_BEHIND_MARKET")):
+            history = {**_history("600001", 0.2, 0.2), metric: value, f"{metric}_status": status,
+                       "_discovery_temporal_reason": temporal, "_discovery_stale": bool(temporal)}
+            result = discovery._cheap_strategy(
+                strategy, _row("600001", "合成", "科技", change=1, amount=100, turnover=2),
+                history, {"status": "SUPPORTIVE", "average_change_pct": 1}, amount_median=100, turnover_upper=2,
+            )
+            assert result["passed"] is True  # Existing product fallback, not a new eligibility rule.
+            assert result["status"] == "PARTIAL"
+            assert result["condition_match"] == "DEGRADED_CLUE"
+            assert result["failed_conditions"] == []
+            assert "HISTORICAL_RETURN_UNAVAILABLE_SECTOR_FALLBACK" in result["reason_codes"]
+            assert temporal in result["missing"] if temporal else f"{metric.upper()}_UNKNOWN" in result["missing"]
+
+
+def test_nonpositive_exclusion_and_positive_matching_survive_projection():
+    result = discovery.run_discovery(providers=_providers(), now=NOW)
+    item = next(item for item in result["excluded"] if item["security_code"] == "600001" and item["strategy"] == "SWING")
+    assert item["reason_codes"] == ["RETURN_20D_NOT_POSITIVE"]
+    assert item["data_health"] == "normal"
+    assert result["queues"]["SWING"][0]["condition_match"] == "FULL_CONDITIONS"
+    dataset = next(item for item in result["datasets"] if item["dataset_id"] == "announcements.recent")
+    assert dataset["request_status"] == "NORMAL"
+    assert dataset["status"] == "partial"
+    assert dataset["material_completeness"] == "UNKNOWN"
+    assert dataset["source_coverage"]["window_complete"] is False
+    assert all("ANNOUNCEMENT_WINDOW_COVERAGE_UNPROVEN" in item["uncertainties"] for item in _all_queue_items(result))
+
+
+def test_sampling_queue_and_excluded_limits_are_reported_without_claiming_full_coverage():
+    rows = [_row(f"600{index:03}", f"合成{index}", "科技", change=1, amount=100, turnover=2) for index in range(70)]
+    histories = [_history(row["code"], 0.2, 0.3) for row in rows]
+    result = discovery.run_discovery(providers=_providers(rows, histories=histories), now=NOW)
+    coverage = result["coverage"]
+    assert coverage["qualification_limit"] == 24
+    assert coverage["qualification_omitted"] == 46
+    assert coverage["queue_limit"] == 12
+    assert coverage["filter_scope"] == "RETURNED_QUEUE_ONLY"
+    assert coverage["universe"].endswith("EXCLUDES_BEIJING")
+    for strategy in discovery.STRATEGIES:
+        assert coverage["queue_eligible"][strategy] == 24
+        assert coverage["queue_omitted"][strategy] == 12
+        assert len(result["queues"][strategy]) == 12
+    assert all(item["research_priority"] != "HIGH" for item in _all_queue_items(result))
+
+    excluded = discovery.run_discovery(providers=_providers(rows, histories=[_history(row["code"], 0, -0.1) for row in rows]), now=NOW)
+    assert excluded["coverage"]["excluded_total"] == 140
+    assert excluded["coverage"]["excluded_omitted"] == 80
+    assert len(excluded["excluded"]) == 60

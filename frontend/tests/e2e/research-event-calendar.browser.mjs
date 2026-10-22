@@ -177,6 +177,10 @@ async function main() {
     const lockupSource = data.sources.find((item) => item.event_type === "LOCKUP_EXPIRY");
     assert.equal(lockupSource.status, "PARTIAL");
     assert.equal(lockupSource.security_statuses.find((item) => item.security_code === "000002").status, "ERROR");
+    const announcementSource = data.sources.find((item) => item.event_type === "ANNOUNCEMENT");
+    assert.equal(announcementSource.request_status, "NORMAL");
+    assert.equal(announcementSource.material_completeness, "UNKNOWN");
+    assert.ok(announcementSource.security_statuses.every((item) => item.source_coverage.window_complete === false));
     assert.deepEqual(data.writes, { campaign: 0, thesis: 0, evidence: 0, decision: 0, trade: 0, account: 0 });
 
     staticServer = await startStaticServer(frontendDist, frontendPort, backendPort);
@@ -208,6 +212,8 @@ async function main() {
       await page.getByRole("heading", { name: "事件日历" }).waitFor();
       await page.getByTestId("research-event-partial").waitFor();
       await page.getByTestId("research-event-row").first().waitFor();
+      await page.getByTestId("research-event-source-ANNOUNCEMENT").getByText("请求成功", { exact: true }).waitFor();
+      assert.match(await page.getByTestId("research-event-coverage-ANNOUNCEMENT").innerText(), /不代表所选日期窗口已查全.*首页最多 15 条.*不是公告全文/);
       assert.equal(await page.locator("h1").filter({ hasText: "决策待办" }).count(), 1);
       const dimensions = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
       assert.ok(dimensions.scroll <= dimensions.client + 2, `${viewport.name} overflow: ${JSON.stringify(dimensions)}`);

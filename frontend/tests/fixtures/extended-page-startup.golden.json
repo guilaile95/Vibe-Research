@@ -126,6 +126,8 @@
           "event_type": "PERIODIC_REPORT",
           "source": "eastmoney:RPT_PUBLIC_BS_APPOIN",
           "status": "UNAVAILABLE",
+          "request_status": "UNAVAILABLE",
+          "material_completeness": "UNKNOWN",
           "security_count": 1,
           "success_count": 0,
           "failure_count": 1,
@@ -139,13 +141,16 @@
             }
           ],
           "limitations": [
-            "NO_EXPLICIT_EVENT_CATALYST_LINK"
+            "NO_EXPLICIT_EVENT_CATALYST_LINK",
+            "REQUEST_SUCCESS_DOES_NOT_PROVE_WINDOW_COVERAGE"
           ]
         },
         {
           "event_type": "LOCKUP_EXPIRY",
           "source": "eastmoney:RPT_LIFT_STAGE",
           "status": "UNAVAILABLE",
+          "request_status": "UNAVAILABLE",
+          "material_completeness": "UNKNOWN",
           "security_count": 1,
           "success_count": 0,
           "failure_count": 1,
@@ -159,13 +164,16 @@
             }
           ],
           "limitations": [
-            "NO_EXPLICIT_EVENT_CATALYST_LINK"
+            "NO_EXPLICIT_EVENT_CATALYST_LINK",
+            "REQUEST_SUCCESS_DOES_NOT_PROVE_WINDOW_COVERAGE"
           ]
         },
         {
           "event_type": "DIVIDEND_BONUS",
           "source": "eastmoney:RPT_SHAREBONUS_DET",
           "status": "UNAVAILABLE",
+          "request_status": "UNAVAILABLE",
+          "material_completeness": "UNKNOWN",
           "security_count": 1,
           "success_count": 0,
           "failure_count": 1,
@@ -179,13 +187,16 @@
             }
           ],
           "limitations": [
-            "NO_EXPLICIT_EVENT_CATALYST_LINK"
+            "NO_EXPLICIT_EVENT_CATALYST_LINK",
+            "REQUEST_SUCCESS_DOES_NOT_PROVE_WINDOW_COVERAGE"
           ]
         },
         {
           "event_type": "ANNOUNCEMENT",
           "source": "eastmoney:np-anotice-stock",
           "status": "UNAVAILABLE",
+          "request_status": "UNAVAILABLE",
+          "material_completeness": "UNKNOWN",
           "security_count": 1,
           "success_count": 0,
           "failure_count": 1,
@@ -199,12 +210,16 @@
             }
           ],
           "limitations": [
-            "NO_EXPLICIT_EVENT_CATALYST_LINK"
+            "NO_EXPLICIT_EVENT_CATALYST_LINK",
+            "REQUEST_SUCCESS_DOES_NOT_PROVE_WINDOW_COVERAGE",
+            "ANNOUNCEMENT_FIRST_PAGE_ONLY",
+            "METADATA_NOT_FULL_TEXT"
           ]
         }
       ],
       "limitations": [
-        "NO_EXPLICIT_EVENT_CATALYST_LINK"
+        "NO_EXPLICIT_EVENT_CATALYST_LINK",
+        "REQUEST_SUCCESS_DOES_NOT_PROVE_WINDOW_COVERAGE"
       ],
       "writes": {
         "campaign": 0,
