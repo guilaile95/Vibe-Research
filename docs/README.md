@@ -20,6 +20,7 @@
 
 1. **看市场、找线索**：从应用的每日复盘、资讯和发现入口开始，先看时间、来源与缺失状态。
 2. **研究一个对象**：进入候选研究或个股数据，保存需要的 Evidence 和 Thesis，回到原始材料核对结论。
+   - [本地问题核对闭环](RESEARCH_QUESTION_LOOP.md)：来由、原页材料、手工口径核对、不可变轮次及浏览器本地存储边界。
 3. **留下决策依据**：用户明确确认后形成 Frozen Decision；实际成交或 no-trade 与后续 Outcome 分开记录。
 4. **评价工具是否有用**：按 [Product Reality #162](https://github.com/guilaile95/Vibe-Research/issues/162) 记录真实任务，不能把测试或演示计为观察日。
 

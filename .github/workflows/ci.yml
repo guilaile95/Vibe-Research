@@ -139,6 +139,40 @@ jobs:
         uses: ./.github/actions/setup-playwright
         timeout-minutes: 15
 
+      - name: Run atomic research workflow browser acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          RESEARCH_WORKFLOW_STORAGE_OUTPUT_DIR: ${{ runner.temp }}/research-workflow-storage-evidence
+        run: npm run test:e2e:research-workflow-storage
+
+      - name: Preserve atomic research workflow evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: research-workflow-storage-evidence
+          path: ${{ runner.temp }}/research-workflow-storage-evidence
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Run same-question T0 to T1 browser acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          RESEARCH_CHECK_LOOP_OUTPUT_DIR: ${{ runner.temp }}/research-check-loop-evidence
+        run: npm run test:e2e:research-check-loop
+
+      - name: Preserve same-question research evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: research-check-loop-evidence
+          path: ${{ runner.temp }}/research-check-loop-evidence
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Run stock-data panel smoke E2E
         if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
