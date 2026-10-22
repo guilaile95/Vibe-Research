@@ -6,7 +6,8 @@ export function candidateEntryContext(search: URLSearchParams): {
   returnTo: string;
   discoveryStrategy: DiscoveryStrategy | null;
 } {
-  const returnTo = safeInternalReturnTo(search.get("return_to"), "");
+  const returnTo = search.getAll("return_to").length === 1
+    ? safeInternalReturnTo(search.get("return_to"), "") : "";
   const generic = { returnTo, discoveryStrategy: null };
   const strategy = search.get("strategy");
   if (

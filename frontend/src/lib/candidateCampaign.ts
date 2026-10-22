@@ -238,8 +238,10 @@ export function presentPortfolioCapitalContext(
   };
 }
 
-export function candidateWorkspaceHref(code: string): string {
-  return `/candidates/${encodeURIComponent(code.trim())}`;
+export function candidateWorkspaceHref(code: string, returnTo?: string): string {
+  const path = `/candidates/${encodeURIComponent(code.trim())}`;
+  const target = safeInternalReturnTo(returnTo ?? null, "");
+  return target ? `${path}?${new URLSearchParams({ return_to: target })}` : path;
 }
 
 const EVIDENCE_SUBJECT_TYPES = ["stock", "sector", "theme"] as const;

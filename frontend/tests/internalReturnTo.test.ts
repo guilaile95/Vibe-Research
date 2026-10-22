@@ -89,3 +89,11 @@ test("ThesisDetail existing evidence href includes current return_to", () => {
     "newEvidenceHref and 查看证据 must share currentReturnTo",
   );
 });
+
+test("encoded, normalized and malformed unsafe paths fail closed while nested queries survive", () => {
+  for (const value of ["/%2fevil.example", "/%252fevil.example", "/%5cevil.example", "/%255cevil.example", "/a/..//evil.example", "/%0a/evil.example", "/%00bad", "/bad%", "/bad%ZZ", "/\n/evil.example"]) {
+    assert.equal(safeInternalReturnTo(value, fallback), fallback, value);
+  }
+  const nested = "/candidates/600519?return_to=%2Fwatchlist%3Fsort%3Damount%23watchlist-600519";
+  assert.equal(safeInternalReturnTo(nested, fallback), nested);
+});

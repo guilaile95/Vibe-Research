@@ -384,3 +384,11 @@ test("findEvidenceBySourceUrl is a frontend ledger lookup and ignores deleted or
   assert.equal(findEvidenceBySourceUrl(records, ""), undefined);
   assert.equal(findEvidenceBySourceUrl(records, null), undefined);
 });
+
+test("candidate links preserve a safe list route and never add business claims", () => {
+  const target = "/watchlist?sort=amount&anomalies=1#watchlist-600519";
+  const url = new URL(candidateWorkspaceHref("600519", target), "http://localhost");
+  assert.equal(url.pathname, "/candidates/600519");
+  assert.deepEqual([...url.searchParams], [["return_to", target]]);
+  assert.equal(candidateWorkspaceHref("600519", "//evil.example"), "/candidates/600519");
+});
