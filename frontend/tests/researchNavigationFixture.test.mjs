@@ -31,6 +31,8 @@ test('browser cancellation targets the candidate-specific draft dialog, not the 
   assert.match(component, /onClick=\{\(\) => \{ if \(blocker.state === "blocked"\) blocker.reset\(\); \}\}>留下继续编辑<\/button>/);
   assert.ok(browser.includes("dialog.getByRole('button', { name: '留下继续编辑', exact: true }).click()"));
   assert.ok(!browser.includes("name: '留在此页'"));
-  assert.ok(browser.includes('await page.goBack(); await dialog.waitFor();'));
+  assert.ok(browser.includes("await dialog.waitFor({ state: 'hidden' });"));
+  assert.ok(browser.includes("await page.goBack(); await dialog.waitFor();\n      await page.waitForURL(url => url.pathname === '/candidates/600519');"));
+  assert.ok(browser.includes("await page.waitForURL(url => url.pathname === '/stock-data' && url.searchParams.get('code') === '600519');"));
   assert.ok(browser.includes("dialog.getByRole('button', { name: '放弃未保存内容并离开', exact: true }).click()"));
 });

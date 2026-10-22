@@ -84,12 +84,15 @@ try {
       await page.getByTestId('candidate-stock-data-entry').click();
       const dialog = page.getByRole('dialog', { name: '研究内容尚未保存' }); await dialog.waitFor();
       await dialog.getByRole('button', { name: '留下继续编辑', exact: true }).click();
+      await dialog.waitFor({ state: 'hidden' });
       assert.equal(new URL(page.url()).pathname, '/candidates/600519');
       assert.equal(await page.getByLabel('我的暂定看法', { exact: true }).inputValue(), '未保存的合成看法');
       await page.goBack(); await dialog.waitFor();
+      await page.waitForURL(url => url.pathname === '/candidates/600519');
       assert.equal(new URL(page.url()).pathname, '/candidates/600519');
       assert.equal(await page.getByLabel('我的暂定看法', { exact: true }).inputValue(), '未保存的合成看法');
       await dialog.getByRole('button', { name: '放弃未保存内容并离开', exact: true }).click();
+      await page.waitForURL(url => url.pathname === '/stock-data' && url.searchParams.get('code') === '600519');
       await page.getByTestId('stock-data-candidate-entry').waitFor();
       await page.screenshot({ path: join(output, `quote-failure-${width}.png`) });
       for (const code of ['', '00700', 'AAPL', 'BAD', '60051']) {
