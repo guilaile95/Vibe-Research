@@ -48,8 +48,19 @@ Use only fresh synthetic stores and controlled fixtures. The existing `tools/val
 
 Old records are read without backfilling unknown model/date/source fields or changing their bodies and identities. New optional metadata must be bounded and validated through the existing note save/import/export path. New-version backup round-trips are tested separately from old-client behavior: an old client may discard new metadata, so lossless two-way downgrade compatibility is not promised. Code rollback is not restoration of private data; no migration or automatic cleanup is included.
 
-## Results and remaining evidence
+## Implemented changes and repeatable checks
 
-Implementation and final integration results will be recorded here only after verification. The baseline is not the final deliverable.
+- Hotlist AI errors are separate from normal conclusions; unsuccessful retries retain a labelled old success. Captured source coverage distinguishes disabled/empty/omitted inputs from analysed results.
+- Today list reads distinguish loading, error, genuine empty and retained old data, with explicit retry and guarded editing. Today and Watchlist pass safe origin/anchor context to candidate research.
+- Submitted valid A-share identities retain candidate entry without a usable quote. Candidate names remain bound to the requested security; unsubmitted text and late responses cannot supply a different identity.
+- Daily-review saves can preserve a bounded generation snapshot independently of single-security research metadata. See [note-generation compatibility and rollback](NOTE_GENERATION_COMPATIBILITY_20261022.md).
+
+The existing CI runs the complete offline backend suites on Linux and Windows, frontend build/full tests, runtime tests and the existing browser suites. New synthetic checks are added without removing existing gates:
+
+- `npm run test:e2e:product-failure-states`: desktop/390px failure, stale-result, retry and request-ownership scenarios.
+- `npm run test:e2e:research-navigation`: desktop/390px submitted identity and source-return loops; the existing candidate-campaign browser suite remains enabled.
+- `npm run test:e2e:notes-backup`: additionally runs daily-review button-save, page-close/reopen and generation-aware export/import checks.
+
+Always-upload CI artifacts are `product-failure-states-evidence`, `research-navigation-evidence` and `note-generation-evidence`. These preserve screenshots and any summaries written by their harnesses; a missing artifact is not a passing scenario. The local Chromium process could not start under the execution environment's permissions, so local syntax/unit/build results are not browser acceptance. Final browser and native Windows outcomes must be read from the exact published HEAD's CI. The PR records the reviewed source identity, full test results and any CI repairs; merge and post-merge checks remain separate gates.
 
 Real provider/source reliability, real model quality, natural next-day continuation, deployed version and sustained product value are **NOT_EVALUATED** in this batch. Synthetic green tests must not activate Product Reality Day 1 or be described as demonstrated research-efficiency improvement.
