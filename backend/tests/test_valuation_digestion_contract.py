@@ -51,6 +51,11 @@ def example_valuation(price, eps_cur, eps_next):
     return namespace["full_valuation"]("000001")
 
 
+def example_digest(price, eps_cur, eps_next):
+    """Keep the portability suite's entry point on the same embedded execution."""
+    return example_valuation(price, eps_cur, eps_next)["digest_years"]
+
+
 def production_valuation(price, eps_cur, eps_next):
     rows = [{"年度": "2026", "均值": eps_cur}, {"年度": "2027", "均值": eps_next}]
     with patch.object(astock, "tencent_quote", return_value={"000001": {"name": "synthetic", "price": price}}), \
