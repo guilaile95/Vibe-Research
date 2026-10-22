@@ -957,11 +957,14 @@ def full_valuation(code: str, *, valuation_reader=None, on_quote=None) -> dict:
         if not math.isfinite(pe_26e) or pe_26e <= 0:
             return out
         out["pe_26e"] = round(pe_26e, 1)
-        if eps_27:
+        if eps_27 is not None:
             cagr = eps_27 / eps_26 - 1
             if not math.isfinite(cagr * 100):
                 return out
             out["cagr_pct"] = round(cagr * 100, 0)
+            # 已知下一期零盈利/亏损：保留增长观察，不给盈利估值结论。
+            if eps_27 <= 0:
+                return out
             peg = calc_peg(pe_26e, cagr)
             out["peg"] = round(peg, 2) if math.isfinite(peg) else None
             dig = pe_digestion(pe_26e, cagr)

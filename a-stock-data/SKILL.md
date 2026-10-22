@@ -3823,11 +3823,11 @@ def full_valuation(code: str) -> dict:
     eps_next = eps_next if eps_next is not None and math.isfinite(eps_next) else None
     pe_fwd = price / eps_cur if eps_cur is not None and eps_cur > 0 else float("inf")
     valid_pe = math.isfinite(pe_fwd) and pe_fwd > 0
-    cagr = (eps_next / eps_cur - 1) if valid_pe and eps_next else float("inf")
+    cagr = (eps_next / eps_cur - 1) if valid_pe and eps_next is not None else float("inf")
     valid_growth = math.isfinite(cagr * 100)
     peg = pe_fwd / (cagr * 100) if valid_growth and cagr > 0 else float("inf")
-    # 有限输入且已不高于目标 PE 才是 0 年；缺预测/无法消化均以 None 返回。
-    digest = pe_digestion(pe_fwd, cagr) if valid_pe and valid_growth else float("inf")
+    # 下一期仍盈利且已不高于目标 PE 才是 0 年；零盈利/亏损只保留增长观察。
+    digest = pe_digestion(pe_fwd, cagr) if valid_pe and valid_growth and eps_next > 0 else float("inf")
 
     return {
         "name": vals[1],

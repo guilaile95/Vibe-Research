@@ -66,12 +66,25 @@ class ValuationDigestionContract(unittest.TestCase):
             (60, None, None, None), (20, 1, None, None),
             (60, -1, -2, None), (60, 0, 1, None), (60, 1, 0, None),
             (60, 1, -1, None), (60, None, 2, None),
+            (20, 1, -1, None), (30, 1, -1, None),
+            (20, 1, 0, None), (30, 1, 0, None), (30, 1, 0.8, 0.0),
         ]:
             with self.subTest(price=price, current=current, following=following):
                 for compute in (example_valuation, production_valuation):
                     actual = compute(price, current, following)
                     self.assertEqual(actual["digest_years"], expected)
                     json.dumps(actual, allow_nan=False)
+
+    def test_loss_and_zero_next_eps_preserve_observation_not_estimates(self):
+        for following in (-1, 0):
+            for price in (20, 30, 60):
+                for compute, key in ((example_valuation, "eps_next"), (production_valuation, "eps_27e")):
+                    with self.subTest(compute=compute.__name__, following=following, price=price):
+                        result = compute(price, 1, following)
+                        self.assertEqual(result[key], following)
+                        self.assertEqual(result["cagr_pct"], (following - 1) * 100)
+                        self.assertIsNone(result["peg"])
+                        self.assertIsNone(result["digest_years"])
 
     def test_nonfinite_forecasts_are_missing_not_zero_years(self):
         for invalid in (float("nan"), float("inf"), float("-inf")):
