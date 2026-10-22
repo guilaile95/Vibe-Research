@@ -13,29 +13,39 @@ const displayTime = (value?: string | null) => value ? value.replace("T", " ").r
 export function NativeIntelSecurityContext({
   code,
   evidenceCapture,
+  onContextChange,
 }: {
   code: string;
+  onContextChange?: (context: Context | null, code: string) => void;
   evidenceCapture?: {
     returnTo: string;
     records?: readonly EvidenceRecord[];
   };
 }) {
-  const [context, setContext] = useState<Context | null>(null);
+  const [result, setResult] = useState<{ code: string; value: Context } | null>(null);
+  const context = result?.code === code && result.value.security.code === code ? result.value : null;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
+    onContextChange?.(null, code);
+    setResult(null);
     if (!/^\d{6}$/.test(code)) return;
     const controller = new AbortController();
     setLoading(true);
     setError(null);
     api.nativeIntelSecurityContext(code, controller.signal)
-      .then((value) => { if (!controller.signal.aborted) setContext(value); })
+      .then((value) => {
+        if (controller.signal.aborted) return;
+        if (value.security.code !== code) throw new Error("Mismatched security context");
+        setResult({ code, value });
+        onContextChange?.(value, code);
+      })
       .catch((cause) => { if (!controller.signal.aborted) setError(cause instanceof ApiError ? cause.message : "Native Intel 上下文读取失败"); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [code, retry]);
+  }, [code, retry, onContextChange]);
 
   if (!/^\d{6}$/.test(code)) return null;
   const terms = context?.mapping.terms ?? [];
@@ -46,7 +56,7 @@ export function NativeIntelSecurityContext({
     <GlassCard className="mb-4" data-testid="native-intel-security-context" data-security-code={code}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h3 className="flex items-center gap-1.5 text-sm font-semibold"><Rss className="h-4 w-4 text-primary" />公开资讯上下文 <span className="rounded bg-muted/50 px-1.5 py-0.5 text-[10px] font-normal">Native Intel · {loading ? "读取中" : statusLabel(context?.status)}</span></h3>
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold"><Rss className="h-4 w-4 text-primary" />公开资讯上下文 <span className="rounded bg-muted/50 px-1.5 py-0.5 text-[10px] font-normal">Native Intel · {loading ? "读取中" : (context ? statusLabel(context.status) : "不可用")}</span></h3>
           <p className="mt-1 text-xs text-muted-foreground">本地保存的公开资讯观察；不代表买卖建议，也不修改持仓、论点或决策。</p>
         </div>
         <button type="button" onClick={() => setRetry((value) => value + 1)} disabled={loading} className="rounded border border-border/50 p-1.5" aria-label="刷新公开资讯上下文">

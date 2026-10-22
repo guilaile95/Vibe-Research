@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, X, RefreshCw, Star } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
@@ -54,6 +54,8 @@ const saveLive = (on: boolean) => {
 };
 
 export function Watchlist() {
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [codes, setCodes] = useState<string[]>([]);
   // Reuse the existing backend security-directory projection; codes stay the identity.
   // Bind each response to its requested list so late results cannot name a new list.
@@ -77,8 +79,15 @@ export function Watchlist() {
   const [anomalies, setAnomalies] = useState<WatchlistAnomalies | null>(null);
   const [anomalyLoading, setAnomalyLoading] = useState(false);
   const [anomalyError, setAnomalyError] = useState<string | null>(null);
-  const [onlyAnomalies, setOnlyAnomalies] = useState(false);
-  const [sort, setSort] = useState<WatchlistSort>("anomaly");
+  const onlyAnomalies = searchParams.get("anomalies") === "1";
+  const requestedSort = searchParams.get("sort");
+  const sort: WatchlistSort = requestedSort === "watchlist" || requestedSort === "change" || requestedSort === "amount" ? requestedSort : "anomaly";
+  const updateView = (key: string, value: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set(key, value);
+    setSearchParams(next, { replace: true });
+  };
+
   const anomalyRunRef = useRef(0);
   const listHeadingRef = useRef<HTMLHeadingElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -213,6 +222,11 @@ export function Watchlist() {
     ),
     [anomalies, codes, onlyAnomalies, quotes, sort],
   );
+  useEffect(() => {
+    if (!/^#watchlist-\d{6}$/.test(location.hash)) return;
+    const frame = requestAnimationFrame(() => document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: "center" }));
+    return () => cancelAnimationFrame(frame);
+  }, [visibleCodes, location.hash]);
 
   const aiContext = useMemo(
     () =>
@@ -403,13 +417,13 @@ export function Watchlist() {
                     type="checkbox"
                     checked={onlyAnomalies}
                     disabled={anomalies === null}
-                    onChange={(e) => setOnlyAnomalies(e.target.checked)}
+                    onChange={(e) => updateView("anomalies", e.target.checked ? "1" : "0")}
                   />
                   仅看有异动
                 </label>
                 <select
                   value={sort}
-                  onChange={(e) => setSort(e.target.value as WatchlistSort)}
+                  onChange={(e) => updateView("sort", e.target.value)}
                   className="min-h-11 rounded border border-border bg-background px-2 py-1"
                   aria-label="自选排序"
                 >
@@ -443,14 +457,14 @@ export function Watchlist() {
                       const events = anomalyByCode[c] ?? [];
                       const name = q?.name || events[0]?.name || metadataNames.get(c);
                       return (
-                        <tr role="row" key={c} data-watchlist-code={c}>
+                        <tr role="row" key={c} id={`watchlist-${c}`} data-watchlist-code={c}>
                   <td role="cell" headers="watchlist-stock" className="px-2 py-3">
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <Link to={`/stock-data?code=${c}`} className="inline-flex min-h-11 items-center rounded font-mono hover:text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
                         {c}
                       </Link>
                       <Link
-                        to={candidateWorkspaceHref(c)}
+                        to={candidateWorkspaceHref(c, `${location.pathname}${location.search}#watchlist-${c}`)}
                         className="inline-flex min-h-11 items-center rounded px-2 text-[11px] text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                         data-testid={`watchlist-candidate-${c}`}
                       >

@@ -1,3 +1,4 @@
+import { runNoteGeneration } from './note-generation.fixture.mjs';
 import { routeCredentialStatus } from './credential-generation.fixture.mjs';
 /**
  * 研究记录备份真实浏览器路径：
@@ -523,6 +524,7 @@ try {
 
   await runAttributionOwnership(browser, frontend);
   await runTradeListOwnership(browser, frontend);
+  await runNoteGeneration(browser, frontend);
   console.log("notes backup browser E2E: PASS");
 } finally {
   if (browser) await browser.close().catch(() => {});

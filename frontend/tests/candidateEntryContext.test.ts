@@ -67,3 +67,9 @@ test("Untrusted ratings, reasons and campaign hints never become research contex
   const claimed = entry({ rating: "BUY", reason: "verified_fact", campaign_id: "fake_campaign", priority: "HIGH" });
   assert.deepEqual(candidateEntryContext(claimed), candidateEntryContext(original));
 });
+
+test("duplicate return targets are rejected even for generic navigation", () => {
+  const search = new URLSearchParams({ return_to: "/watchlist#watchlist-600519" });
+  search.append("return_to", "//evil.example");
+  assert.deepEqual(candidateEntryContext(search), { returnTo: "", discoveryStrategy: null });
+});

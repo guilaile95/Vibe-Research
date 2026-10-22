@@ -39,6 +39,7 @@ import { SealQualityCard } from "@/components/dailyReview/SealQualityCard";
 import { northboundErrorMessage } from "@/lib/northboundView";
 import { loadLlm } from "@/lib/llm";
 import { useDailyReviewAiTaskStore } from "@/stores/dailyReviewAiTaskStore";
+import { dailyReviewNoteGeneration } from "@/lib/noteGeneration";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import {
   loadWatchAuthoritative,
@@ -176,6 +177,11 @@ export function DailyReview() {
 
   // 自选（后端权威；启动时一次性迁移 localStorage）
   const [watchCodes, setWatchCodes] = useState<string[]>([]);
+  const [watchListState, setWatchListState] = useState<"loading" | "ready" | "error">("loading");
+  const [watchListError, setWatchListError] = useState<string | null>(null);
+  const [watchListReadAt, setWatchListReadAt] = useState<string | null>(null);
+  const watchListRequest = useRef(0);
+  const watchListBusy = useRef(false);
   const [watchEtag, setWatchEtag] = useState<string | null>(null);
   const [watchQuotes, setWatchQuotes] = useState<Record<string, Quote>>({});
   const [watchInput, setWatchInput] = useState("");
@@ -452,29 +458,44 @@ export function DailyReview() {
     });
   };
 
+  const reloadWatchList = async () => {
+    if (watchListBusy.current) return;
+    watchListBusy.current = true;
+    const request = ++watchListRequest.current;
+    const active = () => mountedRef.current && request === watchListRequest.current;
+    setWatchListState("loading");
+    setWatchListError(null);
+    try {
+      const r = await loadWatchAuthoritative();
+      if (!active()) return;
+      if (r.status === "corrupted" || r.migrationError) throw new Error("unconfirmed watchlist");
+      setWatchCodes(r.codes);
+      setWatchEtag(r.etag);
+      setWatchListState("ready");
+      setWatchListReadAt(new Date().toLocaleString("zh-CN"));
+      refreshWatch(r.codes);
+    } catch {
+      if (!active()) return;
+      setWatchListState("error");
+      setWatchListError("关注清单读取失败，当前清单尚未确认。请重试或进入自选页检查。");
+    } finally {
+      if (active()) watchListBusy.current = false;
+    }
+  };
+
   useEffect(() => {
     mountedRef.current = true;
     loadDailyReview();
     loadNorthbound();
     loadBk11History();
     loadHistory({ trade_date: "", offset: 0 });
-    loadWatchAuthoritative()
-      .then((r) => {
-        if (!mountedRef.current) return;
-        setWatchCodes(r.codes);
-        setWatchEtag(r.etag);
-        refreshWatch(r.codes);
-      })
-      .catch(() => {
-        if (!mountedRef.current) return;
-        refreshWatch([]);
-        setWatchCodes([]);
-        setWatchEtag(null);
-      });
+    void reloadWatchList();
     // 仅首次挂载：不自动保存、不自动 AI
     return () => {
       mountedRef.current = false;
       watchRequest.current += 1;
+      watchListRequest.current += 1;
+      watchListBusy.current = false;
       historyRequestRef.current += 1;
       detailRequestRef.current += 1;
       comparisonRequestRef.current += 1;
@@ -945,30 +966,35 @@ export function DailyReview() {
     );
   };
 
-  const persistWatch = async (next: string[]) => {
+  const persistWatch = async (next: string[], clearInput = false) => {
+    if (watchListState !== "ready" || watchListBusy.current) return;
+    watchListBusy.current = true;
+    const request = ++watchListRequest.current;
+    const active = () => mountedRef.current && request === watchListRequest.current;
+    setWatchListState("loading");
+    setWatchListError(null);
     try {
       const r = await saveWatchAuthoritative(next, watchEtag);
+      if (!active()) return;
       setWatchCodes(r.codes);
       setWatchEtag(r.etag);
+      setWatchListState("ready");
+      setWatchListReadAt(new Date().toLocaleString("zh-CN"));
+      if (clearInput) setWatchInput("");
       refreshWatch(r.codes);
     } catch {
-      // 版本冲突时重载权威列表
-      try {
-        const r = await loadWatchAuthoritative();
-        setWatchCodes(r.codes);
-        setWatchEtag(r.etag);
-        refreshWatch(r.codes);
-      } catch {
-        /* ignore */
-      }
+      if (!active()) return;
+      setWatchListState("error");
+      setWatchListError("关注清单保存未确认成功，保留上次清单；请重新读取后再编辑。");
+    } finally {
+      if (active()) watchListBusy.current = false;
     }
   };
 
   const addWatch = () => {
     const { next, added } = addCodes(watchCodes, watchInput);
-    setWatchInput("");
     if (!added) return;
-    void persistWatch(next);
+    void persistWatch(next, true);
   };
 
   const removeWatch = (c: string) => {
@@ -1010,6 +1036,7 @@ export function DailyReview() {
   const taskContent = useDailyReviewAiTaskStore((s) => s.content);
   const taskStreamContent = useDailyReviewAiTaskStore((s) => s.streamContent);
   const taskResultMeta = useDailyReviewAiTaskStore((s) => s.resultMeta);
+  const taskGeneration = taskResultMeta ? dailyReviewNoteGeneration(taskResultMeta, taskContent) : undefined;
   const taskError = useDailyReviewAiTaskStore((s) => s.error);
   const taskRestoreError = useDailyReviewAiTaskStore((s) => s.restoreError);
   const taskStartedAt = useDailyReviewAiTaskStore((s) => s.startedAt);
@@ -1101,13 +1128,14 @@ export function DailyReview() {
       <GlassCard className="mb-6">
         <div className="mb-3 flex flex-wrap gap-2">
           <input
+            disabled={watchListState !== "ready"}
             value={watchInput}
             onChange={(e) => setWatchInput(e.target.value.replace(/[^\d,\s]/g, "").slice(0, 80))}
             onKeyDown={(e) => e.key === "Enter" && addWatch()}
             placeholder="加自选：可批量，如 600519 000858"
             className="min-w-0 flex-1 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
           />
-          <button onClick={addWatch}
+          <button disabled={watchListState !== "ready"} onClick={addWatch}
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25">
             <Plus className="h-4 w-4" /> 增加
           </button>
@@ -1115,14 +1143,14 @@ export function DailyReview() {
         {watchQuoteError && <p role="alert" className="mb-2 text-xs text-warning">{watchQuoteError}</p>}
         {watchRequestCompletedAt && <p className="mb-2 text-xs text-muted-foreground">请求完成于 {new Date(watchRequestCompletedAt).toLocaleTimeString("zh-CN")}（非行情时间）</p>}
         {watchCodes.length === 0 ? (
-          <p className="text-sm text-muted-foreground/60">加上你关注的股票，手动刷新价格快照与涨跌。</p>
+          <p className="text-sm text-muted-foreground/60">{watchListState === "ready" ? "加上你关注的股票，手动刷新价格快照与涨跌。" : "清单尚未确认，暂不可编辑。"}</p>
         ) : (
           <div className="grid grid-cols-2 gap-2" data-testid="today-watch-manager-quotes">
             {watchCodes.map((c) => {
               const q = watchQuotes[c];
               return (
                 <div key={c} className="group relative min-w-0 rounded-lg bg-muted/25 p-3">
-                  <button onClick={() => removeWatch(c)} title="移除"
+                  <button disabled={watchListState !== "ready"} onClick={() => removeWatch(c)} title="移除"
                     className="absolute right-1.5 top-1.5 text-muted-foreground/40 opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100">
                     <X className="h-3.5 w-3.5" />
                   </button>
@@ -1210,7 +1238,7 @@ export function DailyReview() {
         {taskContent ? (
           <>
             <div className="prose prose-sm dark:prose-invert mt-4 max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>{taskContent}</ReactMarkdown></div>
-            {(taskStatus === "success" || taskStatus === "restored") && <div className="mt-3"><SaveNoteButton kind="复盘" title={`每日复盘 ${dr?.trade_date || today}`} content={taskContent} /></div>}
+            {(taskStatus === "success" || taskStatus === "restored") && <div className="mt-3"><SaveNoteButton kind="复盘" title={`每日复盘 ${taskResultMeta?.trade_date || dr?.trade_date || today}`} content={taskContent} generation={taskGeneration} />{!taskGeneration && <p className="mt-1 text-xs text-muted-foreground">当前正文与原结果依据未确认一致，将仅保存正文，不附生成依据。</p>}</div>}
           </>
         ) : !needConfig && taskStatus === "idle" ? (
           <p className="mt-3 text-sm text-muted-foreground">点上方按钮，由服务器聚合当日数据并按事实/推断/建议结构生成复盘。</p>
@@ -1798,10 +1826,16 @@ export function DailyReview() {
                 <RecentResearch />
                 <section className="rounded-xl border border-border/60 bg-card/40 p-4">
                   <div className="mb-2 flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">关注股票</h2><Link to="/watchlist" className="text-xs text-primary hover:underline">全部自选 →</Link></div>
+                  <div data-testid="today-watch-list-state" className="text-xs text-muted-foreground">
+                    {watchListState === "loading" && <p role="status">正在读取关注清单…</p>}
+                    {watchListError && <p role="alert" className="text-warning">{watchListError}</p>}
+                    {watchListState !== "ready" && watchListReadAt && <p>以下为上次确认的旧清单 · 读取时间：{watchListReadAt}</p>}
+                    <button type="button" disabled={watchListState === "loading"} onClick={() => void reloadWatchList()} className="my-2 text-primary disabled:opacity-50">重新读取关注清单</button>
+                  </div>
                   {watchCodes.length ? <ul data-testid="today-watch-compact-quotes" className="divide-y divide-border/40">{watchCodes.slice(0, 5).map((code) => {
                     const quote = watchQuotes[code];
-                    return <li key={code} className="py-2 text-sm"><div className="flex items-center justify-between gap-2"><Link to={candidateWorkspaceHref(code)} className="min-w-0 truncate hover:text-primary">{quote?.name || code}</Link><span className={cn("shrink-0 font-mono text-xs", quote ? pctColor(quote.change_pct) : "text-muted-foreground")}>{quote ? pctCell(quote.change_pct) : "行情未读取"}</span></div><p className="mt-1 text-xs text-muted-foreground">{quoteSnapshotLabel(watchQuoteStates[code])}{!quote && watchQuoteFailures.includes(code) ? " · 刷新失败" : ""}</p></li>;
-                  })}</ul> : <p className="py-3 text-xs text-muted-foreground">还没有关注股票，可从市场发现挑选研究对象。</p>}
+                    return <li key={code} id={`today-watch-${code}`} className="py-2 text-sm"><div className="flex items-center justify-between gap-2"><Link to={candidateWorkspaceHref(code, `${location.pathname}${location.search}#today-watch-${code}`)} className="min-w-0 truncate hover:text-primary">{quote?.name || code}</Link><span className={cn("shrink-0 font-mono text-xs", quote ? pctColor(quote.change_pct) : "text-muted-foreground")}>{quote ? pctCell(quote.change_pct) : "行情未读取"}</span></div><p className="mt-1 text-xs text-muted-foreground">{quoteSnapshotLabel(watchQuoteStates[code])}{!quote && watchQuoteFailures.includes(code) ? " · 刷新失败" : ""}</p></li>;
+                  })}</ul> : <p className="py-3 text-xs text-muted-foreground">{watchListState === "ready" ? "还没有关注股票，可从市场发现挑选研究对象。" : "尚不能确认关注股票清单。"}</p>}
                   <details className="mt-2 border-t border-border/40 pt-2"><summary className="cursor-pointer text-xs text-muted-foreground">管理关注股票</summary><div className="mt-3">{marketSections.find((item) => item.order === 9)?.node}</div></details>
                 </section>
 

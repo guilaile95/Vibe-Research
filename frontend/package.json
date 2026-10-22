@@ -66,7 +66,9 @@
     "test:e2e:market02-empty-state": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/market02-empty-state.browser.mjs",
     "test:e2e:evidence-edit-conflict": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/evidence-edit-conflict.browser.mjs",
     "test:e2e:public-research": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/public-research.browser.mjs",
-    "test:e2e:workflow-recovery": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/workflow-recovery.browser.mjs"
+    "test:e2e:workflow-recovery": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/workflow-recovery.browser.mjs",
+    "test:e2e:research-navigation": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/research-navigation.browser.mjs",
+    "test:e2e:product-failure-states": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/product-failure-states.browser.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.0",

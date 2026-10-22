@@ -4078,7 +4078,32 @@ export interface NativeIntelDeepReadResponse {
   disclaimer: string;
 }
 
+export interface NativeIntelAnalysisCoverage {
+  enabled: boolean;
+  available: number | null;
+  included: number;
+  omitted: number | null;
+  reason: "included" | "disabled" | "no_items" | "budget_exhausted" | "budget_truncated" | "source_unavailable" | "source_limited";
+}
+
+export interface NativeIntelAnalysisSources {
+  version: 1;
+  status: "CAPTURED";
+  submission_status: "PREPARED" | "RESPONSE_RECEIVED" | "UNKNOWN";
+  items: Array<{
+    id: string;
+    section: "hotlist" | "rss" | "standalone";
+    title: string;
+    source_id: string | null;
+    source_name: string | null;
+    published_at: string | null;
+    original_url: string | null;
+  }>;
+  coverage: Record<"hotlist" | "rss" | "standalone", NativeIntelAnalysisCoverage>;
+}
+
 export interface NativeIntelAiAnalysisResponse {
+  input_sources?: NativeIntelAnalysisSources;
   artifact_id: string;
   mode: string;
   scope: string;

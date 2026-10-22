@@ -3,9 +3,11 @@ import { Check, BookmarkPlus } from "lucide-react";
 import { addNote } from "@/lib/notes";
 import type { NoteResearchMetadata } from "@/lib/researchNote";
 
+import type { NoteGeneration } from "@/lib/noteGeneration";
+
 // 把一段 AI 结果存入「研究记录」（沉淀）。存本地、不上传。
-export function SaveNoteButton({ kind, title, content, metadata }: { kind: string; title: string; content: string; metadata?: NoteResearchMetadata }) {
-  const identity = JSON.stringify([kind, title, content, metadata]);
+export function SaveNoteButton({ kind, title, content, metadata, generation }: { kind: string; title: string; content: string; metadata?: NoteResearchMetadata; generation?: NoteGeneration }) {
+  const identity = JSON.stringify([kind, title, content, metadata, generation]);
   const [savedIdentity, setSavedIdentity] = useState<string | null>(null);
   const [failure, setFailure] = useState<{ identity: string; message: string } | null>(null);
   const saved = savedIdentity === identity;
@@ -15,7 +17,7 @@ export function SaveNoteButton({ kind, title, content, metadata }: { kind: strin
     <button
       onClick={() => {
         try {
-          addNote(kind, title, content, metadata);
+          addNote(kind, title, content, metadata, generation);
           setSavedIdentity(identity);
           setFailure(null);
         } catch (error) {

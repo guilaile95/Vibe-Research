@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { AlertCircle, ArrowLeft, FileSearch, Loader2 } from "lucide-react";
 import { CandidateCampaignPanel } from "@/components/campaign/CandidateCampaignPanel";
@@ -15,7 +15,7 @@ import {
   deriveCandidatePosition,
   type CandidatePositionPresentation,
 } from "@/lib/candidateCampaign";
-import { api, ApiError, type EvidenceRecord, type StockRelativeContext, type StockValuationContext } from "@/lib/api";
+import { api, ApiError, type EvidenceRecord, type StockRelativeContext, type StockValuationContext, type NativeIntelSecurityContext as IntelContext } from "@/lib/api";
 import { candidateEntryContext } from "@/lib/candidateEntryContext";
 import { CandidateEvidenceLoadError, loadCandidateEvidence } from "@/lib/candidateEvidence";
 import { CAMPAIGN_STRATEGY_LABELS } from "@/lib/decisionInbox";
@@ -54,6 +54,11 @@ export function CandidateWorkspace() {
   const { code = "" } = useParams();
   const location = useLocation();
   const [searchParams] = useSearchParams();
+  const [nameContext, setNameContext] = useState<{ code: string; name: string | null } | null>(null);
+  const onNameContext = useCallback((context: IntelContext | null, requestedCode: string) => {
+    setNameContext({ code: requestedCode, name: context?.security.code === requestedCode ? context.security.company_name : null });
+  }, []);
+  const name = nameContext?.code === code ? nameContext.name : null;
   const validCode = /^\d{6}$/.test(code);
   const [position, setPosition] = useState<LoadState<CandidatePositionPresentation>>(loadingState);
   const [evidence, setEvidence] = useState<LoadState<{ records: EvidenceRecord[]; total: number }>>(loadingState);
@@ -160,7 +165,7 @@ export function CandidateWorkspace() {
   return (
     <div className="space-y-6" data-testid="candidate-workspace" data-security-code={code}>
       <PageHeader
-        title={`候选研究 · ${code}`}
+        title={`候选研究 · ${name ? `${name}（${code}）` : code}`}
         subtitle="先核对资料、提问并留下暂定看法；需要正式决策时，再建立投资计划。"
         actions={(
           <div className="flex flex-wrap items-center gap-3">
@@ -253,6 +258,7 @@ export function CandidateWorkspace() {
         <div id="candidate-public-info" tabIndex={-1} className="scroll-mt-6">
           <NativeIntelSecurityContext
             code={code}
+            onContextChange={onNameContext}
             evidenceCapture={{ returnTo, records: evidence.value?.records }}
           />
         </div>

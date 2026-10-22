@@ -17,6 +17,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 import chat
 import native_intel_store as store
@@ -384,6 +385,48 @@ def _empty_analysis_dict() -> dict[str, Any]:
     }
 
 
+def _analysis_source_url(value: Any) -> str | None:
+    """Navigation-only allowlist, not permission to fetch any URL."""
+    if not isinstance(value, str) or not value or re.search(r"[\s\\\x00-\x1f\x7f]", value):
+        return None
+    try:
+        parsed = urlsplit(value)
+        if (parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None):
+            return None
+        _ = parsed.port
+        return value
+    except ValueError:
+        return None
+
+
+def _analysis_source(item: dict[str, Any], section: str) -> dict[str, Any]:
+    # Hash the original identity instead of exposing URL-bearing keys to clients.
+    identity = [item.get("source_id"), item.get("item_key") or item.get("item_id")]
+    if not identity[1]:
+        identity.append([item.get("title") or item.get("observed_title"),
+                         item.get("published_at"), item.get("url") or item.get("canonical_url")])
+    source_id = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    return {
+        "id": "source_" + source_id,
+        "section": section,
+        "title": item.get("title") or (item.get("observed_title") if section != "rss" else "") or "",
+        "source_id": item.get("source_id") or None,
+        "source_name": item.get("source_name") or item.get("source_id") or None,
+        "published_at": item.get("published_at") or None,
+        "original_url": _analysis_source_url(item.get("url") or item.get("canonical_url")),
+    }
+
+
+def _analysis_coverage(enabled: bool, available: int | None, included: int,
+                       reason: str | None = None) -> dict[str, Any]:
+    omitted = max(0, available - included) if available is not None else None
+    return {"enabled": enabled, "available": available, "included": included, "omitted": omitted,
+            "reason": reason or ("disabled" if not enabled else "no_items" if not available
+                                  else "budget_exhausted" if not included
+                                  else "budget_truncated" if omitted else "included")}
+
+
 def _prepare_analysis_facts(
     report_data: dict[str, Any],
     max_news: int = 50,
@@ -441,6 +484,7 @@ def _prepare_analysis_facts(
     # Standalone 读取：遵守 source enable, RSS freshness, per-source max_items，绕过关键词/AI兴趣过滤
     standalone_count = 0
     standalone_analyzed = 0
+    standalone_failed = False
     if include_standalone:
         try:
             import native_intel_service as service
@@ -452,10 +496,16 @@ def _prepare_analysis_facts(
                 if k not in seen_st:
                     seen_st.add(k)
                     standalone_items.append(it)
-            standalone_count = int(st_res.get("total", len(standalone_items)))
             standalone_analyzed = len(standalone_items)
+            standalone_count = int(st_res.get("total", len(standalone_items)))
         except Exception as e:
+            standalone_failed = True
             logger.warning("Failed to fetch standalone items: %s", e)
+
+    # Even malformed source totals must not hide already selected prompt entries.
+    standalone_analyzed = len(standalone_items)
+    if not standalone_failed:
+        standalone_count = max(standalone_count, standalone_analyzed)
 
     counts = {
         "total_news": len(hotlist_items) + len(rss_items),
@@ -570,6 +620,27 @@ def _prepare_analysis_facts(
         ] if include_standalone else [],
     }
 
+    # Capture the SAME selected arrays used above, before invocation; never query
+    # fresh items to reconstruct a historical artifact. Include metadata in the
+    # fingerprint so changed identities/links cannot reuse an unrelated snapshot.
+    normalized_input["input_sources"] = {
+        "version": 1,
+        "status": "CAPTURED",
+        "items": [
+            _analysis_source(it, section)
+            for section, selected in (("hotlist", analyzed_hotlist), ("rss", analyzed_rss),
+                                      ("standalone", standalone_items))
+            for it in selected
+        ],
+        "coverage": {
+            "hotlist": _analysis_coverage(True, len(hotlist_items), len(analyzed_hotlist)),
+            "rss": _analysis_coverage(include_rss, len(rss_items), len(analyzed_rss)),
+            "standalone": _analysis_coverage(
+                include_standalone, None if standalone_failed or not include_standalone else standalone_count,
+                standalone_analyzed, "source_unavailable" if standalone_failed else
+                "source_limited" if standalone_count > standalone_analyzed else None),
+        },
+    }
     return normalized_input, facts_text, counts
 
 
@@ -671,9 +742,12 @@ def analyze_report(
     error_kind = None
     error_message = None
     parsed_data: dict[str, Any] = {}
+    submission_status = "PREPARED"
 
     try:
+        submission_status = "UNKNOWN"
         raw_resp = invoke_llm_text(effective_cfg, messages, model_runner=model_runner)
+        submission_status = "RESPONSE_RECEIVED"
         parse_err = None
         try:
             candidate = _load_json_response(raw_resp)
@@ -731,6 +805,7 @@ def analyze_report(
         "outlook_strategy": parsed_data.get("outlook_strategy", ""),
         "standalone_summaries": parsed_data.get("standalone_summaries", {}) if include_standalone else {},
         "counts": counts,
+        "input_sources": {**facts_fp["input_sources"], "submission_status": submission_status},
         "disclaimer": DISCLAIMER_WATERMARK,
         "provider": provider,
         "model": model,

@@ -317,8 +317,14 @@ try {
   await page.evaluate(credential => localStorage.setItem("vr-llm", JSON.stringify(credential)), apiCredential);
 
   // Item 1 has title: "Data center liquid cooling demand rises"
-  const item1Title = page.locator("text=Data center liquid cooling demand rises");
+  const item1Title = page.getByTestId("display-region-hotlist").getByText("Data center liquid cooling demand rises", { exact: true });
   await item1Title.waitFor({ state: "visible", timeout: 10000 });
+  assert.equal(await item1Title.count(), 1, "The original hotlist item remains unique in its region");
+  const capturedSources = aiAnalysisRegion.getByTestId("analysis-sources");
+  await capturedSources.locator("summary").click();
+  const capturedItemTitle = capturedSources.getByText(/^\d+\. Data center liquid cooling demand rises$/);
+  await capturedItemTitle.waitFor({ state: "visible", timeout: 10000 });
+  assert.equal(await capturedItemTitle.count(), 1, "Captured input source remains independently inspectable");
 
   let capturedTranslateReqBody = null;
   const translateReqHandler = (req) => {

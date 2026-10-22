@@ -190,6 +190,23 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Run product research navigation acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          RESEARCH_NAVIGATION_OUTPUT_DIR: ${{ runner.temp }}/research-navigation-evidence
+        run: npm run test:e2e:research-navigation
+
+      - name: Preserve research-navigation-evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: research-navigation-evidence
+          path: ${{ runner.temp }}/research-navigation-evidence
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Run layout navigation and mobile scroll acceptance
         if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
@@ -1046,13 +1063,40 @@ jobs:
           path: ${{ runner.temp }}/local-ocr-share-evidence
           if-no-files-found: warn
 
+      - name: Run explicit product failure state acceptance
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 5
+        env:
+          FAILURE_STATES_EVIDENCE_DIR: ${{ runner.temp }}/product-failure-states-evidence
+        run: npm run test:e2e:product-failure-states
+
+      - name: Preserve product-failure-states-evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: product-failure-states-evidence
+          path: ${{ runner.temp }}/product-failure-states-evidence
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Run research notes backup E2E
         if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
         env:
           E2E_ATTRIBUTION_SCREENSHOT_DIR: attribution-evidence
           E2E_PAGE_AI_SCREENSHOT_DIR: page-ai-evidence
+          NOTE_GENERATION_EVIDENCE_DIR: ${{ runner.temp }}/note-generation-evidence
         run: npm run test:e2e:notes-backup
+
+      - name: Preserve synthetic note generation provenance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: note-generation-evidence
+          path: ${{ runner.temp }}/note-generation-evidence
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Save synthetic attribution viewport evidence
         if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}

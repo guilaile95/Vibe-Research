@@ -1,3 +1,4 @@
+import { NoteGenerationDetails } from "@/components/ui/NoteGenerationDetails";
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
@@ -278,6 +279,7 @@ export function Notes() {
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
         <div>
           <p className="font-medium text-foreground">研究记录只保存在当前浏览器中。</p>
+          <p>含生成依据的备份使用 v2；旧版不能导入。回退旧版前请完整导出并保留备份，旧版在同一浏览器修改记录可能丢失新增依据字段。</p>
           <p>清理浏览器数据、切换浏览器 Profile 或更换设备前，请先导出备份。备份文件只包含研究记录，不包含模型密钥、访问密钥或 AI 对话。</p>
         </div>
       </div>
@@ -365,6 +367,8 @@ export function Notes() {
                 </div>
                 {open && (
                   <div className="border-t border-border/40 px-4 py-3">
+                    <p className="mb-2 text-xs text-muted-foreground">保存时间：{fmt(n.ts)}</p>
+                    <NoteGenerationDetails generation={n.generation} />
                     {n.research && <div className="mb-3 space-y-1 rounded border border-border/50 p-3 text-xs" data-testid="note-research-context">
                       <p className="font-medium">{n.research.securityCode} · {n.kind === "暂定研究" ? "用户暂定记录，尚未核验" : "AI 原文，未经用户确认"}</p>
                       {n.research.question && <p>研究问题：{n.research.question}</p>}

@@ -1,8 +1,12 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Sparkles, RefreshCw, Loader2, AlertCircle, FileText, BarChart3, ShieldAlert, BookOpen, Layers, Newspaper } from "lucide-react";
 import { api } from "../../lib/api";
+import { isCompletedAnalysis, rssNotAnalyzedMessage } from "../../lib/analysisPresentation";
 import { loadLlm } from "../../lib/llm";
 import type { NativeIntelAiAnalysisResponse, NativeIntelConfig } from "../../lib/api/types";
+
+import { isCapturedAnalysisSources } from "../../lib/analysisSources";
+import { AnalysisSources } from "./AnalysisSources";
 
 interface AiAnalysisRegionProps {
   mode?: "current" | "daily" | "incremental";
@@ -58,30 +62,55 @@ function formatSectionContent(val: unknown, fallback: string): string {
 export function AiAnalysisRegion({ mode = "current", scope = "all", config }: AiAnalysisRegionProps) {
   const [loading, setLoading] = useState(false);
   const [analysis, setAnalysis] = useState<NativeIntelAiAnalysisResponse | null>(null);
+  const [failedAnalysis, setFailedAnalysis] = useState<NativeIntelAiAnalysisResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<typeof SECTION_TABS[number]["id"]>("core_trends");
 
+  const requestRef = useRef(0);
+  const busyRef = useRef(false);
+  useEffect(() => {
+    requestRef.current += 1;
+    busyRef.current = false;
+    setLoading(false);
+    setAnalysis(null);
+    setError(null);
+    setFailedAnalysis(null);
+    return () => { requestRef.current += 1; };
+  }, [mode, scope]);
+
   const handleGenerate = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    const request = ++requestRef.current;
+    const active = () => request === requestRef.current;
+    const includeRss = config?.ai_analysis_include_rss !== false;
     setLoading(true);
     setError(null);
+    setFailedAnalysis(null);
     try {
       const llm = loadLlm();
       const res = await api.nativeIntelAiAnalysis({
         mode: mode.toUpperCase(),
         scope,
         max_news: config?.ai_analysis_max_news ?? 50,
-        include_rss: config?.ai_analysis_include_rss !== false,
+        include_rss: includeRss,
         include_standalone: Boolean(config?.ai_analysis_include_standalone),
         llm,
       });
-      setAnalysis(res);
-      if (res.status === "ERROR") {
-        setError(res.error || "AI 分析返回异常");
+      if (!active()) return;
+      if (!isCompletedAnalysis(res)) {
+        if (res && typeof res === "object" && res.status === "ERROR") setFailedAnalysis(res);
+        setError("本次响应未提供成功分析结果，请检查配置或稍后手动重试。");
+        return;
       }
+      setAnalysis(res);
     } catch (err: any) {
-      setError(err?.message || "请求 AI 深度分析服务失败");
+      if (active()) setError("请求失败或响应无法解析，请检查服务后手动重试。");
     } finally {
-      setLoading(false);
+      if (active()) {
+        busyRef.current = false;
+        setLoading(false);
+      }
     }
   };
 
@@ -127,6 +156,12 @@ export function AiAnalysisRegion({ mode = "current", scope = "all", config }: Ai
         </div>
       </div>
 
+      {analysis && (error || loading) && (
+        <p data-testid="wave5-ai-previous-result" className="px-3 py-2 text-xs text-warning">
+          以下为上次成功结果，非本次分析。原生成时间：{analysis.generated_at || "未记录"} · 原结果：{analysis.artifact_id || "未记录"}
+        </p>
+      )}
+
       {/* Counts and Meta Bar */}
       {analysis && (
         <div
@@ -150,8 +185,9 @@ export function AiAnalysisRegion({ mode = "current", scope = "all", config }: Ai
         <div className="p-4 m-3 rounded-lg border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs flex items-start gap-2">
           <AlertCircle className="h-4 w-4 shrink-0 text-rose-400 mt-0.5" />
           <div>
-            <p className="font-semibold">AI 分析未能顺利完成</p>
+            <p className="font-semibold">本次未完成分析</p>
             <p className="mt-0.5 text-rose-400/90">{error}</p>
+            {failedAnalysis && <div className="mt-3"><AnalysisSources analysis={failedAnalysis} /></div>}
           </div>
         </div>
       )}
@@ -178,6 +214,7 @@ export function AiAnalysisRegion({ mode = "current", scope = "all", config }: Ai
       {/* Analysis Content Tabs */}
       {analysis && (
         <div className="p-3 space-y-3">
+          <AnalysisSources analysis={analysis} />
           {/* Section Tabs */}
           <div className="flex flex-wrap gap-1.5 border-b border-border/40 pb-2">
             {SECTION_TABS.map((tab) => {
@@ -210,7 +247,7 @@ export function AiAnalysisRegion({ mode = "current", scope = "all", config }: Ai
                   <FlameTabIcon className="h-3.5 w-3.5 text-amber-400" /> 核心热点态势
                 </h4>
                 <p className="text-xs leading-relaxed text-foreground/90 whitespace-pre-wrap">
-                  {formatSectionContent(analysis.core_trends, "暂无显著热点态势")}
+                  {formatSectionContent(analysis.core_trends, "本次结果未提供热点态势内容")}
                 </p>
               </div>
             )}
@@ -221,7 +258,7 @@ export function AiAnalysisRegion({ mode = "current", scope = "all", config }: Ai
                   <ShieldAlert className="h-3.5 w-3.5 text-rose-400" /> 舆情风向与争议焦点
                 </h4>
                 <p className="text-xs leading-relaxed text-foreground/90 whitespace-pre-wrap">
-                  {formatSectionContent(analysis.sentiment_controversy, "暂无显著舆情争议")}
+                  {formatSectionContent(analysis.sentiment_controversy, "本次结果未提供舆情争议内容")}
                 </p>
               </div>
             )}
@@ -232,7 +269,7 @@ export function AiAnalysisRegion({ mode = "current", scope = "all", config }: Ai
                   <BarChart3 className="h-3.5 w-3.5 text-blue-400" /> 异动与弱信号捕捉
                 </h4>
                 <p className="text-xs leading-relaxed text-foreground/90 whitespace-pre-wrap">
-                  {formatSectionContent(analysis.signals, "暂无异常异动信号")}
+                  {formatSectionContent(analysis.signals, "本次结果未提供异动信号内容")}
                 </p>
               </div>
             )}
@@ -243,7 +280,9 @@ export function AiAnalysisRegion({ mode = "current", scope = "all", config }: Ai
                   <BookOpen className="h-3.5 w-3.5 text-emerald-400" /> RSS 深度洞察与硬核增量
                 </h4>
                 <p className="text-xs leading-relaxed text-foreground/90 whitespace-pre-wrap">
-                  {formatSectionContent(analysis.rss_insights, "暂无 RSS 深度增量")}
+                  {(analysis.counts?.rss_analyzed ?? 0) === 0
+                    ? rssNotAnalyzedMessage(isCapturedAnalysisSources(analysis.input_sources) ? analysis.input_sources.coverage.rss.reason : undefined)
+                    : formatSectionContent(analysis.rss_insights, "已纳入RSS，但结果未提供深度洞察内容")}
                 </p>
               </div>
             )}

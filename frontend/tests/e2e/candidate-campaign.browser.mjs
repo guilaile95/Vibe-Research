@@ -1250,7 +1250,7 @@ try {
   assert.equal(await page.getByText("让 AI 读这些数据").count(), 0, "quote failure must not expose the AI action");
   state.valuationMode = "ok";
 
-  // Keep the existing independent Candidate flow on its historical URL shape.
+  // Independent StockData entry now preserves its submitted query as the return route.
   state.apiPaths.length = 0;
   await page.goto(`http://127.0.0.1:${port}/stock-data?code=600519`, { waitUntil: "networkidle" });
   await page.locator('[data-active-code="600519"]').waitFor();
@@ -1260,7 +1260,7 @@ try {
     "normal StockData entry must not silently start the Candidate Workspace",
   );
   await page.getByTestId("stock-data-candidate-entry").click();
-  await page.waitForURL(/\/candidates\/600519$/);
+  await page.waitForURL((url) => url.pathname === "/candidates/600519" && url.searchParams.get("return_to") === "/stock-data?code=600519");
   const workspace = page.getByTestId("candidate-workspace");
   await workspace.waitFor();
   await workspace.locator('[data-position-state="NOT_HELD"]').waitFor();
@@ -1407,7 +1407,7 @@ try {
   await page.getByTestId("watchlist-candidate-600519").waitFor();
   assert.equal(await page.locator('[data-watchlist-code="600519"] a[href="/stock-data?code=600519"]').count(), 1);
   await page.getByTestId("watchlist-candidate-600519").click();
-  await page.waitForURL(/\/candidates\/600519$/);
+  await page.waitForURL((url) => url.pathname === "/candidates/600519" && url.searchParams.get("return_to") === "/watchlist#watchlist-600519");
 
   await page.goto(`http://127.0.0.1:${port}/intel`, { waitUntil: "domcontentloaded" });
   await page.getByTestId("market-intel-candidate-600519").waitFor();

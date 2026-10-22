@@ -22,6 +22,7 @@ function harness({ failRetryReadback = false } = {}) {
   const stub = new Proxy({}, { get: (_, key) => key === '__esModule' ? true : () => null });
   const draft = Array.from({ length: 51 }, (_, i) => String(600000 + i));
   const modules = {
+    "react-router-dom": { Link: "Link", useLocation: () => ({ pathname: "/watchlist", search: "", hash: "" }), useSearchParams: () => [new URLSearchParams(), () => {}] },
     react: React,
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
     '@/lib/watchlist': {
@@ -36,7 +37,7 @@ function harness({ failRetryReadback = false } = {}) {
   };
   const exports = {};
   const source = ts.transpileModule(readFileSync(new URL('../src/pages/Watchlist.tsx', import.meta.url), 'utf8'), { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  vm.runInNewContext(source, { exports, require: name => modules[name] ?? stub, localStorage: { getItem: () => null } });
+  vm.runInNewContext(source, { URLSearchParams, exports, require: name => modules[name] ?? stub, localStorage: { getItem: () => null } });
   return { render() { cursor = 0; const tree = exports.Watchlist(); const queue = pending; pending = []; queue.forEach(fn => fn()); return tree; }, loads: () => loads, saves, draft };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
