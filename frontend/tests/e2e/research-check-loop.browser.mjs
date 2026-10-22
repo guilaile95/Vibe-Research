@@ -230,7 +230,7 @@ try {
       await panel.getByLabel('打开原研究轮次', { exact: true }).selectOption(t0.id);
       assert.match(await panel.getByTestId('check-saved-round').innerText(), /T0：只能确认/);
       assert.ok(!(await panel.getByTestId('check-saved-round').innerText()).includes('T1：'));
-      await page.screenshot({ path: join(output, `T1-reopen-T0-${width}.png`) });
+      await panel.getByTestId('check-round-history').screenshot({ path: join(output, `T1-reopen-T0-${width}.png`) });
 
       phase = 'two-page-conflict';
       const other = await context.newPage(); other.setDefaultTimeout(15000); const otherPanel = await openQuestion(other, q.id);
