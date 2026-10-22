@@ -50,7 +50,7 @@ test('candidate browser readback uses a unique stable field identity, not a broa
   const placeholder = '先写目前的理解，不必形成正式结论';
   assert.equal(component.split(`"${placeholder}"`).length - 1, 1);
   assert.ok(browser.includes(`page.getByTestId('candidate-research-note').getByPlaceholder('${placeholder}', { exact: true })`));
-  assert.ok(browser.includes('assert.equal(await tentativeView.count(), 1)'));
+  assert.ok(browser.includes('await tentativeView.waitFor();\n      assert.equal(await tentativeView.count(), 1)'));
   assert.equal(browser.split("assert.equal(await tentativeView.inputValue(), '未保存的合成看法')").length - 1, 2);
   assert.ok(browser.includes("page.getByLabel('我的暂定看法', { exact: true }).fill"));
   assert.ok(!browser.includes("getByLabel('我的暂定看法', { exact: true }).inputValue"));

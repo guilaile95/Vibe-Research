@@ -89,6 +89,7 @@ try {
       // React synchronizes textarea.defaultValue, which makes the wrapping label's
       // text include the draft. Use the unique field placeholder for later reads.
       const tentativeView = page.getByTestId('candidate-research-note').getByPlaceholder('先写目前的理解，不必形成正式结论', { exact: true });
+      await tentativeView.waitFor();
       assert.equal(await tentativeView.count(), 1);
       await page.getByLabel('我的暂定看法', { exact: true }).fill('未保存的合成看法');
       phase = 'product-return-blocked';
