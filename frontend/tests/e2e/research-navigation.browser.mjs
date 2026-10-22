@@ -8,6 +8,7 @@ import { join, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { readReply } from './ai-settings-storage.fixture.mjs';
+import { navigationEvidencePage } from './research-navigation.fixture.mjs';
 const dist = fileURLToPath(new URL('../../dist/', import.meta.url));
 const output = process.env.RESEARCH_NAVIGATION_OUTPUT_DIR || mkdtempSync(join(tmpdir(), 'research-navigation-'));
 mkdirSync(output, { recursive: true });
@@ -46,7 +47,7 @@ try {
       if (path === '/api/watchlist') return ok({ status: 'valid', data: { codes: ['600519'], updated_at: null }, etag: '1111111111111111' });
       if (path === '/api/watchlist/anomalies') return ok({ items: [], unavailable_codes: [], as_of_ms: null });
       if (path === '/api/quote') return ok({});
-      if (path === '/api/evidence') return ok({ items: record ? [record] : [], total: record ? 1 : 0 });
+      if (path === '/api/evidence') return ok(navigationEvidencePage(record ? [record] : [], url.searchParams));
       if (path === '/api/campaigns' || path === '/api/thesis') return ok({ items: [], total: 0 });
       if (path === '/api/native-intel/security-context/600519') return ok({ status: 'normal', security: { code: '600519', company_name: '合成公司' }, mapping: { terms: [], errors: [] }, window_hours: 24, observation: { items: [], item_count: 0 }, rank_history: {} });
       if (path === '/api/valuation' && url.searchParams.get('code') === '600519' && slow) { started.resolve(); await release.promise; return ok({ code: '600519', name: '旧股晚到', price: 1 }); }
