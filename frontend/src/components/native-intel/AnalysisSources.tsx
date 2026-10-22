@@ -1,13 +1,13 @@
 import type { NativeIntelAiAnalysisResponse, NativeIntelAnalysisCoverage } from "../../lib/api/types";
-import { safeAnalysisSourceUrl, analysisCoverageReason } from "../../lib/analysisSources";
+import { safeAnalysisSourceUrl, analysisCoverageReason, isCapturedAnalysisSources } from "../../lib/analysisSources";
 
 const sectionNames = { hotlist: "热榜", rss: "RSS", standalone: "独立展示区" };
 
 /** A persisted input snapshot, not claim-level citations or verification evidence. */
 export function AnalysisSources({ analysis }: { analysis: NativeIntelAiAnalysisResponse }) {
   const snapshot = analysis.input_sources;
-  if (!snapshot || snapshot.version !== 1 || snapshot.status !== "CAPTURED") {
-    return <div className="text-xs text-muted-foreground" data-testid="analysis-sources-unknown">历史记录未保存本次来源清单，实际输入来源未知；不会用最新资讯补填。</div>;
+  if (!isCapturedAnalysisSources(snapshot)) {
+    return <div className="text-xs text-muted-foreground" data-testid="analysis-sources-unknown">{snapshot ? "本次来源清单格式不可读取，实际输入来源未知。" : "历史记录未保存本次来源清单，实际输入来源未知；不会用最新资讯补填。"}</div>;
   }
   const successful = analysis.status === "SUCCESS" && snapshot.submission_status === "RESPONSE_RECEIVED";
   return <details className="rounded-lg border border-border p-3 text-xs" data-testid="analysis-sources">
