@@ -330,11 +330,12 @@ export function DiscoveryWorkspace() {
       </div>
 
       <p role="status" aria-live="polite" aria-atomic="true" data-testid="discovery-results-status" className="text-sm text-muted-foreground">{refreshing ? "刷新中，" : ""}当前显示 <span className="font-medium text-foreground">{items.length}</span> 个{STRATEGY_LABELS[filters.strategy]}研究候选 · {statusLabel(snapshot.status)}</p>
-      <div className="space-y-1 text-xs text-muted-foreground" data-testid="discovery-queue-boundary">
+      <details className="space-y-1 text-xs text-muted-foreground" data-testid="discovery-queue-boundary">
+        <summary className="min-h-11 cursor-pointer content-center rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">仅筛选本次候选队列 · 范围说明</summary>
         <p>仅筛选本次候选队列，行业/主题选择不重新扫描全行业；无结果不代表该行业没有值得研究的公司。</p>
         <p>范围为 Provider 返回的沪深主板、创业板和科创板，不包含北交所；每策略最多12条，按研究优先级再按证券代码排序，同优先级顺序非价值排名。</p>
         <p data-testid="discovery-sampling-summary">{discoveryCoverageSummary(snapshot, filters.strategy)}</p>
-      </div>
+      </details>
       <div className="space-y-3" data-testid={`discovery-queue-${filters.strategy}`}>
         {items.length ? items.map((item) => <OpportunityCard key={`${item.strategy}-${item.security_code}`} item={item} />) : (
           <GlassCard className="space-y-3 p-8 text-center text-sm text-muted-foreground">

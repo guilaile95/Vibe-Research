@@ -133,6 +133,18 @@ test("Discovery only links into Candidate Research and exposes no BUY or hidden 
   assert.doesNotMatch(source, /\/api\/campaigns|\b(?:score|ranking|BUY NOW|BUY SMALL|SCALE IN)\b/i);
 });
 
+test("Discovery keeps full scope in a collapsed native disclosure with an accessible touch target", () => {
+  const source = readFileSync(new URL("../src/components/discovery/DiscoveryWorkspace.tsx", import.meta.url), "utf8");
+  const boundary = source.match(/<details[^>]*data-testid="discovery-queue-boundary"[^>]*>[\s\S]*?<\/details>/)?.[0];
+  assert.ok(boundary);
+  assert.doesNotMatch(boundary.slice(0, boundary.indexOf(">")), /\bopen(?:\s|=|$)/);
+  assert.match(boundary, /<summary className="[^"]*min-h-11[^"]*">仅筛选本次候选队列 · 范围说明<\/summary>/);
+  assert.match(boundary, /行业\/主题选择不重新扫描全行业/);
+  assert.match(boundary, /不包含北交所；每策略最多12条/);
+  assert.match(boundary, /按研究优先级再按证券代码排序，同优先级顺序非价值排名/);
+  assert.match(boundary, /discoveryCoverageSummary\(snapshot, filters.strategy\)/);
+});
+
 test("Discovery query restores every filter and validates enum values without dropping an absent sector", () => {
   const search = new URLSearchParams({ strategy: "MEDIUM", sector: "消费 & 医药", priority: "LOW", restricted: "RESTRICTED", health: "unknown" });
   assert.deepEqual(discoveryFiltersFromSearch(search), filters("MEDIUM", {
