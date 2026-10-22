@@ -23,7 +23,7 @@ import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { storageGet, storageGetChecked, storageSetChecked, storageRemoveChecked } from "@/lib/storage";
 import { parseReportChatCoverage } from "@/lib/reportChatCoverage";
 import { applyChatToolResult, chatToolStatusLabel, parseStoredChatTools, type ChatToolUse } from "@/lib/chatToolStatus";
-import { conversationNoteMetadata, parseNoteResearchMetadata, type NoteResearchMetadata } from "@/lib/researchNote";
+import { conversationNoteMetadata, parseNoteResearchMetadata, RESEARCH_NOTE_SOURCE_BOUNDARY, researchChatSourceBoundary, type NoteResearchMetadata } from "@/lib/researchNote";
 
 // 对话持久化。此前 msgs 只是组件内的 useState：切页面卸载、刷新、
 // 关标签页，问过的东西全没了——每轮对话是花了自己 API 额度换来的，丢掉的是真金白银。
@@ -490,6 +490,9 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
               <>
                 <div ref={scrollRef} className="flex-1 overflow-auto px-4 pb-5 sm:px-6">
                   <div className="mx-auto w-full max-w-xl space-y-6 pt-4 text-sm">
+                    <p className="rounded-xl border border-border/50 bg-muted/40 p-3 text-xs text-muted-foreground" data-testid="chat-source-mode-boundary">
+                      {researchChatSourceBoundary(reportPageContext ? "report-pages" : isCodexRuntime ? "codex" : "api")}
+                    </p>
                     {msgs.length === 0 && (
                       <div className="py-8 text-center">
                         <span className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-muted">
@@ -497,11 +500,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                         </span>
                         <p className="mt-3 font-medium">就当前页面开始提问</p>
                         <p className="mt-1 text-xs text-muted-foreground">
-                          {reportPageContext
-                            ? "只提供重新校验后的指定页文本，不调用数据工具；未覆盖页与来源版本会随回答保留。"
-                            : isCodexRuntime
-                            ? "Codex 只使用当前页面上下文，不会读取本机文件或调用数据工具。"
-                            : "AI 会自动带上本页上下文，并按需调用 Vibe 数据工具。"}
+                          可继续追问或保存回答。保存前请核对下方的来源保全边界。
                         </p>
                       </div>
                     )}
@@ -516,6 +515,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                           <div className="w-full leading-6 text-foreground">
                             {m.tools && m.tools.length > 0 && (
                               <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                                <p className="w-full text-xs text-muted-foreground" data-testid="chat-tool-payload-boundary">工具状态仅表示调用结果；返回正文未随此回答完整存档，成功或 hash 均不能代替原文复核。</p>
                                 {m.tools.map((t, j) => (
                                   <span key={j} className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-[10px] text-muted-foreground">
                                     <Wrench className="h-2.5 w-2.5" />
@@ -566,7 +566,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", scope
                               <p className="whitespace-pre-wrap break-words">{m.content}</p>
                             )}
                             {m.content && !m.partial && !(loading && i === msgs.length - 1) && (
-                              <div className="mt-2"><SaveNoteButton kind="问AI" title={`问 AI · ${msgs[i - 1]?.content?.slice(0, 24) || "对话"}`} content={m.content}
+                              <div className="mt-2"><p className="mb-2 text-xs text-muted-foreground" data-testid="chat-note-source-boundary">{RESEARCH_NOTE_SOURCE_BOUNDARY}</p><SaveNoteButton kind="问AI" title={`问 AI · ${msgs[i - 1]?.content?.slice(0, 24) || "对话"}`} content={m.content}
                                 metadata={m.noteMetadata} /></div>
                             )}
                           </div>

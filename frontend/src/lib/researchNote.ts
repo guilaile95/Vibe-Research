@@ -13,6 +13,15 @@ export interface NoteResearchMetadata {
   nextQuestion?: string;
 }
 
+/** Storage limit notice, including legacy answers: never backfill missing evidence. */
+export const RESEARCH_NOTE_SOURCE_BOUNDARY = "保存的是回答与可选来源链接；未保全所选摘录原文、版本或工具返回正文，不能据此完整重放生成依据。";
+
+export function researchChatSourceBoundary(mode: "api" | "codex" | "report-pages"): string {
+  if (mode === "report-pages") return "指定页模式：仅使用重新校验后的所选页文本与对话，不调用数据工具；页覆盖与版本信息不等于全文覆盖。";
+  if (mode === "codex") return "Codex Subscription：只使用页面上下文与对话，不读取本机文件，也不调用数据工具。";
+  return "API 探索模式：可按需调用白名单公开数据工具，不限于本次选中材料，也不是封闭历史回放；工具列表或摘要不等于原文全文。";
+}
+
 /** Sources describe supplied context, not proof that the model verified each source. */
 export function conversationNoteMetadata(
   current: NoteResearchMetadata,
@@ -84,7 +93,7 @@ export function candidateResearchContext(code: string, records: readonly Evidenc
   return [
     `候选研究 · ${code}。以下仅为用户本次明确选中的本地证据摘录，不代表已读取原始来源全文。`,
     "这是非正式研究讨论；区分原记录中的事实、推断和未知，不替用户确认投资逻辑或决策。未自动加入行情图表、未选证据、账户持仓或资金字段及其他页面内容；所选摘录仍按用户提供的原文理解。",
-    selected.length ? `本次选中 ${selected.length} 条：` : "本次没有选择证据；只能帮助梳理研究问题，不能声称已核验这只股票的事实。",
+    selected.length ? `本次选中 ${selected.length} 条：` : "本次没有选择证据；这些页面输入不足以核验股票事实。若运行方式允许另查公开资料，须区分工具新取得的材料与本次页面输入，不得声称已阅读未取得的原文。",
     ...selected.map((record, index) => [
       `[${index + 1}] ${record.source_title || "来源标题未知"} · 记录 ${record.id}`,
       `原记录分类：${record.classification}；置信度：${record.confidence}；来源日期：${record.source_date || "未知"}`,

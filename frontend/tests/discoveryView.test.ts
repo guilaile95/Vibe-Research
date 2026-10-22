@@ -205,3 +205,20 @@ test("Discovery stale summary preserves the last successful timestamp", () => {
     "行情归属 2026-08-28 · 最后成功更新于 2026-08-30 10:00 · 刷新失败于 2026-08-30 12:00",
   );
 });
+
+test("Discovery coverage and condition labels distinguish missing proof from complete matching", async () => {
+  const { discoveryCoverageSummary, discoveryConditionLabel } = await import("../src/lib/discoveryView.ts");
+  assert.match(discoveryCoverageSummary(snapshot, "SWING"), /覆盖明细未提供/);
+  assert.match(discoveryConditionLabel(swingA), /未记录/);
+  assert.match(discoveryConditionLabel({ ...swingA, condition_match: "DEGRADED_CLUE" }), /不是完整条件匹配/);
+  assert.match(discoveryConditionLabel({ ...swingA, condition_match: "FULL_CONDITIONS" }), /不代表材料完整/);
+  const scoped = { ...snapshot, coverage: {
+    universe: "PROVIDER_SH_SZ_CORE_A_SHARES_EXCLUDES_BEIJING", qualification_limit: 24,
+    qualification_omitted: 66, qualification_order: "STRATEGY_AMOUNT_DESC_THEN_CODE_DEDUPLICATED",
+    queue_limit: 12, queue_eligible: { SHORT: 1, SWING: 2, MEDIUM: 1 }, queue_omitted: { SHORT: 0, SWING: 0, MEDIUM: 0 },
+    queue_order: "RESEARCH_PRIORITY_THEN_SECURITY_CODE", filter_scope: "RETURNED_QUEUE_ONLY" as const,
+    excluded_total: 100, excluded_omitted: 40,
+  } };
+  assert.match(discoveryCoverageSummary(scoped, "SWING"), /上限 24 股，未进入补充检查 66 股/);
+  assert.match(discoveryCoverageSummary(scoped, "SWING"), /上限 12 条，截断 0 条/);
+});

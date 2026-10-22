@@ -6,6 +6,8 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { formatDiscoveryObservationValue } from "@/lib/discoveryObservation";
 import {
   discoveryCandidateHref,
+  discoveryConditionLabel,
+  discoveryCoverageSummary,
   discoveryCardAnchor,
   discoveryFiltersFromSearch,
   discoverySearchWithFilters,
@@ -53,6 +55,7 @@ const GAP_LABELS: Record<string, string> = {
   AMOUNT_UNKNOWN: "成交额未知",
   TURNOVER_UNKNOWN: "换手率未知",
   SESSION_RETURN_UNKNOWN: "当日涨跌幅未知",
+  ANNOUNCEMENT_WINDOW_COVERAGE_UNPROVEN: "公告窗口未证明查全，列表不等于全文",
   RETURN_20D_UNKNOWN: "20 日收益缺失",
   RETURN_60D_UNKNOWN: "60 日收益缺失",
   VALUATION_INPUT_UNKNOWN: "估值数据缺失",
@@ -139,6 +142,7 @@ function OpportunityCard({ item }: { item: DiscoveryOpportunityItem }) {
       <div className={`grid gap-4 border-t border-border/50 pt-4 ${gaps.length ? "lg:grid-cols-2" : ""}`}>
         <div className="min-w-0">
           <p className="text-xs font-medium">进入{STRATEGY_LABELS[item.strategy]}研究队列的依据</p>
+          <p className="mt-2 text-xs text-muted-foreground" data-testid={`discovery-condition-${item.security_code}`}>{discoveryConditionLabel(item)}</p>
           <dl className="mt-2 max-w-xl space-y-2 text-xs" data-testid={`discovery-summary-observations-${item.security_code}`}>
             {observations.map((observation) => (
               <div key={`${observation.code}-${observation.source_ref}`} className="flex items-start justify-between gap-3">
@@ -326,11 +330,15 @@ export function DiscoveryWorkspace() {
       </div>
 
       <p role="status" aria-live="polite" aria-atomic="true" data-testid="discovery-results-status" className="text-sm text-muted-foreground">{refreshing ? "刷新中，" : ""}当前显示 <span className="font-medium text-foreground">{items.length}</span> 个{STRATEGY_LABELS[filters.strategy]}研究候选 · {statusLabel(snapshot.status)}</p>
-      <p className="text-xs text-muted-foreground" data-testid="discovery-queue-boundary">仅筛选本次候选队列，每策略最多12条，同优先级顺序非价值排名。</p>
+      <div className="space-y-1 text-xs text-muted-foreground" data-testid="discovery-queue-boundary">
+        <p>仅筛选本次候选队列，行业/主题选择不重新扫描全行业；无结果不代表该行业没有值得研究的公司。</p>
+        <p>范围为 Provider 返回的沪深主板、创业板和科创板，不包含北交所；每策略最多12条，按研究优先级再按证券代码排序，同优先级顺序非价值排名。</p>
+        <p data-testid="discovery-sampling-summary">{discoveryCoverageSummary(snapshot, filters.strategy)}</p>
+      </div>
       <div className="space-y-3" data-testid={`discovery-queue-${filters.strategy}`}>
         {items.length ? items.map((item) => <OpportunityCard key={`${item.strategy}-${item.security_code}`} item={item} />) : (
           <GlassCard className="space-y-3 p-8 text-center text-sm text-muted-foreground">
-            <p>{["unavailable", "error"].includes(snapshot.status) ? "当前发现数据不可用，暂时无法提供研究候选。" : "当前筛选下没有研究候选；信息缺失的对象不会被补成机会。"}</p>
+            <p>{["unavailable", "error"].includes(snapshot.status) ? "当前发现数据不可用，暂时无法提供研究候选。" : "本次有限队列中没有匹配项，不代表该行业没有研究对象。部分历史收益缺失可按行业条件降级入选，请核对缺口。"}</p>
             <Link to={{ pathname: location.pathname, search: `?${fullMarketSearch}` }} className="inline-flex min-h-11 items-center rounded px-2 text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" data-testid="discovery-open-full-market">进入全市场筛选</Link>
           </GlassCard>
         )}
@@ -352,7 +360,8 @@ export function DiscoveryWorkspace() {
               ["初筛通过", snapshot.funnel.cheap_scan_passed],
               ["进入资格检查", snapshot.funnel.qualification_candidates],
               ["行业覆盖", snapshot.market_context.sector_count],
-              ["排除或拦截", snapshot.funnel.excluded],
+              ["已展示排除/拦截记录", snapshot.funnel.excluded],
+              ["未展示排除/拦截记录", snapshot.coverage?.excluded_omitted ?? "未知"],
             ].map(([label, value]) => <div key={String(label)}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 font-medium">{String(value)}</dd></div>)}
           </dl>
           <div className="divide-y divide-border/50 text-xs text-muted-foreground">
@@ -361,6 +370,7 @@ export function DiscoveryWorkspace() {
                 <div className="flex flex-wrap items-center gap-2"><span className="font-medium text-foreground">{DATASET_LABELS[dataset.dataset_id] ?? dataset.dataset_id}</span><Badge tone={dataset.status}>{statusLabel(dataset.status)}</Badge></div>
                 <p className="font-mono text-[11px]">{dataset.dataset_id}</p>
                 <p>数据归属 {dataset.as_of ?? "未知"} · 获取于 {dataset.fetched_at}</p>
+                {dataset.request_status ? <p>请求：{dataset.request_status === "NORMAL" ? "成功" : dataset.request_status === "NOT_REQUESTED" ? "未请求" : "部分失败"} · 材料覆盖：未证明完整；公告列表不等于全文。</p> : null}
                 {dataset.reason_code ? <p>状态说明：{dataset.reason_code}</p> : null}
                 <p>来源：{dataset.provenance_refs.join(" · ") || "未提供"}</p>
               </div>

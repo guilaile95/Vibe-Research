@@ -499,13 +499,15 @@ def _source_summary(event_type: str, security_statuses: list[dict[str, Any]]) ->
         "event_type": event_type,
         "source": _SOURCE_NAMES[event_type],
         "status": status,
+        "request_status": status,
+        "material_completeness": "UNKNOWN",
         "security_count": len(security_statuses),
         "success_count": successes,
         "failure_count": failures,
         "unavailable_count": unavailable,
         "no_record_count": no_records,
         "security_statuses": security_statuses,
-        "limitations": list(_COMMON_LIMITATIONS),
+        "limitations": [*_COMMON_LIMITATIONS, "REQUEST_SUCCESS_DOES_NOT_PROVE_WINDOW_COVERAGE", *(["ANNOUNCEMENT_FIRST_PAGE_ONLY", "METADATA_NOT_FULL_TEXT"] if event_type == "ANNOUNCEMENT" else [])],
     }
 
 
@@ -629,12 +631,20 @@ def build_research_event_calendar(
                         events.setdefault(event["event_id"], event)
                     security_statuses.append({"security_code": code, "status": source_state})
                 else:
+                    payload = astock.announcements(code, strict=True, with_coverage=True)
+                    # Legacy injected readers have no pagination proof. Keep them usable,
+                    # but never convert an empty/short list into whole-window coverage.
+                    announcement_rows = payload.get("rows", []) if isinstance(payload, dict) else payload
+                    coverage = payload.get("source_coverage") if isinstance(payload, dict) else None
                     rows, source_state = _announcement_events(
-                        security, astock.announcements(code, strict=True), fetched_at, start, end,
+                        security, announcement_rows, fetched_at, start, end,
                     )
                     for event in rows:
                         events.setdefault(event["event_id"], event)
-                    security_statuses.append({"security_code": code, "status": source_state})
+                    security_statuses.append({
+                        "security_code": code, "status": source_state, "request_status": "NORMAL",
+                        "source_coverage": coverage or {"status": "unknown", "scope": "provider_announcement_list", "window_complete": False, "full_text_included": False},
+                    })
             except Exception:  # noqa: BLE001 - one source/security must not erase other observations
                 security_statuses.append({
                     "security_code": code,
@@ -670,7 +680,7 @@ def build_research_event_calendar(
         "universe": universe,
         "events": ordered_events,
         "sources": source_summaries,
-        "limitations": [_CATALYST_LIMITATION],
+        "limitations": [_CATALYST_LIMITATION, "REQUEST_SUCCESS_DOES_NOT_PROVE_WINDOW_COVERAGE"],
         "writes": writes,
     }
 

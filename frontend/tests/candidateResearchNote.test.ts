@@ -98,3 +98,18 @@ test("AI answer provenance retains historical sources without relabeling them as
   assert.throws(() => conversationNoteMetadata(b, [{ ...a, sourceLinks: Array.from({length:20}, (_, i) => ({ title:String(i), url:`https://example.com/${i}` })) }]), /超过 20 条/);
   assert.equal(a.sourceLinks[0].title, "A");
 });
+
+test("AI modes and note provenance never claim a fully preserved evidence chain", async () => {
+  const { researchChatSourceBoundary, RESEARCH_NOTE_SOURCE_BOUNDARY } = await import("../src/lib/researchNote.ts");
+  assert.match(researchChatSourceBoundary("api"), /白名单公开数据工具/);
+  assert.match(researchChatSourceBoundary("api"), /不是封闭历史回放/);
+  assert.match(researchChatSourceBoundary("codex"), /不读取本机文件，也不调用数据工具/);
+  assert.match(researchChatSourceBoundary("report-pages"), /不调用数据工具/);
+  assert.match(researchChatSourceBoundary("report-pages"), /不等于全文覆盖/);
+  assert.match(RESEARCH_NOTE_SOURCE_BOUNDARY, /未保全所选摘录原文、版本或工具返回正文/);
+  const noSelection = candidateResearchContext("600519", [], []);
+  assert.match(noSelection, /若运行方式允许另查公开资料/);
+  const source = readFileSync(new URL("../src/components/ui/AskAiButton.tsx", import.meta.url), "utf8");
+  assert.match(source, /chat-note-source-boundary/);
+  assert.match(source, /返回正文未随此回答完整存档/);
+});

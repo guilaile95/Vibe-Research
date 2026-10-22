@@ -131,3 +131,16 @@ export function discoveryTimeSummary(
   }
   return `行情归属 ${marketDate} · 抓取于 ${displayDiscoveryTime(snapshot.fetched_at)}`;
 }
+
+/** Counts describe this bounded run, never a whole-industry or whole-market proof. */
+export function discoveryCoverageSummary(snapshot: DiscoverySnapshot, strategy: DiscoveryStrategy): string {
+  const coverage = snapshot.coverage;
+  if (!coverage) return "覆盖明细未提供；当前是有限候选队列，不证明全市场或全行业已查全。";
+  return `初筛通过 ${snapshot.funnel.cheap_scan_passed} 股，按成交额抽样去重后对 ${snapshot.funnel.qualification_candidates} 股补充材料（上限 ${coverage.qualification_limit} 股，未进入补充检查 ${coverage.qualification_omitted} 股）；当前策略合格 ${coverage.queue_eligible[strategy]} 条，返回 ${snapshot.funnel.queue_items[strategy]} 条（上限 ${coverage.queue_limit} 条，截断 ${coverage.queue_omitted[strategy]} 条）。`;
+}
+
+export function discoveryConditionLabel(item: DiscoveryOpportunityItem): string {
+  if (item.condition_match === "DEGRADED_CLUE") return "降级线索：历史收益不可用，按行业条件回退；不是完整条件匹配。";
+  if (item.condition_match === "FULL_CONDITIONS") return "行情条件匹配；不代表材料完整或已证明研究价值。";
+  return "条件匹配类型未记录，请查看依据与缺口。";
+}

@@ -441,3 +441,21 @@ def test_http_security_code_with_campaign_ids_is_422(monkeypatch):
         params=[("security_code", "600519"), ("campaign_ids", "campaign_" + "a" * 32)],
     )
     assert response.status_code == 422
+
+
+def test_announcement_request_success_and_no_record_never_imply_complete_window(monkeypatch):
+    _base(monkeypatch, [_campaign("600001", "a")])
+    for payload in ([], {"rows": [], "source_coverage": {
+        "status": "partial", "scope": "provider_announcement_first_page", "pages_fetched": 1,
+        "row_limit": 15, "returned_rows": 0, "window_complete": False, "full_text_included": False,
+    }}):
+        monkeypatch.setattr(astock, "announcements", lambda code, **_: payload)
+        result = calendar.build_research_event_calendar(today=AS_OF, event_types=["ANNOUNCEMENT"])
+        source = result["sources"][0]
+        assert source["status"] == source["request_status"] == "NORMAL"
+        assert source["material_completeness"] == "UNKNOWN"
+        assert source["no_record_count"] == 1
+        assert "REQUEST_SUCCESS_DOES_NOT_PROVE_WINDOW_COVERAGE" in source["limitations"]
+        assert source["security_statuses"][0]["source_coverage"]["window_complete"] is False
+        assert source["security_statuses"][0]["request_status"] == "NORMAL"
+        assert result["events"] == []
