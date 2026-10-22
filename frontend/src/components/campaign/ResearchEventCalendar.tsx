@@ -95,12 +95,15 @@ function SourceSummary({ data }: { data: ResearchEventCalendarData }) {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-medium">{researchEventTypeLabel(source.event_type)}</span>
               <span className="rounded-full bg-background/70 px-2 py-0.5 text-muted-foreground">
-                {statusLabel(source.status)}
+                {source.status === "NORMAL" ? "请求成功" : statusLabel(source.status)}
               </span>
             </div>
             <p className="mt-1 break-words text-muted-foreground">来源：{source.source}</p>
+            <p className="mt-1 text-muted-foreground" data-testid={`research-event-coverage-${source.event_type}`}>
+              请求成功不代表所选日期窗口已查全。{source.event_type === "ANNOUNCEMENT" && "公告仅请求首页最多 15 条，只有列表元信息，不是公告全文。"}
+            </p>
             {source.no_record_count > 0 && (
-              <p className="mt-1 text-muted-foreground">{source.no_record_count} 个证券返回 NO_RECORD；这不等同于 provider 失败。</p>
+              <p className="mt-1 text-muted-foreground">{source.no_record_count} 个证券返回 NO_RECORD；这不等同于 provider 失败，也不能证明窗口内没有披露。</p>
             )}
             {failed.length > 0 && (
               <p className="mt-1 break-words text-amber-700 dark:text-amber-400">

@@ -438,13 +438,14 @@ def _research_identity_rows(rows, code):
                 raise ValueError("SOURCE_IDENTITY_CONFLICT")
 
 
-def announcements(code: str, limit: int = 15, *, strict: bool = False) -> list[dict]:
+def announcements(code: str, limit: int = 15, *, strict: bool = False,
+                  with_coverage: bool = False) -> list[dict] | dict:
     """个股近期公告（东财公开接口，仅 requests，稳定）。返回 日期/标题/类型/详情链接。
 
     与其他东财数据路径一致使用固定直连会话（trust_env=False）：系统代理
     （Clash 等）停机会把该请求掐断，公告能力不应受代理环境影响。
     ``strict`` 仅供需要区分“真实空结果”和“源失败”的只读组合层使用；
-    默认保持既有调用方的异常语义。
+    默认保持既有调用方的异常语义。``with_coverage`` 明确首页范围，不证明窗口查全。
     """
     r = _em_session(True).get(
         "https://np-anotice-stock.eastmoney.com/api/security/ann",
@@ -452,16 +453,16 @@ def announcements(code: str, limit: int = 15, *, strict: bool = False) -> list[d
                 "client_source": "web", "stock_list": code, "f_node": 0, "s_node": 0},
         headers={"User-Agent": UA}, timeout=20,
     )
-    if strict and getattr(r, "status_code", 200) >= 400:
+    if (strict or with_coverage) and getattr(r, "status_code", 200) >= 400:
         raise RuntimeError("announcement provider returned an error status")
     payload = r.json()
-    if strict:
+    if strict or with_coverage:
         if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
             raise ValueError("announcement provider response missing data")
         if not isinstance(payload["data"].get("list"), list):
             raise ValueError("announcement provider response missing list")
     lst = (payload.get("data") or {}).get("list") or []
-    if strict and any(not isinstance(item, dict) for item in lst):
+    if (strict or with_coverage) and any(not isinstance(item, dict) for item in lst):
         raise ValueError("announcement provider response contains malformed rows")
     out = []
     if strict:
@@ -485,7 +486,27 @@ def announcements(code: str, limit: int = 15, *, strict: bool = False) -> list[d
             "type": cols[0] if cols else "",
             "url": f"https://data.eastmoney.com/notices/detail/{code}/{art}.html" if art else "",
         })
-    return out
+    if not with_coverage:
+        return out
+    total = payload["data"].get("total_hits")
+    total = total if isinstance(total, int) and not isinstance(total, bool) and total >= len(lst) else None
+    return {
+        "rows": out,
+        "request_status": "NORMAL",
+        "source_coverage": {
+            "status": "partial",
+            "scope": "provider_announcement_first_page",
+            "pages_fetched": 1,
+            "page_limit": 1,
+            "row_limit": limit,
+            "returned_rows": len(out),
+            "provider_total_rows": total,
+            "truncated": total > len(lst) if total is not None else None,
+            "window_complete": False,
+            "full_text_included": False,
+            "reason_codes": ["FIRST_PAGE_ONLY", "WINDOW_COVERAGE_UNPROVEN", "METADATA_NOT_FULL_TEXT"],
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

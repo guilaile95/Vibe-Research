@@ -58,6 +58,7 @@ function opportunity(overrides) {
     sector: "食品饮料",
     themes: ["消费"],
     discovery_state: "QUEUED",
+    condition_match: "FULL_CONDITIONS",
     research_priority: "HIGH",
     reason_codes: ["SECTOR_CONTEXT_SUPPORT", "CATALYST_DISCLOSED"],
     supporting_observations: [
@@ -127,6 +128,7 @@ const unknown = opportunity({
   sector: null,
   themes: [],
   research_priority: "MEDIUM",
+  condition_match: "DEGRADED_CLUE",
   reason_codes: ["SECTOR_CONTEXT_UNKNOWN", "FUNDAMENTAL_UNKNOWN"],
   supporting_observations: [{ code: "LIQUIDITY", label: "流动性", value: "AVAILABLE", source_ref: "market:fixture" }],
   uncertainties: ["行业上下文未知", "财务事实缺失"],
@@ -162,6 +164,13 @@ function snapshot({ partial = false, stale = false } = {}) {
       qualification_candidates: 24,
       queue_items: { SHORT: 1, SWING: degraded ? 3 : 2, MEDIUM: 1 },
       excluded: 1,
+    },
+    coverage: {
+      universe: "PROVIDER_SH_SZ_CORE_A_SHARES_EXCLUDES_BEIJING", qualification_limit: 24,
+      qualification_omitted: 72, qualification_order: "STRATEGY_AMOUNT_DESC_THEN_CODE_DEDUPLICATED",
+      queue_limit: 12, queue_eligible: { SHORT: 1, SWING: degraded ? 3 : 2, MEDIUM: 1 },
+      queue_omitted: { SHORT: 0, SWING: 0, MEDIUM: 0 }, queue_order: "RESEARCH_PRIORITY_THEN_SECURITY_CODE",
+      filter_scope: "RETURNED_QUEUE_ONLY", excluded_total: 100, excluded_omitted: 99,
     },
     datasets: [
       { dataset_id: "market-snapshot", status: "normal", as_of: "2026-08-28", fetched_at: fetchedAt, reason_code: null, provenance_refs: ["market:fixture"] },
@@ -312,7 +321,15 @@ try {
   server = await startStaticServer(port);
   browser = await launchBrowser();
   const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
-  await page.addInitScript(() => localStorage.setItem("vr-theme", "dark"));
+  await page.addInitScript(() => {
+    localStorage.setItem("vr-theme", "dark");
+    // Synthetic local configuration and legacy archive only. Never submit a model call.
+    localStorage.setItem("vr-llm", JSON.stringify({ provider: "openai", model: "synthetic", baseURL: "https://fixture.invalid/v1", apiKey: "synthetic-not-a-credential" }));
+    localStorage.setItem("vr-askai-chat:/candidates/600519#600519@openai:synthetic:https://fixture.invalid/v1", JSON.stringify([
+      { role: "user", content: "合成历史问题" },
+      { role: "assistant", content: "合成旧回答，无原文保全。", tools: [{ name: "announcements", arg: "600519", status: "success", truncated: true }] },
+    ]));
+  });
   page.on("console", (message) => { if (message.type() === "error") browserErrors.push(message.text()); });
   page.on("pageerror", (error) => browserErrors.push(`pageerror: ${error.message}`));
   await page.route("**/*", (route) => {
@@ -414,7 +431,24 @@ try {
   assert.equal(await firstSummary.locator("div").filter({ hasText: "行业相对市场状态" }).locator("dd").innerText(), "+1.25%");
   assert.equal(await firstSummary.locator("dt").count(), 3);
   assert.equal(await firstSummary.getByText("资讯提及：未知", { exact: true }).count(), 0);
-  assert.match(await page.getByTestId("discovery-queue-boundary").innerText(), /仅筛选本次候选队列，每策略最多12条，同优先级顺序非价值排名/);
+  const boundaryDetails = page.getByTestId("discovery-queue-boundary");
+  const boundarySummary = boundaryDetails.locator("summary");
+  assert.equal(await boundaryDetails.getAttribute("open"), null);
+  assert.equal(await boundarySummary.innerText(), "仅筛选本次候选队列 · 范围说明");
+  assert.equal(await page.getByTestId("discovery-sampling-summary").isVisible(), false);
+  await boundarySummary.click();
+  assert.notEqual(await boundaryDetails.getAttribute("open"), null);
+  const queueBoundary = await boundaryDetails.innerText();
+  assert.match(queueBoundary, /仅筛选本次候选队列/);
+  assert.match(queueBoundary, /行业\/主题选择不重新扫描全行业/);
+  assert.match(queueBoundary, /沪深主板、创业板和科创板，不包含北交所/);
+  assert.match(queueBoundary, /每策略最多12条/);
+  assert.match(queueBoundary, /按研究优先级再按证券代码排序/);
+  assert.match(queueBoundary, /同优先级顺序非价值排名/);
+  assert.match(await page.getByTestId("discovery-sampling-summary").innerText(), /未进入补充检查 72 股/);
+  assert.match(await page.getByTestId("discovery-sampling-summary").innerText(), /截断 0 条/);
+  await boundarySummary.click();
+  assert.equal(await boundaryDetails.getAttribute("open"), null);
   await firstCard.getByRole("link", { name: "进入候选研究" }).waitFor();
   assert.match(await page.getByTestId("strategy-SWING").innerText(), /波段/);
   assert.equal(await page.getByTestId("full-market-tab").innerText(), "全市场筛选");
@@ -440,6 +474,13 @@ try {
     await page.getByRole("main").evaluate((element) => element.scrollTo(0, 0));
     const firstBounds = await firstCard.boundingBox();
     const diagnosticsBounds = await diagnostics.boundingBox();
+    const controlBounds = [];
+    layoutEvidence.push({ viewport, firstBounds, diagnosticsBounds, controlBounds });
+    // Preserve the failing viewport too, before a geometry assertion can stop the run.
+    if (screenshots) {
+      await page.screenshot({ path: path.join(screenshots, `discovery-after-${viewport.width}.png`), fullPage: true });
+      writeFileSync(path.join(screenshots, "discovery-after-layout.json"), JSON.stringify({ layoutEvidence, browserErrors, externalRequests }, null, 2));
+    }
     assert.ok(firstBounds && diagnosticsBounds && firstBounds.y < diagnosticsBounds.y, "candidates must precede diagnostics");
     assert.ok(firstBounds.y >= 0 && firstBounds.y < viewport.height, `first candidate must enter the initial viewport at ${viewport.width}px`);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `no page horizontal overflow at ${viewport.width}px`);
@@ -447,8 +488,7 @@ try {
     const filters = page.getByTestId("discovery-filters");
     assert.equal(await filters.locator("label").count(), 4);
     for (const label of ["行业 / 主题", "研究优先级", "研究资格", "数据状态"]) assert.equal(await filters.locator("label > span").getByText(label, { exact: true }).isVisible(), true);
-    const controls = [page.getByTestId("refresh-discovery"), ...await filters.locator("select, button").all(), page.getByTestId("discovery-candidate-600519"), firstCard.locator("summary")];
-    const controlBounds = [];
+    const controls = [page.getByTestId("refresh-discovery"), ...await filters.locator("select, button").all(), boundarySummary, page.getByTestId("discovery-candidate-600519"), firstCard.locator("summary")];
     for (const control of controls) {
       const bounds = await control.boundingBox();
       assert.ok(bounds && bounds.height >= 44, `44px Discovery touch target at ${viewport.width}px`);
@@ -456,8 +496,12 @@ try {
       controlBounds.push(bounds);
     }
     assert.equal(await page.getByTestId("discovery-results-status").getAttribute("role"), "status");
-    layoutEvidence.push({ viewport, firstBounds, controlBounds });
-    if (screenshots) await page.screenshot({ path: path.join(screenshots, `discovery-after-${viewport.width}.png`), fullPage: true });
+    await boundarySummary.click();
+    assert.equal(await page.getByTestId("discovery-sampling-summary").isVisible(), true);
+    assert.ok(await page.getByRole("main").evaluate((element) => element.scrollWidth <= element.clientWidth), `expanded boundary has no horizontal overflow at ${viewport.width}px`);
+    if (screenshots) await page.screenshot({ path: path.join(screenshots, `discovery-boundary-expanded-${viewport.width}.png`), fullPage: true });
+    await boundarySummary.click();
+    assert.equal(await boundaryDetails.getAttribute("open"), null);
     if (viewport.width <= 390) {
       await page.getByLabel("研究优先级", { exact: true }).selectOption("LOW");
       await page.waitForURL((url) => url.searchParams.get("priority") === "LOW");
@@ -489,6 +533,15 @@ try {
   await firstCard.waitFor({ state: "detached" });
   assert.equal(await firstCard.count(), 0);
   await page.getByLabel("研究优先级", { exact: true }).selectOption("ALL");
+  await page.waitForURL((url) => url.searchParams.get("priority") === "ALL");
+  await firstCard.waitFor();
+  await boundarySummary.click();
+  assert.match(await page.getByTestId("discovery-queue-boundary").innerText(), /不重新扫描全行业/);
+  assert.match(await page.getByTestId("discovery-queue-boundary").innerText(), /不包含北交所/);
+  assert.match(await page.getByTestId("discovery-sampling-summary").innerText(), /未进入补充检查 72 股/);
+  assert.match(await page.getByTestId("discovery-sampling-summary").innerText(), /截断 0 条/);
+  await boundarySummary.click();
+  assert.match(await page.getByTestId("discovery-condition-600519").innerText(), /行情条件匹配；不代表材料完整/);
   const discoveryText = await workspace.innerText();
   assert.doesNotMatch(discoveryText, /\bBUY\b|Opportunity Score|综合评分/);
   assert.equal(await page.locator('[data-testid*="market-cloud"], [data-testid*="market-intel"]').count(), 0);
@@ -578,6 +631,7 @@ try {
   await page.getByTestId("discovery-summary").getByText("部分可用", { exact: true }).first().waitFor();
   const unknownCard = page.getByTestId("discovery-item-SWING-300012");
   await unknownCard.waitFor();
+  assert.match(await page.getByTestId("discovery-condition-300012").innerText(), /降级线索.*不是完整条件匹配/);
   const unknownGaps = page.getByTestId("discovery-gaps-300012");
   await unknownGaps.getByText("数据状态：未知", { exact: true }).waitFor();
   assert.equal(await unknownGaps.getByText("财务事实缺失", { exact: true }).count(), 0);
@@ -630,6 +684,21 @@ try {
   await candidate.waitFor();
   assert.equal(await candidate.getAttribute("data-security-code"), "600519");
   await candidate.locator('[data-position-state="NOT_HELD"]').waitFor();
+  await candidate.getByRole("button", { name: "围绕这个问题问 AI", exact: true }).click();
+  const chat = page.getByRole("complementary", { name: "Vibe AI 对话" });
+  await chat.waitFor();
+  assert.match(await chat.getByTestId("chat-source-mode-boundary").innerText(), /API 探索模式.*不是封闭历史回放/);
+  assert.match(await chat.getByTestId("chat-tool-payload-boundary").innerText(), /返回正文未随此回答完整存档/);
+  assert.match(await chat.getByTestId("chat-note-source-boundary").innerText(), /未保全所选摘录原文、版本或工具返回正文/);
+  await page.evaluate(() => {
+    localStorage.setItem("vr-llm", JSON.stringify({ provider: "cli-codex", model: "synthetic", baseURL: "", apiKey: "" }));
+    window.dispatchEvent(new Event("vr-llm-change"));
+  });
+  await chat.getByTestId("chat-source-mode-boundary").filter({ hasText: "Codex Subscription" }).waitFor();
+  assert.match(await chat.getByTestId("chat-source-mode-boundary").innerText(), /不读取本机文件，也不调用数据工具/);
+  await chat.getByRole("button", { name: "关闭", exact: true }).click();
+  assert.equal(apiRequests.some(({ pathname, method }) => pathname === "/api/chat" && method === "POST"), false);
+
   await candidate.getByTestId("candidate-campaign-panel").getByText("暂无候选投资计划", { exact: true }).waitFor();
   assert.equal(await page.getByTestId("candidate-stock-data-entry").getAttribute("href"), returnTo);
   await page.goBack();

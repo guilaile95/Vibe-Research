@@ -52,7 +52,7 @@ class DiscoveryProviders:
     market_snapshot: Callable[[], list[dict[str, Any]] | dict[str, Any]]
     full_market: Callable[[], dict[str, Any]]
     financials: Callable[[str], dict[str, Any]]
-    announcements: Callable[[str], list[dict[str, Any]]]
+    announcements: Callable[[str], list[dict[str, Any]] | dict[str, Any]]
     native_intel: Callable[[list[str]], dict[str, Any]]
 
 
@@ -172,7 +172,7 @@ DEFAULT_PROVIDERS = DiscoveryProviders(
     # Stage 3 needs one bounded financial clue fetch, not the three-statement
     # StockData expansion performed by include_health=True.
     financials=lambda code: astock.financials(code, include_health=False),
-    announcements=astock.announcements,
+    announcements=lambda code: astock.announcements(code, strict=True, with_coverage=True),
     native_intel=_default_native_intel,
 )
 
@@ -300,6 +300,7 @@ def _cheap_strategy(
     reasons: list[str] = []
     missing: list[str] = []
     observations: list[dict[str, Any]] = []
+    failed_conditions: list[str] = []
 
     def observe(code: str, label: str, value: Any, source_ref: str) -> None:
         reasons.append(code)
@@ -332,7 +333,7 @@ def _cheap_strategy(
         elif turnover is None:
             missing.append("TURNOVER_UNKNOWN")
         passed = bool(liquid and change is not None and change > 0 and active)
-        return {"passed": passed, "status": "NORMAL" if not missing else "PARTIAL", "reason_codes": reasons, "missing": missing, "observations": observations}
+        return {"passed": passed, "status": "NORMAL" if not missing else "PARTIAL", "reason_codes": reasons, "missing": missing, "observations": observations, "failed_conditions": failed_conditions, "condition_match": "FULL_CONDITIONS" if passed else "NOT_MATCHED"}
 
     metric = "return_20d" if strategy == "SWING" else "return_60d"
     metric_status = str((history or {}).get(f"{metric}_status") or "")
@@ -340,6 +341,8 @@ def _cheap_strategy(
     history_available = momentum is not None
     if history_available and momentum > 0:
         observe(f"POSITIVE_{metric.upper()}", f"{metric.removeprefix('return_').upper()} 日收益为正", momentum, f"research-data-plane:{metric}")
+    elif history_available:
+        failed_conditions.append(f"{metric.upper()}_NOT_POSITIVE")
     elif not history_temporal_unusable:
         missing.append(f"{metric.upper()}_UNKNOWN")
 
@@ -358,7 +361,10 @@ def _cheap_strategy(
         else:
             missing.append("VALUATION_INPUT_UNKNOWN")
         passed = bool((pe_ttm is not None or pb is not None) and cap is not None and ((history_available and momentum > 0) or (not history_available and liquid and sector_supportive)))
-    return {"passed": passed, "status": "NORMAL" if history_available and not missing else "PARTIAL", "reason_codes": reasons, "missing": missing, "observations": observations}
+    condition_match = "DEGRADED_CLUE" if passed and not history_available else "FULL_CONDITIONS" if passed else "NOT_MATCHED"
+    if condition_match == "DEGRADED_CLUE":
+        reasons.append("HISTORICAL_RETURN_UNAVAILABLE_SECTOR_FALLBACK")
+    return {"passed": passed, "status": "NORMAL" if history_available and not missing else "PARTIAL", "reason_codes": reasons, "missing": missing, "observations": observations, "failed_conditions": failed_conditions, "condition_match": condition_match}
 
 
 def _qualification_codes(candidates: dict[str, list[dict[str, Any]]]) -> list[str]:
@@ -431,7 +437,11 @@ def _qualify_one(code: str, providers: DiscoveryProviders, as_of: date) -> dict[
     except Exception:  # provider boundary: expose a fixed state, never raw exception text
         fundamental = {"status": "ERROR", "clue": None, "source_ref": "astock.financials"}
     try:
-        announcements = providers.announcements(code) or []
+        payload = providers.announcements(code)
+        announcements = payload.get("rows", []) if isinstance(payload, dict) else payload or []
+        if not isinstance(announcements, list):
+            raise ValueError("announcement rows must be a list")
+        coverage = payload.get("source_coverage") if isinstance(payload, dict) else None
         cutoff = as_of - timedelta(days=CATALYST_WINDOW_DAYS)
         recent = [
             row for row in announcements
@@ -445,6 +455,8 @@ def _qualify_one(code: str, providers: DiscoveryProviders, as_of: date) -> dict[
         )
         announcement_result = {
             "status": "AVAILABLE" if recent else "UNKNOWN",
+            "request_status": "NORMAL",
+            "source_coverage": coverage or {"status": "unknown", "scope": "provider_announcement_list", "window_complete": False, "full_text_included": False},
             "count": len(recent),
             "older_or_future_count": max(0, len(announcements) - len(recent) - unknown_date_count),
             "unknown_date_count": unknown_date_count,
@@ -604,6 +616,7 @@ def _opportunity_item(
         uncertainties.append("FUNDAMENTAL_FACTS_UNKNOWN")
     elif qualification["fundamental"]["status"] == "PARTIAL":
         uncertainties.append("FUNDAMENTAL_FRESHNESS_UNKNOWN")
+    uncertainties.append("ANNOUNCEMENT_WINDOW_COVERAGE_UNPROVEN")
     if catalyst_status != "AVAILABLE":
         uncertainties.append("CATALYST_EVIDENCE_UNKNOWN")
     if (qualification.get("native_intel") or {}).get("mapping_status") != "MAPPED":
@@ -650,6 +663,7 @@ def _opportunity_item(
         "sector": base.get("sector"),
         "themes": themes,
         "discovery_state": "QUEUED" if gate not in {"INSUFFICIENT", "ERROR"} else "BLOCKED",
+        "condition_match": cheap.get("condition_match", "UNKNOWN"),
         "research_priority": priority,
         "reason_codes": reason_codes,
         "supporting_observations": supporting,
@@ -762,6 +776,7 @@ def run_discovery(
     cheap_by_code_strategy: dict[tuple[str, str], dict[str, Any]] = {}
     base_by_code: dict[str, dict[str, Any]] = {}
     excluded: list[dict[str, Any]] = list(outside_core[:OUTSIDE_CORE_SAMPLE_LIMIT])
+    excluded_total = len(outside_core)
     for row in core_rows:
         code = row["code"]
         sector_name = str(row.get("industry") or "").strip() or None
@@ -793,14 +808,17 @@ def run_discovery(
             cheap_by_code_strategy[(code, strategy)] = cheap
             if cheap["passed"]:
                 candidates[strategy].append(base)
-            elif len(excluded) < EXCLUDED_LIMIT:
+            else:
+                excluded_total += 1
+                if len(excluded) >= EXCLUDED_LIMIT:
+                    continue
                 excluded.append({
                     "security_code": code,
                     "name": row["name"],
                     "strategy": strategy,
                     "sector": sector_name,
                     "discovery_state": "EXCLUDED",
-                    "reason_codes": cheap["missing"] or ["CHEAP_SCAN_NOT_QUALIFIED"],
+                    "reason_codes": [*cheap["failed_conditions"], *cheap["missing"]] or ["CHEAP_SCAN_NOT_QUALIFIED"],
                     "data_health": "unknown" if cheap["missing"] else "normal",
                     "restricted_universe": row["restricted"],
                     "as_of": market_as_of,
@@ -842,11 +860,13 @@ def run_discovery(
             else:
                 queues[strategy].append(item)
 
+    queue_eligible_counts = {strategy: len(queues[strategy]) for strategy in STRATEGIES}
     priority_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
     for strategy in STRATEGIES:
         queues[strategy].sort(key=lambda item: (priority_order[item["research_priority"]], item["security_code"]))
         queues[strategy] = queues[strategy][:QUEUE_LIMIT]
 
+    excluded_total += len(blocked)
     excluded.extend(blocked)
     excluded = excluded[:EXCLUDED_LIMIT]
     market_dataset = _dataset(
@@ -886,19 +906,28 @@ def run_discovery(
         ),
         _dataset(
             "announcements.recent",
-            "partial" if announcements_partial else "normal",
+            "partial",
             as_of=evaluation_date.isoformat(),
             fetched_at=fetched_at,
             provenance_refs=["astock.announcements"],
-            reason_code="PROVIDER_PARTIAL" if announcements_partial else None,
+            reason_code="PROVIDER_PARTIAL" if announcements_partial else "BOUNDED_LIST_WINDOW_COVERAGE_UNPROVEN",
         ),
         intel_dataset,
     ]
+    announcement_dataset = next(item for item in datasets if item["dataset_id"] == "announcements.recent")
+    announcement_dataset["request_status"] = "PARTIAL" if announcements_partial else "NORMAL" if qualification_codes else "NOT_REQUESTED"
+    announcement_dataset["material_completeness"] = "UNKNOWN"
+    announcement_dataset["source_coverage"] = {"scope": "qualified_securities_provider_lists", "window_complete": False, "full_text_included": False}
     overall = "normal" if all(item["status"] == "normal" for item in datasets) else "partial"
     limitations = [
         "Discovery 是研究优先级 read model，不是 Formal Evidence、投资建议或交易权限。",
         "上市时长只在 Provider 明确提供 listing_date/listing_days 时评估；缺失保持 UNKNOWN。",
         "Theme 仅复用已有 Native Intel 实体映射；没有映射时保持 UNKNOWN。",
+        "仅扫描 Provider 返回的沪深主板、创业板与科创板行情，不包含北交所，不保证完整 A 股覆盖。",
+        "按成交额在三个策略初筛结果中抽样并去重，最多 24 股补充财务与公告；每队列最多返回 12 条，按研究优先级再按证券代码排序。",
+        "行业/主题过滤只作用于已返回的有限队列，不重新扫描全行业；空结果不代表该行业没有研究对象。",
+        "公告请求成功仅代表取到有界列表，通常为首页 15 条；不证明 30 日窗口查全，也不代表已读取公告全文。",
+        "历史收益缺失时可按既有行业条件降级入选；降级线索不等于完整条件匹配，不能因缺数提高可信度。",
     ]
     if rdp_dataset["status"] != "normal":
         limitations.append("RDP 历史上下文为 PARTIAL/UNKNOWN；它会收窄 Data Health、Evidence Gate 与优先级，但不会把股票本身标记为 Restricted。")
@@ -932,6 +961,19 @@ def run_discovery(
             "qualification_candidates": len(qualification_codes),
             "queue_items": {strategy: len(queues[strategy]) for strategy in STRATEGIES},
             "excluded": len(excluded),
+        },
+        "coverage": {
+            "universe": "PROVIDER_SH_SZ_CORE_A_SHARES_EXCLUDES_BEIJING",
+            "qualification_limit": QUALIFICATION_LIMIT,
+            "qualification_omitted": max(0, len({item["code"] for rows in candidates.values() for item in rows}) - len(qualification_codes)),
+            "qualification_order": "STRATEGY_AMOUNT_DESC_THEN_CODE_DEDUPLICATED",
+            "queue_limit": QUEUE_LIMIT,
+            "queue_eligible": queue_eligible_counts,
+            "queue_omitted": {strategy: queue_eligible_counts[strategy] - len(queues[strategy]) for strategy in STRATEGIES},
+            "queue_order": "RESEARCH_PRIORITY_THEN_SECURITY_CODE",
+            "filter_scope": "RETURNED_QUEUE_ONLY",
+            "excluded_total": excluded_total,
+            "excluded_omitted": excluded_total - len(excluded),
         },
         "datasets": datasets,
         "queues": queues,
