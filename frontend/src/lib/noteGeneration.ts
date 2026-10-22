@@ -48,7 +48,7 @@ export function parseNoteGeneration(value: unknown): NoteGeneration {
 }
 
 export function dailyReviewNoteGeneration(result: AiGeneratedResult<DailyReviewAiPayload>, content: string): NoteGeneration | undefined {
-  if (!content.trim() || content !== result.payload.markdown) return undefined;
+  if (result.result_type !== "daily_review_ai" || !content.trim() || content !== result.payload.markdown) return undefined;
   const basis = validatedReviewBasis(result);
   return { schemaVersion: "note-generation.v1", resultType: "daily_review_ai", resultSchemaVersion: result.schema_version,
     tradeDate: result.trade_date, generatedAt: result.generated_at, modelProvider: result.model_provider, modelName: result.model_name,

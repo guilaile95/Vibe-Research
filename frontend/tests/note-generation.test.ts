@@ -61,6 +61,7 @@ test("quota and limit preserve all bytes; full import skips instead of evicting;
 
 test("mismatched streamed or replacement body is never assigned saved-result provenance",()=>{
  assert.equal(dailyReviewNoteGeneration(result,"different streamed result"),undefined);
+ assert.equal(dailyReviewNoteGeneration({...result,result_type:"other" as typeof result.result_type},result.payload.markdown),undefined);
  assert.equal(dailyReviewNoteGeneration({...result,payload:{...result.payload,markdown:""}},result.payload.markdown),undefined);
 });
 
