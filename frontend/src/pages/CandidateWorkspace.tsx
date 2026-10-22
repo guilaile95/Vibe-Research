@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { AlertCircle, ArrowLeft, FileSearch, Loader2 } from "lucide-react";
 import { CandidateCampaignPanel } from "@/components/campaign/CandidateCampaignPanel";
+import { ResearchCheckPanel } from "@/components/campaign/ResearchCheckPanel";
 import { CandidateResearchNote } from "@/components/campaign/CandidateResearchNote";
 import { ResearchEventCalendar } from "@/components/campaign/ResearchEventCalendar";
 import { NativeIntelSecurityContext } from "@/components/native-intel/NativeIntelSecurityContext";
@@ -19,7 +20,9 @@ import { api, ApiError, type EvidenceRecord, type StockRelativeContext, type Sto
 import { candidateEntryContext } from "@/lib/candidateEntryContext";
 import { CandidateEvidenceLoadError, loadCandidateEvidence } from "@/lib/candidateEvidence";
 import { CAMPAIGN_STRATEGY_LABELS } from "@/lib/decisionInbox";
-import { rememberResearchVisit, RESEARCH_SECTIONS as researchSections } from "@/lib/researchResume";
+import { rememberResearchVisit, RESEARCH_SECTIONS as existingResearchSections } from "@/lib/researchResume";
+
+const researchSections = [...existingResearchSections.slice(0, 2), { id: "candidate-research-check", label: "问题与材料核对" }, ...existingResearchSections.slice(2)];
 
 type LoadState<T> =
   | { status: "loading"; value: null; error: "" }
@@ -59,6 +62,7 @@ export function CandidateWorkspace() {
     setNameContext({ code: requestedCode, name: context?.security.code === requestedCode ? context.security.company_name : null });
   }, []);
   const name = nameContext?.code === code ? nameContext.name : null;
+  const [checkDirty, setCheckDirty] = useState(false);
   const validCode = /^\d{6}$/.test(code);
   const [position, setPosition] = useState<LoadState<CandidatePositionPresentation>>(loadingState);
   const [evidence, setEvidence] = useState<LoadState<{ records: EvidenceRecord[]; total: number }>>(loadingState);
@@ -356,8 +360,20 @@ export function CandidateWorkspace() {
         </GlassCard>
       </section>
 
+      <ResearchCheckPanel
+        key={`check-${code}`}
+        onDirtyChange={setCheckDirty}
+        code={code}
+        records={evidence.value?.records ?? []}
+        evidenceStatus={evidence.status}
+        returnTo={returnTo}
+        originLabel={discoveryStrategy ? `市场发现 · ${CAMPAIGN_STRATEGY_LABELS[discoveryStrategy]}` : undefined}
+        suggestedQuestion={evidenceGap?.highestImpactQuestion}
+      />
+
       <CandidateResearchNote
         key={code}
+        additionalDirty={checkDirty}
         code={code}
         records={evidence.value?.records ?? []}
         evidenceStatus={evidence.status}

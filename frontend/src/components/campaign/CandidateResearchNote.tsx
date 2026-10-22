@@ -6,12 +6,13 @@ import type { EvidenceRecord } from "@/lib/api";
 import { addNote, loadNotesState, NOTES_CHANGED_EVENT } from "@/lib/notes";
 import { candidateResearchContext, candidateResearchSelection, candidateResearchSourceLinks, type NoteResearchMetadata } from "@/lib/researchNote";
 
-export function CandidateResearchNote({ code, records, evidenceStatus, returnTo, suggestedQuestion }: {
+export function CandidateResearchNote({ code, records, evidenceStatus, returnTo, suggestedQuestion, additionalDirty = false }: {
   code: string;
   records: EvidenceRecord[];
   evidenceStatus: "loading" | "ready" | "error";
   returnTo: string;
   suggestedQuestion?: string | null;
+  additionalDirty?: boolean;
 }) {
   const [question, setQuestion] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -26,7 +27,9 @@ export function CandidateResearchNote({ code, records, evidenceStatus, returnTo,
   const fields = [question, tentativeView, contraryEvidence, nextQuestion].map((value) => value.trim());
   const textIdentity = JSON.stringify(fields);
   const [savedTextIdentity, setSavedTextIdentity] = useState(textIdentity);
-  const dirty = fields.some(Boolean) && textIdentity !== savedTextIdentity;
+  // The candidate page owns one router blocker for both independent drafts.
+  const ownDirty = fields.some(Boolean) && textIdentity !== savedTextIdentity;
+  const dirty = ownDirty || additionalDirty;
   const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && (
     currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search
   ));
@@ -90,7 +93,7 @@ export function CandidateResearchNote({ code, records, evidenceStatus, returnTo,
         className="m-auto w-11/12 max-w-md rounded-lg border border-border bg-background p-5 text-foreground shadow-xl backdrop:bg-black/50"
         onCancel={(event) => { event.preventDefault(); if (blocker.state === "blocked") blocker.reset(); }}>
         <h2 id="candidate-unsaved-title" className="font-semibold">研究内容尚未保存</h2>
-        <p id="candidate-unsaved-description" className="mt-2 text-sm text-muted-foreground">离开会丢失本次未保存的问题和看法。可以留在这里继续编辑或先保存。</p>
+        <p id="candidate-unsaved-description" className="mt-2 text-sm text-muted-foreground">离开会丢失本次未保存的问题、材料核对草稿和看法。可以留在这里继续编辑或先保存。</p>
         <div className="mt-4 flex flex-wrap gap-3">
           <button type="button" autoFocus className="rounded border border-primary/40 px-3 py-2 text-sm text-primary" onClick={() => { if (blocker.state === "blocked") blocker.reset(); }}>留下继续编辑</button>
           <button type="button" className="rounded border border-border px-3 py-2 text-sm" onClick={() => { if (blocker.state === "blocked") blocker.proceed(); }}>放弃未保存内容并离开</button>
@@ -100,7 +103,7 @@ export function CandidateResearchNote({ code, records, evidenceStatus, returnTo,
         <h2 className="text-sm font-semibold">提问、留下看法，下次接着研究</h2>
         <p className="mt-1 text-xs leading-5 text-muted-foreground">可以先做轻量研究，不必创建投资计划。这里保存的是本浏览器的非正式记录；不会自动成为事实、投资逻辑或决策。</p>
       </div>
-      {dirty && <p role="status" className="text-xs text-warning">有尚未保存的研究内容；刷新或关闭页面时，浏览器可能会提示确认。请先保存重要内容。</p>}
+      {ownDirty && <p role="status" className="text-xs text-warning">有尚未保存的研究内容；刷新或关闭页面时，浏览器可能会提示确认。请先保存重要内容。</p>}
       <label className="block text-xs">本次要核对的问题
         <input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：盈利增长是否有现金流支持？" className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-sm" />
       </label>
