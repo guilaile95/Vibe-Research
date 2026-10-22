@@ -520,13 +520,13 @@ export function StockData() {
         : "")
     : "";
   const stockReturnPath = (() => {
-    if (!returnTo || !/^\d{6}$/.test(activeCode)) return "";
+    if (!/^\d{6}$/.test(activeCode)) return "";
     const params = new URLSearchParams(searchParams);
     params.set("code", activeCode);
     return `${location.pathname}?${params.toString()}${location.hash}`;
   })();
   const candidateHref = /^\d{6}$/.test(activeCode)
-    ? `${candidateWorkspaceHref(activeCode)}${stockReturnPath ? `?${new URLSearchParams({ return_to: stockReturnPath }).toString()}` : ""}`
+    ? candidateWorkspaceHref(activeCode, stockReturnPath)
     : "";
 
   // 资金卡常驻以显示各来源状态；龙虎榜明细仅在本次接口返回数据时展示。
@@ -586,7 +586,7 @@ export function StockData() {
       <PageHeader
         title="个股数据"
         subtitle="行情 · 估值 · 研报 · 新闻 · 资金面"
-        actions={((val || gstock) || returnTo) && (
+        actions={((val || gstock) || candidateHref || returnTo) && (
           <div className="flex flex-wrap items-center gap-2">
             {returnTo && (
               <Link
@@ -597,17 +597,15 @@ export function StockData() {
                 返回来源
               </Link>
             )}
+            {candidateHref && (
+              <Link
+                to={candidateHref}
+                className="rounded-md border border-primary/50 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10"
+                data-testid="stock-data-candidate-entry"
+              >候选研究</Link>
+            )}
             {(val || gstock) && (
               <>
-                {/^\d{6}$/.test(activeCode) && (
-                  <Link
-                    to={candidateHref}
-                    className="rounded-md border border-primary/50 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10"
-                    data-testid="stock-data-candidate-entry"
-                  >
-                    候选研究
-                  </Link>
-                )}
                 <AskAiButton
                   context={gstock ? gAiContext : aiContext}
                   // 本页不换路由就能换标的，必须按已解析代码分开存对话，否则会串台。
@@ -628,6 +626,12 @@ export function StockData() {
         <div className="mb-5 flex gap-2">
           {queryBox}
         </div>
+      )}
+
+      {candidateHref && !val && (
+        <p className="mb-4 text-xs text-muted-foreground" data-testid="stock-data-research-without-quote">
+          {activeCode} · {loading ? "行情读取中" : "行情与估值暂不可用"}；仍可进入候选研究，查看已有证据和笔记。
+        </p>
       )}
 
       {err && (

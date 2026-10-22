@@ -6,11 +6,13 @@ import ts from 'typescript';
 import { ApiError } from '../src/lib/api.ts';
 import * as panels from '../src/components/ui/optionalDataPanelState.ts';
 import * as evidence from '../src/lib/stockDataEvidence.ts';
+import * as candidate from '../src/lib/candidateCampaign.ts';
+import * as internalReturn from '../src/lib/internalReturnTo.ts';
 
 // Actual component with synthetic hooks and API boundaries; no browser/providers.
-function harness(globalStock) {
+function harness(globalStock, initialQuery = "AAP", valuation = async () => { throw new ApiError("SYNTHETIC_QUOTE_FAILURE", 503); }) {
   const slots=[], effects=[];
-  let cursor=0, pending=[], query='AAP';
+  let cursor=0, pending=[], query=initialQuery;
   const same=(a,b)=>a&&b&&a.length===b.length&&a.every((v,i)=>Object.is(v,b[i]));
   const React={
     useState(initial) { const i=cursor++; if (!(i in slots)) slots[i]=typeof initial==='function'?initial():initial; return [slots[i],next=>{slots[i]=typeof next==='function'?next(slots[i]):next;}]; },
@@ -25,8 +27,10 @@ function harness(globalStock) {
     'react-router-dom':{Link:()=>null,useLocation:()=>({pathname:'/stock',search:`?code=${query}`,hash:''}),useNavigate:()=>()=>{},useSearchParams:()=>[new URLSearchParams({code:query})]},
     '@/components/ui/optionalDataPanelState':panels,
     '@/lib/stockDataEvidence':evidence,
+    '@/lib/candidateCampaign':candidate,
+    '@/lib/internalReturnTo':internalReturn,
     '@/lib/utils':{cn:(...items)=>items.join(' ')},
-    '@/lib/api':{ApiError,api:new Proxy({globalStock,hkCashflow:async()=>{throw new ApiError('not HK',404);}}, {get:(target,key)=>key in target?target[key]:()=>{throw new Error(`Unexpected API ${String(key)}`);}})},
+    '@/lib/api':{ApiError,api:new Proxy({globalStock,valuation,hkCashflow:async()=>{throw new ApiError('not HK',404);}}, {get:(target,key)=>key in target?target[key]:()=>Promise.reject(new Error(`Synthetic unavailable API ${String(key)}`))})},
   };
   const exports={};
   const source=ts.transpileModule(readFileSync(new URL('../src/pages/StockData.tsx',import.meta.url),'utf8'),{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
@@ -55,4 +59,32 @@ test('actual StockData ignores a late old-symbol rejection after another lookup'
   oldReject(new ApiError('OLD_ERROR',503));await tick();
   assert.match(text(h.render()),/CURRENT_ERROR/);
   assert.doesNotMatch(text(h.render()),/OLD_ERROR/);
+});
+
+function nodes(tree) { if (tree == null || typeof tree !== 'object') return []; return Array.isArray(tree) ? tree.flatMap(nodes) : [tree, ...nodes(tree.props?.children), ...nodes(tree.props?.actions)]; }
+function candidateLink(tree) { return nodes(tree).find(node => node.props?.['data-testid'] === 'stock-data-candidate-entry'); }
+for (const code of ['', '00700', 'AAPL', 'BAD', '60051']) {
+  test(`production candidate entry rejects non A-share or unsubmitted code ${code}`, async () => {
+    const h = harness(async () => { throw new Error('unavailable'); }, code);
+    h.render(); await tick(); assert.equal(candidateLink(h.render()), undefined);
+  });
+}
+test('production candidate entry survives failed quote and ignores unsubmitted text', async () => {
+  const h = harness(async () => null, '600519');
+  h.render(); await tick(); let tree = h.render();
+  const input = nodes(tree).find(node => node.props?.placeholder?.startsWith('A 股 6 位代码'));
+  input.props.onChange({ target: { value: '600520' } }); tree = h.render();
+  const target = new URL(candidateLink(tree).props.to, 'http://localhost');
+  assert.equal(target.pathname, '/candidates/600519');
+  assert.equal(new URL(target.searchParams.get('return_to'), 'http://localhost').searchParams.get('code'), '600519');
+  assert.match(text(tree), /行情与估值暂不可用/);
+});
+test('production candidate entry remains bound to latest query after late quote success', async () => {
+  let finish;
+  const h = harness(async () => null, '600519', code => code === '600519' ? new Promise(resolve => { finish = resolve; }) : Promise.reject(new Error('new unavailable')));
+  h.render(); h.render(); h.query('600520'); h.render(); await tick();
+  finish({ code: '600519', name: 'LATE_OLD', price: 1 }); await tick();
+  const tree = h.render();
+  assert.equal(new URL(candidateLink(tree).props.to, 'http://localhost').pathname, '/candidates/600520');
+  assert.doesNotMatch(text(tree), /LATE_OLD/);
 });
