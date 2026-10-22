@@ -1,4 +1,5 @@
 /** Browser-local research snapshots. Never Evidence, Campaign, Thesis or Decision authority. */
+import { parseDiscoveryResearchOrigin, type DiscoveryResearchOrigin } from './discoveryResearchOrigin.ts';
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type ResearchQuestionStatus = 'watching' | 'resolved' | 'paused' | 'archived';
 export interface ResearchOrigin {
@@ -6,6 +7,7 @@ export interface ResearchOrigin {
   label: string;
   url?: string;
   capturedAt: number;
+  snapshot?: DiscoveryResearchOrigin;
 }
 export interface ResearchQuestion {
   id: string;
@@ -157,9 +159,14 @@ export function validateResearchQuestion(value: unknown): ResearchQuestion {
   const v = record(value);
   keys(v, ['id', 'securityCode', 'question', 'origin', 'createdAt', 'updatedAt', 'revision', 'headRoundId', 'status', 'reviewedMaterialKeys']);
   const o = record(v.origin);
-  keys(o, ['kind', 'label', 'url', 'capturedAt']);
+  keys(o, ['kind', 'label', 'url', 'capturedAt', 'snapshot']);
   const securityCode = code(v.securityCode);
   const origin: ResearchOrigin = { kind: oneOf(o.kind, ['candidate', 'discovery', 'manual', 'legacy']), label: str(o.label, '问题来由', false, 20_000), capturedAt: num(o.capturedAt, '来由时间') };
+  if (o.snapshot !== undefined) {
+    const snapshot = parseDiscoveryResearchOrigin(o.snapshot, securityCode);
+    if (!snapshot || origin.kind !== 'discovery' || snapshot.capturedAt > origin.capturedAt) fail('原发现来由快照无效、跨证券或时间不匹配');
+    origin.snapshot = snapshot;
+  }
   if (o.url !== undefined) {
     origin.url = str(o.url, '问题来由链接', false, 4096);
     if (!safeWorkflowUrl(origin.url)) fail('问题来由链接不安全');
@@ -230,7 +237,8 @@ export function validateResearchRound(value: unknown): ResearchRound {
     if (calculation.comparable && inputs.some(input => !input.confirmed || !input.unit || !input.currency || !input.period || !input.metric || !input.basis)) fail('比较口径尚未确认');
   }
   const result: ResearchRound = { id: id(v.id), questionId: id(v.questionId), securityCode, parentRoundId: nullableId(v.parentRoundId), createdAt: num(v.createdAt, '轮次时间'), materials, calculation,
-    judgement: str(v.judgement, '本轮判断'), limitations: str(v.limitations, '限制与反证', true), nextMaterial: str(v.nextMaterial, '下一材料', true), reviewedMaterialKeys, ignoredMaterialKeys, coverage: oneOf(v.coverage, ['partial', 'complete']) };
+    judgement: str(v.judgement, '本轮判断', true), limitations: str(v.limitations, '限制与反证', true), nextMaterial: str(v.nextMaterial, '下一材料', true), reviewedMaterialKeys, ignoredMaterialKeys, coverage: oneOf(v.coverage, ['partial', 'complete']) };
+  if (!result.judgement.trim() && !result.nextMaterial.trim()) fail('请至少保留一句判断或下一问题');
   if (materials.some(material => material.capturedAt > result.createdAt)) fail('材料读取时间晚于保存轮次');
   if (result.coverage === 'complete' && (!materials.length || materials.some(material => material.availability !== 'full' || material.readRange.truncated) || reviewedMaterialKeys.length + ignoredMaterialKeys.length !== materials.length)) fail('部分读取或未处理材料不能标为全范围复核');
   if (utf8Bytes(canonicalJson(result)) > RESEARCH_ROUND_BUDGET_BYTES) throw new ResearchWorkflowError('BUDGET', '单轮研究超过 2 MiB 预算，未截断或删除材料');

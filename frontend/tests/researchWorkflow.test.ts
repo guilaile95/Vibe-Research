@@ -14,6 +14,20 @@ test('full snapshots retain actual text, original provenance and explicit partia
   assert.equal(saved.materials[0].content, material().content);
   assert.deepEqual(saved.materials[0].provenance, material().provenance);
 });
+test('light research accepts a judgement or next question without invented findings', () => {
+  assert.equal(validateResearchRound(round({ judgement: '', limitations: '', nextMaterial: '下一步核对现金流原页' })).judgement, '');
+  assert.equal(validateResearchRound(round({ judgement: '当前只能确认有限材料', limitations: '', nextMaterial: '' })).nextMaterial, '');
+  assert.throws(() => validateResearchRound(round({ judgement: ' ', nextMaterial: '' })), /至少保留/);
+});
+test('discovery origin preserves bounded non-authoritative original card context', () => {
+  const snapshot = { schemaVersion: 'discovery-card.v1', scope: 'NON_AUTHORITATIVE_CARD_CONTEXT', securityCode: '301213', securityName: '合成公司', strategy: 'SWING', capturedAt: 1,
+    sourceFetchedAt: null, discoveredAt: null, asOf: null, conditionSummary: '仅便宜价格条件', observations: [{ code: 'RETURN', label: '已知收益', rawValue: '-2%', sourceRef: 'synthetic' }], reasonCodes: ['CLUE'], sourceNames: ['synthetic'], limitations: ['非投资结论'], truncated: false };
+  const value = { ...question(), origin: { kind: 'discovery', label: '从原卡继续研究', capturedAt: 1, snapshot } };
+  assert.deepEqual(validateResearchQuestion(value).origin.snapshot, snapshot);
+  for (const change of [{ securityCode: '600519' }, { capturedAt: 2 }, { scope: 'AUTHORITATIVE' }, { extra: true }]) {
+    assert.throws(() => validateResearchQuestion({ ...value, origin: { ...value.origin, snapshot: { ...snapshot, ...change } } }), /来由快照/);
+  }
+});
 test('safe origin and material identity prevent cross-stock and unsafe link activation', () => {
   assert.throws(() => validateResearchQuestion(question({ origin: { kind: 'candidate', label: 'x', url: '/candidates/688041', capturedAt: 1 } })), /证券/);
   assert.throws(() => validateResearchRound(round({ materials: [material({ securityCode: '688041' })] })), /跨证券/);
