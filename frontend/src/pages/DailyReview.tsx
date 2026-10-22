@@ -966,7 +966,7 @@ export function DailyReview() {
     );
   };
 
-  const persistWatch = async (next: string[]) => {
+  const persistWatch = async (next: string[], clearInput = false) => {
     if (watchListState !== "ready" || watchListBusy.current) return;
     watchListBusy.current = true;
     const request = ++watchListRequest.current;
@@ -980,7 +980,7 @@ export function DailyReview() {
       setWatchEtag(r.etag);
       setWatchListState("ready");
       setWatchListReadAt(new Date().toLocaleString("zh-CN"));
-      setWatchInput("");
+      if (clearInput) setWatchInput("");
       refreshWatch(r.codes);
     } catch {
       if (!active()) return;
@@ -994,7 +994,7 @@ export function DailyReview() {
   const addWatch = () => {
     const { next, added } = addCodes(watchCodes, watchInput);
     if (!added) return;
-    void persistWatch(next);
+    void persistWatch(next, true);
   };
 
   const removeWatch = (c: string) => {
