@@ -12,6 +12,7 @@ export async function runNoteGeneration(browser, frontend) {
     const generation={schemaVersion:'note-generation.v1',resultType:'daily_review_ai',resultSchemaVersion:'daily_review_ai.v1',tradeDate:'2026-10-08',generatedAt:'2026-10-21T08:00:00Z',modelProvider:'synthetic',modelName:'fixture',sourceReviewGeneratedAt:'2026-10-21T07:00:00Z',sourceDataCutoff:null,staleAtSave:true};
     await context.route('**/*',route=>{
       const request=route.request(),url=new URL(request.url());
+      if(request.method()==='GET' && url.href==='https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap')return route.fulfill({contentType:'text/css',body:''});
       if(url.origin!==frontend){external.push(url.origin);return route.abort()}
       if(!url.pathname.startsWith('/api/'))return route.continue();
       if(request.method()!=='GET'){writes.push(`${request.method()} ${url.pathname}`);return route.abort()}
