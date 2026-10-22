@@ -9,6 +9,7 @@ const browser = read('./e2e/research-check-loop.browser.mjs');
 const discovery = read('../src/components/discovery/DiscoveryWorkspace.tsx');
 test('candidate has a bounded material-check entry alongside existing workflow and one combined SPA blocker', () => {
   assert.match(candidate, /<ResearchCheckPanel/); assert.match(candidate, /onDirtyChange=\{setCheckDirty\}/); assert.match(candidate, /additionalDirty=\{checkDirty\}/);
+  assert.match(candidate, /to=\{\{ pathname: location\.pathname, search: location\.search, hash: `#\$\{id\}` \}\}\s+state=\{location\.state\}/);
   assert.match(note, /const dirty = ownDirty \|\| additionalDirty/); assert.match(note, /useBlocker/); assert.doesNotMatch(panel, /useBlocker/);
 });
 test('check panel never invokes a model, changes formal state, fetches arbitrary URL or auto-migrates notes', () => {

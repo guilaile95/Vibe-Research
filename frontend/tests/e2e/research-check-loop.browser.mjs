@@ -120,6 +120,8 @@ try {
       await page.goto('/screener?mode=discovery&strategy=SWING');
       await page.getByTestId('discovery-candidate-600519').click();
       await page.getByTestId('candidate-discovery-context').waitFor();
+      await page.getByRole('navigation', { name: '候选研究快速接续' }).getByRole('link', { name: '问题与材料核对', exact: true }).click();
+      assert.equal(new URL(page.url()).hash, '#candidate-research-check');
       let panel = page.getByTestId('research-check-panel');
       await panel.getByLabel('核对研究问题', { exact: true }).fill('合成预告是否被修订或兑现？');
       assert.match(await panel.getByLabel('为什么开始研究', { exact: true }).inputValue(), /来自市场发现/);

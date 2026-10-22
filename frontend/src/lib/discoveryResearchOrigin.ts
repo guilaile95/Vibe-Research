@@ -30,7 +30,7 @@ const day = (value: unknown): boolean => value === null || (text(value, 10) && /
 export function parseDiscoveryResearchOrigin(value: unknown, expectedCode: string): DiscoveryResearchOrigin | null {
   if (!object(value) || !/^\d{6}$/.test(expectedCode) || !exactKeys(value, ["schemaVersion", "scope", "securityCode", "securityName", "strategy", "capturedAt", "sourceFetchedAt", "discoveredAt", "asOf", "conditionSummary", "observations", "reasonCodes", "sourceNames", "limitations", "truncated"])) return null;
   if (value.schemaVersion !== "discovery-card.v1" || value.scope !== "NON_AUTHORITATIVE_CARD_CONTEXT" || value.securityCode !== expectedCode
-    || !text(value.securityName, 200) || !["SHORT", "SWING", "MEDIUM"].includes(String(value.strategy))
+    || !text(value.securityName, 200) || typeof value.strategy !== "string" || !["SHORT", "SWING", "MEDIUM"].includes(value.strategy)
     || typeof value.capturedAt !== "number" || !Number.isSafeInteger(value.capturedAt) || value.capturedAt < 0
     || !timestamp(value.sourceFetchedAt) || !timestamp(value.discoveredAt) || !day(value.asOf) || !text(value.conditionSummary)
     || !strings(value.reasonCodes, 24, 200) || !strings(value.sourceNames, 24) || !strings(value.limitations, 24)

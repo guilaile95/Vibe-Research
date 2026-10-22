@@ -208,6 +208,7 @@ export function CandidateWorkspace() {
             <Link
               key={id}
               to={{ pathname: location.pathname, search: location.search, hash: `#${id}` }}
+              state={location.state}
               onClick={() => focusResearchSection(id)}
               className="rounded border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-primary hover:bg-primary/10"
             >

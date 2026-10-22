@@ -20,6 +20,7 @@ test("missing, cross-stock, unknown shape, oversized fields and invalid dates ar
   const origin = buildDiscoveryResearchOrigin(item, snapshot, [], 123)!;
   for (const value of [null, {}, { ...origin, securityCode: "000001" }, { ...origin, scope: "VERIFIED_EVIDENCE" }, { ...origin, strategy: "UNKNOWN" }, { ...origin, buy: true }, { ...origin, asOf: "2026-02-30" }, { ...origin, capturedAt: -1 }, { ...origin, sourceFetchedAt: "unknown" }, { ...origin, conditionSummary: "x".repeat(501) }, { ...origin, observations: [{ ...origin.observations[0], rawValue: "x".repeat(1001) }] }]) assert.equal(parseDiscoveryResearchOrigin(value, "600519"), null);
   assert.equal(parseDiscoveryResearchOrigin(origin, "000001"), null);
+  for (const strategy of [["SWING"], { value: "SWING" }, null, 0, true]) assert.equal(parseDiscoveryResearchOrigin({ ...origin, strategy }, "600519"), null);
 });
 test("bounded snapshots disclose truncation and remain under16KiB without unbounded card objects", () => {
   const large = { ...item, reason_codes: Array(50).fill("中".repeat(200)), supporting_observations: Array(20).fill({ code: "RAW", label: "中".repeat(300), value: "中".repeat(1000), source_ref: "中".repeat(500) }), provenance_refs: Array(50).fill("中".repeat(500)) };
