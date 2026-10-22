@@ -3727,11 +3727,14 @@ def pe_digestion(current_pe: float, cagr: float, target_pe: float = 30) -> float
     target_pe 固定30x（A股成长股合理估值锚点）。
     cagr: 用 下一年EPS / 当年EPS - 1
     """
+    if not all(math.isfinite(value) for value in (current_pe, cagr, target_pe)) or current_pe <= 0 or target_pe <= 0:
+        return float("inf")
     if current_pe <= target_pe:
         return 0.0
     if cagr <= 0:
         return float("inf")
-    return math.log(current_pe / target_pe) / math.log(1 + cagr)
+    # log1p 保留微小正增长；对数相减避免 PE 比值先溢出。
+    return (math.log(current_pe) - math.log(target_pe)) / math.log1p(cagr)
 ```
 
 ### PEG
@@ -3815,12 +3818,16 @@ def full_valuation(code: str) -> dict:
         except (ValueError, TypeError) as e:
             print(f"[WARN] full_valuation EPS 解析失败({e})，估值可能不完整")
 
-    # 3. 估值指标
-    pe_fwd = price / eps_cur if eps_cur else float("inf")
-    cagr = (eps_next / eps_cur - 1) if (eps_cur and eps_next) else 0
-    peg = pe_fwd / (cagr * 100) if cagr > 0 else float("inf")
-    # 已不高于目标 PE 才是 0 年；高于目标且无正增长时无法消化（JSON 用 None）。
-    digest = pe_digestion(pe_fwd, cagr)
+    # 3. 估值指标。未知不填 0；负/零 EPS 不能产生可用的前向 PE。
+    eps_cur = eps_cur if eps_cur is not None and math.isfinite(eps_cur) else None
+    eps_next = eps_next if eps_next is not None and math.isfinite(eps_next) else None
+    pe_fwd = price / eps_cur if eps_cur is not None and eps_cur > 0 else float("inf")
+    valid_pe = math.isfinite(pe_fwd) and pe_fwd > 0
+    cagr = (eps_next / eps_cur - 1) if valid_pe and eps_next else float("inf")
+    valid_growth = math.isfinite(cagr * 100)
+    peg = pe_fwd / (cagr * 100) if valid_growth and cagr > 0 else float("inf")
+    # 有限输入且已不高于目标 PE 才是 0 年；缺预测/无法消化均以 None 返回。
+    digest = pe_digestion(pe_fwd, cagr) if valid_pe and valid_growth else float("inf")
 
     return {
         "name": vals[1],
@@ -3830,10 +3837,10 @@ def full_valuation(code: str) -> dict:
         "pb": pb,
         "eps_cur": eps_cur,
         "eps_next": eps_next,
-        "pe_fwd": round(pe_fwd, 1) if eps_cur else None,
-        "cagr_pct": round(cagr * 100, 0) if cagr else None,
-        "peg": round(peg, 2) if peg != float("inf") else None,
-        "digest_years": round(digest, 1) if digest != float("inf") else None,
+        "pe_fwd": round(pe_fwd, 1) if valid_pe else None,
+        "cagr_pct": round(cagr * 100, 0) if valid_growth else None,
+        "peg": round(peg, 2) if math.isfinite(peg) else None,
+        "digest_years": round(digest, 1) if math.isfinite(digest) else None,
         "analyst_count": analyst_count,
     }
 
@@ -3849,7 +3856,9 @@ stocks = ["688017", "300308", "300476", "002463"]
 for code in stocks:
     try:
         r = full_valuation(code)
-        print(f"{r['name']}({code}): PE_fwd={r['pe_fwd']}x PEG={r['peg']} 消化={r['digest_years']}年 覆盖={r['analyst_count']}家")
+        digest_text = (f"{r['digest_years']}年" if r["digest_years"] is not None else
+                       "缺少输入" if r["eps_cur"] is None or r["eps_next"] is None else "无法估算")
+        print(f"{r['name']}({code}): PE_fwd={r['pe_fwd']}x PEG={r['peg']} 消化={digest_text} 覆盖={r['analyst_count']}家")
     except Exception as e:
         print(f"{code}: 失败 - {e}")
 ```
