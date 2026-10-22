@@ -43,7 +43,7 @@ try {
         return ok(record);
       }
       reads.push(path + url.search);
-      if (path === '/api/watchlist') return ok({ status: 'valid', data: { codes: ['600519'], updated_at: null }, etag: 'synthetic' });
+      if (path === '/api/watchlist') return ok({ status: 'valid', data: { codes: ['600519'], updated_at: null }, etag: '1111111111111111' });
       if (path === '/api/watchlist/anomalies') return ok({ items: [], unavailable_codes: [], as_of_ms: null });
       if (path === '/api/quote') return ok({});
       if (path === '/api/evidence') return ok({ items: record ? [record] : [], total: record ? 1 : 0 });
@@ -101,7 +101,12 @@ try {
       slow = true; await page.goto('/stock-data?code=600519'); await started.promise;
       await query.fill('600520'); await query.press('Enter');
       await page.waitForFunction(() => document.querySelector('[data-active-code="600520"]'));
-      release.resolve(); await page.waitForTimeout(100);
+      const oldResponse = page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return url.pathname === '/api/valuation' && url.searchParams.get('code') === '600519';
+      });
+      release.resolve(); await oldResponse;
+      await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
       assert.equal(new URL(await page.getByTestId('stock-data-candidate-entry').getAttribute('href'), baseURL).pathname, '/candidates/600520');
       assert.equal(await page.getByText('旧股晚到', { exact: true }).count(), 0);
       assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.equal(writes.length, 1);
