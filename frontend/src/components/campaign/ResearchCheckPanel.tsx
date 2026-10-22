@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { GlassCard } from "@/components/ui/GlassCard";
+import type { DiscoveryResearchOrigin } from "@/lib/discoveryResearchOrigin";
 import { api, type EvidenceRecord, type MyReport, type MyReportTextHit } from "@/lib/api";
 import { blankOperand, compareForecast, evidenceMaterial, reportIdFromMaterial, reportPageMaterials, safeSourceUrl, type CheckOperand, type ComparisonMode } from "@/lib/researchCheck";
 import { RESEARCH_DEFAULT_BUDGET_BYTES, materialKey, type LegacyResearchNote, type ResearchMaterial, type ResearchQuestion, type ResearchQuestionStatus, type ResearchRound } from "@/lib/researchWorkflow";
@@ -60,16 +61,20 @@ function OperandFields({ label, value, onChange, materials }: { label: string; v
   </fieldset>;
 }
 
-export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, originLabel, suggestedQuestion, onDirtyChange }: {
+export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, originLabel, discoveryOrigin, suggestedQuestion, onDirtyChange }: {
   code: string; records: EvidenceRecord[]; evidenceStatus: "loading" | "ready" | "error"; returnTo: string;
-  originLabel?: string; suggestedQuestion?: string | null; onDirtyChange?: (dirty: boolean) => void;
+  originLabel?: string; discoveryOrigin?: DiscoveryResearchOrigin | null; suggestedQuestion?: string | null; onDirtyChange?: (dirty: boolean) => void;
 }) {
+  const defaultWhy = discoveryOrigin
+    ? `来自${originLabel || "市场发现"}：${discoveryOrigin.conditionSummary} 原卡片快照已保留，仍需核对。`
+    : originLabel ? `来自${originLabel}；原发现卡片快照不可用，不能还原当时入选依据。`
+      : `从已知股票 ${code} 开始核对；额外来由未记录。`;
   const [questions, setQuestions] = useState<ResearchQuestion[]>([]);
   const [active, setActive] = useState<ResearchQuestion | null>(null);
   const [rounds, setRounds] = useState<ResearchRound[]>([]);
   const [viewedId, setViewedId] = useState("");
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
-  const [title, setTitle] = useState(""), [why, setWhy] = useState("");
+  const [title, setTitle] = useState(""), [why, setWhy] = useState(defaultWhy);
   const [materials, setMaterials] = useState<ResearchMaterial[]>([]), [available, setAvailable] = useState<ResearchMaterial[]>([]);
   const [handled, setHandled] = useState<Record<string, "reviewed" | "ignored">>({});
   const [judgement, setJudgement] = useState(""), [limitations, setLimitations] = useState(""), [nextMaterial, setNextMaterial] = useState("");
@@ -118,7 +123,7 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
   }, [code, records]);
 
   function clearDraft(question: ResearchQuestion | null, reference?: ResearchRound) {
-    const nextTitle = question?.question || "", nextWhy = question?.origin.label || "", nextStatus = question?.status || "watching";
+    const nextTitle = question?.question || "", nextWhy = question?.origin.label || defaultWhy, nextStatus = question?.status || "watching";
     const nextMaterials = reference?.materials || [];
     setTitle(nextTitle); setWhy(nextWhy); setStatus(nextStatus); setMaterials(nextMaterials); setHandled({}); setJudgement(""); setLimitations(""); setNextMaterial("");
     setForecast(blankOperand()); setComparison(blankOperand()); setCalculationEnabled(false); setMode("actual"); setAllowUnitConversion(false); operation.current = null;
@@ -143,7 +148,7 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
   }
   async function searchPages() {
     if (!chosenReport || !term.trim()) return;
-    const expectedReportId = chosenReport.id; const generation = ++requestGeneration.current; setSearching(true); setHits([]); setReportError("");
+    const expectedReportId = chosenReport.id; const generation = ++requestGeneration.current; setReading(false); setSearching(true); setHits([]); setReportError("");
     try {
       const rows = await api.searchMyReportText(term.trim(), [expectedReportId], 20);
       if (mounted.current && generation === requestGeneration.current) { setHits(rows.filter(hit => hit.report_id === expectedReportId)); setPageNotice(rows.length ? "字面关键词命中只是定位线索；请读指定页保留表头、单位和脚注。" : "未命中字面关键词，不代表公司未披露。可换术语或直接读取页码。"); }
@@ -156,7 +161,7 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
     if (!/^\d+$/.test(pageFrom) || !/^\d+$/.test(pageTo) || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end > 1000000 || end - start >= 200) { setReportError("请输入 1–200 页的连续正整数范围。"); return; }
     if (!/^[a-f0-9]{64}$/.test(chosenReport.file_sha256 || "")) { setReportError("缺少文件版本。请先在 MyReports 建立索引并刷新，不会把链接当作原文。"); return; }
     if (!reportConfirmed || reportCode !== code) { setReportError("请对照原页证券代码确认资料属于当前股票；标题或文件名不足以证明归属。"); return; }
-    const report = chosenReport, generation = ++requestGeneration.current; setReading(true); setReportError(""); setPageNotice("");
+    const report = chosenReport, generation = ++requestGeneration.current; setSearching(false); setReading(true); setReportError(""); setPageNotice("");
     try {
       const response = await api.readReportPages({ report_id: report.id, selected_report_ids: [report.id], expected_file_sha256: report.file_sha256!, page_from: start, page_to: end });
       const snapshots = await reportPageMaterials(report, response, code, start, end);
@@ -168,29 +173,36 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
     finally { if (mounted.current && generation === requestGeneration.current) setReading(false); }
   }
   async function save() {
+    if (busy || discardTarget !== null || reading || searching) return;
     setError(""); setNotice("");
-    if (!title.trim() || !why.trim() || !judgement.trim() || !limitations.trim() || !nextMaterial.trim()) { setError("请填写研究问题、研究来由、本轮判断、限制 / 反证及下一项材料。资料不足也可明确记录，不必勉强计算。"); return; }
+    if (!title.trim() || (!judgement.trim() && !nextMaterial.trim())) { setError("请写下研究问题，并留下本轮判断或下一项要核对的问题；其余可稍后补充，不必勉强计算。"); return; }
     if (calculationEnabled && !calculation?.comparable) { setError("当前计算被拒绝。补齐口径后再保存计算，或取消计算并把资料不足记入本轮限制。"); return; }
     if (calculation?.comparable && calculation.inputs.some(input => handled[input.materialKey] !== "reviewed")) { setError("计算来源尚未标为本轮已核对。请在每份对应材料下明确选择“已核对这部分实际内容”，不会自动推进基线。"); return; }
     const now = Date.now();
     const questionId = active?.id || id();
     if (!operation.current || operation.current.identity !== draftIdentity) {
       const round: ResearchRound = { id: id(), questionId, securityCode: code, parentRoundId: active?.headRoundId || null, createdAt: now,
-        materials, calculation, judgement: judgement.trim(), limitations: limitations.trim(), nextMaterial: nextMaterial.trim(),
+        materials, calculation, judgement: judgement.trim(), limitations: limitations.trim() || "未记录 / 待核", nextMaterial: nextMaterial.trim(),
         reviewedMaterialKeys: materials.filter(m => handled[materialKey(m)] === "reviewed").map(materialKey), ignoredMaterialKeys: materials.filter(m => handled[materialKey(m)] === "ignored").map(materialKey), coverage: "partial" };
       operation.current = active ? { identity: draftIdentity, create: null, request: { operationId: id(), questionId, expectedRevision: active.revision, expectedHeadRoundId: active.headRoundId, round, status } }
-        : { identity: draftIdentity, request: null, create: { operationId: id(), question: { id: questionId, securityCode: code, question: title.trim(), origin: { kind: originLabel ? "discovery" : "candidate", label: why.trim(), url: returnTo.split("#")[0], capturedAt: now }, createdAt: now, status }, initialRound: round } };
+        : { identity: draftIdentity, request: null, create: { operationId: id(), question: { id: questionId, securityCode: code, question: title.trim(), origin: { kind: originLabel ? "discovery" : "candidate", label: why.trim() || defaultWhy, ...(discoveryOrigin ? { snapshot: discoveryOrigin } : {}), url: returnTo.split("#")[0], capturedAt: now }, createdAt: now, status }, initialRound: round } };
     }
-    const pending = operation.current; setBusy(true);
+    const pending = operation.current, generation = ++requestGeneration.current; setDiscardTarget(null); setBusy(true);
     try {
       const result = pending.request ? await store.appendRound(pending.request) : null;
       const question = result?.question || await store.createQuestion(pending.create!);
       const committedRound = result?.round || pending.create!.initialRound!;
       if (!mounted.current) return;
+      if (generation !== requestGeneration.current) {
+        setQuestions(current => [question, ...current.filter(item => item.id !== question.id)]);
+        setNotice("先前提交的研究轮次已保存；当前视图已变化，未覆盖当前草稿。可从问题列表打开已保存记录。");
+        // Keep the identical operation receipt available for a retry, rather than creating it again.
+        return;
+      }
       setActive(question); setQuestions(current => [question, ...current.filter(item => item.id !== question.id)]);
       setRounds(current => [...current.filter(item => item.id !== committedRound.id), committedRound]); setViewedId(committedRound.id);
       clearDraft(question); setNotice("本轮已保存。仅本轮明确核对 / 忽略的材料推进处理基线；未处理资料仍保留。未写入正式证据、投资逻辑或决定。");
-    } catch (cause) { if (mounted.current) setError(`${failure(cause)} 本轮草稿未清空，未推进本页显示的复核基线。若为并发冲突，请先查看最新轮次再继续。`); }
+    } catch (cause) { if (mounted.current && generation === requestGeneration.current) setError(`${failure(cause)} 本轮草稿未清空，未推进本页显示的复核基线。若为并发冲突，请先查看最新轮次再继续。`); }
     finally { if (mounted.current) setBusy(false); }
   }
   async function reconcile() {
@@ -217,21 +229,33 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
     <header><h2 className="text-base font-semibold">围绕一个问题核对材料</h2><p className="mt-1 text-xs leading-5 text-muted-foreground">无须 AI 或投资计划。保存来由、实际材料、手工口径计算与不可变研究轮次；新依据出现后仍回到同一问题。仅本浏览器 IndexedDB，不跨设备同步，也不是永久备份。</p></header>
     <div className="flex flex-wrap items-end gap-2"><label className="min-w-0 flex-1 text-xs">这只股票的研究问题<select aria-label="这只股票的研究问题" value={active?.id || ""} disabled={loading || busy} onChange={e => chooseQuestion(e.target.value)} className={fieldClass}><option value="">新建问题</option>{questions.map(question => <option key={question.id} value={question.id}>{question.question} · {statusLabels[question.status]}</option>)}</select></label><button type="button" className={buttonClass} disabled={loading || busy} onClick={() => void refreshQuestions()}>刷新问题列表</button></div>
     {loading && <p role="status" className="text-xs">正在读取本浏览器研究问题…</p>}
-    {discardTarget !== null && <section role="alertdialog" aria-label="保留或放弃核对草稿" className="rounded border border-warning p-3 text-xs"><p>当前核对草稿未保存。切换问题会丢失草稿。</p><div className="mt-2 flex gap-2"><button type="button" className={buttonClass} onClick={() => setDiscardTarget(null)}>留下继续核对</button><button type="button" className={buttonClass} onClick={() => { const target = discardTarget; setDiscardTarget(null); void openQuestion(target); }}>放弃草稿并切换</button></div></section>}
+    {discardTarget !== null && <section role="alertdialog" aria-label="保留或放弃核对草稿" className="rounded border border-warning p-3 text-xs"><p>当前核对草稿未保存。切换问题会丢失草稿。</p><div className="mt-2 flex gap-2"><button type="button" className={buttonClass} disabled={busy} onClick={() => setDiscardTarget(null)}>留下继续核对</button><button type="button" className={buttonClass} disabled={busy} onClick={() => { const target = discardTarget; setDiscardTarget(null); void openQuestion(target); }}>放弃草稿并切换</button></div></section>}
     {active && <section className="rounded border border-border/50 p-3 text-xs" data-testid="check-question-context"><p>研究来由：{active.origin.label}</p><p className="mt-1">状态：{statusLabels[active.status]} · 已保存 {rounds.length} 轮 · 基线已处理 {active.reviewedMaterialKeys.length} 份材料</p><p className="mt-1 text-muted-foreground">{active.status === "paused" ? "已暂停常规待办提示；手动打开仍可检查未处理依据。" : active.status === "resolved" ? `已解决，不会自动重开。当前可见摘录中有 ${uncheckedNew} 份未处理依据，是否相关需人工判断。` : `打开 / 刷新时可核对现有摘录中 ${uncheckedNew} 份未处理依据；不代表后台持续在线监控或完整公告覆盖。`}</p><button type="button" className={`${buttonClass} mt-2`} disabled={busy} onClick={() => void reconcile()}>查看最新轮次并保留草稿</button></section>}
     {rounds.length > 0 && <section className="space-y-3 rounded border border-border/60 p-3" aria-label="研究轮次历史" data-testid="check-round-history">
       <label className="block text-xs">打开原研究轮次<select aria-label="打开原研究轮次" value={viewedId} onChange={e => setViewedId(e.target.value)} className={fieldClass}>{rounds.map((round, index) => <option value={round.id} key={round.id}>第 {index + 1} 轮 · {date(round.createdAt)}{round.id === active?.headRoundId ? " · 当前头轮" : ""}</option>)}</select></label>
-      {viewed && <div className="space-y-2 text-xs" data-testid="check-saved-round"><p className="font-medium">原判断（只读）：{viewed.judgement}</p><p>原限制 / 反证：{viewed.limitations}</p><p>原下一材料：{viewed.nextMaterial}</p><p>本轮覆盖：局部材料，不代表全范围复核完成；明确核对 {viewed.reviewedMaterialKeys.length} 份，忽略 {viewed.ignoredMaterialKeys.length} 份。</p>
+      {viewed && <div className="space-y-2 text-xs" data-testid="check-saved-round"><p className="font-medium">原判断（只读）：{viewed.judgement || "未记录 / 待核"}</p><p>原限制 / 反证：{viewed.limitations || "未记录 / 待核"}</p><p>原下一材料：{viewed.nextMaterial || "未记录；已解决的问题可不填"}</p><p>本轮覆盖：局部材料，不代表全范围复核完成；明确核对 {viewed.reviewedMaterialKeys.length} 份，忽略 {viewed.ignoredMaterialKeys.length} 份。</p>
         {viewed.calculation && <div className="rounded border border-primary/30 p-2"><p>{viewed.calculation.result}</p><p className="mt-1 break-words">{viewed.calculation.formula}</p><p className="mt-1 text-muted-foreground">{viewed.calculation.reason}</p><details className="mt-2"><summary className="cursor-pointer">原计算输入与引句</summary>{viewed.calculation.inputs.map((input, i) => <p key={i} className="mt-2 break-all">{input.label}：{input.value} {input.unit} / {input.currency}；{input.subject} / {input.metric} / {input.period} / {input.basis} / {input.valueType}。第 {input.page ?? "未知"} 页；原文：{input.sourceExcerpt}；材料版本：{input.materialKey}</p>)}</details></div>}
         {viewed.materials.map(material => <MaterialCard key={materialKey(material)} material={material} />)}
         <button type="button" className={buttonClass} disabled={busy || dirty} onClick={() => { clearDraft(active, viewed); setNotice("已复制该历史轮材料供本轮核对；旧轮不改写。保存后追加到当前最新轮，需重新确认本轮处理材料与判断。"); }}>以此轮材料继续核对</button>{dirty && <p className="text-warning">先保存或放弃当前草稿，才能复制历史材料。</p>}
       </div>}
     </section>}
-    <fieldset disabled={busy} className="min-w-0 space-y-4">
+    {(active?.origin.snapshot || (!active && discoveryOrigin)) && (() => {
+      const original = active?.origin.snapshot || discoveryOrigin!;
+      return <details className="rounded border border-border/50 p-3 text-xs" data-testid="check-discovery-origin"><summary className="cursor-pointer">原发现卡片快照（只读，非已核验事实）</summary>
+        <p className="mt-2">{original.securityName} · {original.securityCode} · {original.strategy} · {original.conditionSummary}</p>
+        <p className="mt-1">行情归属：{original.asOf || "未知"}；来源抓取：{original.sourceFetchedAt || "未知"}；发现时间：{original.discoveredAt || "未知"}；快照捕获：{date(original.capturedAt)}</p>
+        <ul className="mt-2 space-y-1">{original.observations.map((observation, index) => <li key={index} className="break-all">{observation.label}：{observation.rawValue}（原始值） · {observation.code} · {observation.sourceRef}</li>)}</ul>
+        <p className="mt-2 break-all">入选理由代码：{original.reasonCodes.join(" · ") || "未提供"}</p><p className="mt-1 break-all">来源名称 / 引用：{original.sourceNames.join(" · ") || "未提供"}</p>
+        <ul className="mt-2 space-y-1">{original.limitations.map((limit, index) => <li key={index}>{limit}</li>)}</ul>
+        {original.truncated && <p className="mt-2 text-warning">原卡片内容超出快照上限，已截断；不是完整来源包。</p>}
+        <p className="mt-2 text-muted-foreground">这份快照只解释为何进入研究，不是原文材料，不能直接作为计算输入。</p>
+      </details>;
+    })()}
+    <fieldset disabled={busy || discardTarget !== null} className="min-w-0 space-y-4">
       <legend className="text-sm font-medium">{active ? "继续同一问题，新增一轮" : "新问题的第一轮"}</legend>
       <label className="block text-xs">研究问题<input aria-label="核对研究问题" value={title} readOnly={Boolean(active)} onChange={e => setTitle(e.target.value)} placeholder="例如：2024 年归母利润预告是否被修订或兑现？" className={fieldClass} /></label>
       {!active && suggestedQuestion && <button type="button" onClick={() => setTitle(suggestedQuestion)} className="text-xs text-primary">采用当前建议问题</button>}
-      <label className="block text-xs">为什么开始研究（保留原来由）<textarea aria-label="为什么开始研究" value={why} readOnly={Boolean(active)} onChange={e => setWhy(e.target.value)} rows={2} placeholder={originLabel ? `来自${originLabel}；请补充什么线索值得核对` : "什么发现、疑问或已有看法使你开始研究？"} className={fieldClass} /></label>
+      <label className="block text-xs">为什么开始研究（已带入来源，可选补充）<textarea aria-label="为什么开始研究" value={why} readOnly={Boolean(active)} onChange={e => setWhy(e.target.value)} rows={2} placeholder={defaultWhy} className={fieldClass} /></label>
       <section className="space-y-3 rounded border border-border/60 p-3" aria-label="本轮材料选择">
         <h3 className="text-sm font-medium">1 · 选择实际材料，区分链接和已读内容</h3>
         <p className="text-xs text-muted-foreground">预告核对至少需要原预告；判断兑现还需要同口径实际业绩，修订预告不能代替年报。现金流、经营结构与解释需另外取材，当前计算不覆盖。</p>
@@ -247,7 +271,7 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
             <p>本地可用原件；正文状态 {chosenReport.text_index_status || "未知"}，共 {chosenReport.page_count ?? "未知"} 页。只有指定页成功返回后才成为本轮实际内容。</p>
             <label className="block">关键词（字面检索，不是语义检索）<input aria-label="原文件检索关键词" value={term} onChange={e => setTerm(e.target.value)} className={fieldClass} /></label>
             <div className="flex flex-wrap gap-2">{["归属于上市公司股东的净利润", "修正", "经营活动产生的现金流量净额"].map(value => <button key={value} type="button" className="text-primary underline" onClick={() => setTerm(value)}>{value}</button>)}<button type="button" className={buttonClass} disabled={searching || reading} onClick={() => void searchPages()}>{searching ? "检索中…" : "在此文件检索关键词"}</button></div>
-            {hits.map((hit, index) => <div key={index} className="rounded border border-border/40 p-2"><p>{hit.snippet}</p><button type="button" className="mt-1 text-primary" disabled={!hit.page} onClick={() => { setPageFrom(String(Math.max(1, (hit.page || 1) - 1))); setPageTo(String((hit.page || 1) + 1)); }}>读取命中页及相邻页（命中 {hit.page ?? "未知"} 页）</button></div>)}
+            {hits.map((hit, index) => <div key={index} className="rounded border border-border/40 p-2"><p>{hit.snippet}</p><button type="button" className="mt-1 text-primary" disabled={!hit.page} onClick={() => { requestGeneration.current++; setReading(false); setSearching(false); setPageFrom(String(Math.max(1, (hit.page || 1) - 1))); setPageTo(String((hit.page || 1) + 1)); }}>读取命中页及相邻页（命中 {hit.page ?? "未知"} 页）</button></div>)}
             <p>先打开原文件核对证券代码；不因标题命中就自动归股。</p><Link target="_blank" rel="noopener noreferrer" to={`/my-reports?report=${encodeURIComponent(chosenReport.id)}`} className="text-primary underline">核对该文件原页</Link>
             <label className="block">原页证券代码<input aria-label="原页证券代码" value={reportCode} maxLength={6} onChange={e => { setReportCode(e.target.value); setReportConfirmed(false); }} className={fieldClass} /></label>
             <label className="flex items-start gap-2"><input aria-label="确认原文件证券归属" type="checkbox" checked={reportConfirmed} onChange={e => setReportConfirmed(e.target.checked)} /><span>我已核对原页证券代码，确认属于当前股票 {code}（人工归属，不是系统验证）。</span></label>
@@ -263,14 +287,14 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
         {calculationEnabled && <><label className="block text-xs">核对类型<select aria-label="区间核对类型" value={mode} onChange={e => { setMode(e.target.value as ComparisonMode); setComparison(blankOperand()); setAllowUnitConversion(false); }} className={fieldClass}><option value="actual">原预告 vs 实际业绩：是否落在区间内</option><option value="revision">原预告 vs 修订预告：区间变化，不判断兑现</option></select></label><label className="flex items-start gap-2 text-xs"><input aria-label="允许明确单位换算" type="checkbox" checked={allowUnitConversion} onChange={e => setAllowUnitConversion(e.target.checked)} />我已核对两份原文单位，明确允许元 / 万元 / 亿元换算；未勾选时不同单位拒绝比较。</label><div className="grid gap-3 xl:grid-cols-2"><OperandFields label="原预告" value={forecast} onChange={setForecast} materials={materials} /><OperandFields label={mode === "actual" ? "实际业绩" : "修订预告"} value={comparison} onChange={setComparison} materials={materials} /></div>
           <div role="status" className={`rounded border p-3 text-xs ${calculation?.comparable ? "border-primary/30" : "border-warning/40"}`} data-testid="check-calculation-result"><p className="font-medium">{calculation?.result}</p>{calculation?.formula && <p className="mt-1 break-words">{calculation.formula}</p>}<p className="mt-1">{calculation?.reason}</p></div></>}
       </section>
-      <section className="space-y-3"><h3 className="text-sm font-medium">3 · 保存有限判断与下一步</h3><p className="text-xs text-muted-foreground">用户判断与材料原文分别保存；管理层解释不等于因果已证实。无材料也可保存“尚不能回答”，不生成“全文核验”标签。</p>
+      <section className="space-y-3"><h3 className="text-sm font-medium">3 · 保存有限判断与下一步</h3><p className="text-xs text-muted-foreground">用户判断与材料原文分别保存；管理层解释不等于因果已证实。只需问题加一句判断或下一项问题即可保存；其余可选，空白限制标为“未记录 / 待核”，不生成“全文核验”标签。</p>
         <label className="block text-xs">本轮能回答什么（用户判断）<textarea aria-label="本轮判断" value={judgement} onChange={e => setJudgement(e.target.value)} rows={3} className={fieldClass} /></label>
         <label className="block text-xs">限制 / 反证 / 尚不能判断<textarea aria-label="本轮限制与反证" value={limitations} onChange={e => setLimitations(e.target.value)} rows={3} className={fieldClass} /></label>
         <label className="block text-xs">下一项需要什么材料<textarea aria-label="下一项材料" value={nextMaterial} onChange={e => setNextMaterial(e.target.value)} rows={2} className={fieldClass} /></label>
         <label className="block text-xs">保存后的问题状态<select aria-label="保存后的问题状态" value={status} onChange={e => setStatus(e.target.value as ResearchQuestionStatus)} className={fieldClass}>{(["watching", "resolved", "paused"] as const).map(key => <option key={key} value={key}>{statusLabels[key]}</option>)}</select></label>
         <p className="text-xs text-muted-foreground">观察中：打开 / 刷新时核对；已解决：保留新依据提示但不自动重开；已暂停：不提示常规待办，手动仍能检查。此处不改变任何正式决定。</p>
       </section>
-      <div className="flex flex-wrap gap-2"><button type="button" disabled={busy || loading || reading} className={buttonClass} onClick={() => void save()} data-testid="check-save-round">{busy ? "保存 / 读取中…" : active ? "保存新一轮核对" : "保存问题与第一轮核对"}</button><button type="button" className={buttonClass} onClick={() => { if (dirty) setDiscardTarget(active?.id || ""); }} disabled={!dirty}>放弃当前核对草稿</button></div>
+      <div className="flex flex-wrap gap-2"><button type="button" disabled={busy || loading || reading || searching} className={buttonClass} onClick={() => void save()} data-testid="check-save-round">{busy ? "保存 / 读取中…" : active ? "保存新一轮核对" : "保存问题与第一轮核对"}</button><button type="button" className={buttonClass} onClick={() => { if (dirty) setDiscardTarget(active?.id || ""); }} disabled={!dirty}>放弃当前核对草稿</button></div>
     </fieldset>
     {dirty && <p role="status" className="text-xs text-warning">有未保存的核对草稿；失败或并发冲突不会清空草稿。请先保存再离开。</p>}
     {error && <p role="alert" className="whitespace-pre-wrap text-xs text-warning" data-testid="check-error">{error}</p>}{notice && <p role="status" className="text-xs" data-testid="check-notice">{notice}</p>}

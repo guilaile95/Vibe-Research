@@ -27,6 +27,17 @@ const originalReport = report('synthetic-original', '原预告（合成文本）
 const revisedReport = report('synthetic-revised', '修订预告（合成文本）', 'b');
 const originalText = '合成证券600519，2024年全年，合并报表，归属于上市公司股东的净利润，单位：万元；预计盈利648.13至753.93万元。这是测试转录，不是实际原PDF。';
 const revisedText = '合成证券600519，2024年全年，合并报表，归属于上市公司股东的净利润，单位：万元；预计亏损594.25至891.37万元。修订预告不是实际业绩。测试转录，不是实际原PDF。';
+const discoveryItem = {
+  security_code: '600519', name: '合成公司', strategy: 'SWING', sector: '合成行业', themes: [], discovery_state: 'QUEUED', condition_match: 'FULL_CONDITIONS', research_priority: 'MEDIUM',
+  reason_codes: ['SYNTHETIC_RETURN_20D'], supporting_observations: [{ code: 'RETURN_20D', label: '20日收益（合成）', value: 0.12, source_ref: 'synthetic:history-source' }],
+  uncertainties: ['FUNDAMENTAL_FRESHNESS_UNKNOWN'], data_health: 'partial', catalyst_status: 'PARTIAL', fundamental_status: 'PARTIAL', evidence_gate: 'PARTIAL',
+  restricted_universe: { status: 'UNKNOWN', reason_codes: [], listing_age_status: 'UNKNOWN' }, discovered_at: '2026-10-22T02:00:00Z', as_of: '2026-10-21', provenance_refs: ['synthetic:market-source', 'synthetic:announcement-directory'],
+};
+const discoverySnapshot = {
+  schema_version: 'full-market-discovery.v0.1', status: 'partial', as_of: '2026-10-21', fetched_at: '2026-10-22T02:01:00Z', last_successful_at: null, refresh_attempted_at: null,
+  market_context: { status: 'partial', core_universe_count: 100, sector_count: 1 }, funnel: { core_universe: 100, cheap_scan_passed: 30, qualification_candidates: 24, queue_items: { SHORT: 0, SWING: 1, MEDIUM: 0 }, excluded: 0 },
+  datasets: [], queues: { SHORT: [], SWING: [discoveryItem], MEDIUM: [] }, excluded: [], limitations: ['合成目录；公告窗口未证明查全，不包含原文'], cache: { hit: false, age_seconds: null },
+};
 const results = []; let browser;
 const readDatabase = page => page.evaluate(() => new Promise((resolve, reject) => {
   const request = indexedDB.open('vr-research-workflow');
@@ -94,8 +105,9 @@ try {
           coverage: { readable: [requested[0]], omitted: requested.slice(1), invalid: [], unreadable: [], error: [] }, items: requested.map((page, i) => i ? ({ page, status: 'omitted', reason: 'BUDGET' }) : ({ page, status: 'readable', reason: 'AVAILABLE', text, returned_chars: text.length, indexed_chars: text.length, truncated: false })) });
       }
       if (request.method() !== 'GET') { writes.push({ path, method: request.method() }); return route.fulfill({ status: 503, json: { detail: 'Synthetic fixture rejects all mutation/model endpoints' } }); }
+      if (path === '/api/screener/discovery') return ok(discoverySnapshot);
       if (path === '/api/myreports') return ok(reportStage ? [originalReport, revisedReport] : [originalReport]);
-      if (path === '/api/myreports/fulltext-search') return ok([]);
+      if (path === '/api/myreports/fulltext-search') return ok([{ report_id: url.searchParams.get('report_ids'), page: 1, snippet: '合成命中仅用于定位，不是已读正文。' }]);
       if (path === '/api/evidence') return ok(navigationEvidencePage([], url.searchParams));
       if (path === '/api/campaigns' || path === '/api/thesis') return ok({ items: [], total: 0 });
       if (path === '/api/native-intel/security-context/600519') return ok({ status: 'normal', security: { code: '600519', company_name: '合成公司' }, mapping: { terms: [], errors: [] }, window_hours: 24, observation: { items: [], item_count: 0 }, rank_history: {} });
@@ -105,22 +117,55 @@ try {
     let page = await context.newPage(); page.setDefaultTimeout(15000); page.on('pageerror', error => errors.push(error.message));
     try {
       phase = 'T0-first-question';
-      await page.goto('/candidates/600519#candidate-research-check');
+      await page.goto('/screener?mode=discovery&strategy=SWING');
+      await page.getByTestId('discovery-candidate-600519').click();
+      await page.getByTestId('candidate-discovery-context').waitFor();
       let panel = page.getByTestId('research-check-panel');
       await panel.getByLabel('核对研究问题', { exact: true }).fill('合成预告是否被修订或兑现？');
-      await panel.getByLabel('为什么开始研究', { exact: true }).fill('发现原预告盈利，想核对后来是否改变；不是正式投资判断。');
+      assert.match(await panel.getByLabel('为什么开始研究', { exact: true }).inputValue(), /来自市场发现/);
+      await panel.getByTestId('check-discovery-origin').locator(':scope > summary').click();
+      assert.match(await panel.getByTestId('check-discovery-origin').innerText(), /synthetic:history-source/);
+      assert.match(await panel.getByTestId('check-discovery-origin').innerText(), /公告窗口未证明查全/);
       await loadReport(panel, originalReport);
       assert.equal(await panel.getByLabel('本轮原文件', { exact: true }).locator('option').count(), 2, 'T0 has only original report');
       await panel.getByRole('button', { name: '读取指定页并加入本轮', exact: true }).click();
       await panel.getByLabel(`本轮处理：${originalReport.title} · 第 1 页`, { exact: true }).selectOption('reviewed');
-      await writeRound(panel, 'T0：只能确认当时预计盈利，缺实际年报，不能判断兑现。');
+      await panel.getByLabel('本轮判断', { exact: true }).fill('T0：只能确认当时预计盈利，缺实际年报，不能判断兑现。'); // minimal save, no forced why/limits/next question
+      phase = 'held-save-discard-race';
+      await panel.getByRole('button', { name: '放弃当前核对草稿', exact: true }).click();
+      await panel.getByRole('alertdialog', { name: '保留或放弃核对草稿' }).waitFor();
+      assert.equal(await panel.getByTestId('check-save-round').isDisabled(), true, 'open discard dialog disables background save');
+      await panel.getByRole('button', { name: '留下继续核对', exact: true }).click();
+      // Delay delivery of the real local transaction completion, not its writes.
+      await page.evaluate(() => {
+        const descriptor = Object.getOwnPropertyDescriptor(IDBTransaction.prototype, 'oncomplete');
+        let hold = true;
+        window.__restoreCompletion = () => Object.defineProperty(IDBTransaction.prototype, 'oncomplete', descriptor);
+        Object.defineProperty(IDBTransaction.prototype, 'oncomplete', { ...descriptor, set(listener) {
+          if (hold && this.mode === 'readwrite') {
+            hold = false; descriptor.set.call(this, event => { window.__releaseCompletion = () => listener.call(this, event); });
+          } else descriptor.set.call(this, listener);
+        } });
+      });
       await panel.getByTestId('check-save-round').click();
+      await page.waitForFunction(() => typeof window.__releaseCompletion === 'function');
+      assert.equal(await panel.getByRole('alertdialog', { name: '保留或放弃核对草稿' }).count(), 0);
+      assert.equal(await panel.getByTestId('check-save-round').isDisabled(), true);
+      assert.equal(await panel.getByLabel('本轮判断', { exact: true }).isDisabled(), true);
+      assert.equal(await panel.getByLabel('这只股票的研究问题', { exact: true }).isDisabled(), true);
+      await page.evaluate(() => { window.__restoreCompletion(); window.__releaseCompletion(); });
       await panel.getByText(/本轮已保存。/).waitFor();
       const T0 = await readDatabase(page), q = T0.questions[0], t0 = T0.rounds[0];
       assert.equal(T0.questions.length, 1); assert.equal(T0.rounds.length, 1); assert.equal(t0.calculation, null);
       assert.equal(t0.materials[0].content, originalText); assert.equal(t0.materials[0].sourceHash, originalReport.file_sha256);
       assert.equal(t0.materials[0].provenance.security_assignment.automatically_verified, false);
-      assert.equal(q.reviewedMaterialKeys.length, 1); assert.match(q.origin.label, /发现原预告盈利/);
+      assert.equal(q.reviewedMaterialKeys.length, 1); assert.match(q.origin.label, /来自市场发现/);
+      assert.equal(t0.limitations, '未记录 / 待核'); assert.equal(t0.nextMaterial, '');
+      assert.equal(q.origin.snapshot.securityCode, '600519'); assert.equal(q.origin.snapshot.strategy, 'SWING');
+      assert.deepEqual(q.origin.snapshot.reasonCodes, discoveryItem.reason_codes); assert.deepEqual(q.origin.snapshot.sourceNames, discoveryItem.provenance_refs);
+      assert.equal(q.origin.snapshot.observations[0].rawValue, '0.12'); assert.equal(q.origin.snapshot.sourceFetchedAt, discoverySnapshot.fetched_at); assert.equal(q.origin.snapshot.asOf, discoveryItem.as_of);
+      assert.ok(q.origin.snapshot.limitations.some(line => line.includes('公告窗口未证明查全')));
+      assert.ok(q.origin.snapshot.limitations.some(line => line.includes('有限候选队列')));
       assert.ok(!JSON.stringify(T0).includes(revisedText), 'later content never enters T0');
       const savedT0 = panel.getByTestId('check-saved-round');
       await savedT0.getByText('实际保存的原文与读取范围', { exact: true }).click();
@@ -132,7 +177,9 @@ try {
       phase = 'close-reopen-T0'; await page.close(); page = await context.newPage(); page.setDefaultTimeout(15000); page.on('pageerror', error => errors.push(error.message));
       panel = await openQuestion(page, q.id);
       assert.match(await panel.getByTestId('check-saved-round').innerText(), /T0：只能确认/);
-      assert.match(await panel.getByTestId('check-question-context').innerText(), /发现原预告盈利/);
+      assert.match(await panel.getByTestId('check-question-context').innerText(), /来自市场发现/);
+      await panel.getByTestId('check-discovery-origin').locator(':scope > summary').click();
+      assert.match(await panel.getByTestId('check-discovery-origin').innerText(), /synthetic:announcement-directory/);
       const reopenedT0 = panel.getByTestId('check-saved-round');
       await reopenedT0.getByText('实际保存的原文与读取范围', { exact: true }).click();
       assert.ok((await reopenedT0.innerText()).includes(originalText));
@@ -159,6 +206,20 @@ try {
       assert.equal(await panel.getByLabel(`本轮处理：${revisedReport.title} · 第 1 页`, { exact: true }).count(), 0, 'late old selection must not join this draft');
       assert.equal(await panel.getByRole('button', { name: '读取指定页并加入本轮', exact: true }).isEnabled(), true, 'cancelled read clears spinner');
       await loadReport(panel, revisedReport);
+      phase = 'hit-page-cancels-stale-read';
+      await panel.getByRole('button', { name: '在此文件检索关键词', exact: true }).click();
+      const hitButton = panel.getByRole('button', { name: '读取命中页及相邻页（命中 1 页）', exact: true }); await hitButton.waitFor();
+      let hitStart, hitRelease; const hitStarted = new Promise(resolve => { hitStart = resolve; }), hitPending = new Promise(resolve => { hitRelease = resolve; });
+      delayed = { started: hitStart, promise: hitPending, release: hitRelease };
+      await panel.getByRole('button', { name: '读取指定页并加入本轮', exact: true }).click(); await hitStarted;
+      await hitButton.click();
+      const cancelledHitResponse = page.waitForResponse(response => response.url().includes('/myreports/page-read'));
+      delayed.release(); await cancelledHitResponse; delayed = null;
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(await panel.getByLabel(`本轮处理：${revisedReport.title} · 第 1 页`, { exact: true }).count(), 0, 'changing hit page range must invalidate the in-flight read');
+      assert.equal(await panel.getByLabel('核对结束页', { exact: true }).inputValue(), '2');
+      assert.equal(await panel.getByRole('button', { name: '读取指定页并加入本轮', exact: true }).isEnabled(), true);
+      await panel.getByLabel('核对结束页', { exact: true }).fill('1');
       await panel.getByRole('button', { name: '读取指定页并加入本轮', exact: true }).click();
       await panel.getByLabel(`本轮处理：${revisedReport.title} · 第 1 页`, { exact: true }).selectOption('reviewed');
       await panel.getByLabel('本轮添加区间核对', { exact: true }).check();
@@ -212,7 +273,7 @@ try {
       await panel.getByLabel('为什么开始研究', { exact: true }).fill('阶段语义反例的人工转录测试，不是自动事件识别或严格PIT。');
       await writeRound(panel, '进展轮：公告回述停牌，但当前已经复牌，不能按背景句判断仍停牌。'); await panel.getByTestId('check-save-round').click(); await panel.getByText(/本轮已保存。/).waitFor();
       const stageFirst = (await readDatabase(page)).questions.find(item => item.id !== q.id);
-      await writeRound(panel, '终止轮：新程序文件记载先前的终止决定。', '人工记录，未保存原PDF，不自动确认事项身份。', '等待后续程序披露；当前问题记为已解决。'); await panel.getByLabel('保存后的问题状态', { exact: true }).selectOption('resolved'); await panel.getByTestId('check-save-round').click(); await panel.getByText(/本轮已保存。/).waitFor();
+      await panel.getByLabel('本轮判断', { exact: true }).fill('终止轮：新程序文件记载先前的终止决定。'); await panel.getByLabel('保存后的问题状态', { exact: true }).selectOption('resolved'); await panel.getByTestId('check-save-round').click(); await panel.getByText(/本轮已保存。/).waitFor();
       await writeRound(panel, '后续回述轮：再次提及同一终止事实，不是又终止一次。'); await panel.getByTestId('check-save-round').click(); await panel.getByText(/本轮已保存。/).waitFor();
       const stages = await readDatabase(page), stageQuestion = stages.questions.find(item => item.id === stageFirst.id), stageRounds = stages.rounds.filter(item => item.questionId === stageFirst.id);
       assert.equal(stageQuestion.status, 'resolved'); assert.equal(stageRounds.length, 3);
@@ -234,6 +295,15 @@ try {
       await panel.getByRole('button', { name: '刷新问题列表', exact: true }).click();
       await panel.getByText(/旧笔记源已变化/).waitFor();
       assert.match(await panel.getByTestId('check-legacy-snapshot').innerText(), /原旧内容/);
+      phase = 'minimal-next-question-only';
+      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption('');
+      await panel.getByLabel('核对研究问题', { exact: true }).fill('只有下一步的最小研究问题');
+      await panel.getByLabel('下一项材料', { exact: true }).fill('先找原公告核对报告期间。');
+      await panel.getByTestId('check-save-round').click(); await panel.getByText(/本轮已保存。/).waitFor();
+      const minimal = await readDatabase(page), minimalQuestion = minimal.questions.find(item => item.question === '只有下一步的最小研究问题');
+      const minimalRound = minimal.rounds.find(item => item.questionId === minimalQuestion.id);
+      assert.equal(minimalRound.judgement, ''); assert.equal(minimalRound.limitations, '未记录 / 待核');
+      assert.equal(minimalRound.nextMaterial, '先找原公告核对报告期间。');
       phase = 'layout-and-no-side-effects';
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'responsive page must not overflow horizontally');
       assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.deepEqual(writes, [], 'no formal state, AI, upload, import or index API writes');

@@ -17,6 +17,7 @@ import {
   type CandidatePositionPresentation,
 } from "@/lib/candidateCampaign";
 import { api, ApiError, type EvidenceRecord, type StockRelativeContext, type StockValuationContext, type NativeIntelSecurityContext as IntelContext } from "@/lib/api";
+import { parseDiscoveryResearchOrigin } from "@/lib/discoveryResearchOrigin";
 import { candidateEntryContext } from "@/lib/candidateEntryContext";
 import { CandidateEvidenceLoadError, loadCandidateEvidence } from "@/lib/candidateEvidence";
 import { CAMPAIGN_STRATEGY_LABELS } from "@/lib/decisionInbox";
@@ -163,6 +164,10 @@ export function CandidateWorkspace() {
   const evidenceGap = evidence.value ? buildCandidateEvidenceGap(evidence.value.records) : null;
   const { returnTo: sourceReturnTo, discoveryStrategy } = candidateEntryContext(searchParams);
   const returnTo = `${location.pathname}${location.search}${location.hash}`;
+  const parsedDiscoveryOrigin = parseDiscoveryResearchOrigin(
+    location.state && typeof location.state === "object" ? location.state.discoveryResearchOrigin : null, code,
+  );
+  const discoveryOrigin = parsedDiscoveryOrigin?.strategy === discoveryStrategy ? parsedDiscoveryOrigin : null;
 
   return (
     <div className="space-y-6" data-testid="candidate-workspace" data-security-code={code}>
@@ -191,7 +196,7 @@ export function CandidateWorkspace() {
         {discoveryStrategy && (
           <div className="mb-3 border-b border-border/40 pb-3" data-testid="candidate-discovery-context">
             <p className="text-sm font-medium">来自市场发现 · {CAMPAIGN_STRATEGY_LABELS[discoveryStrategy]}策略队列</p>
-            <p className="mt-1 text-xs text-muted-foreground">这里只保留浏览来源；是否值得继续研究，需要核对下方资讯和证据。</p>
+            <p className="mt-1 text-xs text-muted-foreground">{discoveryOrigin ? "已保留原发现卡片的浏览快照；它不是已核验事实或研究价值证明。" : "原发现卡片快照不可用；这里只保留浏览路径，不能还原当时入选依据。"}</p>
           </div>
         )}
         <h2 className="text-sm font-semibold">从待验证项开始</h2>
@@ -365,6 +370,7 @@ export function CandidateWorkspace() {
         records={evidence.value?.records ?? []}
         evidenceStatus={evidence.status}
         returnTo={returnTo}
+        discoveryOrigin={discoveryOrigin}
         originLabel={discoveryStrategy ? `市场发现 · ${CAMPAIGN_STRATEGY_LABELS[discoveryStrategy]}` : undefined}
         suggestedQuestion={evidenceGap?.highestImpactQuestion}
       />
