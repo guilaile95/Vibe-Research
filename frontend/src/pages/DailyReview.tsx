@@ -39,6 +39,7 @@ import { SealQualityCard } from "@/components/dailyReview/SealQualityCard";
 import { northboundErrorMessage } from "@/lib/northboundView";
 import { loadLlm } from "@/lib/llm";
 import { useDailyReviewAiTaskStore } from "@/stores/dailyReviewAiTaskStore";
+import { dailyReviewNoteGeneration } from "@/lib/noteGeneration";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import {
   loadWatchAuthoritative,
@@ -1210,7 +1211,7 @@ export function DailyReview() {
         {taskContent ? (
           <>
             <div className="prose prose-sm dark:prose-invert mt-4 max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>{taskContent}</ReactMarkdown></div>
-            {(taskStatus === "success" || taskStatus === "restored") && <div className="mt-3"><SaveNoteButton kind="复盘" title={`每日复盘 ${dr?.trade_date || today}`} content={taskContent} /></div>}
+            {(taskStatus === "success" || taskStatus === "restored") && <div className="mt-3"><SaveNoteButton kind="复盘" title={`每日复盘 ${taskResultMeta?.trade_date || dr?.trade_date || today}`} content={taskContent} generation={taskResultMeta ? dailyReviewNoteGeneration(taskResultMeta, taskContent) : undefined} />{(!taskResultMeta || taskContent !== taskResultMeta.payload.markdown) && <p className="mt-1 text-xs text-muted-foreground">当前正文与原结果依据未确认一致，将仅保存正文，不附生成依据。</p>}</div>}
           </>
         ) : !needConfig && taskStatus === "idle" ? (
           <p className="mt-3 text-sm text-muted-foreground">点上方按钮，由服务器聚合当日数据并按事实/推断/建议结构生成复盘。</p>

@@ -15,7 +15,7 @@ function calendarDate(value: unknown): value is string {
   const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   return year >= 1 && month >= 1 && month <= 12 && day >= 1 && day <= days[month - 1];
 }
-function timestamp(value: unknown): value is string {
+export function reviewBasisTimestamp(value: unknown): value is string {
   if (typeof value !== "string" || value.length > 64) return false;
   const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(?:Z|([+-])(\d{2}):(\d{2}))?$/.exec(value);
   return !!m && calendarDate(m[1]) && Number(m[2]) < 24 && Number(m[3]) < 60 && Number(m[4]) < 60
@@ -27,8 +27,8 @@ export function validatedReviewBasis(result: AiGeneratedResult<DailyReviewAiPayl
   if (result.result_type !== "daily_review_ai" || result.schema_version !== "daily_review_ai.v2" || !b || typeof b !== "object" || Array.isArray(b)
       || Object.keys(b).length !== keys.length || keys.some(k => !has(b, k))
       || b.schema_version !== "daily-review-input-basis.v1" || b.context_schema_version !== "daily-review-ai-context-v0.1"
-      || !calendarDate(b.trade_date) || !timestamp(b.source_review_generated_at)
-      || (b.source_data_cutoff !== null && !timestamp(b.source_data_cutoff))
+      || !calendarDate(b.trade_date) || !reviewBasisTimestamp(b.source_review_generated_at)
+      || (b.source_data_cutoff !== null && !reviewBasisTimestamp(b.source_data_cutoff))
       || b.trade_date !== result.trade_date || b.source_review_generated_at !== result.payload.source_review_generated_at
       || b.source_data_cutoff !== result.payload.source_data_cutoff
       || (b.review_schema_version !== null && (typeof b.review_schema_version !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(b.review_schema_version)))

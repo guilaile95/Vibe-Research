@@ -4,6 +4,8 @@
 import { storageGetChecked, storageSetChecked, storageRemoveChecked } from "./storage.ts";
 import { parseNoteResearchMetadata, type NoteResearchMetadata } from "./researchNote.ts";
 
+import { parseNoteGeneration, type NoteGeneration } from "./noteGeneration.ts";
+
 export interface Note {
   id: string;       // 记录身份
   kind: string;     // 复盘 / 今日要点 / 问AI
@@ -11,6 +13,7 @@ export interface Note {
   content: string; // markdown 正文
   ts: number;      // 保存时间戳(ms)
   research?: NoteResearchMetadata;
+  generation?: NoteGeneration;
 }
 
 export interface NotesImportResult {
@@ -30,6 +33,8 @@ export const NOTES_BACKUP_SCHEMA_VERSION = "vibe-notes.backup.v1";
 export const NOTES_LIMIT = 200;
 export const NOTES_CHANGED_EVENT = "vr-notes-changed";
 
+export const NOTES_GENERATION_BACKUP_SCHEMA_VERSION = "vibe-notes.backup.v2";
+
 const KEY = "vr-notes";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -44,7 +49,7 @@ function parseNote(value: unknown, index: number): Note {
   if (typeof title !== "string") throw new Error(`第 ${index + 1} 条研究记录 title 无效`);
   if (typeof content !== "string") throw new Error(`第 ${index + 1} 条研究记录 content 无效`);
   if (typeof ts !== "number" || !Number.isFinite(ts) || ts < 0) throw new Error(`第 ${index + 1} 条研究记录时间无效`);
-  return { id, kind, title, content, ts, ...(value.research === undefined ? {} : { research: parseNoteResearchMetadata(value.research) }) };
+  return { id, kind, title, content, ts, ...(value.research === undefined ? {} : { research: parseNoteResearchMetadata(value.research) }), ...(value.generation === undefined ? {} : { generation: parseNoteGeneration(value.generation) }) };
 }
 
 function parseStoredNotes(raw: string | null): Note[] {
@@ -95,15 +100,16 @@ export function createNotesBackupJson(
 ): string {
   if (notes.length > NOTES_LIMIT) throw new Error(`本地记录超过 ${NOTES_LIMIT} 条，无法生成完整的标准备份；请先保留原始 vr-notes 数据，未导出截断备份。`);
   return `${JSON.stringify({
-    schema_version: NOTES_BACKUP_SCHEMA_VERSION,
+    schema_version: notes.some(note => note.generation !== undefined) ? NOTES_GENERATION_BACKUP_SCHEMA_VERSION : NOTES_BACKUP_SCHEMA_VERSION,
     exported_at: exportedAt,
-    notes: notes.map(({ id, kind, title, content, ts, research }) => ({
+    notes: notes.map(({ id, kind, title, content, ts, research, generation }) => ({
       id,
       kind,
       title,
       content,
       ts,
       ...(research === undefined ? {} : { research: parseNoteResearchMetadata(research) }),
+    ...(generation === undefined ? {} : { generation: parseNoteGeneration(generation) }),
     })),
   }, null, 2)}\n`;
 }
@@ -116,7 +122,7 @@ export function parseNotesBackupJson(raw: string): Note[] {
     throw new Error("备份文件不是有效的 JSON");
   }
   if (!isRecord(payload)) throw new Error("备份文件格式无效");
-  if (payload.schema_version !== NOTES_BACKUP_SCHEMA_VERSION) {
+  if (payload.schema_version !== NOTES_BACKUP_SCHEMA_VERSION && payload.schema_version !== NOTES_GENERATION_BACKUP_SCHEMA_VERSION) {
     throw new Error("这不是受支持的 Vibe 研究记录备份");
   }
   if (typeof payload.exported_at !== "string" || !Number.isFinite(Date.parse(payload.exported_at))) {
@@ -127,6 +133,9 @@ export function parseNotesBackupJson(raw: string): Note[] {
 
   const seen = new Set<string>();
   return payload.notes.map((value, index) => {
+    if (payload.schema_version === NOTES_BACKUP_SCHEMA_VERSION && isRecord(value) && value.generation !== undefined) {
+      throw new Error("包含生成依据的备份必须使用 v2；未导入降级文件");
+    }
     const note = parseNote(value, index);
     if (seen.has(note.id)) throw new Error(`备份文件包含重复记录：${note.id}`);
     seen.add(note.id);
@@ -183,7 +192,7 @@ export function replaceCorruptedNotesFromBackupJson(raw: string, expectedCorrupt
 }
 
 // 新记录置顶。返回更新后的完整列表。
-export function addNote(kind: string, title: string, content: string, research?: NoteResearchMetadata): Note[] {
+export function addNote(kind: string, title: string, content: string, research?: NoteResearchMetadata, generation?: NoteGeneration): Note[] {
   const note: Note = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     kind,
@@ -191,6 +200,7 @@ export function addNote(kind: string, title: string, content: string, research?:
     content,
     ts: Date.now(),
     ...(research === undefined ? {} : { research: parseNoteResearchMetadata(research) }),
+    ...(generation === undefined ? {} : { generation: parseNoteGeneration(generation) }),
   };
   const current = readNotes();
   if (current.length >= NOTES_LIMIT) {
