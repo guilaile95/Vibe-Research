@@ -27,7 +27,7 @@ const results=[];let browser;
 try{
  browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_PATH}:{})});
  for(const width of [1440,390])for(const scenario of ['watch','ai']){
-  const context=await browser.newContext({baseURL,viewport:{width,height:960},serviceWorkers:'block'});const errors=[],writes=[],external=[],unavailable=[];let watchMode='slow',aiMode='error',calls=0;let pending=defer();
+  const context=await browser.newContext({baseURL,viewport:{width,height:960},serviceWorkers:'block'});const errors=[],writes=[],external=[],unavailable=[],analysisRequests=[];let watchMode='slow',aiMode='error',calls=0;let pending=defer();
   await context.addInitScript(value=>localStorage.setItem('vr-llm',JSON.stringify(value)),storedCredential(model));
   await context.routeWebSocket('**/*',ws=>{external.push(ws.url());ws.close()});
   await context.route('**/*',async route=>{
@@ -44,11 +44,11 @@ try{
     return route.fulfill({json:{data:{status:'valid',data:{codes:watchMode==='empty'?[]:['600519'],updated_at:'synthetic'},etag:'1111111111111111'}}});
    }
    if(url.pathname==='/api/native-intel/ai/analysis'&&request.method()==='POST'){
-    calls++;if(aiMode==='slow'){await pending.promise;return route.fulfill({json:success})}
-    if(aiMode==='parse')return route.fulfill({contentType:'application/json',body:'{INVALID'});
-    if(aiMode==='network')return route.abort();
-    if(aiMode==='error')return route.fulfill({json:{...success,status:'ERROR',core_trends:'UNTRUSTED_FAILED_CONTENT'}});
-    return route.fulfill({json:{...success,counts:{...success.counts,rss_analyzed:aiMode==='included'?1:0},...(['disabled','no_items','budget_exhausted'].includes(aiMode)?{input_sources:rssSnapshot(aiMode)}:{})}});
+    const responseMode=aiMode;analysisRequests.push({call:++calls,mode:responseMode});if(responseMode==='slow'){await pending.promise;return route.fulfill({json:success})}
+    if(responseMode==='parse')return route.fulfill({contentType:'application/json',body:'{INVALID'});
+    if(responseMode==='network')return route.abort();
+    if(responseMode==='error')return route.fulfill({json:{...success,status:'ERROR',core_trends:'UNTRUSTED_FAILED_CONTENT'}});
+    return route.fulfill({json:{...success,counts:{...success.counts,rss_analyzed:responseMode==='included'?1:0},...(['disabled','no_items','budget_exhausted'].includes(responseMode)?{input_sources:rssSnapshot(responseMode)}:{})}});
    }
    if(url.pathname==='/api/ai/credential-status')return route.fulfill({json:credentialStatus(model)});
    if(['/api/native-intel/hotlist','/api/native-intel/filter/items','/api/native-intel/standalone'].includes(url.pathname))return route.fulfill({json:{status:'normal',items:[],sources:[],filter_meta:{status:'OK'}}});
@@ -69,17 +69,25 @@ try{
     watchMode='error';await retry.click();await state.getByRole('alert').waitFor();await state.getByText(/上次确认的旧清单/).waitFor();assert.equal(await page.locator('#today-watch-600519').count(),1);assert.equal(await page.getByPlaceholder('加自选：可批量，如 600519 000858').isDisabled(),true);assert.deepEqual(writes,[]);
    }else{
     await page.goto('/intel');await page.getByRole('button',{name:/实时热榜/}).click();const region=page.getByTestId('display-region-ai_analysis');await region.waitFor();const generate=region.getByTestId('wave5-generate-ai-analysis');
-    for(const mode of ['error','parse','network']){aiMode=mode;await generate.click();await region.getByText('本次未完成分析',{exact:true}).waitFor();assert.equal(await region.getByTestId('wave5-section-core_trends').count(),0);assert.doesNotMatch(await region.innerText(),/暂无异常|暂无显著|UNTRUSTED_FAILED_CONTENT/)}
-    aiMode='success';await generate.click();await region.getByText('SYNTHETIC_ORIGINAL_RESULT',{exact:true}).waitFor();await region.getByTestId('wave5-tab-rss_insights').click();await region.getByText(/本次未分析RSS/).waitFor();assert.equal(await region.getByText('SYNTHETIC_RSS_CONTENT',{exact:true}).count(),0);
-    for(const reason of ['disabled','no_items','budget_exhausted']){aiMode=reason;await generate.click();await region.getByTestId('wave5-section-rss_insights').getByText(/本次未分析RSS/).waitFor();assert.equal(await region.getByText('SYNTHETIC_RSS_CONTENT',{exact:true}).count(),0)}
-    aiMode='error';await generate.click();await region.getByTestId('wave5-ai-previous-result').waitFor();assert.match(await region.getByTestId('wave5-ai-previous-result').innerText(),/2026-10-20T01:02:03Z.*synthetic-original/);
-    aiMode='included';await generate.click();await region.getByText('SYNTHETIC_RSS_CONTENT',{exact:true}).waitFor();assert.equal(await region.getByTestId('wave5-ai-previous-result').count(),0);
+    // A retained result (and the old-result badge) is intentionally visible while
+    // a new attempt runs. Text visibility alone is not completion of that attempt.
+    const generateAndSettle=async mode=>{
+     aiMode=mode;
+     const dispatched=page.waitForRequest(r=>r.url().endsWith('/api/native-intel/ai/analysis'));
+     await generate.click();await dispatched;
+     await page.waitForFunction(()=>document.querySelector('[data-testid="wave5-generate-ai-analysis"]')?.disabled===false);
+    };
+    for(const mode of ['error','parse','network']){await generateAndSettle(mode);await region.getByText('本次未完成分析',{exact:true}).waitFor();assert.equal(await region.getByTestId('wave5-section-core_trends').count(),0);assert.doesNotMatch(await region.innerText(),/暂无异常|暂无显著|UNTRUSTED_FAILED_CONTENT/)}
+    await generateAndSettle('success');await region.getByText('SYNTHETIC_ORIGINAL_RESULT',{exact:true}).waitFor();await region.getByTestId('wave5-tab-rss_insights').click();await region.getByText(/本次未分析RSS/).waitFor();assert.equal(await region.getByText('SYNTHETIC_RSS_CONTENT',{exact:true}).count(),0);
+    for(const reason of ['disabled','no_items','budget_exhausted']){await generateAndSettle(reason);await region.getByTestId('wave5-section-rss_insights').getByText(/本次未分析RSS/).waitFor();assert.equal(await region.getByText('SYNTHETIC_RSS_CONTENT',{exact:true}).count(),0)}
+    await generateAndSettle('error');await region.getByTestId('wave5-ai-previous-result').waitFor();assert.match(await region.getByTestId('wave5-ai-previous-result').innerText(),/2026-10-20T01:02:03Z.*synthetic-original/);
+    await generateAndSettle('included');await region.getByText('SYNTHETIC_RSS_CONTENT',{exact:true}).waitFor();assert.equal(await region.getByTestId('wave5-ai-previous-result').count(),0);
     const before=calls;aiMode='slow';const slowStarted=page.waitForRequest(r=>r.url().endsWith('/api/native-intel/ai/analysis'));await generate.click();await slowStarted;assert.equal(await generate.isDisabled(),true);await generate.evaluate(button=>{button.click();button.click()});assert.equal(calls,before+1);pending.resolve();await page.waitForFunction(()=>!document.querySelector('[data-testid="wave5-generate-ai-analysis"]').disabled);assert.equal(calls,before+1);
     pending=defer();const lateStarted=page.waitForRequest(r=>r.url().endsWith('/api/native-intel/ai/analysis'));await generate.click();await lateStarted;await page.getByTestId('hotlist-mode-interests').click();await region.getByText('当前时段尚未生成 AI 宏观研报').waitFor();const lateResponse=page.waitForResponse(r=>r.url().endsWith('/api/native-intel/ai/analysis'));pending.resolve();await lateResponse;await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));assert.equal(await region.getByText('SYNTHETIC_ORIGINAL_RESULT',{exact:true}).count(),0);
     assert.ok(writes.every(x=>x==='POST /api/native-intel/ai/analysis'));
    }
    assert.deepEqual(errors,[]);assert.deepEqual(external,[]);await page.screenshot({path:join(evidence,`${scenario}-${width}.png`)});results.push({scenario,width,status:'PASS',calls,unavailable});console.log('PASS',scenario,width);
-  }catch(error){console.error({errors,unavailable});await page.screenshot({path:join(evidence,`${scenario}-${width}-failure.png`)}).catch(()=>{});throw error}
+  }catch(error){const failure={scenario,width,status:'FAIL',message:error.message,stack:error.stack,watchMode,aiMode,calls,analysisRequests,errors,unavailable,writes,external};results.push(failure);console.error(failure);await page.screenshot({path:join(evidence,`${scenario}-${width}-failure.png`)}).catch(()=>{});throw error}
   finally{pending.resolve();await context.close()}
  }
 }finally{writeFileSync(join(evidence,'results.json'),JSON.stringify({results},null,2));await browser?.close();server.closeAllConnections();await new Promise(r=>server.close(r));console.log('Evidence:',evidence)}
