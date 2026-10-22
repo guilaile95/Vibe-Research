@@ -244,8 +244,9 @@ export function validateResearchChains(questions: readonly ResearchQuestion[], r
   const versions = new Map<string, string>();
   for (const round of rs.values()) for (const material of round.materials) {
     const key = `${material.securityCode}:${researchMaterialKey(material)}`;
-    const { capturedAt: _capturedAt, ...payload } = material;
-    const frozen = canonicalJson(payload);
+    // Observation receipts can legitimately differ when the same page is read in another
+    // requested range. The original content identity must not silently change.
+    const frozen = canonicalJson({ content: material.content, sourceHash: material.sourceHash, sourceKind: material.sourceKind, securityCode: material.securityCode });
     if (versions.has(key) && versions.get(key) !== frozen) fail('同一材料版本包含不同正文或读取依据');
     versions.set(key, frozen);
   }

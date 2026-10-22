@@ -83,3 +83,10 @@ test('the same material version cannot silently change original payload between 
   const newer = round({ id: 'r2', parentRoundId: 'r1', createdAt: 3, materials: [material({ content: 'same version but changed body' })] });
   assert.throws(() => validateResearchChains([question({ headRoundId: 'r2', revision: 2, updatedAt: 3 })], [round(), newer]), /同一材料版本/);
 });
+
+test('same source version may retain different per-read coverage receipts without rewriting past rounds', () => {
+  const later = material({ capturedAt: 3, readRange: { ...material().readRange, description: '再次读取：不同的请求范围' }, provenance: { requestedPages: [1, 2] } });
+  const newer = round({ id: 'r2', parentRoundId: 'r1', createdAt: 3, materials: [later] });
+  validateResearchChains([question({ headRoundId: 'r2', revision: 2, updatedAt: 3 })], [round(), newer]);
+  assert.notDeepEqual(newer.materials[0].provenance, round().materials[0].provenance);
+});
