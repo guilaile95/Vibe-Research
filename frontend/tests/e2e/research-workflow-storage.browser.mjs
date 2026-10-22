@@ -1,5 +1,6 @@
 /** Native IndexedDB tests in isolated Chromium pages. No backend/model/user store is used.
  * Synthetic AbortError/QuotaExceeded injection proves transaction rollback, not physical-disk durability.
+ * Lost-response recovery is simulated by retrying the same operation, not by dropping an actual response.
  * Sources are transpiled into test-only ES modules by TypeScript, with no production window hooks.
  */
 import assert from 'node:assert/strict';
@@ -87,7 +88,7 @@ try {
   const changedRetry = structuredClone(requests[winnerIndex]); changedRetry.round.judgement = '不同内容';
   assert.equal((await invoke(page, 'appendRound', [changedRetry])).code, 'IDEMPOTENCY');
   assert.equal(ok(await invoke(page, 'getQuestion', ['question'])).status, 'paused');
-  mark('lost-response same-op retry returns original result; changed payload rejected');
+  mark('simulated lost-response idempotency: same-op retry returns original result; changed payload rejected');
 
   const beforeFailure = ok(await invoke(page, 'exportBackup', []));
   for (const errorName of ['AbortError', 'QuotaExceededError']) {
@@ -145,6 +146,15 @@ try {
   await restorePage.reload();
   await restorePage.evaluate(async () => { window.api = await import('/src/lib/researchWorkflowStore.ts'); window.store = window.api.createResearchWorkflowStore({ dbName: 'research-empty-restore' }); });
   assert.deepEqual(ok(await invoke(restorePage, 'getQuestion', ['question'])), paused);
+  // These assertions deliberately run after reload/reopen, not just after import.
+  const reopenedBeforeRetry = JSON.parse(ok(await invoke(restorePage, 'exportBackup', []))).data;
+  assert.deepEqual(ok(await invoke(restorePage, 'getRounds', ['question'])), exportedData.rounds);
+  assert.deepEqual(ok(await invoke(restorePage, 'createQuestion', [initialRequest])), initial);
+  assert.deepEqual(ok(await invoke(restorePage, 'appendRound', [requests[winnerIndex]])), winner);
+  assert.equal((await invoke(restorePage, 'appendRound', [changedRetry])).code, 'IDEMPOTENCY');
+  assert.deepEqual(ok(await invoke(restorePage, 'getQuestion', ['question'])), paused);
+  assert.deepEqual(ok(await invoke(restorePage, 'getRounds', ['question'])), exportedData.rounds);
+  assert.deepEqual(JSON.parse(ok(await invoke(restorePage, 'exportBackup', []))).data, reopenedBeforeRetry);
   mark('validated full backup restores empty native store, immutable payloads and retry receipts survive reload');
 
   for (const fault of ['missing-parent', 'wrong-head', 'cross-stock', 'forged-receipt', 'changed-same-id']) {
@@ -249,9 +259,9 @@ try {
   assert.equal(lifecycle.versionAfterTimeout, 1);
   mark('versionchange closes cooperative client; blocked is bounded, late upgrade aborts, explicit retry recovers');
 
-  await page.evaluate(checks => { document.body.innerText = ['Native IndexedDB acceptance', ...checks.map(check => `PASS ${check.name}`), 'Scope: synthetic data; no actual quota pressure, OS crash, private-mode retention or power-loss durability claim.'].join('\n\n'); }, checks);
+  await page.evaluate(checks => { document.body.innerText = ['Native IndexedDB acceptance', ...checks.map(check => `PASS ${check.name}`), 'Scope: synthetic data; lost-response is a same-operation retry simulation, not an injected delivery failure. Abort/quota faults are injected; no actual quota pressure, OS crash, private-mode retention or power-loss durability claim.'].join('\n\n'); }, checks);
   await page.screenshot({ path: join(output, 'native-indexeddb-acceptance.png'), fullPage: true });
-  writeFileSync(join(output, 'results.json'), JSON.stringify({ status: 'PASS', engine: 'Chromium native IndexedDB', checks, limitations: ['Synthetic quota/abort faults, not physical storage exhaustion', 'No OS crash/power-loss or private-mode retention proof', 'No real user migration or paid model call'] }, null, 2));
+  writeFileSync(join(output, 'results.json'), JSON.stringify({ status: 'PASS', engine: 'Chromium native IndexedDB', checks, limitations: ['Lost-response is a same-operation idempotency simulation, not an injected delivery failure', 'Synthetic quota/abort faults, not physical storage exhaustion', 'No OS crash/power-loss or private-mode retention proof', 'No real user migration or paid model call'] }, null, 2));
 } catch (error) {
   writeFileSync(join(output, 'results.json'), JSON.stringify({ status: 'FAIL', checks, error: String(error?.stack || error) }, null, 2));
   if (page) await page.screenshot({ path: join(output, 'failure.png'), fullPage: true }).catch(() => {});
