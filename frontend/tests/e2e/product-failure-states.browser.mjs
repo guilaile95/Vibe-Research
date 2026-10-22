@@ -73,8 +73,10 @@ try{
     // a new attempt runs. Text visibility alone is not completion of that attempt.
     const generateAndSettle=async mode=>{
      aiMode=mode;
-     const dispatched=page.waitForRequest(r=>r.url().endsWith('/api/native-intel/ai/analysis'));
-     await generate.click();await dispatched;
+     const matchesAnalysis=r=>r.url().endsWith('/api/native-intel/ai/analysis');
+     const dispatched=page.waitForRequest(matchesAnalysis);
+     const completed=page.waitForEvent(mode==='network'?'requestfailed':'requestfinished',{predicate:matchesAnalysis});
+     await generate.click();await dispatched;await completed;
      await page.waitForFunction(()=>document.querySelector('[data-testid="wave5-generate-ai-analysis"]')?.disabled===false);
     };
     for(const mode of ['error','parse','network']){await generateAndSettle(mode);await region.getByText('本次未完成分析',{exact:true}).waitFor();assert.equal(await region.getByTestId('wave5-section-core_trends').count(),0);assert.doesNotMatch(await region.innerText(),/暂无异常|暂无显著|UNTRUSTED_FAILED_CONTENT/)}
