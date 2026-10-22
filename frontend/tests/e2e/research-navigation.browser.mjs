@@ -54,17 +54,21 @@ try {
       const reply = readReply('GET', path, url.search); if (reply) return route.fulfill({ json: reply });
       return route.fulfill({ status: 503, json: { detail: 'Synthetic unavailable source' } });
     });
+    let phase = 'create-page';
     const page = await context.newPage(); page.setDefaultTimeout(10000); page.on('pageerror', error => errors.push(error.message));
     try {
+      phase = 'watchlist-entry';
       await page.goto('/watchlist?sort=amount&anomalies=0');
       const entry = page.getByTestId('watchlist-candidate-600519'); await entry.waitFor();
       const expectedReturn = '/watchlist?sort=amount&anomalies=0#watchlist-600519';
       assert.equal(new URL(await entry.getAttribute('href'), baseURL).searchParams.get('return_to'), expectedReturn);
       await entry.click(); await page.getByRole('heading', { name: '候选研究 · 合成公司（600519）', exact: true }).waitFor();
+      phase = 'create-evidence';
       await page.getByTestId('candidate-add-evidence').click();
       await page.getByPlaceholder('一句话陈述这条证据说了什么。例如：公司2024Q3营收同比+25%，超出市场一致预期+18%。').fill('合成证据，不含真实研究');
       await page.getByPlaceholder('如：《XX公司2024年三季报点评》').fill('合成来源');
       await page.getByRole('button', { name: '保存', exact: true }).click();
+      phase = 'read-saved-evidence';
       await page.getByTestId('candidate-existing-evidence').waitFor();
       assert.equal(record.subject_id, '600519');
       await page.getByTestId('candidate-stock-data-entry').click();
@@ -73,6 +77,7 @@ try {
       assert.equal(await page.getByLabel('自选排序').inputValue(), 'amount');
       await page.screenshot({ path: join(output, `list-return-${width}.png`) });
 
+      phase = 'quote-failure-entry';
       await page.goto('/stock-data?code=600519');
       await page.getByTestId('stock-data-research-without-quote').waitFor();
       const query = page.getByPlaceholder('A 股 6 位代码，或美股/港股/韩股（AAPL / 00700 / 005930.KS）', { exact: true });
@@ -80,32 +85,44 @@ try {
       const target = new URL(await page.getByTestId('stock-data-candidate-entry').getAttribute('href'), baseURL);
       assert.equal(target.pathname, '/candidates/600519'); assert.equal(new URL(target.searchParams.get('return_to'), baseURL).searchParams.get('code'), '600519');
       await page.getByTestId('stock-data-candidate-entry').click();
+      phase = 'fill-candidate-draft';
+      // React synchronizes textarea.defaultValue, which makes the wrapping label's
+      // text include the draft. Use the unique field placeholder for later reads.
+      const tentativeView = page.getByTestId('candidate-research-note').getByPlaceholder('先写目前的理解，不必形成正式结论', { exact: true });
+      assert.equal(await tentativeView.count(), 1);
       await page.getByLabel('我的暂定看法', { exact: true }).fill('未保存的合成看法');
+      phase = 'product-return-blocked';
       await page.getByTestId('candidate-stock-data-entry').click();
       const dialog = page.getByRole('dialog', { name: '研究内容尚未保存' }); await dialog.waitFor();
+      phase = 'cancel-product-return';
       await dialog.getByRole('button', { name: '留下继续编辑', exact: true }).click();
       await dialog.waitFor({ state: 'hidden' });
       assert.equal(new URL(page.url()).pathname, '/candidates/600519');
-      assert.equal(await page.getByLabel('我的暂定看法', { exact: true }).inputValue(), '未保存的合成看法');
+      assert.equal(await tentativeView.inputValue(), '未保存的合成看法');
+      phase = 'browser-back-blocked';
       await page.goBack(); await dialog.waitFor();
       await page.waitForURL(url => url.pathname === '/candidates/600519');
       assert.equal(new URL(page.url()).pathname, '/candidates/600519');
-      assert.equal(await page.getByLabel('我的暂定看法', { exact: true }).inputValue(), '未保存的合成看法');
+      assert.equal(await tentativeView.inputValue(), '未保存的合成看法');
+      phase = 'discard-draft-and-return';
       await dialog.getByRole('button', { name: '放弃未保存内容并离开', exact: true }).click();
       await page.waitForURL(url => url.pathname === '/stock-data' && url.searchParams.get('code') === '600519');
       await page.getByTestId('stock-data-candidate-entry').waitFor();
       await page.screenshot({ path: join(output, `quote-failure-${width}.png`) });
+      phase = 'reject-non-ashare';
       for (const code of ['', '00700', 'AAPL', 'BAD', '60051']) {
         await page.goto('/stock-data' + (code ? `?code=${code}` : ''));
         await page.getByRole('heading', { name: '个股数据', exact: true }).waitFor();
         assert.equal(await page.getByTestId('stock-data-candidate-entry').count(), 0, code);
       }
+      phase = 'reject-unsafe-return-targets';
       for (const value of ['//evil.example', '/%2fevil.example', '/%255cevil.example', 'https://evil.example', '/bad%']) {
         await page.goto('/candidates/600519?' + new URLSearchParams({ return_to: value }));
         assert.equal(await page.getByTestId('candidate-stock-data-entry').getAttribute('href'), '/stock-data?code=600519');
       }
       await page.goto('/candidates/600519?return_to=%2Fwatchlist&return_to=%2Fother');
       assert.equal(await page.getByTestId('candidate-stock-data-entry').getAttribute('href'), '/stock-data?code=600519');
+      phase = 'late-old-quote';
       slow = true; await page.goto('/stock-data?code=600519'); await started.promise;
       await query.fill('600520'); await query.press('Enter');
       await page.waitForFunction(() => document.querySelector('[data-active-code="600520"]'));
@@ -119,7 +136,14 @@ try {
       assert.equal(await page.getByText('旧股晚到', { exact: true }).count(), 0);
       assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.equal(writes.length, 1);
       results.push({ width, status: 'PASS', reads, writes });
-    } catch (error) { results.push({ width, status: 'FAIL', error: error.message, errors, external, reads, writes }); await page.screenshot({ path: join(output, `failure-${width}.png`) }); throw error; }
+    } catch (error) {
+      const dom = await page.evaluate(() => ({
+        url: location.href,
+        candidateCode: document.querySelector('[data-testid="candidate-workspace"]')?.getAttribute('data-security-code'),
+        dialogs: [...document.querySelectorAll('dialog')].map(node => ({ open: node.open, text: node.textContent })),
+        draftFields: [...document.querySelectorAll('[data-testid="candidate-research-note"] textarea')].map(node => ({ placeholder: node.placeholder, value: node.value, defaultValue: node.defaultValue, labelText: node.closest('label')?.textContent })),
+      })).catch(cause => ({ diagnosticError: cause.message }));
+      results.push({ width, status: 'FAIL', phase, error: error.message, stack: error.stack, dom, errors, external, reads, writes }); await page.screenshot({ path: join(output, `failure-${width}.png`) }); throw error; }
     finally { release.resolve(); await context.close(); }
   }
 } finally { writeFileSync(join(output, 'results.json'), JSON.stringify(results, null, 2)); await browser?.close(); server.closeAllConnections(); await new Promise(done => server.close(done)); console.log(output); }
