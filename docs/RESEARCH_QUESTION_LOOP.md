@@ -52,6 +52,18 @@ fixtures are labelled as such, and must not be presented as natural user use,
 provider completeness, live-model accuracy, strict point-in-time data, or economic
 value. CI artifacts describe only the exact build and scenarios executed.
 
+The discovery-to-candidate handoff retains a bounded (16 KiB) non-authoritative
+snapshot of the original card's observations, reasons, source references and
+times. Missing handoff state is explicit; a strategy label is not reconstructed
+as the original discovery evidence. Basic saving requires a question and either
+a short judgement or a next question. Detailed calculation is optional, and an
+unrecorded limitation is labelled as unrecorded rather than invented.
+
+The first local implementation validates the entire bounded store per operation:
+16 MiB serialized application budget and 2 MiB per round. It is not indexed
+pagination or an unbounded history engine. Native browser fault injection tests
+transaction rollback, not actual disk exhaustion or power-loss durability.
+
 The public forecast-revision and transaction-stage examples are semantic test
 inputs. Their cited documents are not a fixed point-in-time archive unless raw
 bytes, hashes, publication availability and the release boundary are independently
