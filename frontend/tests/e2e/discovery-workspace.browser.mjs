@@ -431,13 +431,24 @@ try {
   assert.equal(await firstSummary.locator("div").filter({ hasText: "行业相对市场状态" }).locator("dd").innerText(), "+1.25%");
   assert.equal(await firstSummary.locator("dt").count(), 3);
   assert.equal(await firstSummary.getByText("资讯提及：未知", { exact: true }).count(), 0);
-  const queueBoundary = await page.getByTestId("discovery-queue-boundary").innerText();
+  const boundaryDetails = page.getByTestId("discovery-queue-boundary");
+  const boundarySummary = boundaryDetails.locator("summary");
+  assert.equal(await boundaryDetails.getAttribute("open"), null);
+  assert.equal(await boundarySummary.innerText(), "仅筛选本次候选队列 · 范围说明");
+  assert.equal(await page.getByTestId("discovery-sampling-summary").isVisible(), false);
+  await boundarySummary.click();
+  assert.notEqual(await boundaryDetails.getAttribute("open"), null);
+  const queueBoundary = await boundaryDetails.innerText();
   assert.match(queueBoundary, /仅筛选本次候选队列/);
   assert.match(queueBoundary, /行业\/主题选择不重新扫描全行业/);
   assert.match(queueBoundary, /沪深主板、创业板和科创板，不包含北交所/);
   assert.match(queueBoundary, /每策略最多12条/);
   assert.match(queueBoundary, /按研究优先级再按证券代码排序/);
   assert.match(queueBoundary, /同优先级顺序非价值排名/);
+  assert.match(await page.getByTestId("discovery-sampling-summary").innerText(), /未进入补充检查 72 股/);
+  assert.match(await page.getByTestId("discovery-sampling-summary").innerText(), /截断 0 条/);
+  await boundarySummary.click();
+  assert.equal(await boundaryDetails.getAttribute("open"), null);
   await firstCard.getByRole("link", { name: "进入候选研究" }).waitFor();
   assert.match(await page.getByTestId("strategy-SWING").innerText(), /波段/);
   assert.equal(await page.getByTestId("full-market-tab").innerText(), "全市场筛选");
@@ -463,6 +474,13 @@ try {
     await page.getByRole("main").evaluate((element) => element.scrollTo(0, 0));
     const firstBounds = await firstCard.boundingBox();
     const diagnosticsBounds = await diagnostics.boundingBox();
+    const controlBounds = [];
+    layoutEvidence.push({ viewport, firstBounds, diagnosticsBounds, controlBounds });
+    // Preserve the failing viewport too, before a geometry assertion can stop the run.
+    if (screenshots) {
+      await page.screenshot({ path: path.join(screenshots, `discovery-after-${viewport.width}.png`), fullPage: true });
+      writeFileSync(path.join(screenshots, "discovery-after-layout.json"), JSON.stringify({ layoutEvidence, browserErrors, externalRequests }, null, 2));
+    }
     assert.ok(firstBounds && diagnosticsBounds && firstBounds.y < diagnosticsBounds.y, "candidates must precede diagnostics");
     assert.ok(firstBounds.y >= 0 && firstBounds.y < viewport.height, `first candidate must enter the initial viewport at ${viewport.width}px`);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `no page horizontal overflow at ${viewport.width}px`);
@@ -470,8 +488,7 @@ try {
     const filters = page.getByTestId("discovery-filters");
     assert.equal(await filters.locator("label").count(), 4);
     for (const label of ["行业 / 主题", "研究优先级", "研究资格", "数据状态"]) assert.equal(await filters.locator("label > span").getByText(label, { exact: true }).isVisible(), true);
-    const controls = [page.getByTestId("refresh-discovery"), ...await filters.locator("select, button").all(), page.getByTestId("discovery-candidate-600519"), firstCard.locator("summary")];
-    const controlBounds = [];
+    const controls = [page.getByTestId("refresh-discovery"), ...await filters.locator("select, button").all(), boundarySummary, page.getByTestId("discovery-candidate-600519"), firstCard.locator("summary")];
     for (const control of controls) {
       const bounds = await control.boundingBox();
       assert.ok(bounds && bounds.height >= 44, `44px Discovery touch target at ${viewport.width}px`);
@@ -479,8 +496,12 @@ try {
       controlBounds.push(bounds);
     }
     assert.equal(await page.getByTestId("discovery-results-status").getAttribute("role"), "status");
-    layoutEvidence.push({ viewport, firstBounds, controlBounds });
-    if (screenshots) await page.screenshot({ path: path.join(screenshots, `discovery-after-${viewport.width}.png`), fullPage: true });
+    await boundarySummary.click();
+    assert.equal(await page.getByTestId("discovery-sampling-summary").isVisible(), true);
+    assert.ok(await page.getByRole("main").evaluate((element) => element.scrollWidth <= element.clientWidth), `expanded boundary has no horizontal overflow at ${viewport.width}px`);
+    if (screenshots) await page.screenshot({ path: path.join(screenshots, `discovery-boundary-expanded-${viewport.width}.png`), fullPage: true });
+    await boundarySummary.click();
+    assert.equal(await boundaryDetails.getAttribute("open"), null);
     if (viewport.width <= 390) {
       await page.getByLabel("研究优先级", { exact: true }).selectOption("LOW");
       await page.waitForURL((url) => url.searchParams.get("priority") === "LOW");
@@ -512,10 +533,14 @@ try {
   await firstCard.waitFor({ state: "detached" });
   assert.equal(await firstCard.count(), 0);
   await page.getByLabel("研究优先级", { exact: true }).selectOption("ALL");
+  await page.waitForURL((url) => url.searchParams.get("priority") === "ALL");
+  await firstCard.waitFor();
+  await boundarySummary.click();
   assert.match(await page.getByTestId("discovery-queue-boundary").innerText(), /不重新扫描全行业/);
   assert.match(await page.getByTestId("discovery-queue-boundary").innerText(), /不包含北交所/);
   assert.match(await page.getByTestId("discovery-sampling-summary").innerText(), /未进入补充检查 72 股/);
   assert.match(await page.getByTestId("discovery-sampling-summary").innerText(), /截断 0 条/);
+  await boundarySummary.click();
   assert.match(await page.getByTestId("discovery-condition-600519").innerText(), /行情条件匹配；不代表材料完整/);
   const discoveryText = await workspace.innerText();
   assert.doesNotMatch(discoveryText, /\bBUY\b|Opportunity Score|综合评分/);

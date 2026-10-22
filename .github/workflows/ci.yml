@@ -412,7 +412,18 @@ jobs:
       - name: Run Full-Market Discovery E2E
         if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
+        env:
+          DISCOVERY_SCREENSHOT_DIR: ${{ runner.temp }}/discovery-boundary-evidence
         run: npm run test:e2e:discovery
+
+      - name: Preserve synthetic Discovery boundary evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: discovery-boundary-evidence
+          path: ${{ runner.temp }}/discovery-boundary-evidence
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Run full-market source and screener coverage E2E
         if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
