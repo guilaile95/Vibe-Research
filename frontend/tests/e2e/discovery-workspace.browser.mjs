@@ -431,7 +431,13 @@ try {
   assert.equal(await firstSummary.locator("div").filter({ hasText: "行业相对市场状态" }).locator("dd").innerText(), "+1.25%");
   assert.equal(await firstSummary.locator("dt").count(), 3);
   assert.equal(await firstSummary.getByText("资讯提及：未知", { exact: true }).count(), 0);
-  assert.match(await page.getByTestId("discovery-queue-boundary").innerText(), /仅筛选本次候选队列，每策略最多12条，同优先级顺序非价值排名/);
+  const queueBoundary = await page.getByTestId("discovery-queue-boundary").innerText();
+  assert.match(queueBoundary, /仅筛选本次候选队列/);
+  assert.match(queueBoundary, /行业\/主题选择不重新扫描全行业/);
+  assert.match(queueBoundary, /沪深主板、创业板和科创板，不包含北交所/);
+  assert.match(queueBoundary, /每策略最多12条/);
+  assert.match(queueBoundary, /按研究优先级再按证券代码排序/);
+  assert.match(queueBoundary, /同优先级顺序非价值排名/);
   await firstCard.getByRole("link", { name: "进入候选研究" }).waitFor();
   assert.match(await page.getByTestId("strategy-SWING").innerText(), /波段/);
   assert.equal(await page.getByTestId("full-market-tab").innerText(), "全市场筛选");
