@@ -1,6 +1,6 @@
 // Production build, fresh browser contexts, intercepted synthetic HTTP only. No backend/model.
 import assert from 'node:assert/strict';
-import {createReadStream,existsSync,mkdtempSync,writeFileSync} from 'node:fs';
+import {createReadStream,existsSync,mkdtempSync,mkdirSync,writeFileSync} from 'node:fs';
 import {createServer} from 'node:http';
 import {tmpdir} from 'node:os';
 import {resolve,join,extname,sep} from 'node:path';
@@ -11,6 +11,7 @@ import {ancillaryReply} from './final-families.fixture.mjs';
 import {readReply} from './ai-settings-storage.fixture.mjs';
 const dist=resolve(fileURLToPath(new URL('../../dist/',import.meta.url)));
 const evidence=process.env.FAILURE_STATES_EVIDENCE_DIR||mkdtempSync(join(tmpdir(),'vr-product-failures-'));
+mkdirSync(evidence,{recursive:true});
 const server=createServer((req,res)=>{
  let file=resolve(dist,`.${decodeURIComponent(new URL(req.url,'http://localhost').pathname)}`);
  if(!file.startsWith(dist+sep)&&file!==dist){res.writeHead(403).end();return}
@@ -31,6 +32,7 @@ try{
   await context.routeWebSocket('**/*',ws=>{external.push(ws.url());ws.close()});
   await context.route('**/*',async route=>{
    const request=route.request(),url=new URL(request.url());
+   if(request.method()==='GET'&&request.url()==='https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap')return route.fulfill({contentType:'text/css',body:''});
    if(url.origin!==baseURL){external.push(url.origin);return route.abort()}
    if(!url.pathname.startsWith('/api/'))return route.continue();
    if(request.method()!=='GET')writes.push(`${request.method()} ${url.pathname}`);
