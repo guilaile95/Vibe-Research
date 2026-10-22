@@ -3,6 +3,7 @@ import { AlertCircle, ChevronRight, Database, Loader2, RefreshCw } from "lucide-
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { GlassCard } from "@/components/ui/GlassCard";
+import { buildDiscoveryResearchOrigin } from "@/lib/discoveryResearchOrigin";
 import { formatDiscoveryObservationValue } from "@/lib/discoveryObservation";
 import {
   discoveryCandidateHref,
@@ -95,7 +96,7 @@ function ObservationValue({ value }: { value: unknown }) {
   return <span>{JSON.stringify(value)}</span>;
 }
 
-function OpportunityCard({ item }: { item: DiscoveryOpportunityItem }) {
+function OpportunityCard({ item, snapshot }: { item: DiscoveryOpportunityItem; snapshot: DiscoverySnapshot }) {
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -127,6 +128,7 @@ function OpportunityCard({ item }: { item: DiscoveryOpportunityItem }) {
         </div>
         <Link
           to={discoveryCandidateHref(item, searchParams)}
+          state={{ discoveryResearchOrigin: buildDiscoveryResearchOrigin(item, snapshot, gaps) }}
           onClick={(event) => {
             if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
               navigate({ pathname: location.pathname, search: location.search, hash: `#${anchor}` }, { replace: true });
@@ -337,7 +339,7 @@ export function DiscoveryWorkspace() {
         <p data-testid="discovery-sampling-summary">{discoveryCoverageSummary(snapshot, filters.strategy)}</p>
       </details>
       <div className="space-y-3" data-testid={`discovery-queue-${filters.strategy}`}>
-        {items.length ? items.map((item) => <OpportunityCard key={`${item.strategy}-${item.security_code}`} item={item} />) : (
+        {items.length ? items.map((item) => <OpportunityCard key={`${item.strategy}-${item.security_code}`} item={item} snapshot={snapshot} />) : (
           <GlassCard className="space-y-3 p-8 text-center text-sm text-muted-foreground">
             <p>{["unavailable", "error"].includes(snapshot.status) ? "当前发现数据不可用，暂时无法提供研究候选。" : "本次有限队列中没有匹配项，不代表该行业没有研究对象。部分历史收益缺失可按行业条件降级入选，请核对缺口。"}</p>
             <Link to={{ pathname: location.pathname, search: `?${fullMarketSearch}` }} className="inline-flex min-h-11 items-center rounded px-2 text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" data-testid="discovery-open-full-market">进入全市场筛选</Link>
