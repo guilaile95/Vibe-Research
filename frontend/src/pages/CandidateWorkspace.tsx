@@ -20,9 +20,7 @@ import { api, ApiError, type EvidenceRecord, type StockRelativeContext, type Sto
 import { candidateEntryContext } from "@/lib/candidateEntryContext";
 import { CandidateEvidenceLoadError, loadCandidateEvidence } from "@/lib/candidateEvidence";
 import { CAMPAIGN_STRATEGY_LABELS } from "@/lib/decisionInbox";
-import { rememberResearchVisit, RESEARCH_SECTIONS as existingResearchSections } from "@/lib/researchResume";
-
-const researchSections = [...existingResearchSections.slice(0, 2), { id: "candidate-research-check", label: "问题与材料核对" }, ...existingResearchSections.slice(2)];
+import { rememberResearchVisit, RESEARCH_SECTIONS as researchSections } from "@/lib/researchResume";
 
 type LoadState<T> =
   | { status: "loading"; value: null; error: "" }

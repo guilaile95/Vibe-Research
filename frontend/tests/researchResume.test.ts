@@ -11,6 +11,7 @@ test("resume keeps validated discovery return and section, never arbitrary candi
   assert.equal(result.searchParams.get("strategy"), "SWING");
   assert.equal(result.searchParams.get("claim"), null);
   assert.equal(result.hash, "#candidate-evidence-gap");
+  assert.equal(researchVisitHref("/candidates/600519#candidate-research-check"), "/candidates/600519#candidate-research-check");
   assert.equal(researchVisitHref("/candidates/000001?return_to=https://outside.example#unknown"), "/candidates/000001");
   for (const path of ["//outside.example/candidates/600519", "https://outside.example/candidates/600519", "/candidates/abc", "/evidence/new", "/candidates/600519/extra"]) assert.equal(researchVisitHref(path), null);
 });
@@ -28,6 +29,8 @@ test("browser history is bounded, replaces same security and can be cleared with
     rememberResearchVisit("/candidates/600519#candidate-existing-research");
     assert.deepEqual(loadResearchVisits().map((v) => v.code), ["600519", "300750", "000858"]);
     assert.equal(loadResearchVisits()[0].href, "/candidates/600519#candidate-existing-research");
+    rememberResearchVisit("/candidates/600519#candidate-research-check");
+    assert.equal(loadResearchVisits()[0].href, "/candidates/600519#candidate-research-check");
     assert.deepEqual(Object.keys(loadResearchVisits()[0]).sort(), ["code", "href", "visitedAt"]);
     clearResearchVisits();
     assert.deepEqual(loadResearchVisits(), []);
