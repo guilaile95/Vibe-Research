@@ -121,11 +121,11 @@ try {
   assert.equal(legacyResult.added, 1);
   assert.deepEqual(ok(await invoke(page, 'importLegacy', [oldRaw, 'import-legacy'])), legacyResult);
   assert.equal(await page.evaluate(() => localStorage.getItem('vr-notes')), oldRaw);
-  await peer.evaluate(() => { localStorage.setItem('vr-notes', JSON.stringify([{ id: 'old-later', kind: '普通笔记', title: '旧页新增', content: '不能覆盖研究链', ts: 51 }])); });
+  await peer.evaluate(async () => { const oldClient = await import('/src/lib/notes.ts'); oldClient.addNote('普通笔记', '旧页新增', '不能覆盖独立研究链'); });
   const changedRaw = await peer.evaluate(() => localStorage.getItem('vr-notes'));
   assert.equal(ok(await invoke(page, 'checkLegacySource', [changedRaw])).changed, true);
   assert.equal(ok(await invoke(page, 'getQuestion', ['question'])).headRoundId, winner.round.id);
-  await peer.evaluate(() => localStorage.removeItem('vr-notes'));
+  await peer.evaluate(async () => { const oldClient = await import('/src/lib/notes.ts'); oldClient.clearNotes(); });
   assert.equal(ok(await invoke(page, 'getRounds', ['question'])).length, 2);
   assert.deepEqual(ok(await invoke(page, 'listLegacyNotes', []))[0].payload.unknownMetadata, { retained: true });
   mark('explicit legacy read-only import preserves raw; old-client writes/clear cannot affect new domain');
@@ -170,6 +170,32 @@ try {
   }, exported);
   assert.equal(budgetResult.code, 'BUDGET'); assert.deepEqual(budgetResult.questions, []);
   mark('serialized byte budget rejects entire import without truncating chains');
+
+  const calculationCheck = await page.evaluate(async ({ question, round, materials }) => {
+    const { compareForecast } = await import('/src/lib/researchCheck.ts');
+    const common = { subject: '301213', metric: '归母净利润', periodStart: '2024-01-01', periodEnd: '2024-12-31', periodType: 'annual', currency: 'CNY', unit: '万元', basis: 'consolidated', valueType: 'forecast', confirmed: true };
+    const forecast = { ...common, materialKey: 'disclosure@v1', sourceExcerpt: materials[0].content, low: '648.13', high: '753.93' };
+    const revision = { ...common, materialKey: 'disclosure@v2', sourceExcerpt: materials[1].content, low: '-594.25', high: '-891.37' };
+    const calculation = compareForecast('301213', 'revision', forecast, revision, materials);
+    const store = window.api.createResearchWorkflowStore({ dbName: 'native-calculation' });
+    await store.createQuestion({ operationId: 'calc-first', question, initialRound: { ...round, materials, reviewedMaterialKeys: ['disclosure@v1', 'disclosure@v2'], calculation } });
+    const read = (await store.getRounds(question.id))[0];
+    const backup = JSON.parse(await store.exportBackup());
+    backup.data.rounds[0].calculation.result = '伪造：实际业绩已兑现';
+    backup.data.operations = []; // Force the arithmetic validator, not a mismatched historical operation receipt.
+    backup.manifest.sha256 = await window.domain.researchContentHash(window.domain.canonicalJson(backup.data));
+    const target = window.api.createResearchWorkflowStore({ dbName: 'reject-forged-calculation' });
+    let rejected;
+    try { await target.importBackup(JSON.stringify(backup), 'tampered-calc'); rejected = 'unexpected'; } catch (error) { rejected = error.code; }
+    const after = await target.listQuestions();
+    store.close(); target.close();
+    return { result: read.calculation.result, originalText: read.materials[0].content, rejected, after };
+  }, { question: fixtureQuestion('calculated'), round: fixtureRound('calc-T0', null, 101, 'v1', 'calculated'), materials: [fixtureMaterial('v1'), fixtureMaterial('v2')] });
+  assert.match(calculationCheck.result, /修订预告不是实际业绩/);
+  assert.equal(calculationCheck.originalText, fixtureMaterial('v1').content);
+  assert.equal(calculationCheck.rejected, 'VALIDATION');
+  assert.deepEqual(calculationCheck.after, []);
+  mark('native calculated-round save retains operands and original text; checksum-recomputed forged result cannot import');
 
   for (const count of [100, 200, 1000]) {
     const rounds = Array.from({ length: count }, (_, index) => fixtureRound(`bulk-${count}-${index}`, index ? `bulk-${count}-${index - 1}` : null, 101 + index, 'v1', `bulk-${count}`));
