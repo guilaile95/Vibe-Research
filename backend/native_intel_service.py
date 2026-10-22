@@ -10,12 +10,14 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import logging
 import os
 import re
 import socket
+import ssl
 import threading
 import time
 import urllib.error
@@ -184,6 +186,52 @@ def _classify_error(exc: BaseException) -> tuple[str, str]:
     return store.ERROR_KIND_UNKNOWN, name
 
 
+def _rss_retryable(exc: Exception) -> bool:
+    """Conservative transport-only allowlist, not all network/HTTP failures."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return (
+            exc.code in {408, 502, 503, 504}
+            and (exc.headers is None or exc.headers.get("Retry-After") is None)
+        )
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(reason, ssl.SSLError):
+        return False
+    if isinstance(reason, (TimeoutError, ConnectionResetError, ConnectionAbortedError)):
+        return True
+    if isinstance(reason, socket.gaierror):
+        return reason.errno == socket.EAI_AGAIN
+    return isinstance(reason, OSError) and reason.errno in {
+        errno.ETIMEDOUT, errno.ECONNRESET, errno.ECONNABORTED,
+    }
+
+
+def _read_rss_body(response: Any, deadline: float) -> bytes:
+    """Spend only the remaining budget between urllib body reads.
+
+    HTTPResponse.read1 avoids read() waiting for the entire body under one stale
+    socket timeout. Refresh the exposed CPython HTTP socket timeout per read.
+    This is not a hard wall-clock/cancellation guarantee for DNS, connection
+    setup, or transports that do not expose their socket.
+    """
+    chunks: list[bytes] = []
+    read1 = getattr(response, "read1", None)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError()
+        sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+        if sock is not None:
+            sock.settimeout(remaining)
+        chunk = read1(65536) if read1 is not None else response.read()
+        if time.monotonic() >= deadline:
+            raise TimeoutError()
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+        if read1 is None:
+            return b"".join(chunks)
+
+
 def _fetch_source_items(
     source: dict[str, Any],
     *,
@@ -196,7 +244,10 @@ def _fetch_source_items(
 
     与 ``newsradar._fetch_source`` 的区别：失败时保留结构化错误类别而不是返回 None，
     这样「源失败」永远不会退化成「该源没有数据」。支持 HTTP/HTTPS 代理。
+    Only allowlisted transport failures get one extra attempt within the original
+    FETCH_TIMEOUT budget. Callers have no cancellation protocol; this adds none.
     """
+    deadline = time.monotonic() + FETCH_TIMEOUT
     try:
         req = urllib.request.Request(
             source["url"],
@@ -208,11 +259,35 @@ def _fetch_source_items(
         if proxy_url:
             handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
             opener = urllib.request.build_opener(handler)
-            with opener.open(req, timeout=FETCH_TIMEOUT) as resp:
-                raw = resp.read()
+            open_request = opener.open
         else:
-            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
-                raw = resp.read()
+            open_request = urllib.request.urlopen
+        for attempt in range(2):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError()
+            retry_after = False
+            try:
+                with open_request(req, timeout=remaining) as resp:
+                    retry_after = resp.headers.get("Retry-After") is not None
+                    raw = _read_rss_body(resp, deadline)
+                break
+            except Exception as exc:
+                kind, detail = _classify_error(exc)
+                # HTTPError owns an open response body too; close before retry.
+                if isinstance(exc, urllib.error.HTTPError):
+                    exc.close()
+                retry = (
+                    attempt == 0 and not retry_after and _rss_retryable(exc)
+                    and time.monotonic() < deadline
+                )
+                _LOGGER.info(
+                    "Native Intel RSS read failed: attempt=%d error_kind=%s error_detail=%s retry=%s",
+                    attempt + 1, kind, detail, retry,
+                )
+                if not retry:
+                    return [], kind, detail
+        # Invalid XML/normalization is never a reason to repeat the request.
         root = ET.fromstring(raw)
     except Exception as exc:  # noqa: BLE001 - 单源失败必须被隔离，不能向上冒泡
         kind, detail = _classify_error(exc)
