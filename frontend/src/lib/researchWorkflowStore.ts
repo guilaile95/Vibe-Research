@@ -39,6 +39,7 @@ export interface SetQuestionStatusRequest {
   status: ResearchQuestionStatus;
 }
 export interface ResearchImportResult { addedQuestions: number; addedRounds: number }
+export interface ResearchQuestionContext { question: ResearchQuestion; rounds: ResearchRound[] }
 export interface LegacySourceState { sourceHash: string | null; imported: boolean; changed: boolean }
 export interface LegacyImportPreview { sourceHash: string; notes: LegacyResearchNote[]; changed: boolean }
 interface BackupPayload { schemaVersion: typeof RESEARCH_BACKUP_SCHEMA; exportedAt: string; data: Snapshot; manifest: { sha256: string; questionIds: string[]; roundIds: string[] } }
@@ -66,6 +67,13 @@ function nextQuestion(question: ResearchQuestion, round: ResearchRound, status?:
   if (round.questionId !== question.id || round.securityCode !== question.securityCode || round.parentRoundId !== question.headRoundId || round.createdAt < question.updatedAt) return validation('新轮次的问题、证券、父轮或时间不匹配');
   return validateResearchQuestion({ ...question, revision: question.revision + 1, headRoundId: round.id, updatedAt: round.createdAt, status: status ?? question.status,
     reviewedMaterialKeys: [...new Set([...question.reviewedMaterialKeys, ...round.reviewedMaterialKeys, ...round.ignoredMaterialKeys])].sort() });
+}
+/** The caller has already validated the complete snapshot, including every chain link. */
+function questionRounds(state: Snapshot, question: ResearchQuestion): ResearchRound[] {
+  const ordered: ResearchRound[] = [];
+  let next = question.headRoundId;
+  while (next !== null) { const round = state.rounds.find(entry => entry.id === next)!; ordered.unshift(round); next = round.parentRoundId; }
+  return ordered;
 }
 function validateSnapshot(value: unknown): Snapshot {
   const v = record(value);
@@ -308,13 +316,16 @@ export function createResearchWorkflowStore(options: ResearchStoreOptions = {}) 
       return transact('readonly', state => state.questions.filter(question => securityCode === undefined || question.securityCode === securityCode).sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id)));
     },
     async getQuestion(id: string): Promise<ResearchQuestion | null> { return transact('readonly', state => state.questions.find(question => question.id === id) ?? null); },
+    async getQuestionContext(questionId: string): Promise<ResearchQuestionContext | null> {
+      return transact('readonly', state => {
+        const question = state.questions.find(entry => entry.id === questionId);
+        return question ? { question, rounds: questionRounds(state, question) } : null;
+      });
+    },
     async getRounds(questionId: string): Promise<ResearchRound[]> {
       return transact('readonly', state => {
         const question = state.questions.find(entry => entry.id === questionId);
-        const ordered: ResearchRound[] = [];
-        let next = question?.headRoundId ?? null;
-        while (next !== null) { const round = state.rounds.find(entry => entry.id === next)!; ordered.unshift(round); next = round.parentRoundId; }
-        return ordered;
+        return question ? questionRounds(state, question) : [];
       });
     },
     async exportBackup(): Promise<string> {

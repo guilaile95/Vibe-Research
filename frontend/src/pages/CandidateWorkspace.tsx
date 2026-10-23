@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AlertCircle, ArrowLeft, FileSearch, Loader2 } from "lucide-react";
 import { CandidateCampaignPanel } from "@/components/campaign/CandidateCampaignPanel";
 import { ResearchCheckPanel } from "@/components/campaign/ResearchCheckPanel";
@@ -21,7 +21,7 @@ import { parseDiscoveryResearchOrigin } from "@/lib/discoveryResearchOrigin";
 import { candidateEntryContext } from "@/lib/candidateEntryContext";
 import { CandidateEvidenceLoadError, loadCandidateEvidence } from "@/lib/candidateEvidence";
 import { CAMPAIGN_STRATEGY_LABELS } from "@/lib/decisionInbox";
-import { rememberResearchVisit, RESEARCH_SECTIONS as researchSections } from "@/lib/researchResume";
+import { parseResearchSelection, researchNavigationRisk, researchSelectionHref, rememberResearchVisit, RESEARCH_SECTIONS as researchSections } from "@/lib/researchResume";
 
 type LoadState<T> =
   | { status: "loading"; value: null; error: "" }
@@ -62,6 +62,49 @@ export function CandidateWorkspace() {
   }, []);
   const name = nameContext?.code === code ? nameContext.name : null;
   const [checkDirty, setCheckDirty] = useState(false);
+  const [noteDirty, setNoteDirty] = useState(false);
+  const navigate = useNavigate();
+  const currentHref = `${location.pathname}${location.search}${location.hash}`;
+  const selection = useMemo(() => parseResearchSelection(location.search), [location.search]);
+  const currentHrefRef = useRef(currentHref); currentHrefRef.current = currentHref;
+  const syncReceipt = useRef<{ from: string; to: string } | null>(null);
+  const [discardAction, setDiscardAction] = useState<(() => void) | null>(null);
+  const leaveDialog = useRef<HTMLDialogElement>(null);
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => {
+    const from = `${currentLocation.pathname}${currentLocation.search}${currentLocation.hash}`;
+    const to = `${nextLocation.pathname}${nextLocation.search}${nextLocation.hash}`;
+    if (syncReceipt.current?.from === from && syncReceipt.current.to === to) {
+      syncReceipt.current = null;
+      return false;
+    }
+    const risk = researchNavigationRisk(currentLocation, nextLocation);
+    return risk === "page" ? checkDirty || noteDirty : risk === "question" && checkDirty;
+  });
+  const navigationPending = blocker.state === "blocked" || discardAction !== null;
+  useEffect(() => {
+    if (navigationPending) leaveDialog.current?.showModal();
+    else leaveDialog.current?.close();
+  }, [navigationPending]);
+  useEffect(() => {
+    if (!checkDirty && !noteDirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [checkDirty, noteDirty]);
+  const requestDiscard = useCallback((action: () => void) => setDiscardAction(() => action), []);
+  const changeSelection = useCallback((questionId: string | null, roundId: string | null, replace = false, expectedHref?: string) => {
+    const from = currentHrefRef.current;
+    // Only a receipt for the still-current operation may synchronize its exact saved identity.
+    if (expectedHref !== undefined && expectedHref !== from) return;
+    const to = researchSelectionHref(from, questionId, roundId);
+    if (!to || to === from) return;
+    if (replace) syncReceipt.current = { from, to };
+    navigate(to, { replace, state: location.state });
+    syncReceipt.current = null;
+  }, [navigate, location.state]);
+  const validatedVisit = useCallback((href: string) => {
+    if (href === currentHrefRef.current) rememberResearchVisit(href);
+  }, []);
   const validCode = /^\d{6}$/.test(code);
   const [position, setPosition] = useState<LoadState<CandidatePositionPresentation>>(loadingState);
   const [evidence, setEvidence] = useState<LoadState<{ records: EvidenceRecord[]; total: number }>>(loadingState);
@@ -73,8 +116,8 @@ export function CandidateWorkspace() {
   const [valuationError, setValuationError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (validCode) rememberResearchVisit(`${location.pathname}${location.search}${location.hash}`);
-  }, [validCode, location.pathname, location.search, location.hash]);
+    if (validCode && selection.status === "absent") rememberResearchVisit(`${location.pathname}${location.search}${location.hash}`);
+  }, [validCode, selection.status, location.pathname, location.search, location.hash]);
 
   useEffect(() => {
     const section = researchSections.find(({ id }) => location.hash === `#${id}`);
@@ -171,6 +214,16 @@ export function CandidateWorkspace() {
 
   return (
     <div className="space-y-6" data-testid="candidate-workspace" data-security-code={code}>
+      <dialog ref={leaveDialog} aria-labelledby="candidate-unsaved-title" aria-describedby="candidate-unsaved-description"
+        className="m-auto w-11/12 max-w-md rounded-lg border border-border bg-background p-5 text-foreground shadow-xl backdrop:bg-black/50"
+        onCancel={(event) => { event.preventDefault(); setDiscardAction(null); if (blocker.state === "blocked") blocker.reset(); }}>
+        <h2 id="candidate-unsaved-title" className="font-semibold">研究内容尚未保存</h2>
+        <p id="candidate-unsaved-description" className="mt-2 text-sm text-muted-foreground">{discardAction || (blocker.state === "blocked" && researchNavigationRisk(location, blocker.location) === "question") ? "切换或放弃会清除当前核对草稿；独立轻量笔记仍保留。" : "离开会丢失本次未保存的问题、材料核对草稿和看法。可以留在这里继续编辑或先保存。"}</p>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button type="button" autoFocus className="rounded border border-primary/40 px-3 py-2 text-sm text-primary" onClick={() => { setDiscardAction(null); if (blocker.state === "blocked") blocker.reset(); }}>留下继续编辑</button>
+          <button type="button" className="rounded border border-border px-3 py-2 text-sm" onClick={() => { const action = discardAction; setDiscardAction(null); if (blocker.state === "blocked") blocker.proceed(); else action?.(); }}>放弃未保存内容并离开</button>
+        </div>
+      </dialog>
       <PageHeader
         title={`候选研究 · ${name ? `${name}（${code}）` : code}`}
         subtitle="先核对资料、提问并留下暂定看法；需要正式决策时，再建立投资计划。"
@@ -367,6 +420,11 @@ export function CandidateWorkspace() {
       <ResearchCheckPanel
         key={`check-${code}`}
         onDirtyChange={setCheckDirty}
+        selection={selection}
+        onSelectionChange={changeSelection}
+        onValidatedVisit={validatedVisit}
+        onRequestDiscard={requestDiscard}
+        navigationPending={navigationPending}
         code={code}
         records={evidence.value?.records ?? []}
         evidenceStatus={evidence.status}
@@ -378,7 +436,7 @@ export function CandidateWorkspace() {
 
       <CandidateResearchNote
         key={code}
-        additionalDirty={checkDirty}
+        onDirtyChange={setNoteDirty}
         code={code}
         records={evidence.value?.records ?? []}
         evidenceStatus={evidence.status}

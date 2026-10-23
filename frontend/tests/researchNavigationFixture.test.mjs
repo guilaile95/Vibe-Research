@@ -25,10 +25,10 @@ test('missing offset from the original CI fixture remains rejected by production
 });
 
 test('browser cancellation targets the candidate-specific draft dialog, not the generic form dialog', () => {
-  const component = readFileSync(new URL('../src/components/campaign/CandidateResearchNote.tsx', import.meta.url), 'utf8');
+  const component = readFileSync(new URL('../src/pages/CandidateWorkspace.tsx', import.meta.url), 'utf8');
   const browser = readFileSync(new URL('./e2e/research-navigation.browser.mjs', import.meta.url), 'utf8');
   assert.match(component, /<h2[^>]*>研究内容尚未保存<\/h2>/);
-  assert.match(component, /onClick=\{\(\) => \{ if \(blocker.state === "blocked"\) blocker.reset\(\); \}\}>留下继续编辑<\/button>/);
+  assert.match(component, /onClick=\{\(\) => \{ setDiscardAction\(null\); if \(blocker.state === "blocked"\) blocker.reset\(\); \}\}>留下继续编辑<\/button>/);
   assert.ok(browser.includes("dialog.getByRole('button', { name: '留下继续编辑', exact: true }).click()"));
   assert.ok(!browser.includes("name: '留在此页'"));
   assert.ok(browser.includes("await dialog.waitFor({ state: 'hidden' });"));

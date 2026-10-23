@@ -66,7 +66,7 @@ async function loadReport(panel, record) {
 }
 try {
   browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } : {}) });
-  for (const width of [1440, 390]) {
+  for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ baseURL, viewport: { width, height: 960 }, serviceWorkers: 'block' });
     const errors = [], external = [], writes = [], reads = []; let phase = 'setup', reportStage = 0, delayed = null;
     await context.routeWebSocket('**/*', socket => { external.push(socket.url()); socket.close(); });
@@ -110,9 +110,9 @@ try {
       await panel.getByLabel('本轮判断', { exact: true }).fill('T0：只能确认当时预计盈利，缺实际年报，不能判断兑现。'); // minimal save, no forced why/limits/next question
       phase = 'held-save-discard-race';
       await panel.getByRole('button', { name: '放弃当前核对草稿', exact: true }).click();
-      await panel.getByRole('alertdialog', { name: '保留或放弃核对草稿' }).waitFor();
+      await page.getByRole('dialog', { name: '研究内容尚未保存' }).waitFor();
       assert.equal(await panel.getByTestId('check-save-round').isDisabled(), true, 'open discard dialog disables background save');
-      await panel.getByRole('button', { name: '留下继续核对', exact: true }).click();
+      await page.getByRole('button', { name: '留下继续编辑', exact: true }).click();
       // Delay delivery of the real local transaction completion, not its writes.
       await page.evaluate(() => {
         const descriptor = Object.getOwnPropertyDescriptor(IDBTransaction.prototype, 'oncomplete');
@@ -126,7 +126,7 @@ try {
       });
       await panel.getByTestId('check-save-round').click();
       await page.waitForFunction(() => typeof window.__releaseCompletion === 'function');
-      assert.equal(await panel.getByRole('alertdialog', { name: '保留或放弃核对草稿' }).count(), 0);
+      assert.equal(await page.getByRole('dialog', { name: '研究内容尚未保存' }).isVisible(), false);
       assert.equal(await panel.getByTestId('check-save-round').isDisabled(), true);
       assert.equal(await panel.getByLabel('本轮判断', { exact: true }).isDisabled(), true);
       assert.equal(await panel.getByLabel('这只股票的研究问题', { exact: true }).isDisabled(), true);
@@ -152,7 +152,11 @@ try {
       await page.screenshot({ path: join(output, `T0-saved-${width}.png`) });
 
       phase = 'close-reopen-T0'; await page.close(); page = await context.newPage(); page.setDefaultTimeout(15000); page.on('pageerror', error => errors.push(error.message));
-      panel = await openQuestion(page, q.id);
+      await page.goto(`/candidates/600519?${new URLSearchParams({ question: q.id, round: t0.id })}#candidate-research-check`);
+      panel = page.getByTestId('research-check-panel');
+      await panel.getByTestId('check-question-context').waitFor();
+      assert.equal(await panel.getByLabel('这只股票的研究问题', { exact: true }).inputValue(), q.id);
+      assert.equal(await panel.getByLabel('打开原研究轮次', { exact: true }).inputValue(), t0.id);
       assert.match(await panel.getByTestId('check-saved-round').innerText(), /T0：只能确认/);
       assert.match(await panel.getByTestId('check-question-context').innerText(), /来自市场发现/);
       await panel.getByTestId('check-discovery-origin').locator(':scope > summary').click();
@@ -236,6 +240,16 @@ try {
       const other = await context.newPage(); other.setDefaultTimeout(15000); const otherPanel = await openQuestion(other, q.id);
       await writeRound(panel, '并发旧页草稿必须保留。');
       await writeRound(otherPanel, '另一页先保存的第三轮。'); await otherPanel.getByTestId('check-save-round').click(); await otherPanel.getByText(/本轮已保存。/).waitFor();
+      const draftBeforeHistory = await panel.getByLabel('本轮判断', { exact: true }).inputValue();
+      const secondRound = T1.rounds.find(round => round.id !== t0.id);
+      await panel.getByLabel('打开原研究轮次', { exact: true }).selectOption(secondRound.id);
+      await panel.getByLabel('本轮判断', { exact: true }).waitFor({ state: 'visible' });
+      await page.goBack();
+      await page.waitForFunction(id => new URL(location.href).searchParams.get('round') === id, t0.id);
+      await page.goForward();
+      await page.waitForFunction(id => new URL(location.href).searchParams.get('round') === id, secondRound.id);
+      assert.equal(await panel.getByLabel('本轮判断', { exact: true }).inputValue(), draftBeforeHistory);
+      assert.equal(await page.getByRole('dialog', { name: '研究内容尚未保存' }).isVisible(), false);
       await panel.getByTestId('check-save-round').click(); await panel.getByTestId('check-error').waitFor();
       assert.match(await panel.getByTestId('check-error').innerText(), /其他页面更新/); assert.equal(await panel.getByLabel('本轮判断', { exact: true }).inputValue(), '并发旧页草稿必须保留。');
       const conflict = await readDatabase(page); assert.equal(conflict.rounds.length, 3);

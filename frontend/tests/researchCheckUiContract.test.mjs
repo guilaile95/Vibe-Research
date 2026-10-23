@@ -8,15 +8,15 @@ const note = read('../src/components/campaign/CandidateResearchNote.tsx');
 const browser = read('./e2e/research-check-loop.browser.mjs');
 const discovery = read('../src/components/discovery/DiscoveryWorkspace.tsx');
 test('candidate has a bounded material-check entry alongside existing workflow and one combined SPA blocker', () => {
-  assert.match(candidate, /<ResearchCheckPanel/); assert.match(candidate, /onDirtyChange=\{setCheckDirty\}/); assert.match(candidate, /additionalDirty=\{checkDirty\}/);
+  assert.match(candidate, /<ResearchCheckPanel/); assert.match(candidate, /onDirtyChange=\{setCheckDirty\}/); assert.match(candidate, /onDirtyChange=\{setNoteDirty\}/);
   assert.match(candidate, /to=\{\{ pathname: location\.pathname, search: location\.search, hash: `#\$\{id\}` \}\}\s+state=\{location\.state\}/);
-  assert.match(note, /const dirty = ownDirty \|\| additionalDirty/); assert.match(note, /useBlocker/); assert.doesNotMatch(panel, /useBlocker/);
+  assert.equal((candidate.match(/useBlocker\(/g) || []).length, 1); assert.doesNotMatch(note + panel, /useBlocker|<dialog|role="alertdialog"|beforeunload/); assert.match(candidate, /researchNavigationRisk/);
 });
 test('check panel never invokes a model, changes formal state, fetches arbitrary URL or auto-migrates notes', () => {
   assert.doesNotMatch(panel, /AskAiButton|chatStream|api\.(?:create|evidenceCreate|patchReport|uploadReport|indexMyReport|chat|commit|transition)/);
   assert.match(panel, /api\.readReportPages/); assert.match(panel, /api\.searchMyReportText/);
   assert.match(panel, /initialRound: round/); assert.match(panel, /expectedRevision: active\.revision/); assert.match(panel, /expectedHeadRoundId: active\.headRoundId/);
-  assert.match(panel, /<fieldset disabled=\{busy \|\| discardTarget !== null\}/); assert.match(panel, /草稿未清空/); assert.match(panel, /if \(busy \|\| discardTarget !== null \|\| reading \|\| searching\) return/); assert.match(panel, /generation !== requestGeneration\.current/); assert.match(panel, /先前提交的研究轮次已保存/);
+  assert.match(panel, /<fieldset disabled=\{busy \|\| loading \|\| navigationPending \|\| resumeState !== "ready"\}/); assert.match(panel, /草稿未清空/); assert.match(panel, /if \(busy \|\| navigationPending \|\| resumeState !== "ready" \|\| reading \|\| searching\) return/); assert.match(panel, /generation !== requestGeneration\.current/); assert.match(panel, /先前提交的研究轮次已保存/);
   assert.match(panel, /listLegacyNotes/); assert.match(panel, /checkLegacySource/); assert.match(panel, /确认复制/); assert.match(panel, /coverage: "partial"/);
   assert.match(panel, /file\.size > RESEARCH_DEFAULT_BUDGET_BYTES \* 4/);
 });
@@ -25,7 +25,7 @@ test('one production-dist browser fixture owns full T0→reopen→T1→original 
   assert.match(browser, /page\.close\(\); page = await context\.newPage/);
   assert.match(browser, /assert\.deepEqual\(T1\.rounds\.find\(round => round\.id === t0\.id\), t0/);
   assert.match(browser, /assert\.deepEqual\(writes, \[\]/);
-  assert.match(browser, /for \(const width of \[1440, 390\]\)/);
+  assert.match(browser, /for \(const width of \[1440, 390, 320\]\)/);
 });
 
 test('discovery card passes validated bounded snapshot separately from optional human reason', () => {
@@ -36,4 +36,14 @@ test('discovery card passes validated bounded snapshot separately from optional 
   assert.match(browser, /page\.goto\('\/screener\?mode=discovery&strategy=SWING'\)/);
   assert.match(browser, /getByTestId\('discovery-candidate-600519'\)\.click/);
   assert.match(browser, /q\.origin\.snapshot\.observations/);
+});
+
+
+test('history lookup preserves CAS while explicit reconcile alone updates current draft head', () => {
+  assert.match(panel, /store\.getQuestionContext/);
+  assert.match(panel, /if \(\(activeRef\.current\?\.id \|\| null\) !== question\.id\) \{ setActive\(question\); clearDraft\(question\); \}/);
+  assert.match(panel, /generation !== requestGeneration\.current \|\| hrefRef\.current !== expectedHref/);
+  assert.match(panel, /finally \{ if \(mounted\.current && generation === requestGeneration\.current\) setBusy\(false\); \}/);
+  assert.match(candidate, /expectedHref !== undefined && expectedHref !== from/);
+  assert.doesNotMatch(candidate, /history\.replaceState/);
 });

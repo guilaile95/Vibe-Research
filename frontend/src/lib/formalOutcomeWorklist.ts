@@ -190,7 +190,7 @@ const A_SHARE_CODE = /^\d{6}$/;
  * 历史 Decision 的下一步入口。三个概念严格分开：
  * - 历史 Decision 本身是只读事实，不是入口；
  * - Campaign 尚未结束 → 继续这轮研究（它自己的 Proposal）；
- * - Campaign 已终态 → 新判断必须新建一轮研究，不重开、不改写原来这轮。
+ * - Campaign 已终态 → 新判断必须新建投资计划，不重开、不改写原投资计划。
  *
  * Campaign 身份或状态读不到时返回 unavailable，绝不猜测目标。
  */
@@ -215,7 +215,7 @@ export function outcomeResearchEntry(
       kind: "unavailable",
       label: "Campaign 状态未知",
       href: null,
-      detail: "无法确认这一轮研究是否仍然有效，已停止导航。",
+      detail: "无法确认本投资计划是否仍然有效，已停止导航。",
     };
   }
   if (isTerminalCampaignStatus(campaignStatus as CampaignStatus)) {
@@ -224,20 +224,20 @@ export function outcomeResearchEntry(
         kind: "unavailable",
         label: "缺少可用的证券代码",
         href: null,
-        detail: "这一轮研究已结束，但没有可用的 6 位证券代码，已停止导航。",
+        detail: "本投资计划已结束，但没有可用的 6 位证券代码，已停止导航。",
       };
     }
     return {
       kind: "new-research",
-      label: "需要新判断：新建一轮研究",
+      label: "前往候选研究，准备新投资计划",
       href: candidateWorkspaceHref(securityCode),
-      detail: "这一轮研究已结束。候选研究会显示该证券当前的研究线；需要新一轮时在那一步显式选择策略后新建。原来这轮不会被重新打开或改写。",
+      detail: "本投资计划已结束。候选研究会显示该证券的候选投资计划；需要新投资计划时在那一步显式选择策略后新建。原投资计划不会被重新打开或改写。",
     };
   }
   return {
     kind: "current-proposal",
-    label: "继续这轮研究（Proposal）",
+    label: "继续本投资计划（Proposal）",
     href: `/campaigns/${encodeURIComponent(campaignId.trim())}/decision-proposal`,
-    detail: "这一轮研究尚未结束，进入它的 Proposal 与生命周期；不会新建或改写正式决策。",
+    detail: "本投资计划尚未结束，进入它的 Proposal 与生命周期；不会新建或改写正式决策。",
   };
 }

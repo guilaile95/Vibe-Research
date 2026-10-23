@@ -9,6 +9,8 @@ import * as llm from '../src/lib/llm.ts';
 import * as apiClient from '../src/lib/api.ts';
 import * as models from '../src/lib/ai-models.ts';
 import * as researchNote from '../src/lib/researchNote.ts';
+import * as researchResume from '../src/lib/researchResume.ts';
+import * as candidateCampaign from '../src/lib/candidateCampaign.ts';
 import * as modelProbe from '../src/lib/modelConnectionProbe.ts';
 import * as preferenceStorage from '../src/lib/storage.ts';
 import * as navigation from '../src/lib/navigation.ts';
@@ -789,11 +791,18 @@ test('Settings checks live access storage before probing and refreshes cross-tab
 
 test('candidate unsaved guard follows only meaningful text, save success, and actual route changes', () => {
   let shouldBlock;
-  const blocker = { state: 'unblocked', reset() { this.state = 'unblocked'; }, proceed() { this.state = 'proceeding'; } };
-  const h = harness('components/campaign/CandidateResearchNote.tsx', 'CandidateResearchNote', {
-    'react-router-dom': { Link: 'link', useBlocker: fn => { shouldBlock = fn; return blocker; } },
+  const blocker = { state: 'unblocked', location: { pathname:'/notes', search:'', hash:'' }, reset() { this.state = 'unblocked'; }, proceed() { this.state = 'proceeding'; } };
+  const workspace = harness('pages/CandidateWorkspace.tsx', 'CandidateWorkspace', {
+    'react-router-dom': { Link: 'link', useBlocker: fn => { shouldBlock = fn; return blocker; }, useLocation: () => ({ pathname:'/candidates/600519', search:'', hash:'' }), useParams: () => ({ code:'600519' }), useSearchParams: () => [new URLSearchParams()], useNavigate: () => () => {} },
+    '@/lib/researchResume': researchResume, '@/lib/candidateCampaign': candidateCampaign,
+    '@/lib/candidateEntryContext': { candidateEntryContext: () => ({ returnTo:'', discoveryStrategy:null }) },
+    '@/lib/discoveryResearchOrigin': { parseDiscoveryResearchOrigin: () => null },
+    '@/lib/candidateEvidence': { loadCandidateEvidence: () => new Promise(() => {}) },
+    '@/lib/api': { api: Object.fromEntries(['getDerivedPositions', 'stockRelativeContext', 'stockValuationContext'].map(method => [method, () => new Promise(() => {})])) },
+    '@/components/campaign/CandidateResearchNote': { CandidateResearchNote:'candidate-note' },
   });
-  const props = { code:'600519', records:[], evidenceStatus:'ready', returnTo:'/candidates/600519' };
+  const h = harness('components/campaign/CandidateResearchNote.tsx', 'CandidateResearchNote');
+  const props = { code:'600519', records:[], evidenceStatus:'ready', returnTo:'/candidates/600519', onDirtyChange: dirty => { nodes(workspace.render()).find(node => node.type === 'candidate-note').props.onDirtyChange(dirty); workspace.render(); } };
   const route = (pathname, search = '', hash = '') => ({ pathname, search, hash });
   const currentLocation = route('/candidates/600519');
   const blocks = (nextLocation = route('/notes')) => shouldBlock({currentLocation, nextLocation});
@@ -804,19 +813,19 @@ test('candidate unsaved guard follows only meaningful text, save success, and ac
   };
   h.render(props);
   assert.equal(blocks(), false);
-  assert.equal(h.hasListener('beforeunload'), false);
+  assert.equal(workspace.hasListener('beforeunload'), false);
   edit('本次要核对的问题', '   ');
   assert.equal(blocks(), false);
   for (const field of ['本次要核对的问题', '我的暂定看法', '反证 / 不确定处', '下次核对']) {
     edit(field, 'synthetic pending research');
     assert.equal(blocks(), true, field);
-    assert.equal(h.hasListener('beforeunload'), true);
+    assert.equal(workspace.hasListener('beforeunload'), true);
     for (const destination of ['/notes', '/settings', '/evidence/fixture', '/candidates/000001']) assert.equal(blocks(route(destination)), true);
     assert.equal(blocks(route('/candidates/600519', '', '#candidate-existing-research')), false);
     assert.equal(blocks(route('/candidates/600519', '?return_to=/notes')), true);
     for (let attempt = 0; attempt < 2; attempt++) {
       blocker.state = 'blocked';
-      find(h.render(props), 'button', '留下继续编辑').props.onClick();
+      find(workspace.render(), 'button', '留下继续编辑').props.onClick();
       assert.equal(blocker.state, 'unblocked');
       assert.equal(blocks(), true);
     }
@@ -825,19 +834,19 @@ test('candidate unsaved guard follows only meaningful text, save success, and ac
   }
   edit('我的暂定看法', 'Save this');
   const unload = {prevented:false, returnValue:undefined, preventDefault(){this.prevented=true;}};
-  h.emit('beforeunload', unload);
+  workspace.emit('beforeunload', unload);
   assert.equal(unload.prevented, true);
   assert.equal(unload.returnValue, '');
   globalThis.localStorage = {...workingStorage, setItem(){throw Error('quota');}};
   find(h.render(props), 'button', '保存暂定研究').props.onClick();
   h.render(props);
   assert.equal(blocks(), true);
-  assert.equal(h.hasListener('beforeunload'), true);
+  assert.equal(workspace.hasListener('beforeunload'), true);
   globalThis.localStorage = workingStorage;
   find(h.render(props), 'button', '保存暂定研究').props.onClick();
   h.render(props);
   assert.equal(blocks(), false);
-  assert.equal(h.hasListener('beforeunload'), false);
+  assert.equal(workspace.hasListener('beforeunload'), false);
   edit('我的暂定看法', '  Save this  ');
   assert.equal(blocks(), false);
   // Metadata refresh and changing selected evidence do not create pending text.
@@ -856,10 +865,10 @@ test('candidate unsaved guard follows only meaningful text, save success, and ac
   assert.equal(blocks(), false);
   edit('下次核对', 'New question');
   blocker.state = 'blocked';
-  find(h.render(props), 'button', '放弃未保存内容并离开').props.onClick();
+  find(workspace.render(), 'button', '放弃未保存内容并离开').props.onClick();
   assert.equal(blocker.state, 'proceeding');
-  h.unmount();
-  assert.equal(h.hasListener('beforeunload'), false);
+  h.unmount(); workspace.unmount();
+  assert.equal(workspace.hasListener('beforeunload'), false);
 });
 
 test('failed reflection keeps partial text but cannot reuse previous completion to save', async () => {
