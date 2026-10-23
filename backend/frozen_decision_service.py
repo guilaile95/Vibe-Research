@@ -359,6 +359,8 @@ def _freeze_decision(
     cleaned = _validate_input(payload)
     decision_id = f"decision_{uuid.uuid4().hex}"
     commit_instant = _utc_now_iso()
+    if cleaned["review_by"] <= commit_instant:
+        raise FrozenDecisionValidationError("review_by 必须晚于本次提交时间；历史记录只能按原身份精确重放")
     if pre_write_validator is not None:
         pre_write_validator(cleaned, commit_instant)
     snapshot = _build_snapshot(cleaned, decision_id, commit_instant)

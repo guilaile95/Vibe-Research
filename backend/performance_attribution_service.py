@@ -366,6 +366,8 @@ def _compute_attribution_from_trades(
                 "cost_basis": round(total_cost, 2),
                 "total_fees": round(float(st["total_fees"]), 2),
                 "unrealized_pnl": unrealized,
+                "measurement_state": "PARTIAL" if st["limitations"] else "COMPLETE",
+                "reason_codes": ["MISSING_COST_BASIS"] if st["limitations"] else [],
                 "data_limitations": list(st["limitations"]),
                 # 精确输入来源：该证券实际处理的行（计算顺序，含 oversell /
                 # no-position 等仅记录 limitation 的行；不宣称超过算法支持的强度）
@@ -405,6 +407,7 @@ def _compute_attribution_from_trades(
         price_inputs=prices,
     )
 
+    partial = any(p["measurement_state"] == "PARTIAL" for p in positions)
     return {
         "as_of_date": _today(),
         "date_from": date_from,
@@ -413,6 +416,8 @@ def _compute_attribution_from_trades(
         "selected_trade_ids": selected_trade_ids,
         "selected_trade_count": len(selected_trade_ids),
         "computation_fingerprint": fingerprint,
+        "measurement_state": "PARTIAL" if partial else "COMPLETE",
+        "reason_codes": ["MISSING_COST_BASIS"] if partial else [],
         "positions": positions,
         "totals": totals,
         "data_limitations": limitations,

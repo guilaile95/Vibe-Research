@@ -6,7 +6,7 @@ import threading
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 _LOCK = threading.Lock()
 
@@ -145,7 +145,10 @@ def void_trade_on_connection(
     return _row_to_dict(updated)
 
 
-def insert_record(db_path: str | Path, record: dict[str, Any]) -> None:
+def insert_record(
+    db_path: str | Path, record: dict[str, Any], *,
+    pre_commit_validator: Callable[[sqlite3.Connection], None] | None = None,
+) -> None:
     with _LOCK:
         path = Path(db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -176,6 +179,8 @@ def insert_record(db_path: str | Path, record: dict[str, Any]) -> None:
                     None,
                     None,
                 ))
+                if pre_commit_validator is not None:
+                    pre_commit_validator(conn)
                 conn.commit()
         except sqlite3.DatabaseError as exc:
             raise TradeLedgerCorruptedError() from exc
