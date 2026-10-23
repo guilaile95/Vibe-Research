@@ -4,6 +4,14 @@
 
 完整数据包覆盖已声明的 Vibe 本地持久化位置，不是整机备份。
 
+安全版本 v0.2 只收集后端登记的业务 JSON / SQLite 资产、研报目录、Research Data Plane、显式 Fact Lake 和数据库覆盖配置。VR_DATA_DIR 内未登记文件不再自动入包；资产清单由 backend/vibe_data_backup.py 的 _DATA_FILES / _DATA_DIRECTORIES 统一维护。新增数据存储须同步登记，不能把整个用户目录当作业务数据。
+
+VR_REPORTS_DIR、VR_FACT_LAKE_ROOT 和 VIBE_RESEARCH_RESEARCH_DATA_DIR 不可配置为 VR_DATA_DIR 本身（包括等价路径）；此布局无法同时保证允许清单和业务完整性，备份会明确拒绝而不是生成遗漏数据的“成功”包。请改用独立业务子目录并在人工核对数据后重新备份；工具不会自动迁移原文件。显式数据库覆盖配置按完整路径登记，嵌套目录中的同名数据库仍会连同 sidecar 进入独立逻辑分区。
+
+认证与运行时目录（包括 agent-runtime、codex-home、.codex、sessions、private）和 auth.json 等认证文件在创建、验证、恢复三个入口均排除，大小写变体同样拒绝。登录状态不随备份迁移，恢复后需重新登录。
+
+旧 v0.1 包可能含认证/session 内容，工具不会把它认定为安全或自动恢复，也不会改写或删除原包。请保留原包于私人受保护位置，并优先从原数据重新生成 v0.2 包；若只剩旧包，先进行人工离线资产审查，不要直接解压到运行目录或分享旧包。
+
 归档是未加密 ZIP，可能包含持仓、交易、研究和账户相关私人数据。SHA-256 用于检查归档内部完整性，不提供加密或外部数字签名。归档必须保存在受保护的私人位置，不得提交到 Git。
 
 浏览器 localStorage 不在数据包中，包括 `vr-notes`、`vr-askai-chat:*`、`vr-llm` 和 `vr-access-key`。Cookie、Token、密码和浏览器 Profile 也不会被扫描。
@@ -134,12 +142,12 @@ if ($LASTEXITCODE -ne 0) {
 
 | staging 分区 | 对应资产 |
 | --- | --- |
-| `data/` | `VR_DATA_DIR`；未设置时为 `%USERPROFILE%\.vibe-research` |
+| `data/` | `VR_DATA_DIR` 中登记的业务资产；未设置时为 `%USERPROFILE%\.vibe-research` |
 | `shared-review/` | shared daily-review DB 及归档时存在的 SQLite sidecar |
 | `reports/` | `VR_REPORTS_DIR` 或现有默认 reports 目录 |
 | `fact-lake/` | 已配置且存在的 `VR_FACT_LAKE_ROOT` |
 | `research-data/` | `VIBE_RESEARCH_RESEARCH_DATA_DIR`；默认来源为 data root 下的 `research_data_plane` |
-| `external-db/` | 位于 data root 外的已配置 `VIBE_RESEARCH_*_DB` / `VIBE_NATIVE_INTEL_DB` |
+| `external-db/` | 显式配置的 `VIBE_RESEARCH_*_DB` / `VIBE_NATIVE_INTEL_DB`，位于 data root 外或使用非默认文件名 |
 
 manifest 使用逻辑相对路径，不记录源机器绝对路径。资产状态含义：
 

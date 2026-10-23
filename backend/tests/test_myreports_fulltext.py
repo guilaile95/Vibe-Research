@@ -309,11 +309,12 @@ def test_chinese_report_question_search_preserves_selected_sources(tmp_path, mon
     monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "reports")
     # Isolate retrieval from Chinese PDF font encoding. PDF extraction itself is
     # exercised above; these synthetic extracted pages have explicit provenance.
-    monkeypatch.setattr(fulltext, "_extract_pdf", lambda _path: (
+    original_extract = fulltext.extract
+    monkeypatch.setattr(fulltext, "extract", lambda _path, ext: (
         fulltext.STATUS_SEARCHABLE,
         [(1, "公司历史概况"), (2, "毛利率预计上升至 35%，因产品结构改善。收入增长预计 20%。")],
         2, "",
-    ))
+    ) if ext == ".pdf" else original_extract(_path, ext))
     bullish = _upload("乐观报告.pdf", _pdf("overview", "synthetic Chinese extraction"))
     bearish = _upload("谨慎报告.md", "毛利率预计下降至 20%，因价格竞争加剧。收入增长预计 8%。".encode())
     unrelated = _upload("无关报告.md", "报告的观点分歧：库存周期尚未见底。".encode())
