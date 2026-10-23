@@ -523,7 +523,7 @@ try {
       if (!(await reportSummary.evaluate(node => node.parentElement.open))) await reportSummary.click();
       let startedList, releaseList;
       const listStarted = new Promise(resolve => { startedList = resolve; });
-      heldReportList = { started: startedList, promise: new Promise(resolve => { releaseList = resolve; }) };
+      heldReportList = { started: startedList, promise: new Promise(resolve => { releaseList = resolve; }), release: () => releaseList() };
       await panel.getByRole('button', { name: '读取 / 刷新 MyReports 列表', exact: true }).click(); await listStarted;
       await panel.getByRole('button', { name: '放弃当前核对草稿', exact: true }).click(); await singleDialog.waitFor();
       await singleDialog.getByRole('button', { name: '放弃未保存内容并离开', exact: true }).click();
@@ -579,6 +579,6 @@ try {
     } catch (error) {
       results.push({ width, status: 'FAIL', phase, error: error.message, stack: error.stack, errors, external, reads, writes, storageWrites });
       await page.screenshot({ path: join(output, `failure-${width}.png`) }).catch(() => {}); throw error;
-    } finally { delayed?.release(); await context.close(); }
+    } finally { delayed?.release(); heldReportList?.release(); await context.close(); }
   }
 } finally { writeFileSync(join(output, 'results.json'), JSON.stringify(results, null, 2)); await browser?.close(); server.closeAllConnections(); await new Promise(done => server.close(done)); console.log(output); }
