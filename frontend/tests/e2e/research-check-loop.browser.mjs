@@ -366,6 +366,38 @@ try {
       await page.goBack(); await settleSelection(qa, qa.headRoundId);
       await page.goForward(); await settleSelection(qa, historical.id);
 
+      await storageWrites.flush(page); phase = 'resume-hard-back-beforeunload'; await storageWrites.setPhase(page, phase);
+      const hardBackPage = await context.newPage(); hardBackPage.setDefaultTimeout(15000);
+      hardBackPage.on('pageerror', error => errors.push(error.message));
+      await hardBackPage.goto('/watchlist'); await hardBackPage.goto(href(qa, historical.id));
+      await waitForSavedSelection(hardBackPage, qa.id, historical.id, historical.judgement);
+      await storageWrites.setPhase(hardBackPage, phase);
+      const hardPanel = hardBackPage.getByTestId('research-check-panel');
+      const hardNote = hardBackPage.getByTestId('candidate-research-note').getByPlaceholder('先写目前的理解，不必形成正式结论', { exact: true });
+      await hardNote.click(); await hardNote.fill('硬导航取消后独立笔记仍在');
+      await hardPanel.getByLabel('本轮判断', { exact: true }).fill('硬导航取消后核对草稿仍在');
+      await hardBackPage.evaluate(() => { window.__hardBackDocument = 'retain-both-drafts'; });
+      const hardHref = hardBackPage.url(), hardDatabase = await readDatabase(hardBackPage);
+      const hardNotes = await hardBackPage.evaluate(() => localStorage.getItem('vr-notes'));
+      await hardPanel.getByRole('button', { name: '放弃当前核对草稿', exact: true }).click();
+      const hardModal = hardBackPage.getByRole('dialog', { name: '研究内容尚未保存' }); await hardModal.waitFor();
+      // Listen for this one native prompt explicitly; Playwright otherwise auto-
+      // accepts beforeunload. Do not suppress arbitrary alerts or navigation errors.
+      const nativePrompt = hardBackPage.waitForEvent('dialog');
+      const hardNavigation = hardBackPage.goBack().then(() => null, error => error);
+      const prompt = await nativePrompt; assert.equal(prompt.type(), 'beforeunload'); await prompt.dismiss();
+      const navigationError = await hardNavigation;
+      if (navigationError) assert.match(navigationError.message, /navigation cancelled by beforeunload dialog/);
+      assert.equal(hardBackPage.url(), hardHref);
+      assert.equal(await hardBackPage.evaluate(() => window.__hardBackDocument), 'retain-both-drafts');
+      assert.equal(await hardNote.inputValue(), '硬导航取消后独立笔记仍在');
+      assert.equal(await hardPanel.getByLabel('本轮判断', { exact: true }).inputValue(), '硬导航取消后核对草稿仍在');
+      assert.equal(await hardModal.isVisible(), true);
+      assert.deepEqual(await readDatabase(hardBackPage), hardDatabase);
+      assert.equal(await hardBackPage.evaluate(() => localStorage.getItem('vr-notes')), hardNotes);
+      await hardBackPage.screenshot({ path: join(output, `resume-hard-back-retained-${width}.png`) });
+      await storageWrites.flush(hardBackPage); await hardBackPage.close(); // disposable test-page cleanup only
+
       await storageWrites.flush(page); phase = 'resume-two-drafts-single-owner'; await storageWrites.setPhase(page, phase);
       await page.goto(href(qa, historical.id)); await settleSelection(qa, historical.id);
       // Establish a real same-document Back target. Two page.goto calls create
