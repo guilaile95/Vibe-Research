@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
+import document_parse_budget as budget
 
 
 INDEX_NAME = ".fulltext-index.sqlite3"
@@ -184,14 +185,21 @@ def _extract_pdf(path: Path) -> tuple[str, list[tuple[int, str]], int | None, st
         from pypdf import PdfReader
 
         reader = PdfReader(str(path), strict=True)
+        if len(reader.pages) > budget.MAX_PAGES:
+            raise budget.DocumentBudgetExceeded()
         chunks = []
+        total = 0
         for page_number, page in enumerate(reader.pages, start=1):
             text = _clean_text(page.extract_text() or "")
+            budget.check_text(text, total)
+            total += len(text)
             if text:
                 chunks.append((page_number, text))
         if not chunks:
             return STATUS_OCR_REQUIRED, [], len(reader.pages), "PDF_NO_EXTRACTABLE_TEXT"
         return STATUS_SEARCHABLE, chunks, len(reader.pages), ""
+    except budget.DocumentBudgetExceeded:
+        return STATUS_ARCHIVED, [], None, "DOCUMENT_RESOURCE_LIMIT"
     except Exception:
         return STATUS_ERROR, [], None, "PDF_EXTRACTION_FAILED"
 
@@ -199,23 +207,37 @@ def _extract_pdf(path: Path) -> tuple[str, list[tuple[int, str]], int | None, st
 def _extract_docx(path: Path) -> tuple[str, list[tuple[int, str]], int | None, str]:
     try:
         with zipfile.ZipFile(path) as archive:
-            xml = archive.read("word/document.xml")
+            infos = archive.infolist()
+            if (len(infos) > budget.MAX_ZIP_ENTRIES
+                    or sum(info.file_size for info in infos) > budget.MAX_ZIP_BYTES
+                    or archive.getinfo("word/document.xml").file_size > budget.MAX_XML_BYTES):
+                raise budget.DocumentBudgetExceeded()
+            with archive.open("word/document.xml") as source:
+                xml = source.read(budget.MAX_XML_BYTES + 1)
+            if len(xml) > budget.MAX_XML_BYTES:
+                raise budget.DocumentBudgetExceeded()
         root = ElementTree.fromstring(xml)
         namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
         paragraphs = []
+        total = 0
         for paragraph in root.iter(f"{namespace}p"):
             text = "".join(node.text or "" for node in paragraph.iter(f"{namespace}t")).strip()
+            total += len(text) + 1
+            if total > budget.MAX_TEXT_CHARS:
+                raise budget.DocumentBudgetExceeded()
             if text:
                 paragraphs.append(text)
         body = _clean_text("\n".join(paragraphs))
         if not body:
             return STATUS_ERROR, [], None, "DOCX_NO_TEXT"
         return STATUS_SEARCHABLE, [(0, body)], None, ""
+    except budget.DocumentBudgetExceeded:
+        return STATUS_ARCHIVED, [], None, "DOCUMENT_RESOURCE_LIMIT"
     except (OSError, KeyError, zipfile.BadZipFile, ElementTree.ParseError):
         return STATUS_ERROR, [], None, "DOCX_EXTRACTION_FAILED"
 
 
-def extract(path: Path, extension: str) -> tuple[str, list[tuple[int, str]], int | None, str]:
+def _extract_local(path: Path, extension: str) -> tuple[str, list[tuple[int, str]], int | None, str]:
     ext = extension.lower()
     if ext not in SEARCHABLE_EXTENSIONS:
         return STATUS_ARCHIVED, [], None, "UNSUPPORTED_SEARCH_TYPE"
@@ -224,7 +246,13 @@ def extract(path: Path, extension: str) -> tuple[str, list[tuple[int, str]], int
     if ext == ".docx":
         return _extract_docx(path)
     try:
-        body = _clean_text(path.read_bytes().decode("utf-8", errors="strict"))
+        with path.open("rb") as source:
+            raw = source.read(budget.MAX_INPUT_BYTES + 1)
+        if len(raw) > budget.MAX_INPUT_BYTES:
+            return STATUS_ARCHIVED, [], None, "DOCUMENT_RESOURCE_LIMIT"
+        body = _clean_text(raw.decode("utf-8", errors="strict"))
+        if len(body) > budget.MAX_TEXT_CHARS:
+            return STATUS_ARCHIVED, [], None, "DOCUMENT_RESOURCE_LIMIT"
     except (OSError, UnicodeDecodeError):
         return STATUS_ERROR, [], None, "INVALID_UTF8"
     if not body:
@@ -232,10 +260,20 @@ def extract(path: Path, extension: str) -> tuple[str, list[tuple[int, str]], int
     return STATUS_SEARCHABLE, [(0, body)], None, ""
 
 
+def extract(path: Path, extension: str):
+    if extension.lower() not in SEARCHABLE_EXTENSIONS:
+        return STATUS_ARCHIVED, [], None, "UNSUPPORTED_SEARCH_TYPE"
+    return budget.extract(path, extension)
+
+
 def _source_sha256(path: Path) -> str:
     digest = hashlib.sha256()
+    total = 0
     with path.open("rb") as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            total += len(chunk)
+            if total > budget.MAX_INPUT_BYTES:
+                raise budget.DocumentBudgetExceeded()
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -254,6 +292,8 @@ def index_report(reports_dir: Path, report: dict[str, Any], source_path: Path) -
         status, chunks, page_count, error_code = extract(source_path, extension)
         if _source_sha256(source_path) != source_sha:
             status, chunks, page_count, error_code = STATUS_ERROR, [], None, "FILE_CHANGED_DURING_INDEX"
+    except budget.DocumentBudgetExceeded:
+        status, chunks, page_count, error_code = STATUS_ARCHIVED, [], None, "DOCUMENT_RESOURCE_LIMIT"
     except Exception as exc:
         status, chunks, page_count, error_code = STATUS_ERROR, [], None, "EXTRACTION_FAILED"
         extraction_error = exc

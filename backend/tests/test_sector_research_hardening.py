@@ -1014,3 +1014,18 @@ def test_each_sector_report_discovery_uses_own_config(monkeypatch):
 
     srd.discover_sector_reports("hbm", scope="company", days=30)
     assert "002409" in seen_codes["codes"]
+
+
+def test_import_http_does_not_echo_pdf_network_credentials(monkeypatch):
+    app_module._clear_discovery_cache()
+    _seed_discovery_cache('pcb', [{
+        'external_id': 'SAFEOUTPUT', 'info_code': 'SAFEOUTPUT', 'title': 'synthetic',
+        'institution': 'synthetic', 'publish_date': '2026-10-23',
+        'report_scope': 'company', 'source_provider': 'eastmoney',
+    }], monkeypatch)
+    def fail(_):
+        raise mr.ReportError('https://synthetic:SYNTHETIC_PROXY_PASSWORD@example.com')
+    monkeypatch.setattr(app_module, '_download_pdf', fail)
+    response = client.post('/api/sector-research/import/pcb', json={'external_id': 'SAFEOUTPUT'})
+    assert response.status_code == 400
+    assert 'SYNTHETIC_PROXY_PASSWORD' not in response.text

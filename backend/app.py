@@ -3183,10 +3183,11 @@ def sector_research_import(sector_key: str, body: SectorReportImportIn):
         raise HTTPException(400, "PDF 链接不在允许域名或非 HTTPS")
     try:
         blob = _download_pdf(pdf_url)
-    except mr.ReportError as e:
-        raise HTTPException(400, str(e)) from e
+    except mr.ReportError:
+        from safe_outputs import public_error
+        raise HTTPException(400, public_error("pdf")) from None
     except Exception as e:  # noqa: BL001
-        raise HTTPException(502, "PDF 下载失败，请稍后重试。") from e
+        raise HTTPException(502, "PDF 下载失败，请稍后重试。") from None
     if not blob:
         raise HTTPException(502, "PDF 内容为空")
 
@@ -3277,7 +3278,8 @@ def _download_pdf(url: str, max_bytes: int = 25 * 1024 * 1024) -> bytes:
         try:
             resp = session.get(current, timeout=60, stream=True, allow_redirects=False)
         except requests.RequestException as e:
-            raise mr.ReportError(f"PDF 下载网络错误：{e}") from e
+            from safe_outputs import public_error
+            raise mr.ReportError(public_error("pdf")) from None
         if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
             loc = resp.headers.get("Location")
             if not loc:
@@ -3292,7 +3294,8 @@ def _download_pdf(url: str, max_bytes: int = 25 * 1024 * 1024) -> bytes:
     try:
         resp.raise_for_status()
     except requests.HTTPError as e:
-        raise mr.ReportError(f"PDF 下载 HTTP 错误：{e}") from e
+        from safe_outputs import public_error
+        raise mr.ReportError(public_error("pdf")) from None
 
     # 最终 URL 再校验一次
     final_url = getattr(resp, "url", None) or current
@@ -3303,7 +3306,7 @@ def _download_pdf(url: str, max_bytes: int = 25 * 1024 * 1024) -> bytes:
     if ctype and ctype not in ("application/pdf", "application/octet-stream", "binary/octet-stream"):
         # 不唯依赖 Content-Type，但明确 HTML/JS 直接拒绝
         if "html" in ctype or "javascript" in ctype or "json" in ctype or "text/" in ctype:
-            raise mr.ReportError(f"响应 Content-Type 非 PDF：{ctype}")
+            raise mr.ReportError("响应 Content-Type 非 PDF")
 
     buf = bytearray()
     for chunk in resp.iter_content(chunk_size=1 << 16):

@@ -27,7 +27,8 @@ import research_data_plane_path
 import review_db_path
 
 
-BUNDLE_SCHEMA_VERSION = "vibe_data_backup.bundle.v0.1"
+BUNDLE_SCHEMA_VERSION = "vibe_data_backup.bundle.v0.2"
+LEGACY_BUNDLE_SCHEMA_VERSION = "vibe_data_backup.bundle.v0.1"
 BUNDLE_CONSISTENCY_CONTRACT = "QUIESCENT_PRE_POST_SOURCE_STAT_V0.1"
 BACKUP_REFUSED = "BACKUP_REFUSED_ACTIVE_OR_UNCERTAIN_WRITER"
 
@@ -37,8 +38,40 @@ UNCERTAIN = "UNCERTAIN"
 
 _KNOWN_PORTS = (8900, 5899)
 _EXCLUDED_NAMES = frozenset(
-    {".git", ".venv", ".vibe-runtime", "node_modules", "runtime", "private"}
+    {".git", ".venv", ".vibe-runtime", "node_modules", "runtime", "private",
+     "agent-runtime", "codex-home", ".codex", "sessions", "archived_sessions",
+     "auth.json", "credentials.json", "ai_credentials.json", ".env"}
 )
+# Reviewed application assets, not a recursive snapshot of arbitrary user files.
+# New persistence owners must register their asset here before claiming coverage.
+_DATA_FILES = frozenset({
+    "portfolio.json", "account_profile.json", "account_execution_policy.json",
+    "watchlist.json", "daily_review_latest.json", "data_health_events.json",
+    "campaigns.sqlite3", "alert_rules.sqlite3", "decision_trace.sqlite3",
+    "decision_challenges.sqlite3", "frozen_decisions.sqlite3", "trade_ledger.sqlite3",
+    "formal_trade_attributions.sqlite3", "trade_origins.sqlite3", "native_intel.sqlite3",
+    "short_term_facts.sqlite3", "intel_digest.sqlite3", "performance_attribution.sqlite3",
+    "company_research.sqlite3", "company_comparison.sqlite3", "personal_review.sqlite3",
+    "personal_review_price_basis.sqlite3", "next_day_verification.sqlite3",
+    "decision_feedback.sqlite3", "evidence_thesis.db", "push2_guard.sqlite3",
+})
+_DATA_DIRECTORIES = frozenset({"myreports", "research_data_plane"})
+
+
+def _allowed_data_path(path):
+    parts = path.split("/")
+    if parts[0] != "data":
+        return parts[0] in {"reports", "fact-lake", "research-data", "shared-review", "external-db"}
+    if len(parts) == 1:
+        return True
+    if parts[1] in _DATA_DIRECTORIES:
+        return True
+    name = parts[1]
+    return len(parts) == 2 and (name in _DATA_FILES or any(
+        name == item + suffix for item in _DATA_FILES
+        if Path(item).suffix in _DB_SUFFIXES for suffix in _SQLITE_SIDECAR_SUFFIXES))
+
+
 _ASSET_STATUSES = frozenset(
     {"PRESENT", "ABSENT_OPTIONAL", "EXTERNAL_OVERRIDE_INCLUDED"}
 )
@@ -168,7 +201,7 @@ def _collect_directories(root: Path, archive_prefix: str) -> list[tuple[str, Pat
     directories = [(archive_prefix, root.resolve())]
     for dirpath, dirnames, _filenames in os.walk(root.resolve(), followlinks=False):
         here = Path(dirpath)
-        dirnames[:] = sorted(name for name in dirnames if name not in _EXCLUDED_NAMES)
+        dirnames[:] = sorted(name for name in dirnames if name.casefold() not in _EXCLUDED_NAMES)
         for name in dirnames:
             child = here / name
             if not _plain_path_exists(child, "数据目录", "directory"):
@@ -235,6 +268,8 @@ def discover_bundle_sources() -> tuple[
         for suffix in _SQLITE_SIDECAR_SUFFIXES
     )
     if review_present:
+        if any(part.casefold() in _EXCLUDED_NAMES for part in review_configured_path.parts):
+            raise BundleError("shared review 资产位于认证或运行时目录，拒绝备份")
         single_files.extend(
             _database_entries("shared-review/daily_reviews.sqlite3", review_db)
         )
@@ -324,7 +359,11 @@ def discover_bundle_sources() -> tuple[
             (Path(str(db_path) + suffix), "file")
             for suffix in _SQLITE_SIDECAR_SUFFIXES
         )
-        if outside_data_root:
+        if any(part.casefold() in _EXCLUDED_NAMES for part in db_path.parts):
+            raise BundleError("数据库资产位于认证或运行时目录，拒绝备份")
+        if db_path.suffix.lower() not in _DB_SUFFIXES:
+            raise BundleError("数据库资产须为 SQLite 文件")
+        if outside_data_root or db_path.name not in _DATA_FILES:
             slug = env_name.lower().replace("_", "-")
             external_overrides.extend(
                 _database_entries(
@@ -338,6 +377,23 @@ def discover_bundle_sources() -> tuple[
     directory_groups = groups + [("data", data_root)]
     directory_groups.sort(key=lambda item: (-len(item[1].resolve().parts), item[0]))
     for prefix, root in directory_groups:
+        if any(part.casefold() in _EXCLUDED_NAMES for part in root.parts):
+            raise BundleError("显式数据资产位于认证或运行时目录，拒绝备份")
+        if prefix == "data":
+            raw_directories.append(("data", root.resolve()))
+            for name in sorted(_DATA_FILES):
+                source = root / name
+                if _plain_path_exists(source, "数据资产", "file"):
+                    raw_entries.extend(_database_entries(f"data/{name}", source)
+                                       if source.suffix in _DB_SUFFIXES else [(f"data/{name}", source)])
+                elif source.suffix in _DB_SUFFIXES:
+                    _assert_no_orphan_sidecars(source, "数据资产")
+            for name in sorted(_DATA_DIRECTORIES):
+                source = root / name
+                if _plain_path_exists(source, "数据资产目录", "directory"):
+                    raw_directories.extend(_collect_directories(source, f"data/{name}"))
+                    raw_entries.extend(snapshot.collect_snapshot_sources(source, archive_prefix=f"data/{name}", excluded_names=_EXCLUDED_NAMES))
+            continue
         raw_directories.extend(_collect_directories(root, prefix))
         raw_entries.extend(
             snapshot.collect_snapshot_sources(
@@ -351,6 +407,8 @@ def discover_bundle_sources() -> tuple[
     source_to_archive: dict[str, str] = {}
     archive_paths: set[str] = set()
     for archive_path, source in raw_entries:
+        if _has_excluded_component(archive_path):
+            continue
         key = _path_key(source)
         if key in source_to_archive:
             continue
@@ -582,6 +640,8 @@ def _validate_bundle(manifest: dict) -> dict:
     bundle = manifest.get("vibe_bundle")
     if not isinstance(bundle, dict):
         raise BundleError("archive 缺少 vibe_bundle manifest")
+    if bundle.get("schema_version") == LEGACY_BUNDLE_SCHEMA_VERSION:
+        raise BundleError("旧版数据包可能包含认证或运行时资产；拒绝验证为安全或自动恢复。原包保持不变，请从原数据重新生成安全备份。")
     if bundle.get("schema_version") != BUNDLE_SCHEMA_VERSION:
         raise BundleError("vibe_bundle schema version 不受支持")
     if bundle.get("consistency_contract") != BUNDLE_CONSISTENCY_CONTRACT:
@@ -634,6 +694,8 @@ def _validate_bundle(manifest: dict) -> dict:
         for entry in manifest.get("files", [])
         if isinstance(entry, dict) and isinstance(entry.get("path"), str)
     }
+    if any(not _allowed_data_path(path) for path in file_paths | directory_prefixes):
+        raise BundleError("vibe_bundle 包含未登记数据资产")
     if any(_has_excluded_component(path) for path in file_paths):
         raise BundleError("vibe_bundle file path 命中排除项")
     portable_files = {
