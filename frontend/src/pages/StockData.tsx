@@ -985,7 +985,7 @@ export function StockData() {
                                 to={buildEvidenceNewHref({
                                   subjectType: "stock",
                                   subjectId: activeCode,
-                                  returnTo: `/stock-data?code=${activeCode}`,
+                                  returnTo: stockReturnPath,
                                   evidenceType: "announcement",
                                   sourceTitle: title,
                                   sourceUrl: a.url,
@@ -1023,7 +1023,7 @@ export function StockData() {
                                 to={buildEvidenceNewHref({
                                   subjectType: "stock",
                                   subjectId: activeCode,
-                                  returnTo: `/stock-data?code=${activeCode}`,
+                                  returnTo: stockReturnPath,
                                   evidenceType: "news",
                                   sourceTitle: n.新闻标题,
                                   sourceUrl: n.新闻链接,
