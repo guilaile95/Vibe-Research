@@ -400,6 +400,8 @@ _ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"} | _parse_trusted_hosts(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start existing schedulers and a lifespan-scoped Native Intel MCP transport."""
+    import public_data_budget
+    public_data_budget.startup()
     async with native_intel_mcp.running_mcp():
         pf.start_scheduler(1800)
         # NATIVE-INTEL1：本地资讯数据层建库 / 回收中断 run / 缺数据时首抓 / 启动定时抓取
@@ -410,7 +412,10 @@ async def lifespan(app: FastAPI):
                 "Native Intel startup recovery unavailable: %s", type(exc).__name__
             )
         native_intel_service.start_scheduler()
-        yield
+        try:
+            yield
+        finally:
+            public_data_budget.shutdown()
 
 
 __version__ = read_version()
@@ -2855,7 +2860,7 @@ def margin(code: str = Query(...)):
     """融资融券明细（东财，日级）。缓存 30 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("margin", code, 1800, lambda: astock.margin_trading(code))}
+        return {"data": _cached("margin", code, 1800, lambda: astock.margin_trading(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "融资融券异常，请稍后重试。") from e
 
@@ -2865,7 +2870,7 @@ def block_trade(code: str = Query(...)):
     """大宗交易（东财）。缓存 30 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("block", code, 1800, lambda: astock.block_trade(code))}
+        return {"data": _cached("block", code, 1800, lambda: astock.block_trade(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "大宗交易异常，请稍后重试。") from e
 
@@ -2875,7 +2880,7 @@ def holders(code: str = Query(...)):
     """股东户数变化（东财，季度级）。缓存 30 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("holders", code, 1800, lambda: astock.holder_num_change(code))}
+        return {"data": _cached("holders", code, 1800, lambda: astock.holder_num_change(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "股东户数异常，请稍后重试。") from e
 
@@ -2885,7 +2890,7 @@ def dividend(code: str = Query(...)):
     """分红送转历史（东财）。缓存 30 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("dividend", code, 1800, lambda: astock.dividend_history(code))}
+        return {"data": _cached("dividend", code, 1800, lambda: astock.dividend_history(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "分红送转异常，请稍后重试。") from e
 
@@ -2896,7 +2901,7 @@ def fund_flow(code: str = Query(...)):
     注：push2his 对部分大陆住宅 IP 有间歇风控，可能返回空（非代码问题）。"""
     code = _validate(code)
     try:
-        return {"data": _cached("fundflow", code, 900, lambda: astock.stock_fund_flow_120d(code))}
+        return {"data": _cached("fundflow", code, 900, lambda: astock.stock_fund_flow_120d(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "资金流异常，请稍后重试。") from e
 
@@ -2906,7 +2911,7 @@ def dragon_tiger(code: str = Query(...)):
     """龙虎榜：该股近期上榜记录 + 买卖席位 + 机构净买（东财）。缓存 30 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("dt", code, 1800, lambda: astock.dragon_tiger_board(code))}
+        return {"data": _cached("dt", code, 1800, lambda: astock.dragon_tiger_board(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "龙虎榜异常，请稍后重试。") from e
 
@@ -2916,7 +2921,7 @@ def lockup(code: str = Query(...)):
     """限售解禁日历：历史解禁 + 未来 90 天待解禁（东财）。缓存 30 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("lockup", code, 1800, lambda: astock.lockup_expiry(code))}
+        return {"data": _cached("lockup", code, 1800, lambda: astock.lockup_expiry(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "解禁日历异常，请稍后重试。") from e
 
@@ -2926,7 +2931,7 @@ def blocks(code: str = Query(...)):
     """个股所属板块/概念归属（东财 slist）。缓存 30 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("blocks", code, 1800, lambda: astock.concept_blocks(code))}
+        return {"data": _cached("blocks", code, 1800, lambda: astock.concept_blocks(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "板块归属异常，请稍后重试。") from e
 
@@ -2936,7 +2941,7 @@ def hot_concepts(code: str = Query(...)):
     """个股当下被市场归到哪些概念在炒（东财热门概念命中）。缓存 15 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("hotcon", code, 900, lambda: astock.hot_concepts(code))}
+        return {"data": _cached("hotcon", code, 900, lambda: astock.hot_concepts(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "热门概念异常，请稍后重试。") from e
 

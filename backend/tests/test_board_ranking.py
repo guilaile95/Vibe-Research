@@ -1,4 +1,4 @@
-﻿"""board_ranking 统一板块排名离线测试（全部 Mock 网络）。"""
+"""board_ranking 统一板块排名离线测试（全部 Mock 网络）。"""
 from __future__ import annotations
 
 import json
@@ -246,7 +246,7 @@ def test_board_ranking_optional_cleaning(monkeypatch):
 
 # ── 13 重复 code ────────────────────────────────────────────────────
 
-def test_board_ranking_dedupe(monkeypatch):
+def test_board_ranking_duplicate_identity_rejected(monkeypatch):
     rows = [
         _board("DUP", "第一", f3=1.0),
         _board("DUP", "第二", f3=9.0),
@@ -257,11 +257,8 @@ def test_board_ranking_dedupe(monkeypatch):
         return {"data": {"total": 3, "diff": rows}}
 
     _install_em_get(monkeypatch, handler)
-    out = astock.board_ranking("industry", top_n=10)
-    assert out["total"] == 2
-    dup = next(x for x in out["top"] if x["code"] == "DUP")
-    assert dup["name"] == "第一"
-    assert dup["change_pct"] == pytest.approx(1.0)
+    with pytest.raises(RuntimeError, match="overlapping board"):
+        astock.board_ranking("industry", top_n=10)
 
 
 # ── 14 空市场 ───────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ At most four children exist per backend; a timed-out child is killed and reaped.
 from __future__ import annotations
 
 import copy
+from concurrent.futures import Future, TimeoutError as FutureTimeout
 import json
 import multiprocessing
 import os
@@ -16,7 +17,11 @@ import time
 
 MAX_BYTES = 2 * 1024 * 1024
 TIMEOUT = 12.0
-_SLOTS = threading.BoundedSemaphore(4)
+# Full-A pagination alone owns a 120s cooperative budget. Preserve a hard
+# process lifetime while allowing pagination + four pools + sector completion.
+OVERVIEW_TIMEOUT = 210.0
+PUBLIC_DATA_WORKERS = 4
+_SLOTS = threading.BoundedSemaphore(PUBLIC_DATA_WORKERS)
 
 
 class PublicDataUnavailable(RuntimeError):
@@ -39,6 +44,8 @@ def _child(path, operation, code):
     try:
         if operation == "overview":
             import market
+            if isinstance(code, dict) and code.get("snapshot_seed"):
+                market._CACHE["a_share_snapshot"] = code["snapshot_seed"]
             value = market.get_overview()
         elif operation == "valuation":
             import astock
@@ -53,6 +60,12 @@ def _child(path, operation, code):
         elif operation.startswith("kline_"):
             import astock
             value = astock._kline_source(operation.removeprefix("kline_"), *code)
+        elif operation == "discovery_financials":
+            import astock
+            value = astock.financials(code, include_health=False)
+        elif operation == "discovery_announcements":
+            import astock
+            value = astock.announcements(code, strict=True, with_coverage=True)
         elif operation == "financials":
             import astock
             def summary_checkpoint(summary):
@@ -82,8 +95,9 @@ def _read_result(path):
         raise PublicDataUnavailable("SOURCE_BAD_RESPONSE") from None
 
 
-def _run_process(operation, code=None, *, timeout=TIMEOUT, _target=None):
+def _run_process(operation, code=None, *, timeout=TIMEOUT, _target=None, cancel_event=None):
     if operation not in {"overview", "valuation", "financials", "daily_review",
+                         "discovery_financials", "discovery_announcements",
                          "kline_hithink", "kline_mootdx", "kline_tencent"}:
         raise ValueError("unsupported public operation")
     if operation.startswith("kline_"):
@@ -99,6 +113,8 @@ def _run_process(operation, code=None, *, timeout=TIMEOUT, _target=None):
                 source == "mootdx" and code[0].startswith("92") or
                 source == "tencent" and (code[1] not in (4, 5, 6) or astock.get_prefix(code[0]) == "bj")):
             raise ValueError("unsupported kline source route")
+    if cancel_event is not None and cancel_event.is_set():
+        raise PublicDataUnavailable("SOURCE_CANCELLED")
     if not _SLOTS.acquire(blocking=False):
         raise PublicDataUnavailable("SOURCE_BUSY")
     process = None
@@ -112,7 +128,12 @@ def _run_process(operation, code=None, *, timeout=TIMEOUT, _target=None):
             process = context.Process(target=_target or _child, args=(path, operation, code), daemon=True)
             process.start()
             started = True
-            process.join(timeout=max(0, deadline - time.monotonic()))
+            if cancel_event is None:
+                process.join(timeout=max(0, deadline - time.monotonic()))
+            else:
+                while process.is_alive() and not cancel_event.is_set() and time.monotonic() < deadline:
+                    process.join(timeout=min(.05, max(0, deadline - time.monotonic())))
+            cancelled = cancel_event is not None and cancel_event.is_set()
             timed_out = process.is_alive()
             if timed_out:
                 process.kill()
@@ -120,6 +141,8 @@ def _run_process(operation, code=None, *, timeout=TIMEOUT, _target=None):
             reaped = not process.is_alive()
             if not reaped:
                 raise RuntimeError("Public data worker could not be reaped")
+            if cancelled:
+                raise PublicDataUnavailable("SOURCE_CANCELLED")
             if timed_out:
                 checkpoint = path + ".checkpoint"
                 if operation in {"valuation", "financials", "daily_review"} and os.path.isfile(checkpoint):
@@ -150,9 +173,103 @@ _INFLIGHT = set()
 _LOCK = threading.Lock()
 
 
-def run(operation, code=None, *, timeout=TIMEOUT, _target=None):
+_OVERVIEW_LOCK = threading.Lock()
+_OVERVIEW_FLIGHT = None
+_OVERVIEW_THREAD = None
+_OVERVIEW_CANCEL = None
+_OVERVIEW_CLOSING = False
+
+
+def startup():
+    global _OVERVIEW_CLOSING
+    with _OVERVIEW_LOCK:
+        _OVERVIEW_CLOSING = False
+
+
+def shutdown():
+    """Cancel the admitted refresh and reap its actual provider process."""
+    global _OVERVIEW_CLOSING
+    with _OVERVIEW_LOCK:
+        _OVERVIEW_CLOSING = True
+        thread = _OVERVIEW_THREAD
+        if _OVERVIEW_CANCEL is not None:
+            _OVERVIEW_CANCEL.set()
+    if thread is not None and thread is not threading.current_thread():
+        thread.join(timeout=3)
+        if thread.is_alive():
+            raise RuntimeError("Public overview supervisor did not stop")
+
+
+def _refresh_overview(flight, cancel_event, seed, session):
+    import market
+    try:
+        value = _run_process("overview", {"snapshot_seed": seed},
+                             timeout=OVERVIEW_TIMEOUT, cancel_event=cancel_event)
+        if market.overview_cacheable(value, session):
+            with _LOCK:
+                if len(_CACHE) >= 128:
+                    _CACHE.pop(next(iter(_CACHE)))
+                _CACHE[("overview", None)] = (time.monotonic(), copy.deepcopy(value))
+        flight.set_result(value)
+    except BaseException as error:
+        flight.set_exception(error)
+
+
+def _overview(*, timeout):
+    """Bound response time separately from one globally admitted refresh lifetime."""
+    global _OVERVIEW_FLIGHT, _OVERVIEW_THREAD, _OVERVIEW_CANCEL
+    import market
+    session = market.observation_session()
+    completed = market.completed_overview()
+    if completed is not None:
+        return completed
+    with _OVERVIEW_LOCK:
+        if _OVERVIEW_CLOSING:
+            raise PublicDataUnavailable("SOURCE_CANCELLED")
+        with _LOCK:
+            hit = _CACHE.get(("overview", None))
+            if (hit and time.monotonic() - hit[0] < 300
+                    and market.overview_cacheable(hit[1], session)):
+                return copy.deepcopy(hit[1])
+        flight = _OVERVIEW_FLIGHT
+        if flight is None or flight.done():
+            if market.push2_guard.is_read_only():
+                raise PublicDataUnavailable("SOURCE_READ_ONLY")
+            flight = Future()
+            cancel = threading.Event()
+            _OVERVIEW_FLIGHT, _OVERVIEW_CANCEL = flight, cancel
+            thread = threading.Thread(target=_refresh_overview,
+                                      args=(flight, cancel, market.completed_snapshot_seed(), session),
+                                      name="public-overview-refresh", daemon=True)
+            _OVERVIEW_THREAD = thread
+            try:
+                thread.start()
+            except BaseException:
+                _OVERVIEW_FLIGHT = None
+                _OVERVIEW_THREAD = None
+                raise
+    try:
+        value = copy.deepcopy(flight.result(timeout=max(0, min(timeout, TIMEOUT))))
+        # A refresh can straddle a session boundary. Keep its date/provenance;
+        # never represent yesterday's completed observation as current.
+        if isinstance(value, dict) and isinstance(value.get("sentiment"), dict):
+            current_session = market.observation_session()
+            if value["sentiment"].get("date") != current_session or current_session is None:
+                value.update(status="partial", is_stale=True, reason_code="SOURCE_SESSION_CHANGED")
+                value["sentiment"].update(status="partial", is_stale=True)
+        return value
+    except FutureTimeout:
+        # No cancellation here: other readers share this single admitted refresh.
+        raise PublicDataUnavailable("SOURCE_REFRESH_PENDING") from None
+
+
+def run(operation, code=None, *, timeout=None, _target=None, cancel_event=None):
+    if timeout is None:
+        timeout = TIMEOUT
     if _target is not None:  # internal synthetic process-lifetime tests
-        return _run_process(operation, code, timeout=timeout, _target=_target)
+        return _run_process(operation, code, timeout=timeout, _target=_target, cancel_event=cancel_event)
+    if operation == "overview":
+        return _overview(timeout=timeout)
     key = (operation, code)
     with _LOCK:
         hit = _CACHE.get(key)
@@ -162,11 +279,13 @@ def run(operation, code=None, *, timeout=TIMEOUT, _target=None):
             raise PublicDataUnavailable("SOURCE_BUSY")
         _INFLIGHT.add(key)
     try:
-        value = _run_process(operation, code, timeout=timeout)
-        # Cache only usable successes. Missing/failed results never suppress retry.
+        kwargs = {"timeout": timeout}
+        if cancel_event is not None:
+            kwargs["cancel_event"] = cancel_event
+        value = _run_process(operation, code, **kwargs)
+        # Missing/failed results never suppress retry.
         cacheable = isinstance(value, dict) and (
             operation == "valuation" and value.get("price") is not None and value.get("status") != "partial" or
-            operation == "overview" and value.get("sentiment", {}).get("status") == "normal" or
             operation == "financials" and value.get("revenue") is not None and value.get("net_profit") is not None and value.get("status") != "partial")
         if cacheable:
             with _LOCK:

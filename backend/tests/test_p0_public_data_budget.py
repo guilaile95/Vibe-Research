@@ -120,8 +120,8 @@ def test_cache_is_defensive_bounded_and_missing_results_do_not_stick(monkeypatch
     monkeypatch.setattr(budget,"_run_process",worker)
     a=budget.run("valuation","600000");a["price"]=999
     assert budget.run("valuation","600000")["price"]==10 and len(calls)==1
-    budget._INFLIGHT.add(("overview",None))
-    with pytest.raises(budget.PublicDataUnavailable,match="SOURCE_BUSY"):budget.run("overview")
+    budget._INFLIGHT.add(("financials","600001"))
+    with pytest.raises(budget.PublicDataUnavailable,match="SOURCE_BUSY"):budget.run("financials","600001")
     budget._INFLIGHT.clear()
     monkeypatch.setattr(budget,"_run_process",lambda *a,**kw:{"price":None})
     budget.run("valuation","600001")
