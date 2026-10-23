@@ -367,7 +367,13 @@ try {
       await page.goForward(); await settleSelection(qa, historical.id);
 
       await storageWrites.flush(page); phase = 'resume-two-drafts-single-owner'; await storageWrites.setPhase(page, phase);
-      await page.goto('/watchlist'); await page.goto(href(qa, historical.id)); await settleSelection(qa, historical.id);
+      await page.goto(href(qa, historical.id)); await settleSelection(qa, historical.id);
+      // Establish a real same-document Back target. Two page.goto calls create
+      // cross-document history, which exercises beforeunload, not useBlocker.
+      await page.evaluate(() => { window.__draftGuardDocument = 'candidate-stockdata-roundtrip'; });
+      await page.getByTestId('candidate-open-stock-data').click();
+      await page.getByTestId('stock-data-candidate-entry').click(); await settleSelection(qa, historical.id);
+      assert.equal(await page.evaluate(() => window.__draftGuardDocument), 'candidate-stockdata-roundtrip');
       const noteDraft = page.getByTestId('candidate-research-note').getByPlaceholder('先写目前的理解，不必形成正式结论', { exact: true });
       await noteDraft.fill('独立轻量草稿保持');
       await panel.getByLabel('本轮判断', { exact: true }).fill('核对草稿保持');
