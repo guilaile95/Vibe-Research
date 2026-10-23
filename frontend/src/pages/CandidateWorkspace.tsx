@@ -68,6 +68,11 @@ export function CandidateWorkspace() {
   const selection = useMemo(() => parseResearchSelection(location.search), [location.search]);
   const currentHrefRef = useRef(currentHref); currentHrefRef.current = currentHref;
   const validatedLocation = useRef<string | null>(null);
+  const previousContext = useRef(`${location.pathname}${location.search}`);
+  if (previousContext.current !== `${location.pathname}${location.search}`) {
+    previousContext.current = `${location.pathname}${location.search}`;
+    validatedLocation.current = null;
+  }
   const syncReceipt = useRef<{ from: string; to: string } | null>(null);
   const [discardAction, setDiscardAction] = useState<(() => void) | null>(null);
   const leaveDialog = useRef<HTMLDialogElement>(null);
