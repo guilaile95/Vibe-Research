@@ -21,6 +21,7 @@ import {
   type AccountReality,
   type DataHealthRecordDto,
 } from "@/lib/api";
+import { candidateWorkspaceHref } from "@/lib/candidateCampaign";
 import { loadLlm } from "@/lib/llm";
 import { usePortfolioAdviceTaskStore } from "@/stores/portfolioAdviceTaskStore";
 import { cn } from "@/lib/utils";
@@ -1353,10 +1354,26 @@ export function Portfolio() {
               </thead>
               <tbody>
                 {holdings.map((h) => (
-                  <tr key={h.code} className="border-b border-border/30">
+                  <tr key={h.code} id={`portfolio-holding-${h.code}`} className="border-b border-border/30">
                     <td className="px-2 py-2.5">
                       <span className="font-medium">{h.name}</span>
                       <span className="ml-1.5 font-mono text-xs text-muted-foreground/60">{h.code}</span>
+                      {/* Holding is the existing A-share/astock contract, not a cross-market identity.
+                          Keep unsupported identifiers display-only; never infer from the name. */}
+                      {/^[0-9]{6}$/.test(h.code) && (
+                        <div className="mt-1 flex flex-wrap gap-x-3">
+                          <Link
+                            to={`/stock-data?${new URLSearchParams({ code: h.code, return_to: `/portfolio#portfolio-holding-${h.code}` })}`}
+                            className="inline-flex min-h-11 items-center rounded text-xs text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                            title="查看行情、财务与公开资料"
+                          >查看数据</Link>
+                          <Link
+                            to={candidateWorkspaceHref(h.code, `/portfolio#portfolio-holding-${h.code}`)}
+                            className="inline-flex min-h-11 items-center rounded text-xs text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                            title="查看问题与笔记，不自动选定投资计划"
+                          >候选研究</Link>
+                        </div>
+                      )}
                     </td>
                     <td className="px-2 py-2.5 font-mono">{fmtPx(h.price)}</td>
                     <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmt(h.shares)}</td>

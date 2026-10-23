@@ -11,6 +11,7 @@ import { readReply } from './ai-settings-storage.fixture.mjs';
 import { researchEvidenceManifest } from './research-evidence-manifest.fixture.mjs';
 import { installResearchWriteAudit } from './research-write-audit.fixture.mjs';
 import { navigationEvidencePage } from './research-navigation.fixture.mjs';
+import { portfolioEntryFixture, checkPortfolioEntries } from './portfolio-entry.fixture.mjs';
 const dist = fileURLToPath(new URL('../../dist/', import.meta.url));
 const output = process.env.RESEARCH_NAVIGATION_OUTPUT_DIR || mkdtempSync(join(tmpdir(), 'research-navigation-'));
 mkdirSync(output, { recursive: true });
@@ -32,7 +33,7 @@ try {
   browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } : {}) });
   for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ baseURL, viewport: { width, height: 960 }, serviceWorkers: 'block' });
-    const errors = [], external = [], writes = [], reads = []; let record; let slow = false; let phase = 'fixture-init';
+    const errors = [], external = [], writes = [], reads = []; let record; let slow = false; let phase = 'fixture-init'; let portfolioAuthority = 'LEGACY_PORTFOLIO';
     const storageWrites = await installResearchWriteAudit(context, () => phase);
     const started = deferred(), release = deferred();
     await context.routeWebSocket('**/*', socket => { external.push(socket.url()); socket.close(); });
@@ -50,6 +51,7 @@ try {
         return ok(record);
       }
       reads.push(path + url.search);
+      if (path === '/api/portfolio' && !url.search) return ok(portfolioEntryFixture(portfolioAuthority));
       if (path === '/api/watchlist') return ok({ status: 'valid', data: { codes: ['600519'], updated_at: null }, etag: '1111111111111111' });
       if (path === '/api/watchlist/anomalies') return ok({ items: [], unavailable_codes: [], as_of_ms: null });
       if (path === '/api/quote') return ok({});
@@ -63,6 +65,10 @@ try {
     phase = 'create-page';
     const page = await context.newPage(); page.setDefaultTimeout(10000); page.on('pageerror', error => errors.push(error.message));
     try {
+      await checkPortfolioEntries(page, { baseURL, width, output, writes, storageWrites,
+        setAuthority: value => { portfolioAuthority = value; },
+        phase: async value => { await storageWrites.flush(page); phase = value; await storageWrites.setPhase(page, phase); },
+      });
       await storageWrites.flush(page); phase = 'watchlist-entry'; await storageWrites.setPhase(page, phase);
       await page.goto('/watchlist?sort=amount&anomalies=0');
       const entry = page.getByTestId('watchlist-candidate-600519'); await entry.waitFor();
