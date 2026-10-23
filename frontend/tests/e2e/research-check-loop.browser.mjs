@@ -10,6 +10,7 @@ import { chromium } from 'playwright';
 import { researchEvidenceManifest } from './research-evidence-manifest.fixture.mjs';
 import { installResearchWriteAudit } from './research-write-audit.fixture.mjs';
 import { readReply } from './ai-settings-storage.fixture.mjs';
+import { checkStockEvidenceReturns, assertStockEvidenceWrites } from './stock-evidence-return.fixture.mjs';
 import { originalReport, revisedReport, originalText, revisedText, discoveryItem, discoverySnapshot, resumeContextFixture, researchCheckReadReply, researchCheckPageReadReply } from './research-check-loop.fixture.mjs';
 const dist = fileURLToPath(new URL('../../dist/', import.meta.url));
 const output = process.env.RESEARCH_CHECK_LOOP_OUTPUT_DIR || mkdtempSync(join(tmpdir(), 'research-check-loop-'));
@@ -357,6 +358,11 @@ try {
       assert.deepEqual(await readDatabase(page), beforeResume, 'deep links, refresh and five tool roundtrips never modify any saved object');
       await page.screenshot({ path: join(output, `resume-history-${width}.png`) });
 
+      await storageWrites.flush(page); phase = 'stock-evidence-return-chain'; await storageWrites.setPhase(page, phase);
+      const q2Round = fixture.rounds.filter(item => item.questionId === qa2.id)[1];
+      observations.push({ phase, ...await checkStockEvidenceReturns({ page, question: qa2, round: q2Round, candidateHref: href(qa2, q2Round.id), waitForSelection: waitForSavedSelection, readDatabase, storageWrites, onWrite: event => writes.push({ phase, ...event }), setPhase: async value => { await storageWrites.flush(page); phase = value; await storageWrites.setPhase(page, phase); } }) });
+      await page.goto(exactResumeHref); await settleSelection(qa, historical.id);
+
       await storageWrites.flush(page); phase = 'resume-question-only-replace-and-history'; await storageWrites.setPhase(page, phase);
       await page.goto('/watchlist');
       await page.goto(href(qa)); await settleSelection(qa, qa.headRoundId);
@@ -642,7 +648,7 @@ try {
 
       await storageWrites.flush(page); phase = 'layout-and-no-side-effects'; await storageWrites.setPhase(page, phase);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'responsive page must not overflow horizontally');
-      assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.deepEqual(writes, [], 'no formal state, AI, upload, import or index API writes');
+      assert.deepEqual(errors, []); assert.deepEqual(external, []); assertStockEvidenceWrites(writes);
       results.push({ width, status: 'PASS', checkoutSha: buildManifest.checkoutSha, checkoutTree: buildManifest.checkoutTree, checks: storageWrites.phases, evidence: 'synthetic production-dist UI with real disposable IndexedDB; not natural usage or PDF/PIT proof', reads, writes, storageWrites, observations });
     } catch (error) {
       results.push({ width, status: 'FAIL', phase, error: error.message, stack: error.stack, errors, external, reads, writes, storageWrites, observations });
