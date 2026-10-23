@@ -44,6 +44,7 @@ import {
   type StockValuationContext,
 } from "@/lib/api";
 import { indicatorErrorMessage } from "@/lib/technicalIndicatorsView";
+import { sameStockCandidateReturn } from "@/lib/researchResume";
 import { buildEvidenceNewHref, candidateWorkspaceHref } from "@/lib/candidateCampaign";
 import { safeInternalReturnTo } from "@/lib/internalReturnTo";
 import { cn } from "@/lib/utils";
@@ -526,7 +527,7 @@ export function StockData() {
     return `${location.pathname}?${params.toString()}${location.hash}`;
   })();
   const candidateHref = /^\d{6}$/.test(activeCode)
-    ? candidateWorkspaceHref(activeCode, stockReturnPath)
+    ? sameStockCandidateReturn(returnTo, activeCode) || candidateWorkspaceHref(activeCode, stockReturnPath)
     : "";
 
   // 资金卡常驻以显示各来源状态；龙虎榜明细仅在本次接口返回数据时展示。

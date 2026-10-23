@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clearResearchVisits, loadResearchVisits, parseResearchVisits, rememberResearchVisit, researchVisitHref } from "../src/lib/researchResume.ts";
+import { clearResearchVisits, loadResearchVisits, parseResearchVisits, rememberResearchVisit, researchVisitHref, parseResearchSelection, researchSelectionHref, researchNavigationRisk, sameStockCandidateReturn } from "../src/lib/researchResume.ts";
 
 test("resume keeps validated discovery return and section, never arbitrary candidate metadata", () => {
   const source = "/screener?mode=discovery&strategy=SWING&industry=白酒#opportunity-600519";
@@ -53,5 +53,72 @@ test("corrupt or unavailable browser storage does not break research navigation"
   } finally {
     if (previous) Object.defineProperty(globalThis, "localStorage", previous);
     else Reflect.deleteProperty(globalThis, "localStorage");
+  }
+});
+
+
+test("saved question and historical round survive canonical resume without identity loss", () => {
+  const question = "历史问题 /?&=#", round = "旧轮次/一?&=#";
+  const path = `/candidates/600519?${new URLSearchParams({ question, round })}#candidate-research-check`;
+  const result = new URL(researchVisitHref(path)!, "http://localhost");
+  assert.equal(result.searchParams.get("question"), question);
+  assert.equal(result.searchParams.get("round"), round);
+  let normalized = path;
+  for (let pass = 0; pass < 5; pass++) normalized = researchVisitHref(normalized)!;
+  assert.equal(normalized, path);
+});
+
+test("invalid saved identity fails closed instead of silently becoming a different location", () => {
+  for (const query of ["question=", "question=%20", "question=q&question=q", "question=q&round=r&round=r", "round=r", "question=%GG", "question=%E0%A4", `question=${"a".repeat(257)}`]) {
+    assert.equal(researchVisitHref(`/candidates/600519?${query}`), null, query);
+  }
+  assert.ok(researchVisitHref(`/candidates/600519?question=${"a".repeat(256)}`));
+});
+
+
+test("locator identity matches legacy store strings without trimming or double decoding", () => {
+  for (const value of [" 前后空格 ", "a/b", "a%2Fb", "a+b", "问题?&=#", "\uFFFD", "a".repeat(256)]) {
+    const search = `?${new URLSearchParams({ question: value, round: value })}`;
+    assert.deepEqual(parseResearchSelection(search), { status: "selected", questionId: value, roundId: value });
+    assert.equal(researchSelectionHref(`/candidates/600519${search}`, value, value), `/candidates/600519${search}`);
+  }
+  assert.deepEqual(parseResearchSelection("?question=a%252Fb"), { status: "selected", questionId: "a%2Fb", roundId: null });
+  assert.deepEqual(parseResearchSelection("?question=%FF"), { status: "invalid" });
+  assert.deepEqual(parseResearchSelection("?question=%EF%BF%BD"), { status: "selected", questionId: "\uFFFD", roundId: null });
+});
+
+test("navigation risk distinguishes read positions, affected check drafts and leaving both editors", () => {
+  const here = { pathname: "/candidates/600519", search: "?question=q&round=r1&return_to=%2Fwatchlist" };
+  assert.equal(researchNavigationRisk(here, { ...here, search: "?question=q&round=r2&return_to=%2Fwatchlist" }), "none");
+  assert.equal(researchNavigationRisk(here, { ...here, search: "?question=other&return_to=%2Fwatchlist" }), "question");
+  assert.equal(researchNavigationRisk(here, { ...here, search: "?return_to=%2Fwatchlist" }), "question");
+  assert.equal(researchNavigationRisk(here, { ...here, search: "?question=q&round=r1&return_to=%2Fnotes" }), "page");
+  assert.equal(researchNavigationRisk(here, { ...here, pathname: "/candidates/000001" }), "page");
+  assert.equal(researchNavigationRisk(here, { ...here, search: "?question=q&round=&return_to=%2Fwatchlist" }), "question");
+});
+
+test("same-stock Candidate return converges across five StockData roundtrips", () => {
+  let href = "/candidates/600519?return_to=%2Fwatchlist&question=q&round=r#candidate-research-check";
+  for (let i = 0; i < 5; i++) {
+    const data = `/stock-data?${new URLSearchParams({ code: "600519", return_to: href })}`;
+    href = sameStockCandidateReturn(new URL(data, "http://localhost").searchParams.get("return_to")!, "600519")!;
+  }
+  assert.equal(href, "/candidates/600519?return_to=%2Fwatchlist&question=q&round=r#candidate-research-check");
+  for (const target of [href.replace("600519", "000001"), "//evil.example", "/candidates/600519?question=q&round=", "/stock-data?code=600519"]) assert.equal(sameStockCandidateReturn(target, "600519"), null);
+});
+
+test("unencodable legacy identities fail closed before URL APIs can alias them to replacement characters", () => {
+  for (const value of ["\uD800", "\uDC00", "x\uD800y", "x\uDC00y"]) {
+    assert.equal(researchSelectionHref("/candidates/600519", value), null);
+    assert.equal(researchSelectionHref("/candidates/600519", "valid", value), null);
+    assert.deepEqual(parseResearchSelection(`?question=${value}`), { status: "invalid" });
+    assert.deepEqual(parseResearchSelection(`?question=valid&round=${value}`), { status: "invalid" });
+    assert.equal(researchVisitHref(`/candidates/600519?question=${value}`), null);
+    assert.equal(researchVisitHref(`/candidates/600519?question=valid&round=${value}`), null);
+  }
+  for (const value of ["\uFFFD", "😀", "历史😀 /?&=#+% "]) {
+    const href = researchSelectionHref("/candidates/600519", value, value)!;
+    assert.ok(href);
+    assert.deepEqual(parseResearchSelection(new URL(href, "http://localhost").search), { status: "selected", questionId: value, roundId: value });
   }
 });

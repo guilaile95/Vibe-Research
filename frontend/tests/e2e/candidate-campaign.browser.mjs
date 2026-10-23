@@ -1145,7 +1145,7 @@ try {
   for (const [label, id] of [
     ["查看公开资讯", "candidate-public-info"],
     ["查看证据缺口", "candidate-evidence-gap"],
-    ["继续已有研究", "candidate-existing-research"],
+    ["候选投资计划", "candidate-existing-research"],
   ]) {
     await page.getByRole("navigation", { name: "候选研究快速接续" }).getByRole("link", { name: label }).click();
     await page.waitForURL(`${discoveryCandidateUrl}#${id}`);
@@ -1430,7 +1430,7 @@ try {
   assert.deepEqual(state.createdPayloads, [{ security_code: "600519", strategy: "SHORT" }]);
   assert.equal(state.transitionPayloads.length, 0, "creation must not auto-transition beyond DRAFT");
   const writesBeforeResume = state.writeRequests.length;
-  await page.getByRole("navigation", { name: "候选研究快速接续" }).getByRole("link", { name: "继续已有研究" }).click();
+  await page.getByRole("navigation", { name: "候选研究快速接续" }).getByRole("link", { name: "候选投资计划" }).click();
   await page.waitForURL(/#candidate-existing-research$/);
   await page.waitForFunction(() => document.activeElement?.id === "candidate-existing-research");
   assert.equal(await panel.locator('[data-campaign-status="DRAFT"]').count(), 1);
@@ -1752,7 +1752,7 @@ try {
   await researchNote.getByRole("button", { name: "保存暂定研究", exact: true }).click();
   await researchNote.getByRole("button", { name: "已保存暂定研究", exact: true }).waitFor();
   const savedTentative = await page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes"))[0]);
-  await researchNote.getByRole("link", { name: "查看这只股票的研究记录 →", exact: true }).click();
+  await researchNote.getByRole("link", { name: "查看本股轻量笔记 →", exact: true }).click();
   await page.waitForURL((url) => url.pathname === "/notes" && url.searchParams.get("security_code") === "600519");
   await page.getByText(savedTentative.title, { exact: true }).click();
   const savedContext = page.getByTestId("note-research-context");
@@ -1768,13 +1768,13 @@ try {
   const unsavedDialog = page.getByRole("dialog", { name: "研究内容尚未保存" });
   const questionInput = researchNote.getByLabel("本次要核对的问题");
   await questionInput.fill("   ");
-  await researchNote.getByRole("link", { name: "查看这只股票的研究记录 →", exact: true }).click();
+  await researchNote.getByRole("link", { name: "查看本股轻量笔记 →", exact: true }).click();
   await page.waitForURL((url) => url.pathname === "/notes");
   await page.goBack();
   await questionInput.fill("保留这个尚未保存的问题");
   const candidateUrl = page.url();
   for (const target of [
-    researchNote.getByRole("link", { name: "查看这只股票的研究记录 →", exact: true }),
+    researchNote.getByRole("link", { name: "查看本股轻量笔记 →", exact: true }),
     page.getByTestId("candidate-existing-evidence").first(),
     page.locator('a[href="/settings"]').first(),
   ]) {
@@ -1812,7 +1812,7 @@ try {
   });
   await researchNote.getByRole("button", { name: "保存暂定研究", exact: true }).click();
   await researchNote.getByRole("alert").waitFor();
-  await researchNote.getByRole("link", { name: "查看这只股票的研究记录 →", exact: true }).click();
+  await researchNote.getByRole("link", { name: "查看本股轻量笔记 →", exact: true }).click();
   await unsavedDialog.waitFor();
   await unsavedDialog.getByRole("button", { name: "留下继续编辑", exact: true }).click();
   await page.evaluate(() => { Storage.prototype.setItem = window.__fixtureSetItem; delete window.__fixtureSetItem; });

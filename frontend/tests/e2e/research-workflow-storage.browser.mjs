@@ -72,6 +72,10 @@ try {
   assert.equal((ok(await invoke(peer, 'getQuestion', ['question']))).headRoundId, 'T0');
   mark('atomic first question + immutable T0 + cross-connection readback');
 
+  assert.deepEqual(ok(await invoke(page, 'getQuestionContext', ['question'])), { question: initial, rounds: [initialRequest.initialRound] });
+  assert.equal(ok(await invoke(page, 'getQuestionContext', ['missing-question'])), null);
+  mark('question context returns saved question and ordered rounds together; missing question is null');
+
   const requests = ['left', 'right'].map(side => ({ operationId: `append-${side}`, questionId: 'question', expectedRevision: 1, expectedHeadRoundId: 'T0', round: fixtureRound(`T1-${side}`, 'T0', 102, 'v2') }));
   const raced = await Promise.all([invoke(page, 'appendRound', [requests[0]]), invoke(peer, 'appendRound', [requests[1]])]);
   assert.equal(raced.filter(result => result.ok).length, 1);
@@ -198,14 +202,28 @@ try {
     let rejected;
     try { await target.importBackup(JSON.stringify(backup), 'tampered-calc'); rejected = 'unexpected'; } catch (error) { rejected = error.code; }
     const after = await target.listQuestions();
+    const raw = await new Promise((resolveOpen, reject) => { const request = indexedDB.open('native-calculation'); request.onsuccess = () => resolveOpen(request.result); request.onerror = () => reject(request.error); });
+    await new Promise((resolveWrite, reject) => {
+      const tx = raw.transaction(['rounds', 'operations'], 'readwrite');
+      tx.objectStore('rounds').put(backup.data.rounds[0]);
+      tx.objectStore('operations').clear();
+      tx.oncomplete = resolveWrite; tx.onabort = () => reject(tx.error);
+    });
+    const contextRejected = [];
+    for (const id of [question.id, 'missing']) {
+      try { await store.getQuestionContext(id); contextRejected.push('unexpected'); } catch (error) { contextRejected.push(error.code); }
+    }
+    raw.close();
     store.close(); target.close();
-    return { result: read.calculation.result, originalText: read.materials[0].content, rejected, after };
+    return { result: read.calculation.result, originalText: read.materials[0].content, rejected, after, contextRejected };
   }, { question: fixtureQuestion('calculated'), round: fixtureRound('calc-T0', null, 101, 'v1', 'calculated'), materials: [fixtureMaterial('v1'), fixtureMaterial('v2')] });
   assert.match(calculationCheck.result, /修订预告不是实际业绩/);
   assert.equal(calculationCheck.originalText, fixtureMaterial('v1').content);
   assert.equal(calculationCheck.rejected, 'VALIDATION');
   assert.deepEqual(calculationCheck.after, []);
   mark('native calculated-round save retains operands and original text; checksum-recomputed forged result cannot import');
+  assert.deepEqual(calculationCheck.contextRejected, ['VALIDATION', 'VALIDATION']);
+  mark('context validates persisted calculation replay before returning either an existing question or not-found');
 
   for (const count of [100, 200, 1000]) {
     const rounds = Array.from({ length: count }, (_, index) => fixtureRound(`bulk-${count}-${index}`, index ? `bulk-${count}-${index - 1}` : null, 101 + index, 'v1', `bulk-${count}`));
@@ -228,6 +246,157 @@ try {
     assert.equal(accepted.last, `bulk-${count}-${count - 1}`);
   }
   mark('native 100 / 200 / 1000 round import and export preserve every complete chain without count truncation');
+
+  const contextReads = await page.evaluate(async ({ question, round }) => {
+    const store = window.api.createResearchWorkflowStore({ dbName: 'context-readonly' });
+    await store.createQuestion({ operationId: 'context-create', question, initialRound: round });
+    for (const status of ['paused', 'resolved', 'archived']) {
+      const id = `context-${status}`;
+      await store.createQuestion({ operationId: `create-${id}`, question: { ...question, id, status }, ...(status === 'paused' ? {} : { initialRound: { ...round, id: `${id}-T0`, questionId: id } }) });
+    }
+    const before = JSON.parse(await store.exportBackup()).data;
+    const originalTransaction = IDBDatabase.prototype.transaction;
+    const mutators = Object.fromEntries(['add', 'put', 'delete', 'clear'].map(method => [method, IDBObjectStore.prototype[method]]));
+    const transactions = [], writes = [], reads = [];
+    IDBDatabase.prototype.transaction = function (...args) {
+      const tx = originalTransaction.apply(this, args);
+      transactions.push({ mode: tx.mode, stores: [...tx.objectStoreNames] });
+      return tx;
+    };
+    for (const [method, original] of Object.entries(mutators)) IDBObjectStore.prototype[method] = function (...args) {
+      writes.push({ method, store: this.name });
+      return original.apply(this, args);
+    };
+    try {
+      for (const id of [question.id, 'context-paused', 'context-resolved', 'context-archived', 'missing']) {
+        const start = transactions.length;
+        reads.push({ id, value: await store.getQuestionContext(id), transactions: transactions.slice(start) });
+      }
+      // Mutating the read projection cannot change any persisted question or immutable round.
+      const detached = await store.getQuestionContext(question.id);
+      detached.question.question = 'Only a detached view changed';
+      detached.rounds[0].materials[0].content = 'Not persisted';
+      detached.rounds.push({ ...detached.rounds[0], id: 'not-saved' });
+    } finally {
+      IDBDatabase.prototype.transaction = originalTransaction;
+      for (const [method, original] of Object.entries(mutators)) IDBObjectStore.prototype[method] = original;
+    }
+    const after = JSON.parse(await store.exportBackup()).data;
+    store.close();
+    return { before, after, writes, reads };
+  }, { question: fixtureQuestion('context-question'), round: fixtureRound('context-T0', null, 101, 'v1', 'context-question') });
+  assert.deepEqual(contextReads.before, contextReads.after);
+  assert.deepEqual(contextReads.writes, []);
+  for (const read of contextReads.reads) assert.deepEqual(read.transactions, [{ mode: 'readonly', stores: ['legacySources', 'operations', 'questions', 'rounds'] }]);
+  assert.equal(contextReads.reads[0].value.question.id, 'context-question');
+  assert.deepEqual(contextReads.reads[0].value.rounds.map(round => round.id), ['context-T0']);
+  assert.equal(contextReads.reads[1].value.question.status, 'paused');
+  assert.equal(contextReads.reads[1].value.question.headRoundId, null);
+  assert.deepEqual(contextReads.reads[1].value.rounds, []);
+  assert.equal(contextReads.reads[2].value.question.status, 'resolved');
+  assert.equal(contextReads.reads[3].value.question.status, 'archived');
+  assert.equal(contextReads.reads[4].value, null);
+  mark('context reads use one readonly full-snapshot transaction each, preserve paused headless/resolved/archived states and issue zero writes');
+
+  const contextRace = await page.evaluate(async ({ question, first, next }) => {
+    const dbName = 'context-concurrent';
+    const store = window.api.createResearchWorkflowStore({ dbName });
+    const initial = await store.createQuestion({ operationId: 'race-context-create', question, initialRound: first });
+    const writer = await new Promise((resolveOpen, reject) => { const request = indexedDB.open(dbName); request.onsuccess = () => resolveOpen(request.result); request.onerror = () => reject(request.error); });
+    const newer = { ...initial, revision: 2, headRoundId: next.id, updatedAt: next.createdAt };
+    const original = IDBObjectStore.prototype.getAll;
+    let queuedWriter, captured = false;
+    IDBObjectStore.prototype.getAll = function (...args) {
+      const request = original.apply(this, args);
+      if (!captured && this.transaction.mode === 'readonly') {
+        captured = true;
+        // Queue a real second-connection transaction after the first read request.
+        // Native IndexedDB serializes it after that entire readonly snapshot. A
+        // split getQuestion/getRounds implementation instead observes mixed heads.
+        queuedWriter = new Promise((resolveWrite, reject) => {
+          const tx = writer.transaction(['questions', 'rounds'], 'readwrite');
+          tx.objectStore('questions').put(newer);
+          tx.objectStore('rounds').add(next);
+          tx.oncomplete = resolveWrite;
+          tx.onabort = () => reject(tx.error);
+        });
+      }
+      return request;
+    };
+    let during;
+    try { during = await store.getQuestionContext(question.id); }
+    finally { IDBObjectStore.prototype.getAll = original; }
+    await queuedWriter;
+    const after = await store.getQuestionContext(question.id);
+    writer.close(); store.close();
+    return { captured, initial, newer, during, after };
+  }, { question: fixtureQuestion('context-race'), first: fixtureRound('z-context-first', null, 101, 'v1', 'context-race'), next: fixtureRound('a-context-next', 'z-context-first', 102, 'v1', 'context-race') });
+  assert.equal(contextRace.captured, true);
+  assert.deepEqual(contextRace.during.question, contextRace.initial);
+  assert.deepEqual(contextRace.during.rounds.map(round => round.id), ['z-context-first']);
+  assert.deepEqual(contextRace.after.question, contextRace.newer);
+  assert.deepEqual(contextRace.after.rounds.map(round => round.id), ['z-context-first', 'a-context-next']);
+  mark('native concurrent writer cannot split question/head/history across snapshots; rounds follow the parent chain, not ID order');
+
+  const contextFailures = await page.evaluate(async ({ question, round }) => {
+    const dbName = 'context-invalid';
+    const store = window.api.createResearchWorkflowStore({ dbName });
+    await store.createQuestion({ operationId: 'invalid-context-create', question, initialRound: round });
+    const baseline = JSON.parse(await store.exportBackup()).data;
+    const raw = await new Promise((resolveOpen, reject) => { const request = indexedDB.open(dbName); request.onsuccess = () => resolveOpen(request.result); request.onerror = () => reject(request.error); });
+    const names = ['questions', 'rounds', 'operations', 'legacySources'];
+    const replaceFixture = data => new Promise((resolveWrite, reject) => {
+      const tx = raw.transaction(names, 'readwrite');
+      for (const name of names) { const target = tx.objectStore(name); target.clear(); for (const entry of data[name]) target.add(entry); }
+      tx.oncomplete = resolveWrite; tx.onabort = () => reject(tx.error);
+    });
+    const rawSnapshot = () => new Promise((resolveRead, reject) => {
+      const tx = raw.transaction(names, 'readonly'), data = {};
+      for (const name of names) { const request = tx.objectStore(name).getAll(); request.onsuccess = () => { data[name] = request.result; }; }
+      tx.oncomplete = () => resolveRead(data); tx.onabort = () => reject(tx.error);
+    });
+    const outcome = async id => { try { return { value: await store.getQuestionContext(id) }; } catch (error) { return { code: error.code }; } };
+    const invalid = [];
+    for (const fault of ['wrong-head', 'cross-stock', 'forged-receipt', 'invalid-legacy']) {
+      const data = structuredClone(baseline);
+      if (fault === 'wrong-head') data.questions[0].headRoundId = 'not-present';
+      if (fault === 'cross-stock') data.rounds[0].securityCode = '688041';
+      if (fault === 'forged-receipt') data.operations[0].response.headRoundId = 'not-present';
+      if (fault === 'invalid-legacy') data.legacySources.push({ id: 'a'.repeat(64), raw: '[]', notes: [{ forged: true }] });
+      await replaceFixture(data);
+      const before = await rawSnapshot();
+      invalid.push({ fault, existing: await outcome(question.id), missing: await outcome('missing'), unchanged: window.domain.canonicalJson(before) === window.domain.canonicalJson(await rawSnapshot()) });
+    }
+    await replaceFixture(baseline);
+    const originalTransaction = IDBDatabase.prototype.transaction;
+    let unavailable;
+    IDBDatabase.prototype.transaction = function () { throw new DOMException('Synthetic unavailable transaction', 'InvalidStateError'); };
+    try { unavailable = await outcome(question.id); }
+    finally { IDBDatabase.prototype.transaction = originalTransaction; }
+    const originalGetAll = IDBObjectStore.prototype.getAll;
+    let aborted, abortQueued = false;
+    IDBObjectStore.prototype.getAll = function (...args) {
+      const request = originalGetAll.apply(this, args);
+      if (!abortQueued) { abortQueued = true; const tx = this.transaction; queueMicrotask(() => tx.abort()); }
+      return request;
+    };
+    try { aborted = await outcome('missing'); }
+    finally { IDBObjectStore.prototype.getAll = originalGetAll; }
+    const recovered = await store.getQuestionContext(question.id);
+    const after = await rawSnapshot();
+    raw.close(); store.close();
+    return { invalid, unavailable, aborted, recovered, unchanged: window.domain.canonicalJson(baseline) === window.domain.canonicalJson(after) };
+  }, { question: fixtureQuestion('context-invalid'), round: fixtureRound('invalid-T0', null, 101, 'v1', 'context-invalid') });
+  for (const result of contextFailures.invalid) {
+    assert.deepEqual(result.existing, { code: 'VALIDATION' }, result.fault);
+    assert.deepEqual(result.missing, { code: 'VALIDATION' }, result.fault);
+    assert.equal(result.unchanged, true, result.fault);
+  }
+  assert.deepEqual(contextFailures.unavailable, { code: 'UNAVAILABLE' });
+  assert.deepEqual(contextFailures.aborted, { code: 'ABORT' });
+  assert.equal(contextFailures.recovered.question.id, 'context-invalid');
+  assert.equal(contextFailures.unchanged, true);
+  mark('context fails closed on full-snapshot chain/stock/receipt/legacy corruption and transaction errors, never disguising them as not-found or writing repairs');
 
   const lifecycle = await page.evaluate(async () => {
     const old = window.api.createResearchWorkflowStore({ dbName: 'upgrade-cooperative' });

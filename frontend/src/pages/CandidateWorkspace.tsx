@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AlertCircle, ArrowLeft, FileSearch, Loader2 } from "lucide-react";
 import { CandidateCampaignPanel } from "@/components/campaign/CandidateCampaignPanel";
 import { ResearchCheckPanel } from "@/components/campaign/ResearchCheckPanel";
@@ -21,7 +21,7 @@ import { parseDiscoveryResearchOrigin } from "@/lib/discoveryResearchOrigin";
 import { candidateEntryContext } from "@/lib/candidateEntryContext";
 import { CandidateEvidenceLoadError, loadCandidateEvidence } from "@/lib/candidateEvidence";
 import { CAMPAIGN_STRATEGY_LABELS } from "@/lib/decisionInbox";
-import { rememberResearchVisit, RESEARCH_SECTIONS as researchSections } from "@/lib/researchResume";
+import { parseResearchSelection, researchNavigationRisk, researchSelectionHref, rememberResearchVisit, RESEARCH_SECTIONS as researchSections } from "@/lib/researchResume";
 
 type LoadState<T> =
   | { status: "loading"; value: null; error: "" }
@@ -62,6 +62,65 @@ export function CandidateWorkspace() {
   }, []);
   const name = nameContext?.code === code ? nameContext.name : null;
   const [checkDirty, setCheckDirty] = useState(false);
+  const [noteDirty, setNoteDirty] = useState(false);
+  const [selectionError, setSelectionError] = useState("");
+  const navigate = useNavigate();
+  const currentHref = `${location.pathname}${location.search}${location.hash}`;
+  const selection = useMemo(() => parseResearchSelection(location.search), [location.search]);
+  const validatedLocation = useRef<string | null>(null);
+  const previousContext = useRef(`${location.pathname}${location.search}`);
+  if (previousContext.current !== `${location.pathname}${location.search}`) {
+    previousContext.current = `${location.pathname}${location.search}`;
+    validatedLocation.current = null;
+  }
+  const syncReceipt = useRef<{ from: string; to: string } | null>(null);
+  const [discardAction, setDiscardAction] = useState<(() => void) | null>(null);
+  const leaveDialog = useRef<HTMLDialogElement>(null);
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => {
+    const from = `${currentLocation.pathname}${currentLocation.search}${currentLocation.hash}`;
+    const to = `${nextLocation.pathname}${nextLocation.search}${nextLocation.hash}`;
+    if (syncReceipt.current?.from === from && syncReceipt.current.to === to) {
+      syncReceipt.current = null;
+      return false;
+    }
+    const risk = researchNavigationRisk(currentLocation, nextLocation);
+    return risk === "page" ? checkDirty || noteDirty : risk === "question" && checkDirty;
+  });
+  const navigationPending = blocker.state === "blocked" || discardAction !== null;
+  useEffect(() => { setSelectionError(""); }, [currentHref]);
+  useEffect(() => { if (blocker.state === "blocked") setDiscardAction(null); }, [blocker.state]);
+  useEffect(() => {
+    if (navigationPending) leaveDialog.current?.showModal();
+    else leaveDialog.current?.close();
+  }, [navigationPending]);
+  useEffect(() => {
+    if (!checkDirty && !noteDirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [checkDirty, noteDirty]);
+  const requestDiscard = useCallback((action: () => void) => setDiscardAction(() => action), []);
+  const changeSelection = useCallback((questionId: string | null, roundId: string | null, replace = false, expectedHref?: string) => {
+    // Router state can be rendering a transition while browser history already
+    // contains a newer hash. Never replace that live location with an old render.
+    const from = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    // Only a receipt for the still-current operation may synchronize its exact saved identity.
+    if (expectedHref !== undefined && expectedHref.split("#")[0] !== from.split("#")[0]) return;
+    const to = researchSelectionHref(from, questionId, roundId);
+    if (!to) { setSelectionError("该问题或轮次标识无法无损用于网址定位，未切换到其他记录。"); return; }
+    setSelectionError("");
+    if (to === from) return;
+    if (replace) syncReceipt.current = { from, to };
+    navigate(to, { replace, state: location.state });
+    syncReceipt.current = null;
+  }, [navigate, location.state]);
+  const validatedVisit = useCallback((href: string) => {
+    const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (href.split("#")[0] === current.split("#")[0]) {
+      validatedLocation.current = current.split("#")[0];
+      rememberResearchVisit(current);
+    }
+  }, []);
   const validCode = /^\d{6}$/.test(code);
   const [position, setPosition] = useState<LoadState<CandidatePositionPresentation>>(loadingState);
   const [evidence, setEvidence] = useState<LoadState<{ records: EvidenceRecord[]; total: number }>>(loadingState);
@@ -73,8 +132,10 @@ export function CandidateWorkspace() {
   const [valuationError, setValuationError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (validCode) rememberResearchVisit(`${location.pathname}${location.search}${location.hash}`);
-  }, [validCode, location.pathname, location.search, location.hash]);
+    const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (current.split("#")[0] !== `${location.pathname}${location.search}`) return;
+    if (validCode && (selection.status === "absent" || validatedLocation.current === `${location.pathname}${location.search}`)) rememberResearchVisit(current);
+  }, [validCode, selection.status, location.pathname, location.search, location.hash]);
 
   useEffect(() => {
     const section = researchSections.find(({ id }) => location.hash === `#${id}`);
@@ -171,6 +232,17 @@ export function CandidateWorkspace() {
 
   return (
     <div className="space-y-6" data-testid="candidate-workspace" data-security-code={code}>
+      <dialog ref={leaveDialog} aria-labelledby="candidate-unsaved-title" aria-describedby="candidate-unsaved-description"
+        className="m-auto w-11/12 max-w-md rounded-lg border border-border bg-background p-5 text-foreground shadow-xl backdrop:bg-black/50"
+        onCancel={(event) => { event.preventDefault(); setDiscardAction(null); if (blocker.state === "blocked") blocker.reset(); }}>
+        <h2 id="candidate-unsaved-title" className="font-semibold">研究内容尚未保存</h2>
+        <p id="candidate-unsaved-description" className="mt-2 text-sm text-muted-foreground">{(blocker.state === "blocked" ? researchNavigationRisk(location, blocker.location) === "question" : discardAction !== null) ? "切换或放弃会清除当前核对草稿；独立轻量笔记仍保留。" : "离开会丢失本次未保存的问题、材料核对草稿和看法。可以留在这里继续编辑或先保存。"}</p>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button type="button" autoFocus className="rounded border border-primary/40 px-3 py-2 text-sm text-primary" onClick={() => { setDiscardAction(null); if (blocker.state === "blocked") blocker.reset(); }}>留下继续编辑</button>
+          <button type="button" className="rounded border border-border px-3 py-2 text-sm" onClick={() => { const action = discardAction; setDiscardAction(null); if (blocker.state === "blocked") blocker.proceed(); else action?.(); }}>放弃未保存内容并离开</button>
+        </div>
+      </dialog>
+      {selectionError && <p role="alert" className="text-sm text-warning" data-testid="research-selection-error">{selectionError}</p>}
       <PageHeader
         title={`候选研究 · ${name ? `${name}（${code}）` : code}`}
         subtitle="先核对资料、提问并留下暂定看法；需要正式决策时，再建立投资计划。"
@@ -367,6 +439,11 @@ export function CandidateWorkspace() {
       <ResearchCheckPanel
         key={`check-${code}`}
         onDirtyChange={setCheckDirty}
+        selection={selection}
+        onSelectionChange={changeSelection}
+        onValidatedVisit={validatedVisit}
+        onRequestDiscard={requestDiscard}
+        navigationPending={navigationPending}
         code={code}
         records={evidence.value?.records ?? []}
         evidenceStatus={evidence.status}
@@ -378,7 +455,7 @@ export function CandidateWorkspace() {
 
       <CandidateResearchNote
         key={code}
-        additionalDirty={checkDirty}
+        onDirtyChange={setNoteDirty}
         code={code}
         records={evidence.value?.records ?? []}
         evidenceStatus={evidence.status}

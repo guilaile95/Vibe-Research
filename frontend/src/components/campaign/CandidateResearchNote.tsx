@@ -1,18 +1,18 @@
-import { useEffect, useRef, useState } from "react";
-import { Link, useBlocker } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { GlassCard } from "@/components/ui/GlassCard";
 import type { EvidenceRecord } from "@/lib/api";
 import { addNote, loadNotesState, NOTES_CHANGED_EVENT } from "@/lib/notes";
 import { candidateResearchContext, candidateResearchSelection, candidateResearchSourceLinks, type NoteResearchMetadata } from "@/lib/researchNote";
 
-export function CandidateResearchNote({ code, records, evidenceStatus, returnTo, suggestedQuestion, additionalDirty = false }: {
+export function CandidateResearchNote({ code, records, evidenceStatus, returnTo, suggestedQuestion, onDirtyChange }: {
   code: string;
   records: EvidenceRecord[];
   evidenceStatus: "loading" | "ready" | "error";
   returnTo: string;
   suggestedQuestion?: string | null;
-  additionalDirty?: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [question, setQuestion] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -29,24 +29,7 @@ export function CandidateResearchNote({ code, records, evidenceStatus, returnTo,
   const [savedTextIdentity, setSavedTextIdentity] = useState(textIdentity);
   // The candidate page owns one router blocker for both independent drafts.
   const ownDirty = fields.some(Boolean) && textIdentity !== savedTextIdentity;
-  const dirty = ownDirty || additionalDirty;
-  const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && (
-    currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search
-  ));
-  const leaveDialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    if (blocker.state === "blocked") leaveDialog.current?.showModal();
-    else leaveDialog.current?.close();
-  }, [blocker.state]);
-  useEffect(() => {
-    if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
+  useEffect(() => { onDirtyChange?.(ownDirty); }, [ownDirty, onDirtyChange]);
   useEffect(() => {
     const refresh = () => setNotesState(loadNotesState());
     window.addEventListener(NOTES_CHANGED_EVENT, refresh);
@@ -89,19 +72,9 @@ export function CandidateResearchNote({ code, records, evidenceStatus, returnTo,
   };
   return (
     <GlassCard id="candidate-research-note" tabIndex={-1} className="scroll-mt-6 space-y-4" data-testid="candidate-research-note">
-      <dialog ref={leaveDialog} aria-labelledby="candidate-unsaved-title" aria-describedby="candidate-unsaved-description"
-        className="m-auto w-11/12 max-w-md rounded-lg border border-border bg-background p-5 text-foreground shadow-xl backdrop:bg-black/50"
-        onCancel={(event) => { event.preventDefault(); if (blocker.state === "blocked") blocker.reset(); }}>
-        <h2 id="candidate-unsaved-title" className="font-semibold">研究内容尚未保存</h2>
-        <p id="candidate-unsaved-description" className="mt-2 text-sm text-muted-foreground">离开会丢失本次未保存的问题、材料核对草稿和看法。可以留在这里继续编辑或先保存。</p>
-        <div className="mt-4 flex flex-wrap gap-3">
-          <button type="button" autoFocus className="rounded border border-primary/40 px-3 py-2 text-sm text-primary" onClick={() => { if (blocker.state === "blocked") blocker.reset(); }}>留下继续编辑</button>
-          <button type="button" className="rounded border border-border px-3 py-2 text-sm" onClick={() => { if (blocker.state === "blocked") blocker.proceed(); }}>放弃未保存内容并离开</button>
-        </div>
-      </dialog>
       <div>
-        <h2 className="text-sm font-semibold">提问、留下看法，下次接着研究</h2>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">可以先做轻量研究，不必创建投资计划。这里保存的是本浏览器的非正式记录；不会自动成为事实、投资逻辑或决策。</p>
+        <h2 className="text-sm font-semibold">轻量笔记与 AI 草稿</h2>
+        <p className="mt-1 text-xs leading-5 text-muted-foreground">可以先做轻量研究，不必创建投资计划。这里保存的是本浏览器的轻量笔记，不含问题核对轮次；不会自动成为事实、投资逻辑或决策。</p>
       </div>
       {ownDirty && <p role="status" className="text-xs text-warning">有尚未保存的研究内容；刷新或关闭页面时，浏览器可能会提示确认。请先保存重要内容。</p>}
       <label className="block text-xs">本次要核对的问题
@@ -132,7 +105,7 @@ export function CandidateResearchNote({ code, records, evidenceStatus, returnTo,
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <button type="button" onClick={save} disabled={savedIdentity === identity} className="rounded border border-primary/40 px-3 py-2 text-xs text-primary disabled:opacity-60">{savedIdentity === identity ? "已保存暂定研究" : "保存暂定研究"}</button>
-        <Link to={`/notes?security_code=${code}`} className="text-xs text-primary hover:underline">查看这只股票的研究记录 →</Link>
+        <Link to={`/notes?security_code=${code}`} className="text-xs text-primary hover:underline">查看本股轻量笔记 →</Link>
       </div>
       {(error || notesState.error) && <p role="alert" className="text-xs text-warning">{error || notesState.error}</p>}
       {latest.length > 0 && <div className="border-t border-border/50 pt-3 text-xs"><p className="font-medium">这只股票最近留下的记录</p><ul className="mt-2 space-y-2">{latest.map((note) => <li key={note.id}><Link className="text-primary hover:underline" to={`/notes?security_code=${code}&note=${encodeURIComponent(note.id)}`}>{note.title}</Link><span className="ml-2 text-muted-foreground">{note.kind === "暂定研究" ? "用户暂定记录" : "AI 原文，未经用户确认"}</span>{note.research?.nextQuestion && <p className="mt-1">下次核对：{note.research.nextQuestion} <button type="button" className="text-primary hover:underline" onClick={() => setQuestion(note.research?.nextQuestion || "")}>用这个问题继续</button></p>}</li>)}</ul></div>}

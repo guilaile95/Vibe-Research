@@ -5,6 +5,7 @@ import type { DiscoveryResearchOrigin } from "@/lib/discoveryResearchOrigin";
 import { api, type EvidenceRecord, type MyReport, type MyReportTextHit } from "@/lib/api";
 import { blankOperand, compareForecast, evidenceMaterial, reportIdFromMaterial, reportPageMaterials, safeSourceUrl, type CheckOperand, type ComparisonMode } from "@/lib/researchCheck";
 import { RESEARCH_DEFAULT_BUDGET_BYTES, materialKey, type LegacyResearchNote, type ResearchMaterial, type ResearchQuestion, type ResearchQuestionStatus, type ResearchRound } from "@/lib/researchWorkflow";
+import type { ResearchSelection } from "@/lib/researchResume";
 import { researchWorkflowStore as store } from "@/lib/researchWorkflowStore";
 
 const fieldClass = "mt-1 block w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50";
@@ -61,8 +62,13 @@ function OperandFields({ label, value, onChange, materials }: { label: string; v
   </fieldset>;
 }
 
-export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, originLabel, discoveryOrigin, suggestedQuestion, onDirtyChange }: {
+export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, originLabel, discoveryOrigin, suggestedQuestion, onDirtyChange, selection, onSelectionChange, onValidatedVisit, onRequestDiscard, navigationPending }: {
   code: string; records: EvidenceRecord[]; evidenceStatus: "loading" | "ready" | "error"; returnTo: string;
+  selection: ResearchSelection;
+  onSelectionChange: (questionId: string | null, roundId: string | null, replace?: boolean, expectedHref?: string) => void;
+  onValidatedVisit: (href: string) => void;
+  onRequestDiscard: (action: () => void) => void;
+  navigationPending: boolean;
   originLabel?: string; discoveryOrigin?: DiscoveryResearchOrigin | null; suggestedQuestion?: string | null; onDirtyChange?: (dirty: boolean) => void;
 }) {
   const defaultWhy = discoveryOrigin
@@ -89,7 +95,11 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
   const [term, setTerm] = useState("归属于上市公司股东的净利润"), [hits, setHits] = useState<MyReportTextHit[]>([]), [searching, setSearching] = useState(false);
   const [legacyNotes, setLegacyNotes] = useState<LegacyResearchNote[]>([]);
   const [legacyNotice, setLegacyNotice] = useState(""), [legacyPreview, setLegacyPreview] = useState<{ raw: string; count: number } | null>(null);
-  const [discardTarget, setDiscardTarget] = useState<string | null>(null);
+  const [resumeState, setResumeState] = useState<"loading" | "ready" | "invalid" | "unavailable">("loading");
+  const [resumeRetry, setResumeRetry] = useState(0);
+  const contextGeneration = useRef(0), listGeneration = useRef(0), reportGeneration = useRef(0), legacyGeneration = useRef(0);
+  const activeRef = useRef(active); activeRef.current = active;
+  const hrefRef = useRef(returnTo); hrefRef.current = returnTo;
   const requestGeneration = useRef(0), mounted = useRef(true);
   const draftIdentity = JSON.stringify([title, why, materials, handled, judgement, limitations, nextMaterial, status, forecast, comparison, mode, calculationEnabled, allowUnitConversion]);
   const [cleanIdentity, setCleanIdentity] = useState(draftIdentity);
@@ -100,19 +110,19 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
   const viewed = rounds.find(round => round.id === viewedId);
   const uncheckedNew = available.filter(material => !active?.reviewedMaterialKeys.includes(materialKey(material))).length;
 
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; requestGeneration.current++; }; }, []);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; requestGeneration.current++; contextGeneration.current++; listGeneration.current++; reportGeneration.current++; legacyGeneration.current++; }; }, []);
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
-  useEffect(() => { if (!dirty) return; const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; }; window.addEventListener("beforeunload", warn); return () => window.removeEventListener("beforeunload", warn); }, [dirty]);
   const refreshQuestions = useCallback(async () => {
-    setLoading(true);
-    try { const rows = await store.listQuestions(code); if (mounted.current) { setQuestions(rows); setError(""); }
+    const generation = ++listGeneration.current; setLoading(true);
+    const current = () => mounted.current && generation === listGeneration.current;
+    try { const rows = await store.listQuestions(code); if (current()) setQuestions(rows);
       try {
         const imported = await store.listLegacyNotes();
         const oldSource = await store.checkLegacySource(localStorage.getItem("vr-notes"));
-        if (mounted.current) { setLegacyNotes(imported); if (oldSource.changed) setLegacyNotice("旧笔记源已变化。已导入快照仍保留，但没有自动重新导入；可预览后决定是否再复制。"); }
-      } catch { if (mounted.current) setLegacyNotice("旧记录状态暂不可检查；未自动迁移或覆盖。研究问题功能不依赖旧记录。"); } }
-    catch (cause) { if (mounted.current) setError(failure(cause)); }
-    finally { if (mounted.current) setLoading(false); }
+        if (current()) { setLegacyNotes(imported); if (oldSource.changed) setLegacyNotice("旧笔记源已变化。已导入快照仍保留，但没有自动重新导入；可预览后决定是否再复制。"); }
+      } catch { if (current()) setLegacyNotice("旧记录状态暂不可检查；未自动迁移或覆盖。研究问题功能不依赖旧记录。"); } }
+    catch (cause) { if (current()) setError(failure(cause)); }
+    finally { if (current()) setLoading(false); }
   }, [code]);
   useEffect(() => { void refreshQuestions(); }, [refreshQuestions]);
   useEffect(() => {
@@ -129,22 +139,53 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
     setForecast(blankOperand()); setComparison(blankOperand()); setCalculationEnabled(false); setMode("actual"); setAllowUnitConversion(false); operation.current = null;
     setCleanIdentity(JSON.stringify([nextTitle, nextWhy, reference ? [] : nextMaterials, {}, "", "", "", nextStatus, blankOperand(), blankOperand(), "actual", false, false]));
   }
-  async function openQuestion(questionId: string) {
-    const generation = ++requestGeneration.current; setReading(false); setSearching(false); setHits([]); setPageNotice(""); setBusy(true); setError(""); setNotice("");
-    try {
-      const question = questionId ? await store.getQuestion(questionId) : null;
-      if (questionId && (!question || question.securityCode !== code)) throw new Error("该问题不可用或不属于当前股票。");
-      const history = question ? await store.getRounds(question.id) : [];
-      if (mounted.current && generation === requestGeneration.current) { setActive(question); setRounds(history); setViewedId(question?.headRoundId || ""); clearDraft(question); }
-    } catch (cause) { if (mounted.current && generation === requestGeneration.current) setError(failure(cause)); }
-    finally { if (mounted.current && generation === requestGeneration.current) setBusy(false); }
-  }
-  function chooseQuestion(questionId: string) { if (dirty) setDiscardTarget(questionId); else void openQuestion(questionId); }
+  const selectedQuestionId = selection.status === "selected" ? selection.questionId : null;
+  const selectedRoundId = selection.status === "selected" ? selection.roundId : null;
+  useEffect(() => {
+    const generation = ++contextGeneration.current;
+    const expectedHref = returnTo;
+    const current = () => mounted.current && generation === contextGeneration.current;
+    const changingQuestion = (activeRef.current?.id || null) !== selectedQuestionId;
+    if (changingQuestion) {
+      requestGeneration.current++; reportGeneration.current++; legacyGeneration.current++;
+      setReading(false); setSearching(false); setReportLoading(false); setHits([]); setPageNotice(""); setBusy(false);
+    }
+    setError("");
+    if (selection.status === "invalid") { setResumeState("invalid"); setError("问题或轮次定位无效；未打开其他问题，也未创建替代记录。"); return; }
+    if (selection.status === "absent") {
+      if (activeRef.current) { setActive(null); setRounds([]); setViewedId(""); clearDraft(null); }
+      setResumeState("ready"); return;
+    }
+    setResumeState("loading");
+    void store.getQuestionContext(selection.questionId).then(context => {
+      if (!current()) return;
+      if (!context || context.question.securityCode !== code) {
+        setResumeState("invalid"); setError("本浏览器找不到该股票的问题记录，或问题不属于当前股票。未自动创建问题。"); return;
+      }
+      const { question, rounds: history } = context;
+      const roundId = selectedRoundId ?? question.headRoundId;
+      if (roundId !== null && !history.some(round => round.id === roundId && round.questionId === question.id && round.securityCode === code)) {
+        setResumeState("invalid"); setError("指定轮次不存在或不属于该问题；未改为另一轮。"); return;
+      }
+      if (question.headRoundId === null && question.status !== "paused") {
+        setResumeState("invalid"); setError("问题缺少合法头轮次，未按空问题恢复。"); return;
+      }
+      // Looking at history must never silently rebase a draft's CAS revision/head.
+      if ((activeRef.current?.id || null) !== question.id) { setActive(question); clearDraft(question); }
+      setRounds(history); setViewedId(roundId || ""); setResumeState("ready");
+      onValidatedVisit(expectedHref);
+      if (selectedRoundId === null && roundId !== null) onSelectionChange(question.id, roundId, true, expectedHref);
+    }).catch(cause => { if (current()) { setResumeState("unavailable"); setError(`已保存上下文读取失败：${failure(cause)} 未将读取失败视为没有记录。`); } });
+    return () => { contextGeneration.current++; };
+    // The URL drives only saved selection. Draft edits and unrelated source refreshes cannot restart this read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code, selection.status, selectedQuestionId, selectedRoundId, resumeRetry]);
+  function chooseQuestion(questionId: string) { onSelectionChange(questionId || null, null); }
   async function loadReports() {
-    requestGeneration.current++; setReading(false); setSearching(false); setReportLoading(true); setReportError("");
-    try { const rows = await api.myReports(); if (mounted.current) setReports(rows); }
-    catch { if (mounted.current) setReportError("MyReports 列表读取失败。未取得不代表没有披露，可保留当前草稿并重试。"); }
-    finally { if (mounted.current) setReportLoading(false); }
+    requestGeneration.current++; const generation = ++reportGeneration.current; const current = () => mounted.current && generation === reportGeneration.current; setReading(false); setSearching(false); setReportLoading(true); setReportError("");
+    try { const rows = await api.myReports(); if (current()) setReports(rows); }
+    catch { if (current()) setReportError("MyReports 列表读取失败。未取得不代表没有披露，可保留当前草稿并重试。"); }
+    finally { if (current()) setReportLoading(false); }
   }
   async function searchPages() {
     if (!chosenReport || !term.trim()) return;
@@ -173,7 +214,7 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
     finally { if (mounted.current && generation === requestGeneration.current) setReading(false); }
   }
   async function save() {
-    if (busy || discardTarget !== null || reading || searching) return;
+    if (busy || navigationPending || resumeState !== "ready" || reading || searching) return;
     setError(""); setNotice("");
     if (!title.trim() || (!judgement.trim() && !nextMaterial.trim())) { setError("请写下研究问题，并留下本轮判断或下一项要核对的问题；其余可稍后补充，不必勉强计算。"); return; }
     if (calculationEnabled && !calculation?.comparable) { setError("当前计算被拒绝。补齐口径后再保存计算，或取消计算并把资料不足记入本轮限制。"); return; }
@@ -187,13 +228,13 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
       operation.current = active ? { identity: draftIdentity, create: null, request: { operationId: id(), questionId, expectedRevision: active.revision, expectedHeadRoundId: active.headRoundId, round, status } }
         : { identity: draftIdentity, request: null, create: { operationId: id(), question: { id: questionId, securityCode: code, question: title.trim(), origin: { kind: originLabel ? "discovery" : "candidate", label: why.trim() || defaultWhy, ...(discoveryOrigin ? { snapshot: discoveryOrigin } : {}), url: returnTo.split("#")[0], capturedAt: now }, createdAt: now, status }, initialRound: round } };
     }
-    const pending = operation.current, generation = ++requestGeneration.current; setDiscardTarget(null); setBusy(true);
+    const pending = operation.current, generation = ++requestGeneration.current, expectedHref = returnTo; setBusy(true);
     try {
       const result = pending.request ? await store.appendRound(pending.request) : null;
       const question = result?.question || await store.createQuestion(pending.create!);
       const committedRound = result?.round || pending.create!.initialRound!;
       if (!mounted.current) return;
-      if (generation !== requestGeneration.current) {
+      if (generation !== requestGeneration.current || hrefRef.current.split("#")[0] !== expectedHref.split("#")[0]) {
         setQuestions(current => [question, ...current.filter(item => item.id !== question.id)]);
         setNotice("先前提交的研究轮次已保存；当前视图已变化，未覆盖当前草稿。可从问题列表打开已保存记录。");
         // Keep the identical operation receipt available for a retry, rather than creating it again.
@@ -201,19 +242,24 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
       }
       setActive(question); setQuestions(current => [question, ...current.filter(item => item.id !== question.id)]);
       setRounds(current => [...current.filter(item => item.id !== committedRound.id), committedRound]); setViewedId(committedRound.id);
-      clearDraft(question); setNotice("本轮已保存。仅本轮明确核对 / 忽略的材料推进处理基线；未处理资料仍保留。未写入正式证据、投资逻辑或决定。");
+      clearDraft(question); onSelectionChange(question.id, committedRound.id, true, expectedHref); setNotice("本轮已保存。仅本轮明确核对 / 忽略的材料推进处理基线；未处理资料仍保留。未写入正式证据、投资逻辑或决定。");
     } catch (cause) { if (mounted.current && generation === requestGeneration.current) setError(`${failure(cause)} 本轮草稿未清空，未推进本页显示的复核基线。若为并发冲突，请先查看最新轮次再继续。`); }
-    finally { if (mounted.current) setBusy(false); }
+    finally { if (mounted.current && generation === requestGeneration.current) setBusy(false); }
   }
   async function reconcile() {
-    if (!active) return;
+    if (!active || busy || navigationPending || resumeState !== "ready") return;
+    const questionId = active.id, generation = ++requestGeneration.current, expectedHref = returnTo;
     setBusy(true); setError("");
     try {
-      const latest = await store.getQuestion(active.id), history = await store.getRounds(active.id);
-      if (!latest || latest.securityCode !== code) throw new Error("问题不再可用。");
-      if (mounted.current) { setActive(latest); setRounds(history); setViewedId(latest.headRoundId || ""); operation.current = null; setNotice("已显示最新轮次，当前草稿原样保留。请核对冲突后再保存，届时会追加到最新轮次。"); }
-    } catch (cause) { if (mounted.current) setError(failure(cause)); }
-    finally { if (mounted.current) setBusy(false); }
+      const context = await store.getQuestionContext(questionId);
+      if (!context || context.question.securityCode !== code) throw new Error("问题不再可用。");
+      if (mounted.current && generation === requestGeneration.current && hrefRef.current.split("#")[0] === expectedHref.split("#")[0]) {
+        setActive(context.question); setRounds(context.rounds); setViewedId(context.question.headRoundId || ""); operation.current = null;
+        onSelectionChange(questionId, context.question.headRoundId, false, expectedHref);
+        setNotice("已显示最新轮次，当前草稿原样保留。请核对冲突后再保存，届时会追加到最新轮次。");
+      }
+    } catch (cause) { if (mounted.current && generation === requestGeneration.current) setError(failure(cause)); }
+    finally { if (mounted.current && generation === requestGeneration.current) setBusy(false); }
   }
   async function exportBackup() {
     setError("");
@@ -221,18 +267,48 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
     catch (cause) { setError(failure(cause)); }
   }
   async function previewLegacy() {
-    try { const raw = localStorage.getItem("vr-notes") || "[]"; const preview = await store.previewLegacy(raw); setLegacyPreview({ raw, count: preview.notes.length }); setLegacyNotice(`找到 ${preview.notes.length} 条旧记录。仅在确认后复制为只读历史资料，不补造当时的原文，也不自动合并为研究轮次。`); }
-    catch (cause) { setLegacyNotice(failure(cause)); }
+    const generation = ++legacyGeneration.current;
+    try {
+      const raw = localStorage.getItem("vr-notes") || "[]", preview = await store.previewLegacy(raw);
+      if (mounted.current && generation === legacyGeneration.current) { setLegacyPreview({ raw, count: preview.notes.length }); setLegacyNotice(`找到 ${preview.notes.length} 条旧记录。仅在确认后复制为只读历史资料，不补造当时的原文，也不自动合并为研究轮次。`); }
+    } catch (cause) { if (mounted.current && generation === legacyGeneration.current) setLegacyNotice(failure(cause)); }
+  }
+  async function importBackupFile(file: File) {
+    if (busy || navigationPending) return;
+    if (file.size > RESEARCH_DEFAULT_BUDGET_BYTES * 4) { setError("备份超过研究库导入预算（64 MiB），未读取。"); return; }
+    const generation = ++requestGeneration.current;
+    const current = () => mounted.current && generation === requestGeneration.current;
+    setBusy(true);
+    try {
+      const raw = await file.text();
+      if (!current()) return;
+      const result = await store.importBackup(raw, id());
+      if (current()) { setNotice(`已导入 ${result.addedQuestions} 个问题、${result.addedRounds} 轮；当前草稿保留。`); await refreshQuestions(); }
+    } catch (cause) { if (current()) setError(failure(cause)); }
+    finally { if (current()) setBusy(false); }
+  }
+  async function confirmLegacyImport() {
+    if (!legacyPreview || busy || navigationPending) return;
+    const generation = ++legacyGeneration.current;
+    const current = () => mounted.current && generation === legacyGeneration.current;
+    try {
+      const result = await store.importLegacy(legacyPreview.raw, id());
+      if (!current()) return;
+      setLegacyNotice(`已复制 ${result.added} 条旧记录为只读历史资料；旧笔记未修改，未补造材料或研究轮次。导入源 SHA256：${result.sourceHash}`); setLegacyPreview(null);
+      const notes = await store.listLegacyNotes(); if (current()) setLegacyNotes(notes);
+    } catch (cause) { if (current()) setLegacyNotice(failure(cause)); }
   }
 
   return <GlassCard id="candidate-research-check" tabIndex={-1} className="scroll-mt-6 space-y-4" data-testid="research-check-panel">
-    <header><h2 className="text-base font-semibold">围绕一个问题核对材料</h2><p className="mt-1 text-xs leading-5 text-muted-foreground">无须 AI 或投资计划。保存来由、实际材料、手工口径计算与不可变研究轮次；新依据出现后仍回到同一问题。仅本浏览器 IndexedDB，不跨设备同步，也不是永久备份。</p></header>
+    <header><h2 className="text-base font-semibold">围绕一个问题核对材料</h2><p className="mt-1 text-xs leading-5 text-muted-foreground">无须 AI 或投资计划。保存来由、实际材料、手工口径计算与不可变核对轮次；新依据出现后仍回到同一问题。仅本浏览器 IndexedDB，不跨设备同步，也不是永久备份。</p></header>
     <div className="flex flex-wrap items-end gap-2"><label className="min-w-0 flex-1 text-xs">这只股票的研究问题<select aria-label="这只股票的研究问题" value={active?.id || ""} disabled={loading || busy} onChange={e => chooseQuestion(e.target.value)} className={fieldClass}><option value="">新建问题</option>{questions.map(question => <option key={question.id} value={question.id}>{question.question} · {statusLabels[question.status]}</option>)}</select></label><button type="button" className={buttonClass} disabled={loading || busy} onClick={() => void refreshQuestions()}>刷新问题列表</button></div>
     {loading && <p role="status" className="text-xs">正在读取本浏览器研究问题…</p>}
-    {discardTarget !== null && <section role="alertdialog" aria-label="保留或放弃核对草稿" className="rounded border border-warning p-3 text-xs"><p>当前核对草稿未保存。切换问题会丢失草稿。</p><div className="mt-2 flex gap-2"><button type="button" className={buttonClass} disabled={busy} onClick={() => setDiscardTarget(null)}>留下继续核对</button><button type="button" className={buttonClass} disabled={busy} onClick={() => { const target = discardTarget; setDiscardTarget(null); void openQuestion(target); }}>放弃草稿并切换</button></div></section>}
-    {active && <section className="rounded border border-border/50 p-3 text-xs" data-testid="check-question-context"><p>研究来由：{active.origin.label}</p><p className="mt-1">状态：{statusLabels[active.status]} · 已保存 {rounds.length} 轮 · 基线已处理 {active.reviewedMaterialKeys.length} 份材料</p><p className="mt-1 text-muted-foreground">{active.status === "paused" ? "已暂停常规待办提示；手动打开仍可检查未处理依据。" : active.status === "resolved" ? `已解决，不会自动重开。当前可见摘录中有 ${uncheckedNew} 份未处理依据，是否相关需人工判断。` : `打开 / 刷新时可核对现有摘录中 ${uncheckedNew} 份未处理依据；不代表后台持续在线监控或完整公告覆盖。`}</p><button type="button" className={`${buttonClass} mt-2`} disabled={busy} onClick={() => void reconcile()}>查看最新轮次并保留草稿</button></section>}
-    {rounds.length > 0 && <section className="space-y-3 rounded border border-border/60 p-3" aria-label="研究轮次历史" data-testid="check-round-history">
-      <label className="block text-xs">打开原研究轮次<select aria-label="打开原研究轮次" value={viewedId} onChange={e => setViewedId(e.target.value)} className={fieldClass}>{rounds.map((round, index) => <option value={round.id} key={round.id}>第 {index + 1} 轮 · {date(round.createdAt)}{round.id === active?.headRoundId ? " · 当前头轮" : ""}</option>)}</select></label>
+    {resumeState === "loading" && <p role="status" className="text-xs">正在恢复已保存的问题与核对轮次…</p>}
+    {resumeState === "unavailable" && <button type="button" className={buttonClass} onClick={() => setResumeRetry(value => value + 1)}>重试读取已保存上下文</button>}
+    {resumeState === "ready" && active && !active.headRoundId && <p className="text-xs">已暂停的问题尚无已保存核对轮次。</p>}
+    {resumeState === "ready" && active && <section className="rounded border border-border/50 p-3 text-xs" data-testid="check-question-context"><p>研究来由：{active.origin.label}</p><p className="mt-1">状态：{statusLabels[active.status]} · 已保存 {rounds.length} 轮 · 基线已处理 {active.reviewedMaterialKeys.length} 份材料</p><p className="mt-1 text-muted-foreground">{active.status === "paused" ? "已暂停常规待办提示；手动打开仍可检查未处理依据。" : active.status === "resolved" ? `已解决，不会自动重开。当前可见摘录中有 ${uncheckedNew} 份未处理依据，是否相关需人工判断。` : `打开 / 刷新时可核对现有摘录中 ${uncheckedNew} 份未处理依据；不代表后台持续在线监控或完整公告覆盖。`}</p><button type="button" className={`${buttonClass} mt-2`} disabled={busy} onClick={() => void reconcile()}>查看最新轮次并保留草稿</button></section>}
+    {resumeState === "ready" && rounds.length > 0 && <section className="space-y-3 rounded border border-border/60 p-3" aria-label="研究轮次历史" data-testid="check-round-history">
+      <label className="block text-xs">打开原核对轮次<select aria-label="打开原研究轮次" value={viewedId} disabled={busy || navigationPending || resumeState !== "ready"} onChange={e => onSelectionChange(active!.id, e.target.value)} className={fieldClass}>{rounds.map((round, index) => <option value={round.id} key={round.id}>第 {index + 1} 轮 · {date(round.createdAt)}{round.id === active?.headRoundId ? " · 当前头轮" : ""}</option>)}</select></label>
       {viewed && <div className="space-y-2 text-xs" data-testid="check-saved-round"><p className="font-medium">原判断（只读）：{viewed.judgement || "未记录 / 待核"}</p><p>原限制 / 反证：{viewed.limitations || "未记录 / 待核"}</p><p>原下一材料：{viewed.nextMaterial || "未记录；已解决的问题可不填"}</p><p>本轮覆盖：局部材料，不代表全范围复核完成；明确核对 {viewed.reviewedMaterialKeys.length} 份，忽略 {viewed.ignoredMaterialKeys.length} 份。</p>
         {viewed.calculation && <div className="rounded border border-primary/30 p-2"><p>{viewed.calculation.result}</p><p className="mt-1 break-words">{viewed.calculation.formula}</p><p className="mt-1 text-muted-foreground">{viewed.calculation.reason}</p><details className="mt-2"><summary className="cursor-pointer">原计算输入与引句</summary>{viewed.calculation.inputs.map((input, i) => <p key={i} className="mt-2 break-all">{input.label}：{input.value} {input.unit} / {input.currency}；{input.subject} / {input.metric} / {input.period} / {input.basis} / {input.valueType}。第 {input.page ?? "未知"} 页；原文：{input.sourceExcerpt}；材料版本：{input.materialKey}</p>)}</details></div>}
         {viewed.materials.map(material => <MaterialCard key={materialKey(material)} material={material} />)}
@@ -251,7 +327,7 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
         <p className="mt-2 text-muted-foreground">这份快照只解释为何进入研究，不是原文材料，不能直接作为计算输入。</p>
       </details>;
     })()}
-    <fieldset disabled={busy || discardTarget !== null} className="min-w-0 space-y-4">
+    <fieldset disabled={busy || loading || navigationPending || resumeState !== "ready"} className="min-w-0 space-y-4">
       <legend className="text-sm font-medium">{active ? "继续同一问题，新增一轮" : "新问题的第一轮"}</legend>
       <label className="block text-xs">研究问题<input aria-label="核对研究问题" value={title} readOnly={Boolean(active)} onChange={e => setTitle(e.target.value)} placeholder="例如：2024 年归母利润预告是否被修订或兑现？" className={fieldClass} /></label>
       {!active && suggestedQuestion && <button type="button" onClick={() => setTitle(suggestedQuestion)} className="text-xs text-primary">采用当前建议问题</button>}
@@ -291,13 +367,13 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
         <label className="block text-xs">本轮能回答什么（用户判断）<textarea aria-label="本轮判断" value={judgement} onChange={e => setJudgement(e.target.value)} rows={3} className={fieldClass} /></label>
         <label className="block text-xs">限制 / 反证 / 尚不能判断<textarea aria-label="本轮限制与反证" value={limitations} onChange={e => setLimitations(e.target.value)} rows={3} className={fieldClass} /></label>
         <label className="block text-xs">下一项需要什么材料<textarea aria-label="下一项材料" value={nextMaterial} onChange={e => setNextMaterial(e.target.value)} rows={2} className={fieldClass} /></label>
-        <label className="block text-xs">保存后的问题状态<select aria-label="保存后的问题状态" value={status} onChange={e => setStatus(e.target.value as ResearchQuestionStatus)} className={fieldClass}>{(["watching", "resolved", "paused"] as const).map(key => <option key={key} value={key}>{statusLabels[key]}</option>)}</select></label>
+        <label className="block text-xs">保存后的问题状态<select aria-label="保存后的问题状态" value={status} onChange={e => setStatus(e.target.value as ResearchQuestionStatus)} className={fieldClass}>{status === "archived" && <option value="archived">已归档（保持原状态）</option>}{(["watching", "resolved", "paused"] as const).map(key => <option key={key} value={key}>{statusLabels[key]}</option>)}</select></label>
         <p className="text-xs text-muted-foreground">观察中：打开 / 刷新时核对；已解决：保留新依据提示但不自动重开；已暂停：不提示常规待办，手动仍能检查。此处不改变任何正式决定。</p>
       </section>
-      <div className="flex flex-wrap gap-2"><button type="button" disabled={busy || loading || reading || searching} className={buttonClass} onClick={() => void save()} data-testid="check-save-round">{busy ? "保存 / 读取中…" : active ? "保存新一轮核对" : "保存问题与第一轮核对"}</button><button type="button" className={buttonClass} onClick={() => { if (dirty) setDiscardTarget(active?.id || ""); }} disabled={!dirty}>放弃当前核对草稿</button></div>
+      <div className="flex flex-wrap gap-2"><button type="button" disabled={busy || loading || reading || searching} className={buttonClass} onClick={() => void save()} data-testid="check-save-round">{busy ? "保存 / 读取中…" : active ? "保存新一轮核对" : "保存问题与第一轮核对"}</button><button type="button" className={buttonClass} onClick={() => { if (dirty) onRequestDiscard(() => { requestGeneration.current++; reportGeneration.current++; setReportLoading(false); setBusy(false); setReading(false); setSearching(false); clearDraft(active); }); }} disabled={!dirty}>放弃当前核对草稿</button></div>
     </fieldset>
     {dirty && <p role="status" className="text-xs text-warning">有未保存的核对草稿；失败或并发冲突不会清空草稿。请先保存再离开。</p>}
     {error && <p role="alert" className="whitespace-pre-wrap text-xs text-warning" data-testid="check-error">{error}</p>}{notice && <p role="status" className="text-xs" data-testid="check-notice">{notice}</p>}
-    <details className="border-t border-border/50 pt-3 text-xs"><summary className="cursor-pointer">本地备份与旧记录显式导入</summary><p className="mt-2 text-muted-foreground">研究问题使用独立 IndexedDB，不会被旧笔记页面重写；浏览器清理仍可能丢失，请定期备份。导入为完整链校验，不接受断链覆盖。</p><div className="mt-2 flex flex-wrap items-center gap-3"><button type="button" className={buttonClass} onClick={() => void exportBackup()}>导出研究问题备份</button><label className="text-primary">导入研究问题备份<input type="file" accept="application/json,.json" aria-label="导入研究问题备份" className="mt-1 block max-w-full text-xs" disabled={busy} onChange={async e => { const file = e.target.files?.[0]; e.target.value = ""; if (!file) return; if (file.size > RESEARCH_DEFAULT_BUDGET_BYTES * 4) { setError("备份超过研究库导入预算（64 MiB），未读取。"); return; } setBusy(true); try { const result = await store.importBackup(await file.text(), id()); setNotice(`已导入 ${result.addedQuestions} 个问题、${result.addedRounds} 轮；当前草稿保留。`); await refreshQuestions(); } catch (cause) { setError(failure(cause)); } finally { setBusy(false); } }} /></label><button type="button" className={buttonClass} onClick={() => void previewLegacy()}>预览旧笔记导入</button></div>{legacyNotice && <p className="mt-2">{legacyNotice}</p>}{legacyPreview && <button type="button" className={`${buttonClass} mt-2`} onClick={async () => { try { const result = await store.importLegacy(legacyPreview.raw, id()); setLegacyNotice(`已复制 ${result.added} 条旧记录为只读历史资料；旧笔记未修改，未补造材料或研究轮次。导入源 SHA256：${result.sourceHash}`); setLegacyPreview(null); setLegacyNotes(await store.listLegacyNotes()); } catch (cause) { setLegacyNotice(failure(cause)); } }}>确认复制 {legacyPreview.count} 条旧记录</button>}{legacyNotes.filter(note => note.securityCode === code || note.securityCode === null).map((note, index) => <details key={`${note.id}-${index}`} className="mt-3 rounded border border-border/50 p-2" data-testid="check-legacy-snapshot"><summary className="cursor-pointer">只读导入快照 #{index + 1} · {note.title} · {date(note.ts)}</summary><p className="mt-2">{note.securityCode ? `原证券归属：${note.securityCode}` : "原记录无证券归属，不自动关联当前股票"}；不补造旧回答的工具正文或来源。</p><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words font-sans">{note.content}</pre><details className="mt-2"><summary className="cursor-pointer">保留的原记录元数据</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify(note.payload, null, 2)}</pre></details></details>)}<Link to={`/notes?security_code=${code}`} target="_blank" rel="noopener noreferrer" className="mt-2 block text-primary underline">在新标签查看原旧笔记</Link></details>
+    <details className="border-t border-border/50 pt-3 text-xs"><summary className="cursor-pointer">本地备份与旧记录显式导入</summary><p className="mt-2 text-muted-foreground">研究问题使用独立 IndexedDB，不会被旧笔记页面重写；浏览器清理仍可能丢失，请定期备份。导入为完整链校验，不接受断链覆盖。</p><div className="mt-2 flex flex-wrap items-center gap-3"><button type="button" className={buttonClass} onClick={() => void exportBackup()}>导出研究问题备份</button><label className="text-primary">导入研究问题备份<input type="file" accept="application/json,.json" aria-label="导入研究问题备份" className="mt-1 block max-w-full text-xs" disabled={busy} onChange={e => { const file = e.target.files?.[0]; e.target.value = ""; if (file) void importBackupFile(file); }} /></label><button type="button" className={buttonClass} onClick={() => void previewLegacy()}>预览旧笔记导入</button></div>{legacyNotice && <p className="mt-2">{legacyNotice}</p>}{legacyPreview && <button type="button" className={`${buttonClass} mt-2`} onClick={() => void confirmLegacyImport()}>确认复制 {legacyPreview.count} 条旧记录</button>}{legacyNotes.filter(note => note.securityCode === code || note.securityCode === null).map((note, index) => <details key={`${note.id}-${index}`} className="mt-3 rounded border border-border/50 p-2" data-testid="check-legacy-snapshot"><summary className="cursor-pointer">只读导入快照 #{index + 1} · {note.title} · {date(note.ts)}</summary><p className="mt-2">{note.securityCode ? `原证券归属：${note.securityCode}` : "原记录无证券归属，不自动关联当前股票"}；不补造旧回答的工具正文或来源。</p><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words font-sans">{note.content}</pre><details className="mt-2"><summary className="cursor-pointer">保留的原记录元数据</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify(note.payload, null, 2)}</pre></details></details>)}<Link to={`/notes?security_code=${code}`} target="_blank" rel="noopener noreferrer" className="mt-2 block text-primary underline">在新标签查看原旧笔记</Link></details>
   </GlassCard>;
 }
