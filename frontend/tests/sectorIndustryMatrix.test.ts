@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
   formatMatrixPercent,
   formatMatrixNumber,
+  SECTOR_INDUSTRY_MATRIX_ABOVE_MA20_HEADER,
+  SECTOR_INDUSTRY_MATRIX_INDUSTRY_HEADER,
+  SECTOR_INDUSTRY_MATRIX_PARTICIPATION_HEADER,
   sectorIndustryMatrixState,
   sortSectorIndustryRows,
 } from "../src/lib/sectorIndustryMatrix.ts";
@@ -120,4 +124,28 @@ test("industry matrix state distinguishes normal, partial, unavailable, empty, a
   assert.equal(sectorIndustryMatrixState(empty, false, false), "empty");
   assert.equal(sectorIndustryMatrixState(null, false, true), "error");
   assert.equal(sectorIndustryMatrixState(null, true, false), "loading");
+});
+
+test("industry matrix column headers stay Chinese-only display", () => {
+  assert.equal(SECTOR_INDUSTRY_MATRIX_INDUSTRY_HEADER, "东财行业");
+  assert.equal(SECTOR_INDUSTRY_MATRIX_ABOVE_MA20_HEADER, "站上 MA20");
+  assert.equal(SECTOR_INDUSTRY_MATRIX_PARTICIPATION_HEADER, "参与度");
+  for (const heading of [
+    SECTOR_INDUSTRY_MATRIX_INDUSTRY_HEADER,
+    SECTOR_INDUSTRY_MATRIX_ABOVE_MA20_HEADER,
+    SECTOR_INDUSTRY_MATRIX_PARTICIPATION_HEADER,
+  ]) {
+    assert.doesNotMatch(heading, /Eastmoney 行业|Above MA20|>Participation</);
+  }
+
+  const source = readFileSync(
+    new URL("../src/components/sectors/SectorIndustryMatrix.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /SECTOR_INDUSTRY_MATRIX_INDUSTRY_HEADER/);
+  assert.match(source, /SECTOR_INDUSTRY_MATRIX_ABOVE_MA20_HEADER/);
+  assert.match(source, /SECTOR_INDUSTRY_MATRIX_PARTICIPATION_HEADER/);
+  assert.doesNotMatch(source, /Above MA20/);
+  assert.doesNotMatch(source, />Participation</);
+  assert.doesNotMatch(source, />Eastmoney 行业</);
 });
