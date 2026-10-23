@@ -7,8 +7,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { installResearchWriteAudit } from './research-write-audit.fixture.mjs';
 import { readReply } from './ai-settings-storage.fixture.mjs';
-import { originalReport, revisedReport, originalText, revisedText, discoveryItem, discoverySnapshot, researchCheckReadReply, researchCheckPageReadReply } from './research-check-loop.fixture.mjs';
+import { originalReport, revisedReport, originalText, revisedText, discoveryItem, discoverySnapshot, resumeContextFixture, researchCheckReadReply, researchCheckPageReadReply } from './research-check-loop.fixture.mjs';
 const dist = fileURLToPath(new URL('../../dist/', import.meta.url));
 const output = process.env.RESEARCH_CHECK_LOOP_OUTPUT_DIR || mkdtempSync(join(tmpdir(), 'research-check-loop-'));
 mkdirSync(output, { recursive: true });
@@ -26,7 +27,7 @@ const results = []; let browser;
 const readDatabase = page => page.evaluate(() => new Promise((resolve, reject) => {
   const request = indexedDB.open('vr-research-workflow');
   request.onerror = () => reject(request.error?.message);
-  request.onsuccess = () => { const db = request.result, tx = db.transaction(['questions', 'rounds'], 'readonly'), questions = tx.objectStore('questions').getAll(), rounds = tx.objectStore('rounds').getAll(); tx.oncomplete = () => { resolve({ questions: questions.result, rounds: rounds.result }); db.close(); }; tx.onerror = () => reject(tx.error?.message); };
+  request.onsuccess = () => { const db = request.result, tx = db.transaction(['questions', 'rounds', 'operations', 'legacySources'], 'readonly'), questions = tx.objectStore('questions').getAll(), rounds = tx.objectStore('rounds').getAll(), operations = tx.objectStore('operations').getAll(), legacySources = tx.objectStore('legacySources').getAll(); tx.oncomplete = () => { resolve({ questions: questions.result, rounds: rounds.result, operations: operations.result, legacySources: legacySources.result }); db.close(); }; tx.onerror = () => reject(tx.error?.message); };
 }));
 async function openQuestion(page, questionId) {
   await page.goto('/candidates/600519#candidate-research-check');
@@ -69,13 +70,14 @@ try {
   for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ baseURL, viewport: { width, height: 960 }, serviceWorkers: 'block' });
     const errors = [], external = [], writes = [], reads = []; let phase = 'setup', reportStage = 0, delayed = null;
+    const storageWrites = await installResearchWriteAudit(context, () => phase);
     await context.routeWebSocket('**/*', socket => { external.push(socket.url()); socket.close(); });
     await context.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url()), path = url.pathname;
       if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' });
       if (url.origin !== baseURL) { external.push(url.href); return route.abort(); }
       if (!path.startsWith('/api/')) return route.continue();
-      reads.push({ path, method: request.method() });
+      reads.push({ phase, semantic: path === '/api/myreports/page-read' ? 'readonly-page-read' : 'existing-page-read', path, method: request.method() });
       if (path === '/api/myreports/page-read' && request.method() === 'POST') {
         const input = request.postDataJSON(), record = input.report_id === originalReport.id ? originalReport : revisedReport;
         assert.ok(record.id === originalReport.id || reportStage === 1, 'T0 cannot retrieve later information');
@@ -84,7 +86,7 @@ try {
         if (delayed && record.id === revisedReport.id) { delayed.started(); await delayed.promise; }
         return route.fulfill({ json: researchCheckPageReadReply(input, reportStage) });
       }
-      if (request.method() !== 'GET') { writes.push({ path, method: request.method() }); return route.fulfill({ status: 503, json: { detail: 'Synthetic fixture rejects all mutation/model endpoints' } }); }
+      if (request.method() !== 'GET') { writes.push({ phase, path, method: request.method() }); return route.fulfill({ status: 503, json: { detail: 'Synthetic fixture rejects all mutation/model endpoints' } }); }
       const reply = researchCheckReadReply(path, url.search, reportStage) ?? readReply('GET', path, url.search);
       if (reply !== null) return route.fulfill({ json: reply });
       return route.fulfill({ status: 503, json: { detail: 'Synthetic unavailable source' } });
@@ -295,12 +297,202 @@ try {
       const minimalRound = minimal.rounds.find(item => item.questionId === minimalQuestion.id);
       assert.equal(minimalRound.judgement, ''); assert.equal(minimalRound.limitations, '未记录 / 待核');
       assert.equal(minimalRound.nextMaterial, '先找原公告核对报告期间。');
+      phase = 'resume-fixture-init';
+      const fixture = resumeContextFixture();
+      fixture.rounds.filter(round => round.securityCode === '600519').forEach(round => { round.materials = t0.materials; });
+      await page.evaluate(fixture => new Promise((resolve, reject) => {
+        const request = indexedDB.open('vr-research-workflow');
+        request.onsuccess = () => { const db = request.result, tx = db.transaction(['questions', 'rounds'], 'readwrite');
+          fixture.questions.forEach(row => tx.objectStore('questions').add(row)); fixture.rounds.forEach(row => tx.objectStore('rounds').add(row));
+          tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = () => reject(tx.error?.message);
+        }; request.onerror = () => reject(request.error?.message);
+      }), fixture);
+      const [qa, qa2, qb, qb2, paused] = fixture.questions;
+      const historical = fixture.rounds.filter(round => round.questionId === qa.id)[1];
+      const first = fixture.rounds.find(round => round.questionId === qa.id);
+      const href = (question, round = null) => `/candidates/${question.securityCode}?${new URLSearchParams({ return_to: '/watchlist', question: question.id, ...(round ? { round } : {}) })}#candidate-research-check`;
+      const settleSelection = async (question, round) => {
+        await page.waitForFunction(({ q, r }) => {
+          const question = document.querySelector('select[aria-label="这只股票的研究问题"]');
+          const history = document.querySelector('select[aria-label="打开原研究轮次"]');
+          const editor = document.querySelector('textarea[aria-label="本轮判断"]');
+          return question?.value === q && (!r || history?.value === r) && editor && !editor.closest('fieldset').disabled;
+        }, { q: question.id, r: round });
+        panel = page.getByTestId('research-check-panel');
+        assert.equal(new URL(page.url()).searchParams.get('question'), question.id);
+        assert.equal(new URL(page.url()).searchParams.get('round'), round);
+      };
+      const frames = () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+      phase = 'resume-deep-link-history-and-tools';
+      const beforeResume = await readDatabase(page);
+      await page.goto(href(qa, historical.id)); await settleSelection(qa, historical.id);
+      assert.match(await panel.getByTestId('check-saved-round').innerText(), /第2轮原判断/);
+      await panel.getByTestId('check-saved-round').getByText('实际保存的原文与读取范围', { exact: true }).click();
+      assert.ok((await panel.getByTestId('check-saved-round').innerText()).includes(originalReport.file_sha256));
+      const exactResumeHref = new URL(page.url()).pathname + new URL(page.url()).search + new URL(page.url()).hash;
+      for (let pass = 0; pass < 5; pass++) {
+        await page.getByTestId('candidate-open-stock-data').click();
+        await page.getByTestId('stock-data-candidate-entry').waitFor();
+        assert.equal(new URL(page.url()).pathname, '/stock-data');
+        assert.equal(await page.getByTestId('stock-data-candidate-entry').getAttribute('href'), exactResumeHref, 'same-stock candidate return cannot nest itself');
+        await page.getByTestId('stock-data-candidate-entry').click(); await settleSelection(qa, historical.id);
+      }
+      await page.reload(); await settleSelection(qa, historical.id);
+      assert.deepEqual(await readDatabase(page), beforeResume, 'deep links, refresh and five tool roundtrips never modify any saved object');
+      await page.screenshot({ path: join(output, `resume-history-${width}.png`) });
+
+      phase = 'resume-question-only-replace-and-history';
+      await page.goto('/watchlist');
+      await page.goto(href(qa)); await settleSelection(qa, qa.headRoundId);
+      await page.goBack(); assert.equal(new URL(page.url()).pathname, '/watchlist', 'question-only canonical replace must not insert a Back stop');
+      await page.goForward(); await settleSelection(qa, qa.headRoundId);
+      await panel.getByLabel('打开原研究轮次', { exact: true }).selectOption(historical.id); await settleSelection(qa, historical.id);
+      await page.goBack(); await settleSelection(qa, qa.headRoundId);
+      await page.goForward(); await settleSelection(qa, historical.id);
+
+      phase = 'resume-two-drafts-single-owner';
+      const noteDraft = page.getByTestId('candidate-research-note').getByPlaceholder('先写目前的理解，不必形成正式结论', { exact: true });
+      await noteDraft.fill('独立轻量草稿保持');
+      await panel.getByLabel('本轮判断', { exact: true }).fill('核对草稿保持');
+      const dirtyHref = page.url();
+      await panel.getByLabel('这只股票的研究问题', { exact: true }).focus();
+      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa2.id);
+      const singleDialog = page.getByRole('dialog', { name: '研究内容尚未保存' }); await singleDialog.waitFor();
+      assert.equal(await page.locator('dialog[open]').count(), 1);
+      assert.equal(await page.evaluate(() => document.activeElement?.closest('dialog')?.open), true);
+      await page.keyboard.press('Tab'); assert.equal(await page.evaluate(() => document.activeElement?.closest('dialog')?.open), true);
+      await page.screenshot({ path: join(output, `resume-two-drafts-${width}.png`) });
+      await page.keyboard.press('Escape'); await singleDialog.waitFor({ state: 'hidden' });
+      assert.equal(page.url(), dirtyHref); assert.equal(await noteDraft.inputValue(), '独立轻量草稿保持');
+      assert.equal(await panel.getByLabel('本轮判断', { exact: true }).inputValue(), '核对草稿保持');
+      assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '这只股票的研究问题');
+      await panel.getByLabel('打开原研究轮次', { exact: true }).selectOption(first.id); await settleSelection(qa, first.id);
+      assert.equal(await singleDialog.isVisible(), false); assert.equal(await panel.getByLabel('本轮判断', { exact: true }).inputValue(), '核对草稿保持');
+      await page.goBack(); await settleSelection(qa, historical.id); await page.goForward(); await settleSelection(qa, first.id);
+      assert.equal(await panel.getByLabel('本轮判断', { exact: true }).inputValue(), '核对草稿保持');
+      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa2.id); await singleDialog.waitFor();
+      await singleDialog.getByRole('button', { name: '放弃未保存内容并离开', exact: true }).click(); await settleSelection(qa2, qa2.headRoundId);
+      assert.equal(await noteDraft.inputValue(), '独立轻量草稿保持', 'same-stock question switch must retain the independent note');
+      assert.equal(await singleDialog.isVisible(), false); assert.equal(await panel.getByLabel('本轮判断', { exact: true }).inputValue(), '');
+      // A note-only draft never blocks switching saved questions.
+      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa.id); await settleSelection(qa, qa.headRoundId);
+      assert.equal(await singleDialog.isVisible(), false); assert.equal(await noteDraft.inputValue(), '独立轻量草稿保持');
+      await page.getByTestId('candidate-open-stock-data').click(); await singleDialog.waitFor();
+      await singleDialog.getByRole('button', { name: '留下继续编辑', exact: true }).click();
+      assert.equal(await noteDraft.inputValue(), '独立轻量草稿保持');
+
+      phase = 'resume-explicit-note-save';
+      const researchBeforeNote = await readDatabase(page), noteBefore = await page.evaluate(() => localStorage.getItem('vr-notes'));
+      await page.getByTestId('candidate-research-note').getByRole('button', { name: '保存暂定研究', exact: true }).click();
+      await page.getByTestId('candidate-research-note').getByRole('button', { name: '已保存暂定研究', exact: true }).waitFor(); await frames();
+      assert.deepEqual(await readDatabase(page), researchBeforeNote, 'note save does not write question/round/operation storage');
+      assert.notEqual(await page.evaluate(() => localStorage.getItem('vr-notes')), noteBefore);
+      phase = 'resume-explicit-round-save';
+      await noteDraft.fill('研究保存不得清除另一份脏笔记');
+      await panel.getByLabel('本轮判断', { exact: true }).fill('显式核对保存，不双写笔记');
+      const notesBeforeRound = await page.evaluate(() => localStorage.getItem('vr-notes'));
+      const historyLengthBeforeSave = await page.evaluate(() => history.length);
+      await panel.getByTestId('check-save-round').click(); await panel.getByText(/本轮已保存。/).waitFor(); await frames();
+      assert.equal(await singleDialog.isVisible(), false, 'save receipt cannot discard or prompt for the independent note');
+      assert.equal(await noteDraft.inputValue(), '研究保存不得清除另一份脏笔记');
+      assert.equal(await page.evaluate(() => history.length), historyLengthBeforeSave, 'saved identity uses replace');
+      assert.equal(await page.evaluate(() => localStorage.getItem('vr-notes')), notesBeforeRound);
+      const afterRound = await readDatabase(page), savedA = afterRound.questions.find(item => item.id === qa.id);
+      assert.equal(new URL(page.url()).searchParams.get('round'), savedA.headRoundId);
+      assert.equal(afterRound.rounds.length, researchBeforeNote.rounds.length + 1);
+      assert.deepEqual(afterRound.rounds.find(round => round.id === historical.id), historical);
+      // Save the note explicitly, then inspect read-only recovery and recent browsing.
+      phase = 'resume-explicit-note-save';
+      await page.getByTestId('candidate-research-note').getByRole('button', { name: '保存暂定研究', exact: true }).click();
+      await page.getByTestId('candidate-research-note').getByRole('button', { name: '已保存暂定研究', exact: true }).waitFor(); await frames();
+
+      phase = 'resume-recent-and-invalid-targets';
+      await panel.getByLabel('打开原研究轮次', { exact: true }).selectOption(historical.id); await settleSelection(qa, historical.id);
+      await page.goto('/'); await page.getByTestId('recent-research').getByTestId('resume-research').filter({ hasText: '600519' }).click(); await settleSelection(qa, historical.id);
+      const beforeInvalid = await readDatabase(page), recentBeforeInvalid = await page.evaluate(() => localStorage.getItem('vr-research-resume-v1'));
+      const invalidTargets = [
+        '/candidates/600519?question=missing', href(qb, qb.headRoundId).replace('/000001?', '/600519?'),
+        href(qa, qa2.headRoundId), '/candidates/600519?round=orphan', '/candidates/600519?question=q&question=q',
+        '/candidates/600519?question=%FF', '/candidates/600519?question=' + 'q'.repeat(257),
+      ];
+      for (const target of invalidTargets) {
+        await page.goto(target); await page.getByTestId('check-error').waitFor();
+        assert.equal(await page.getByTestId('research-check-panel').getByLabel('本轮判断', { exact: true }).isDisabled(), true);
+        assert.equal(await page.evaluate(() => localStorage.getItem('vr-research-resume-v1')), recentBeforeInvalid, 'failed target must not replace the valid precise recent visit');
+      }
+      assert.deepEqual(await readDatabase(page), beforeInvalid);
+      await page.screenshot({ path: join(output, `resume-invalid-${width}.png`) });
+      for (const question of [qa2, qb2, paused]) {
+        await page.goto(href(question)); await settleSelection(question, question.headRoundId);
+        assert.equal((await readDatabase(page)).questions.find(item => item.id === question.id).status, question.status);
+      }
+      assert.match(await page.getByTestId('research-check-panel').innerText(), /尚无已保存核对轮次/);
+      assert.deepEqual(await readDatabase(page), beforeInvalid, 'resolved/archived/paused opens do not reopen or create rounds');
+
+      phase = 'resume-late-context-and-retry';
+      await page.goto(href(qa, historical.id)); await settleSelection(qa, historical.id);
+      await page.evaluate(() => {
+        const native = IDBDatabase.prototype.transaction;
+        IDBDatabase.prototype.transaction = function(...args) {
+          const tx = native.apply(this, args);
+          if (this.name === 'vr-research-workflow' && args[1] === 'readonly' && window.__holdContext) {
+            window.__holdContext = false;
+            const descriptor = Object.getOwnPropertyDescriptor(IDBTransaction.prototype, 'oncomplete');
+            Object.defineProperty(tx, 'oncomplete', { configurable: true, set(listener) { descriptor.set.call(this, event => { window.__releaseContext = () => listener.call(this, event); }); } });
+          }
+          return tx;
+        }; window.__holdContext = true;
+      });
+      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa2.id);
+      await page.waitForFunction(() => typeof window.__releaseContext === 'function');
+      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa.id); await settleSelection(qa, savedA.headRoundId);
+      await page.evaluate(() => window.__releaseContext()); await frames();
+      assert.equal(await panel.getByLabel('这只股票的研究问题', { exact: true }).inputValue(), qa.id);
+      await page.evaluate(() => {
+        const native = IDBDatabase.prototype.transaction;
+        IDBDatabase.prototype.transaction = function(...args) { if (this.name === 'vr-research-workflow' && args[1] === 'readonly' && window.__denyResumeReads) throw new DOMException('Synthetic unavailable', 'SecurityError'); return native.apply(this, args); };
+        window.__denyResumeReads = true;
+      });
+      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa2.id); await panel.getByTestId('check-error').waitFor();
+      assert.match(await panel.getByTestId('check-error').innerText(), /读取失败/);
+      await page.evaluate(() => { window.__denyResumeReads = false; });
+      await panel.getByRole('button', { name: '重试读取已保存上下文', exact: true }).click(); await settleSelection(qa2, qa2.headRoundId);
+
+      phase = 'resume-held-save-new-question';
+      await panel.getByLabel('本轮判断', { exact: true }).fill('Q2旧保存迟到不得覆盖Q1');
+      await page.evaluate(() => {
+        const descriptor = Object.getOwnPropertyDescriptor(IDBTransaction.prototype, 'oncomplete'); let hold = true;
+        window.__restoreCompletion = () => Object.defineProperty(IDBTransaction.prototype, 'oncomplete', descriptor);
+        Object.defineProperty(IDBTransaction.prototype, 'oncomplete', { ...descriptor, set(listener) {
+          if (hold && this.mode === 'readwrite') { hold = false; descriptor.set.call(this, event => { window.__releaseCompletion = () => listener.call(this, event); }); }
+          else descriptor.set.call(this, listener);
+        } });
+      });
+      await panel.getByTestId('check-save-round').click(); await page.waitForFunction(() => typeof window.__releaseCompletion === 'function');
+      // Browser Back targets Q1 and legitimately uses the page's sole dirty confirmation while a receipt is held.
+      await page.goBack(); await singleDialog.waitFor();
+      await singleDialog.getByRole('button', { name: '放弃未保存内容并离开', exact: true }).click(); await settleSelection(qa, savedA.headRoundId);
+      await panel.getByLabel('本轮判断', { exact: true }).fill('Q1新的草稿保持');
+      const newHref = page.url();
+      await page.evaluate(() => { window.__restoreCompletion(); window.__releaseCompletion(); }); await frames();
+      assert.equal(page.url(), newHref); assert.equal(await panel.getByLabel('本轮判断', { exact: true }).inputValue(), 'Q1新的草稿保持');
+      assert.equal(await panel.getByLabel('这只股票的研究问题', { exact: true }).inputValue(), qa.id);
+      assert.match(await panel.getByTestId('check-notice').innerText(), /先前提交的研究轮次已保存/);
+      await panel.getByRole('button', { name: '放弃当前核对草稿', exact: true }).click(); await singleDialog.waitFor();
+      await singleDialog.getByRole('button', { name: '放弃未保存内容并离开', exact: true }).click();
+      await frames();
+      const allowedResearchPhases = ['resume-fixture-init', 'resume-explicit-round-save', 'resume-held-save-new-question'];
+      assert.deepEqual(storageWrites.filter(event => event.phase.startsWith('resume-') && event.kind === 'research' && !allowedResearchPhases.includes(event.phase)), [], 'pure resume/navigation/history performs zero native research writes');
+      assert.deepEqual(storageWrites.filter(event => event.phase.startsWith('resume-') && event.kind === 'note' && event.phase !== 'resume-explicit-note-save'), [], 'navigation never writes notes');
+      assert.ok(storageWrites.some(event => event.phase === 'resume-explicit-note-save' && event.kind === 'note'));
+      assert.ok(storageWrites.some(event => event.phase === 'resume-explicit-round-save' && event.kind === 'research'));
+
       phase = 'layout-and-no-side-effects';
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'responsive page must not overflow horizontally');
       assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.deepEqual(writes, [], 'no formal state, AI, upload, import or index API writes');
-      results.push({ width, status: 'PASS', evidence: 'synthetic production-dist UI with real disposable IndexedDB; not natural usage or PDF/PIT proof', reads, writes });
+      results.push({ width, status: 'PASS', evidence: 'synthetic production-dist UI with real disposable IndexedDB; not natural usage or PDF/PIT proof', reads, writes, storageWrites });
     } catch (error) {
-      results.push({ width, status: 'FAIL', phase, error: error.message, stack: error.stack, errors, external, reads, writes });
+      results.push({ width, status: 'FAIL', phase, error: error.message, stack: error.stack, errors, external, reads, writes, storageWrites });
       await page.screenshot({ path: join(output, `failure-${width}.png`) }).catch(() => {}); throw error;
     } finally { delayed?.release(); await context.close(); }
   }

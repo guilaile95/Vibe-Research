@@ -8,6 +8,7 @@ import { join, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { readReply } from './ai-settings-storage.fixture.mjs';
+import { installResearchWriteAudit } from './research-write-audit.fixture.mjs';
 import { navigationEvidencePage } from './research-navigation.fixture.mjs';
 const dist = fileURLToPath(new URL('../../dist/', import.meta.url));
 const output = process.env.RESEARCH_NAVIGATION_OUTPUT_DIR || mkdtempSync(join(tmpdir(), 'research-navigation-'));
@@ -26,9 +27,10 @@ const results = []; let browser;
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 try {
   browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } : {}) });
-  for (const width of [1440, 390]) {
+  for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ baseURL, viewport: { width, height: 960 }, serviceWorkers: 'block' });
-    const errors = [], external = [], writes = [], reads = []; let record; let slow = false;
+    const errors = [], external = [], writes = [], reads = []; let record; let slow = false; let phase = 'fixture-init';
+    const storageWrites = await installResearchWriteAudit(context, () => phase);
     const started = deferred(), release = deferred();
     await context.routeWebSocket('**/*', socket => { external.push(socket.url()); socket.close(); });
     await context.route('**/*', async route => {
@@ -38,7 +40,8 @@ try {
       if (!path.startsWith('/api/')) return route.continue();
       const ok = data => route.fulfill({ json: { data } });
       if (request.method() !== 'GET') {
-        writes.push({ path, method: request.method(), body: request.postDataJSON() });
+        writes.push({ phase, path, method: request.method(), body: request.postDataJSON() });
+        assert.equal(phase, 'create-evidence', 'only the explicit Evidence save may mutate');
         assert.equal(path, '/api/evidence'); assert.equal(request.method(), 'POST');
         record = { ...request.postDataJSON(), id: 'synthetic-evidence', created_at: '2026-10-22T00:00:00Z', updated_at: '2026-10-22T00:00:00Z', deleted: 0 };
         return ok(record);
@@ -54,7 +57,7 @@ try {
       const reply = readReply('GET', path, url.search); if (reply) return route.fulfill({ json: reply });
       return route.fulfill({ status: 503, json: { detail: 'Synthetic unavailable source' } });
     });
-    let phase = 'create-page';
+    phase = 'create-page';
     const page = await context.newPage(); page.setDefaultTimeout(10000); page.on('pageerror', error => errors.push(error.message));
     try {
       phase = 'watchlist-entry';
@@ -62,7 +65,13 @@ try {
       const entry = page.getByTestId('watchlist-candidate-600519'); await entry.waitFor();
       const expectedReturn = '/watchlist?sort=amount&anomalies=0#watchlist-600519';
       assert.equal(new URL(await entry.getAttribute('href'), baseURL).searchParams.get('return_to'), expectedReturn);
+      // Preserve the direct one-click Watchlist data shortcut, not only Candidate's href.
+      const directData = page.locator('a[href="/stock-data?code=600519"]').first();
+      await directData.click(); await page.getByRole('heading', { name: '个股数据', exact: true }).waitFor();
+      assert.equal(new URL(page.url()).pathname, '/stock-data');
+      await page.goBack(); await entry.waitFor();
       await entry.click(); await page.getByRole('heading', { name: '候选研究 · 合成公司（600519）', exact: true }).waitFor();
+      assert.deepEqual(writes, [], 'initial pure navigation must not save Evidence');
       phase = 'create-evidence';
       await page.getByTestId('candidate-add-evidence').click();
       await page.getByPlaceholder('一句话陈述这条证据说了什么。例如：公司2024Q3营收同比+25%，超出市场一致预期+18%。').fill('合成证据，不含真实研究');
@@ -136,7 +145,9 @@ try {
       assert.equal(new URL(await page.getByTestId('stock-data-candidate-entry').getAttribute('href'), baseURL).pathname, '/candidates/600520');
       assert.equal(await page.getByText('旧股晚到', { exact: true }).count(), 0);
       assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.equal(writes.length, 1);
-      results.push({ width, status: 'PASS', reads, writes });
+      assert.deepEqual(storageWrites.filter(event => event.kind !== 'navigation-preference'), [], 'navigation never writes research questions or notes');
+      assert.deepEqual(writes.filter(event => event.phase !== 'create-evidence'), [], 'navigation phase has zero formal writes');
+      results.push({ width, status: 'PASS', reads, writes, storageWrites });
     } catch (error) {
       const dom = await page.evaluate(() => ({
         url: location.href,
