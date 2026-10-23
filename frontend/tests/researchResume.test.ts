@@ -106,3 +106,19 @@ test("same-stock Candidate return converges across five StockData roundtrips", (
   assert.equal(href, "/candidates/600519?return_to=%2Fwatchlist&question=q&round=r#candidate-research-check");
   for (const target of [href.replace("600519", "000001"), "//evil.example", "/candidates/600519?question=q&round=", "/stock-data?code=600519"]) assert.equal(sameStockCandidateReturn(target, "600519"), null);
 });
+
+test("unencodable legacy identities fail closed before URL APIs can alias them to replacement characters", () => {
+  for (const value of ["\uD800", "\uDC00", "x\uD800y", "x\uDC00y"]) {
+    assert.equal(researchSelectionHref("/candidates/600519", value), null);
+    assert.equal(researchSelectionHref("/candidates/600519", "valid", value), null);
+    assert.deepEqual(parseResearchSelection(`?question=${value}`), { status: "invalid" });
+    assert.deepEqual(parseResearchSelection(`?question=valid&round=${value}`), { status: "invalid" });
+    assert.equal(researchVisitHref(`/candidates/600519?question=${value}`), null);
+    assert.equal(researchVisitHref(`/candidates/600519?question=valid&round=${value}`), null);
+  }
+  for (const value of ["\uFFFD", "😀", "历史😀 /?&=#+% "]) {
+    const href = researchSelectionHref("/candidates/600519", value, value)!;
+    assert.ok(href);
+    assert.deepEqual(parseResearchSelection(new URL(href, "http://localhost").search), { status: "selected", questionId: value, roundId: value });
+  }
+});

@@ -63,6 +63,7 @@ export function CandidateWorkspace() {
   const name = nameContext?.code === code ? nameContext.name : null;
   const [checkDirty, setCheckDirty] = useState(false);
   const [noteDirty, setNoteDirty] = useState(false);
+  const [selectionError, setSelectionError] = useState("");
   const navigate = useNavigate();
   const currentHref = `${location.pathname}${location.search}${location.hash}`;
   const selection = useMemo(() => parseResearchSelection(location.search), [location.search]);
@@ -87,6 +88,7 @@ export function CandidateWorkspace() {
     return risk === "page" ? checkDirty || noteDirty : risk === "question" && checkDirty;
   });
   const navigationPending = blocker.state === "blocked" || discardAction !== null;
+  useEffect(() => { setSelectionError(""); }, [currentHref]);
   useEffect(() => { if (blocker.state === "blocked") setDiscardAction(null); }, [blocker.state]);
   useEffect(() => {
     if (navigationPending) leaveDialog.current?.showModal();
@@ -104,7 +106,9 @@ export function CandidateWorkspace() {
     // Only a receipt for the still-current operation may synchronize its exact saved identity.
     if (expectedHref !== undefined && expectedHref.split("#")[0] !== from.split("#")[0]) return;
     const to = researchSelectionHref(from, questionId, roundId);
-    if (!to || to === from) return;
+    if (!to) { setSelectionError("该问题或轮次标识无法无损用于网址定位，未切换到其他记录。"); return; }
+    setSelectionError("");
+    if (to === from) return;
     if (replace) syncReceipt.current = { from, to };
     navigate(to, { replace, state: location.state });
     syncReceipt.current = null;
@@ -234,6 +238,7 @@ export function CandidateWorkspace() {
           <button type="button" className="rounded border border-border px-3 py-2 text-sm" onClick={() => { const action = discardAction; setDiscardAction(null); if (blocker.state === "blocked") blocker.proceed(); else action?.(); }}>放弃未保存内容并离开</button>
         </div>
       </dialog>
+      {selectionError && <p role="alert" className="text-sm text-warning" data-testid="research-selection-error">{selectionError}</p>}
       <PageHeader
         title={`候选研究 · ${name ? `${name}（${code}）` : code}`}
         subtitle="先核对资料、提问并留下暂定看法；需要正式决策时，再建立投资计划。"

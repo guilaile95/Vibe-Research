@@ -18,8 +18,15 @@ export type ResearchSelection =
   | { status: "invalid" }
   | { status: "selected"; questionId: string; roundId: string | null };
 
+// Legacy storage permits arbitrary JS strings. URL APIs replace lone surrogates
+// with U+FFFD, which could name a different saved record; reject before conversion.
+function canEncodeLocator(value: string): boolean {
+  try { encodeURIComponent(value); return true; } catch { return false; }
+}
+
 /** URL is only a locator. Ownership is checked against the validated local snapshot. */
 export function parseResearchSelection(search: string): ResearchSelection {
+  if (!canEncodeLocator(search)) return { status: "invalid" };
   const params = new URLSearchParams(search);
   const questions = params.getAll("question"), rounds = params.getAll("round");
   if (!questions.length && !rounds.length) return { status: "absent" };
@@ -38,6 +45,7 @@ export function parseResearchSelection(search: string): ResearchSelection {
 }
 
 export function researchSelectionHref(path: string, questionId: string | null, roundId: string | null = null): string | null {
+  if (![path, questionId, roundId].every(value => value === null || canEncodeLocator(value))) return null;
   const internal = safeInternalReturnTo(path, "");
   if (!internal) return null;
   const url = new URL(internal, "http://localhost");
@@ -66,6 +74,7 @@ export function sameStockCandidateReturn(value: string, code: string): string | 
 
 /** Browser navigation only. Never persist evidence, portfolio state or inferred research progress. */
 export function researchVisitHref(value: string): string | null {
+  if (!canEncodeLocator(value)) return null;
   const internal = safeInternalReturnTo(value, "");
   if (!internal) return null;
   const url = new URL(internal, "http://localhost");

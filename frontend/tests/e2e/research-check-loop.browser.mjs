@@ -366,6 +366,22 @@ try {
       await page.goBack(); await settleSelection(qa, qa.headRoundId);
       await page.goForward(); await settleSelection(qa, historical.id);
 
+      await storageWrites.flush(page); phase = 'resume-unencodable-identity'; await storageWrites.setPhase(page, phase);
+      const unencodable = fixture.questions.find(question => question.id === '\uD800');
+      const replacement = fixture.questions.find(question => question.id === '\uFFFD');
+      const emoji = fixture.questions.find(question => question.id === 'emoji-😀');
+      const identityHref = page.url(), identityDatabase = await readDatabase(page);
+      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(unencodable.id);
+      await page.getByTestId('research-selection-error').waitFor();
+      assert.match(await page.getByTestId('research-selection-error').innerText(), /无法无损/);
+      assert.equal(page.url(), identityHref);
+      assert.equal(await panel.getByLabel('这只股票的研究问题', { exact: true }).inputValue(), qa.id);
+      assert.deepEqual(await readDatabase(page), identityDatabase, 'invalid scalar identity never aliases or rewrites either saved record');
+      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(replacement.id); await settleSelection(replacement, null);
+      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(emoji.id); await settleSelection(emoji, emoji.headRoundId);
+      assert.equal(await page.getByTestId('research-selection-error').count(), 0);
+      assert.deepEqual(await readDatabase(page), identityDatabase);
+
       await storageWrites.flush(page); phase = 'resume-hard-back-beforeunload'; await storageWrites.setPhase(page, phase);
       const hardBackPage = await context.newPage(); hardBackPage.setDefaultTimeout(15000);
       hardBackPage.on('pageerror', error => errors.push(error.message));
@@ -384,9 +400,10 @@ try {
       // Listen for this one native prompt explicitly; Playwright otherwise auto-
       // accepts beforeunload. Native history.back() traverses the real document
       // history without waiting for a load event that cancellation must prevent.
-      const nativePrompt = hardBackPage.waitForEvent('dialog');
-      await hardBackPage.evaluate(() => history.back());
-      const prompt = await nativePrompt; assert.equal(prompt.type(), 'beforeunload'); await prompt.dismiss();
+      const nativePrompt = hardBackPage.waitForEvent('dialog').then(async prompt => {
+        assert.equal(prompt.type(), 'beforeunload'); await prompt.dismiss();
+      });
+      await Promise.all([nativePrompt, hardBackPage.evaluate(() => history.back())]);
       assert.equal(hardBackPage.url(), hardHref);
       assert.equal(await hardBackPage.evaluate(() => window.__hardBackDocument), 'retain-both-drafts');
       assert.equal(await hardNote.inputValue(), '硬导航取消后独立笔记仍在');

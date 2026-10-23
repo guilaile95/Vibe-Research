@@ -58,6 +58,9 @@ export function resumeContextFixture(baseTime = 100) {
     ['B-Q1', '000001', 'watching', 1],
     ['B-Q2', '000001', 'archived', 1],
     ['paused-empty', '600519', 'paused', 0],
+    ['\uD800', '600519', 'paused', 0],
+    ['\uFFFD', '600519', 'paused', 0],
+    ['emoji-😀', '600519', 'watching', 1],
   ];
   const questions = [], rounds = [];
   for (const [id, securityCode, status, count] of specs) {
