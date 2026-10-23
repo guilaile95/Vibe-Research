@@ -97,6 +97,8 @@ def commit_decision_proposal(
         raise HTTPException(404, _CAMPAIGN_NOT_FOUND) from None
     except runtime.CommitConfirmationRequiredError:
         raise HTTPException(422, _CONFIRMATION_REQUIRED) from None
+    except frozen_decision_service.FrozenDecisionReviewBoundaryExpiredError:
+        raise HTTPException(409, "复核时间已过期，请更新 review_by 后重新预览") from None
     except runtime.ProposalStaleError:
         raise HTTPException(409, _STALE_PROPOSAL) from None
     except runtime.TerminalCampaignDecisionConflictError:

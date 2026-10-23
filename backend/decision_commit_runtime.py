@@ -1311,6 +1311,8 @@ def preview_decision_proposal(
     draft_payload = dict(payload)
     draft_payload.pop("draft_witness", None)
     drafts = _validate_draft_inputs(draft_payload)
+    if drafts["review_by"] <= utc_now_iso():
+        raise DecisionCommitInputError("review_by 必须晚于服务器当前时间")
     snapshot_as_of = utc_now_iso() if as_of is None else as_of
     if not isinstance(snapshot_as_of, str):
         raise DecisionCommitInputError("as_of must be a string")

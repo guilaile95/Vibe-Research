@@ -219,9 +219,9 @@ class TestDerivationWithTrades:
 
     def test_oversell_fail_closed(self):
         _bootstrap([_legacy("600519", 100, 10.0)])
-        _trade("600519", "sell", 15.0, 150)
-        with pytest.raises(svc.PositionDerivationError):
-            svc.derive_positions()
+        with pytest.raises(trade_ledger_service.TradeReconciliationRequiredError):
+            _trade("600519", "sell", 15.0, 150)
+        assert _derived("600519")["shares"] == 100
 
     def test_post_vibe_trade_without_bootstrap(self):
         _trade("600519", "buy", 10.0, 100)
@@ -482,9 +482,9 @@ class TestLedgerStartBoundary:
 
     def test_trade_before_ledger_start_fail_closed(self):
         _bootstrap([_legacy("600519", 100, 10.0)], ledger_start_at="2026-08-05")
-        _trade("600519", "buy", 10.0, 100, executed_at="2026-08-03T09:30:00+08:00")
-        with pytest.raises(svc.PositionDerivationError):
-            svc.derive_positions()
+        with pytest.raises(trade_ledger_service.TradeReconciliationRequiredError):
+            _trade("600519", "buy", 10.0, 100, executed_at="2026-08-03T09:30:00+08:00")
+        assert _derived("600519")["shares"] == 100
 
     def test_invalid_ledger_start_rejected(self):
         with pytest.raises(svc.PositionValidationError):
@@ -748,8 +748,8 @@ class TestVoidCascade:
             "after_payload": {"actual_quantity": 50},
             "reason": "成交数量修正",
         })
-        # 模拟既有 /api/trades/{id}/void（不级联）：交易作废，correction 残留为孤儿
-        trade_ledger_service.void_trade(trade["trade_id"], "既有 void 端点")
+        # 直接构造修复前历史孤儿；所有现行公开端点现在均级联
+        trade_ledger_store.void_record_atomic(svc.resolve_db_path(), trade["trade_id"], "historical orphan fixture")
         with pytest.raises(svc.PositionDerivationError):
             svc.derive_positions()
         # 新端点再调：同一事务清理孤儿 correction，返回成功恢复状态（不返回 409）
@@ -859,7 +859,7 @@ class TestVoidAtomicFailureInjection:
             "target_event_type": "trade",
             "after_payload": {"actual_quantity": 50},
         })
-        trade_ledger_service.void_trade(trade["trade_id"], "既有 void")
+        trade_ledger_store.void_record_atomic(svc.resolve_db_path(), trade["trade_id"], "historical orphan fixture")
         result = svc.void_trade_with_cascade(trade["trade_id"], "恢复")
         assert result["status"] == "ALREADY_VOIDED_RECOVERED"
         assert result["cascade_voided"] == 1
