@@ -382,12 +382,11 @@ try {
       await hardPanel.getByRole('button', { name: '放弃当前核对草稿', exact: true }).click();
       const hardModal = hardBackPage.getByRole('dialog', { name: '研究内容尚未保存' }); await hardModal.waitFor();
       // Listen for this one native prompt explicitly; Playwright otherwise auto-
-      // accepts beforeunload. Do not suppress arbitrary alerts or navigation errors.
+      // accepts beforeunload. Native history.back() traverses the real document
+      // history without waiting for a load event that cancellation must prevent.
       const nativePrompt = hardBackPage.waitForEvent('dialog');
-      const hardNavigation = hardBackPage.goBack().then(() => null, error => error);
+      await hardBackPage.evaluate(() => history.back());
       const prompt = await nativePrompt; assert.equal(prompt.type(), 'beforeunload'); await prompt.dismiss();
-      const navigationError = await hardNavigation;
-      if (navigationError) assert.match(navigationError.message, /navigation cancelled by beforeunload dialog/);
       assert.equal(hardBackPage.url(), hardHref);
       assert.equal(await hardBackPage.evaluate(() => window.__hardBackDocument), 'retain-both-drafts');
       assert.equal(await hardNote.inputValue(), '硬导航取消后独立笔记仍在');
