@@ -234,7 +234,7 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
       const question = result?.question || await store.createQuestion(pending.create!);
       const committedRound = result?.round || pending.create!.initialRound!;
       if (!mounted.current) return;
-      if (generation !== requestGeneration.current || hrefRef.current !== expectedHref) {
+      if (generation !== requestGeneration.current || hrefRef.current.split("#")[0] !== expectedHref.split("#")[0]) {
         setQuestions(current => [question, ...current.filter(item => item.id !== question.id)]);
         setNotice("先前提交的研究轮次已保存；当前视图已变化，未覆盖当前草稿。可从问题列表打开已保存记录。");
         // Keep the identical operation receipt available for a retry, rather than creating it again.
@@ -253,7 +253,7 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
     try {
       const context = await store.getQuestionContext(questionId);
       if (!context || context.question.securityCode !== code) throw new Error("问题不再可用。");
-      if (mounted.current && generation === requestGeneration.current && hrefRef.current === expectedHref) {
+      if (mounted.current && generation === requestGeneration.current && hrefRef.current.split("#")[0] === expectedHref.split("#")[0]) {
         setActive(context.question); setRounds(context.rounds); setViewedId(context.question.headRoundId || ""); operation.current = null;
         onSelectionChange(questionId, context.question.headRoundId, false, expectedHref);
         setNotice("已显示最新轮次，当前草稿原样保留。请核对冲突后再保存，届时会追加到最新轮次。");
@@ -370,7 +370,7 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
         <label className="block text-xs">保存后的问题状态<select aria-label="保存后的问题状态" value={status} onChange={e => setStatus(e.target.value as ResearchQuestionStatus)} className={fieldClass}>{(["watching", "resolved", "paused"] as const).map(key => <option key={key} value={key}>{statusLabels[key]}</option>)}</select></label>
         <p className="text-xs text-muted-foreground">观察中：打开 / 刷新时核对；已解决：保留新依据提示但不自动重开；已暂停：不提示常规待办，手动仍能检查。此处不改变任何正式决定。</p>
       </section>
-      <div className="flex flex-wrap gap-2"><button type="button" disabled={busy || loading || reading || searching} className={buttonClass} onClick={() => void save()} data-testid="check-save-round">{busy ? "保存 / 读取中…" : active ? "保存新一轮核对" : "保存问题与第一轮核对"}</button><button type="button" className={buttonClass} onClick={() => { if (dirty) onRequestDiscard(() => { requestGeneration.current++; reportGeneration.current++; setBusy(false); setReading(false); setSearching(false); clearDraft(active); }); }} disabled={!dirty}>放弃当前核对草稿</button></div>
+      <div className="flex flex-wrap gap-2"><button type="button" disabled={busy || loading || reading || searching} className={buttonClass} onClick={() => void save()} data-testid="check-save-round">{busy ? "保存 / 读取中…" : active ? "保存新一轮核对" : "保存问题与第一轮核对"}</button><button type="button" className={buttonClass} onClick={() => { if (dirty) onRequestDiscard(() => { requestGeneration.current++; reportGeneration.current++; setReportLoading(false); setBusy(false); setReading(false); setSearching(false); clearDraft(active); }); }} disabled={!dirty}>放弃当前核对草稿</button></div>
     </fieldset>
     {dirty && <p role="status" className="text-xs text-warning">有未保存的核对草稿；失败或并发冲突不会清空草稿。请先保存再离开。</p>}
     {error && <p role="alert" className="whitespace-pre-wrap text-xs text-warning" data-testid="check-error">{error}</p>}{notice && <p role="status" className="text-xs" data-testid="check-notice">{notice}</p>}

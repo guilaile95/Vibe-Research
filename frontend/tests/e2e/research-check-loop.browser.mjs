@@ -69,7 +69,7 @@ try {
   browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } : {}) });
   for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ baseURL, viewport: { width, height: 960 }, serviceWorkers: 'block' });
-    const errors = [], external = [], writes = [], reads = []; let phase = 'setup', reportStage = 0, delayed = null;
+    const errors = [], external = [], writes = [], reads = []; let phase = 'setup', reportStage = 0, delayed = null, heldReportList = null;
     const storageWrites = await installResearchWriteAudit(context, () => phase);
     await context.routeWebSocket('**/*', socket => { external.push(socket.url()); socket.close(); });
     await context.route('**/*', async route => {
@@ -87,6 +87,7 @@ try {
         return route.fulfill({ json: researchCheckPageReadReply(input, reportStage) });
       }
       if (request.method() !== 'GET') { writes.push({ phase, path, method: request.method() }); return route.fulfill({ status: 503, json: { detail: 'Synthetic fixture rejects all mutation/model endpoints' } }); }
+      if (path === '/api/myreports' && heldReportList) { heldReportList.started(); await heldReportList.promise; }
       const reply = researchCheckReadReply(path, url.search, reportStage) ?? readReply('GET', path, url.search);
       if (reply !== null) return route.fulfill({ json: reply });
       return route.fulfill({ status: 503, json: { detail: 'Synthetic unavailable source' } });
@@ -351,13 +352,20 @@ try {
       await page.goForward(); await settleSelection(qa, historical.id);
 
       phase = 'resume-two-drafts-single-owner';
+      await page.goto('/watchlist'); await page.goto(href(qa, historical.id)); await settleSelection(qa, historical.id);
       const noteDraft = page.getByTestId('candidate-research-note').getByPlaceholder('先写目前的理解，不必形成正式结论', { exact: true });
       await noteDraft.fill('独立轻量草稿保持');
       await panel.getByLabel('本轮判断', { exact: true }).fill('核对草稿保持');
       const dirtyHref = page.url();
+      const singleDialog = page.getByRole('dialog', { name: '研究内容尚未保存' });
+      await panel.getByRole('button', { name: '放弃当前核对草稿', exact: true }).click(); await singleDialog.waitFor();
+      assert.match(await singleDialog.innerText(), /独立轻量笔记仍保留/);
+      await page.goBack(); await singleDialog.getByText(/离开会丢失/).waitFor();
+      assert.doesNotMatch(await singleDialog.innerText(), /独立轻量笔记仍保留/);
+      await page.keyboard.press('Escape'); await singleDialog.waitFor({ state: 'hidden' });
+      assert.equal(page.url(), dirtyHref); assert.equal(await noteDraft.inputValue(), '独立轻量草稿保持');
       await panel.getByLabel('这只股票的研究问题', { exact: true }).focus();
-      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa2.id);
-      const singleDialog = page.getByRole('dialog', { name: '研究内容尚未保存' }); await singleDialog.waitFor();
+      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa2.id); await singleDialog.waitFor();
       assert.equal(await page.locator('dialog[open]').count(), 1);
       assert.equal(await page.evaluate(() => document.activeElement?.closest('dialog')?.open), true);
       await page.keyboard.press('Tab'); assert.equal(await page.evaluate(() => document.activeElement?.closest('dialog')?.open), true);
@@ -445,20 +453,30 @@ try {
       });
       await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa2.id);
       await page.waitForFunction(() => typeof window.__releaseContext === 'function');
-      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa.id); await settleSelection(qa, savedA.headRoundId);
+      await page.getByRole('navigation', { name: '候选研究快速接续' }).getByRole('link', { name: '轻量笔记与 AI 草稿', exact: true }).click();
+      await page.evaluate(() => window.__releaseContext()); await settleSelection(qa2, qa2.headRoundId);
+      assert.equal(new URL(page.url()).hash, '#candidate-research-note', 'late question-only normalization keeps the latest hash');
+      const hashResume = await page.evaluate(() => JSON.parse(localStorage.getItem('vr-research-resume-v1'))[0].href);
+      assert.equal(new URL(hashResume, baseURL).searchParams.get('round'), qa2.headRoundId);
+      assert.equal(new URL(hashResume, baseURL).hash, '#candidate-research-note');
+      await page.evaluate(() => { window.__holdContext = true; delete window.__releaseContext; });
+      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa.id);
+      await page.waitForFunction(() => typeof window.__releaseContext === 'function');
+      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa2.id); await settleSelection(qa2, qa2.headRoundId);
       await page.evaluate(() => window.__releaseContext()); await frames();
-      assert.equal(await panel.getByLabel('这只股票的研究问题', { exact: true }).inputValue(), qa.id);
+      assert.equal(await panel.getByLabel('这只股票的研究问题', { exact: true }).inputValue(), qa2.id);
       await page.evaluate(() => {
         const native = IDBDatabase.prototype.transaction;
         IDBDatabase.prototype.transaction = function(...args) { if (this.name === 'vr-research-workflow' && args[1] === 'readonly' && window.__denyResumeReads) throw new DOMException('Synthetic unavailable', 'SecurityError'); return native.apply(this, args); };
         window.__denyResumeReads = true;
       });
-      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa2.id); await panel.getByTestId('check-error').waitFor();
+      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa.id); await panel.getByTestId('check-error').waitFor();
       assert.match(await panel.getByTestId('check-error').innerText(), /读取失败/);
       await page.evaluate(() => { window.__denyResumeReads = false; });
-      await panel.getByRole('button', { name: '重试读取已保存上下文', exact: true }).click(); await settleSelection(qa2, qa2.headRoundId);
+      await panel.getByRole('button', { name: '重试读取已保存上下文', exact: true }).click(); await settleSelection(qa, savedA.headRoundId);
 
       phase = 'resume-held-save-new-question';
+      await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa2.id); await settleSelection(qa2, qa2.headRoundId);
       await panel.getByLabel('本轮判断', { exact: true }).fill('Q2旧保存迟到不得覆盖Q1');
       await page.evaluate(() => {
         const descriptor = Object.getOwnPropertyDescriptor(IDBTransaction.prototype, 'oncomplete'); let hold = true;
@@ -474,13 +492,38 @@ try {
       await singleDialog.getByRole('button', { name: '放弃未保存内容并离开', exact: true }).click(); await settleSelection(qa, savedA.headRoundId);
       await panel.getByLabel('本轮判断', { exact: true }).fill('Q1新的草稿保持');
       const newHref = page.url();
-      await page.evaluate(() => { window.__restoreCompletion(); window.__releaseCompletion(); }); await frames();
+      await page.evaluate(() => {
+        window.__releaseOldSave = window.__releaseCompletion; window.__restoreCompletion();
+        const descriptor = Object.getOwnPropertyDescriptor(IDBTransaction.prototype, 'oncomplete'); let hold = true;
+        window.__restoreNewCompletion = () => Object.defineProperty(IDBTransaction.prototype, 'oncomplete', descriptor);
+        Object.defineProperty(IDBTransaction.prototype, 'oncomplete', { ...descriptor, set(listener) {
+          if (hold && this.mode === 'readwrite') { hold = false; descriptor.set.call(this, event => { window.__releaseNewSave = () => listener.call(this, event); }); }
+          else descriptor.set.call(this, listener);
+        } });
+      });
+      await panel.getByTestId('check-save-round').click(); await page.waitForFunction(() => typeof window.__releaseNewSave === 'function');
+      await page.evaluate(() => window.__releaseOldSave()); await frames();
       assert.equal(page.url(), newHref); assert.equal(await panel.getByLabel('本轮判断', { exact: true }).inputValue(), 'Q1新的草稿保持');
       assert.equal(await panel.getByLabel('这只股票的研究问题', { exact: true }).inputValue(), qa.id);
+      assert.equal(await panel.getByTestId('check-save-round').isDisabled(), true, 'old save finally cannot unlock the new question save');
       assert.match(await panel.getByTestId('check-notice').innerText(), /先前提交的研究轮次已保存/);
+      await page.evaluate(() => { window.__restoreNewCompletion(); window.__releaseNewSave(); });
+      await panel.getByText(/本轮已保存。/).waitFor(); await frames();
+      assert.equal(new URL(page.url()).searchParams.get('question'), qa.id);
+      phase = 'resume-discard-held-report-list';
+      await panel.getByLabel('本轮判断', { exact: true }).fill('放弃草稿应取消旧列表加载状态');
+      const reportSummary = panel.getByText('MyReports 原文件与指定页（不新建文档仓）', { exact: true });
+      if (!(await reportSummary.evaluate(node => node.parentElement.open))) await reportSummary.click();
+      let startedList, releaseList;
+      const listStarted = new Promise(resolve => { startedList = resolve; });
+      heldReportList = { started: startedList, promise: new Promise(resolve => { releaseList = resolve; }) };
+      await panel.getByRole('button', { name: '读取 / 刷新 MyReports 列表', exact: true }).click(); await listStarted;
       await panel.getByRole('button', { name: '放弃当前核对草稿', exact: true }).click(); await singleDialog.waitFor();
       await singleDialog.getByRole('button', { name: '放弃未保存内容并离开', exact: true }).click();
-      await frames();
+      assert.equal(await panel.getByRole('button', { name: '读取 / 刷新 MyReports 列表', exact: true }).isEnabled(), true);
+      heldReportList = null; releaseList(); await frames();
+      await panel.getByRole('button', { name: '读取 / 刷新 MyReports 列表', exact: true }).click();
+      await page.waitForFunction(() => document.querySelector('select[aria-label="本轮原文件"]')?.options.length > 1);
       const allowedResearchPhases = ['resume-fixture-init', 'resume-explicit-round-save', 'resume-held-save-new-question'];
       assert.deepEqual(storageWrites.filter(event => event.phase.startsWith('resume-') && event.kind === 'research' && !allowedResearchPhases.includes(event.phase)), [], 'pure resume/navigation/history performs zero native research writes');
       assert.deepEqual(storageWrites.filter(event => event.phase.startsWith('resume-') && event.kind === 'note' && event.phase !== 'resume-explicit-note-save'), [], 'navigation never writes notes');

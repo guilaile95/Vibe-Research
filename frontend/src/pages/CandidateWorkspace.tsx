@@ -67,6 +67,7 @@ export function CandidateWorkspace() {
   const currentHref = `${location.pathname}${location.search}${location.hash}`;
   const selection = useMemo(() => parseResearchSelection(location.search), [location.search]);
   const currentHrefRef = useRef(currentHref); currentHrefRef.current = currentHref;
+  const validatedLocation = useRef<string | null>(null);
   const syncReceipt = useRef<{ from: string; to: string } | null>(null);
   const [discardAction, setDiscardAction] = useState<(() => void) | null>(null);
   const leaveDialog = useRef<HTMLDialogElement>(null);
@@ -81,6 +82,7 @@ export function CandidateWorkspace() {
     return risk === "page" ? checkDirty || noteDirty : risk === "question" && checkDirty;
   });
   const navigationPending = blocker.state === "blocked" || discardAction !== null;
+  useEffect(() => { if (blocker.state === "blocked") setDiscardAction(null); }, [blocker.state]);
   useEffect(() => {
     if (navigationPending) leaveDialog.current?.showModal();
     else leaveDialog.current?.close();
@@ -95,7 +97,7 @@ export function CandidateWorkspace() {
   const changeSelection = useCallback((questionId: string | null, roundId: string | null, replace = false, expectedHref?: string) => {
     const from = currentHrefRef.current;
     // Only a receipt for the still-current operation may synchronize its exact saved identity.
-    if (expectedHref !== undefined && expectedHref !== from) return;
+    if (expectedHref !== undefined && expectedHref.split("#")[0] !== from.split("#")[0]) return;
     const to = researchSelectionHref(from, questionId, roundId);
     if (!to || to === from) return;
     if (replace) syncReceipt.current = { from, to };
@@ -103,7 +105,10 @@ export function CandidateWorkspace() {
     syncReceipt.current = null;
   }, [navigate, location.state]);
   const validatedVisit = useCallback((href: string) => {
-    if (href === currentHrefRef.current) rememberResearchVisit(href);
+    if (href.split("#")[0] === currentHrefRef.current.split("#")[0]) {
+      validatedLocation.current = href.split("#")[0];
+      rememberResearchVisit(currentHrefRef.current);
+    }
   }, []);
   const validCode = /^\d{6}$/.test(code);
   const [position, setPosition] = useState<LoadState<CandidatePositionPresentation>>(loadingState);
@@ -116,7 +121,7 @@ export function CandidateWorkspace() {
   const [valuationError, setValuationError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (validCode && selection.status === "absent") rememberResearchVisit(`${location.pathname}${location.search}${location.hash}`);
+    if (validCode && (selection.status === "absent" || validatedLocation.current === `${location.pathname}${location.search}`)) rememberResearchVisit(`${location.pathname}${location.search}${location.hash}`);
   }, [validCode, selection.status, location.pathname, location.search, location.hash]);
 
   useEffect(() => {
@@ -218,7 +223,7 @@ export function CandidateWorkspace() {
         className="m-auto w-11/12 max-w-md rounded-lg border border-border bg-background p-5 text-foreground shadow-xl backdrop:bg-black/50"
         onCancel={(event) => { event.preventDefault(); setDiscardAction(null); if (blocker.state === "blocked") blocker.reset(); }}>
         <h2 id="candidate-unsaved-title" className="font-semibold">研究内容尚未保存</h2>
-        <p id="candidate-unsaved-description" className="mt-2 text-sm text-muted-foreground">{discardAction || (blocker.state === "blocked" && researchNavigationRisk(location, blocker.location) === "question") ? "切换或放弃会清除当前核对草稿；独立轻量笔记仍保留。" : "离开会丢失本次未保存的问题、材料核对草稿和看法。可以留在这里继续编辑或先保存。"}</p>
+        <p id="candidate-unsaved-description" className="mt-2 text-sm text-muted-foreground">{(blocker.state === "blocked" ? researchNavigationRisk(location, blocker.location) === "question" : discardAction !== null) ? "切换或放弃会清除当前核对草稿；独立轻量笔记仍保留。" : "离开会丢失本次未保存的问题、材料核对草稿和看法。可以留在这里继续编辑或先保存。"}</p>
         <div className="mt-4 flex flex-wrap gap-3">
           <button type="button" autoFocus className="rounded border border-primary/40 px-3 py-2 text-sm text-primary" onClick={() => { setDiscardAction(null); if (blocker.state === "blocked") blocker.reset(); }}>留下继续编辑</button>
           <button type="button" className="rounded border border-border px-3 py-2 text-sm" onClick={() => { const action = discardAction; setDiscardAction(null); if (blocker.state === "blocked") blocker.proceed(); else action?.(); }}>放弃未保存内容并离开</button>

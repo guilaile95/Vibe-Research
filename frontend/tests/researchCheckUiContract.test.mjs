@@ -42,8 +42,8 @@ test('discovery card passes validated bounded snapshot separately from optional 
 test('history lookup preserves CAS while explicit reconcile alone updates current draft head', () => {
   assert.match(panel, /store\.getQuestionContext/);
   assert.match(panel, /if \(\(activeRef\.current\?\.id \|\| null\) !== question\.id\) \{ setActive\(question\); clearDraft\(question\); \}/);
-  assert.match(panel, /generation !== requestGeneration\.current \|\| hrefRef\.current !== expectedHref/);
+  assert.match(panel, /generation !== requestGeneration\.current \|\| hrefRef\.current\.split\("#"\)\[0\] !== expectedHref\.split\("#"\)\[0\]/);
   assert.match(panel, /finally \{ if \(mounted\.current && generation === requestGeneration\.current\) setBusy\(false\); \}/);
-  assert.match(candidate, /expectedHref !== undefined && expectedHref !== from/);
+  assert.match(candidate, /expectedHref !== undefined && expectedHref\.split\("#"\)\[0\] !== from\.split\("#"\)\[0\]/);
   assert.doesNotMatch(candidate, /history\.replaceState/);
 });
