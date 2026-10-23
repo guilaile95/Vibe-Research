@@ -51,7 +51,7 @@ export function researchCheckPageReadReply(input, reportStage = 0) {
 }
 
 // Deliberately non-UUID IDs accepted by the existing model. No user records.
-export function resumeContextFixture() {
+export function resumeContextFixture(baseTime = 100) {
   const specs = [
     [' Q1 /?&=#+% ', '600519', 'watching', 3],
     ['Q2-已解决', '600519', 'resolved', 3],
@@ -62,9 +62,9 @@ export function resumeContextFixture() {
   const questions = [], rounds = [];
   for (const [id, securityCode, status, count] of specs) {
     const chain = Array.from({ length: count }, (_, i) => ({ id: `${id}/轮次 ${i + 1}?&=#+%`, questionId: id, securityCode,
-      parentRoundId: i ? `${id}/轮次 ${i}?&=#+%` : null, createdAt: 100 + i, materials: [], calculation: null,
+      parentRoundId: i ? `${id}/轮次 ${i}?&=#+%` : null, createdAt: baseTime + i, materials: [], calculation: null,
       judgement: `${id} 第${i + 1}轮原判断`, limitations: '合成局部材料，非真实研究', nextMaterial: '下一项合成材料', reviewedMaterialKeys: [], ignoredMaterialKeys: [], coverage: 'partial' }));
-    questions.push({ id, securityCode, question: `合成接续问题 ${id}`, origin: { kind: 'manual', label: '导航回归合成夹具', capturedAt: 99 }, createdAt: 100, updatedAt: 100 + Math.max(0, count - 1), revision: count, headRoundId: chain.at(-1)?.id ?? null, status, reviewedMaterialKeys: [] });
+    questions.push({ id, securityCode, question: `合成接续问题 ${id}`, origin: { kind: 'manual', label: '导航回归合成夹具', capturedAt: baseTime - 1 }, createdAt: baseTime, updatedAt: baseTime + Math.max(0, count - 1), revision: count, headRoundId: chain.at(-1)?.id ?? null, status, reviewedMaterialKeys: [] });
     rounds.push(...chain);
   }
   return { questions, rounds };

@@ -7,12 +7,15 @@ import { tmpdir } from 'node:os';
 import { join, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { researchEvidenceManifest } from './research-evidence-manifest.fixture.mjs';
 import { installResearchWriteAudit } from './research-write-audit.fixture.mjs';
 import { readReply } from './ai-settings-storage.fixture.mjs';
 import { originalReport, revisedReport, originalText, revisedText, discoveryItem, discoverySnapshot, resumeContextFixture, researchCheckReadReply, researchCheckPageReadReply } from './research-check-loop.fixture.mjs';
 const dist = fileURLToPath(new URL('../../dist/', import.meta.url));
 const output = process.env.RESEARCH_CHECK_LOOP_OUTPUT_DIR || mkdtempSync(join(tmpdir(), 'research-check-loop-'));
 mkdirSync(output, { recursive: true });
+const buildManifest = researchEvidenceManifest(import.meta.url);
+writeFileSync(join(output, 'build-manifest.json'), JSON.stringify(buildManifest, null, 2));
 const server = createServer((req, res) => {
   const pathname = new URL(req.url, 'http://localhost').pathname;
   if (pathname.startsWith('/api/')) return res.writeHead(503).end();
@@ -94,7 +97,7 @@ try {
     });
     let page = await context.newPage(); page.setDefaultTimeout(15000); page.on('pageerror', error => errors.push(error.message));
     try {
-      phase = 'T0-first-question';
+      await storageWrites.flush(page); phase = 'T0-first-question'; await storageWrites.setPhase(page, phase);
       await page.goto('/screener?mode=discovery&strategy=SWING');
       await page.getByTestId('discovery-candidate-600519').click();
       await page.getByTestId('candidate-discovery-context').waitFor();
@@ -111,7 +114,7 @@ try {
       await panel.getByRole('button', { name: '读取指定页并加入本轮', exact: true }).click();
       await panel.getByLabel(`本轮处理：${originalReport.title} · 第 1 页`, { exact: true }).selectOption('reviewed');
       await panel.getByLabel('本轮判断', { exact: true }).fill('T0：只能确认当时预计盈利，缺实际年报，不能判断兑现。'); // minimal save, no forced why/limits/next question
-      phase = 'held-save-discard-race';
+      await storageWrites.flush(page); phase = 'held-save-discard-race'; await storageWrites.setPhase(page, phase);
       await panel.getByRole('button', { name: '放弃当前核对草稿', exact: true }).click();
       await page.getByRole('dialog', { name: '研究内容尚未保存' }).waitFor();
       assert.equal(await panel.getByTestId('check-save-round').isDisabled(), true, 'open discard dialog disables background save');
@@ -154,7 +157,7 @@ try {
       assert.equal(await savedT0.getByRole('link', { name: '在 MyReports 打开原文件', exact: true }).getAttribute('href'), '/my-reports?report=synthetic-original');
       await page.screenshot({ path: join(output, `T0-saved-${width}.png`) });
 
-      phase = 'close-reopen-T0'; await page.close(); page = await context.newPage(); page.setDefaultTimeout(15000); page.on('pageerror', error => errors.push(error.message));
+      await storageWrites.flush(page); phase = 'close-reopen-T0'; await storageWrites.setPhase(page, phase); await page.close(); page = await context.newPage(); page.setDefaultTimeout(15000); page.on('pageerror', error => errors.push(error.message));
       await page.goto(`/candidates/600519?${new URLSearchParams({ question: q.id, round: t0.id })}#candidate-research-check`);
       panel = page.getByTestId('research-check-panel');
       await panel.getByTestId('check-question-context').waitFor();
@@ -171,14 +174,14 @@ try {
       await panel.getByRole('button', { name: '以此轮材料继续核对', exact: true }).click();
       await panel.getByLabel(`本轮处理：${originalReport.title} · 第 1 页`, { exact: true }).selectOption('reviewed');
 
-      phase = 'SPA-draft-retention';
+      await storageWrites.flush(page); phase = 'SPA-draft-retention'; await storageWrites.setPhase(page, phase);
       await panel.getByLabel('本轮判断', { exact: true }).fill('未保存的核对草稿');
       await page.getByTestId('candidate-stock-data-entry').click();
       const dialog = page.getByRole('dialog', { name: '研究内容尚未保存', exact: true }); await dialog.waitFor();
       await dialog.getByRole('button', { name: '留下继续编辑', exact: true }).click(); await dialog.waitFor({ state: 'hidden' });
       assert.equal(await panel.getByLabel('本轮判断', { exact: true }).inputValue(), '未保存的核对草稿');
 
-      phase = 'T1-availability-and-delayed-read'; reportStage = 1;
+      await storageWrites.flush(page); phase = 'T1-availability-and-delayed-read'; await storageWrites.setPhase(page, phase); reportStage = 1;
       await loadReport(panel, revisedReport);
       let startResolve, releaseResolve; const started = new Promise(resolve => { startResolve = resolve; }), promise = new Promise(resolve => { releaseResolve = resolve; });
       delayed = { started: startResolve, promise, release: releaseResolve };
@@ -190,7 +193,7 @@ try {
       assert.equal(await panel.getByLabel(`本轮处理：${revisedReport.title} · 第 1 页`, { exact: true }).count(), 0, 'late old selection must not join this draft');
       assert.equal(await panel.getByRole('button', { name: '读取指定页并加入本轮', exact: true }).isEnabled(), true, 'cancelled read clears spinner');
       await loadReport(panel, revisedReport);
-      phase = 'hit-page-cancels-stale-read';
+      await storageWrites.flush(page); phase = 'hit-page-cancels-stale-read'; await storageWrites.setPhase(page, phase);
       await panel.getByRole('button', { name: '在此文件检索关键词', exact: true }).click();
       const hitButton = panel.getByRole('button', { name: '读取命中页及相邻页（命中 1 页）', exact: true }); await hitButton.waitFor();
       let hitStart, hitRelease; const hitStarted = new Promise(resolve => { hitStart = resolve; }), hitPending = new Promise(resolve => { hitRelease = resolve; });
@@ -212,7 +215,7 @@ try {
       await operand(panel, '修订预告', revisedReport.title, revisedText, '-594.25', '-891.37');
       assert.match(await panel.getByTestId('check-calculation-result').innerText(), /不重叠.*修订预告不是实际业绩/s);
       assert.match(await panel.getByTestId('check-calculation-result').innerText(), /\[-8913700, -5942500\]/);
-      phase = 'alignment-fail-closed';
+      await storageWrites.flush(page); phase = 'alignment-fail-closed'; await storageWrites.setPhase(page, phase);
       await panel.getByLabel('修订预告证券代码', { exact: true }).fill('000001'); await panel.getByLabel('修订预告已人工核对口径', { exact: true }).check();
       assert.match(await panel.getByTestId('check-calculation-result').innerText(), /错股/);
       await panel.getByLabel('修订预告证券代码', { exact: true }).fill('600519'); await panel.getByLabel('修订预告期间结束', { exact: true }).fill('2024-09-30'); await panel.getByLabel('修订预告已人工核对口径', { exact: true }).check();
@@ -223,7 +226,7 @@ try {
       assert.match(await panel.getByTestId('check-calculation-result').innerText(), /属性不匹配/);
       await panel.getByLabel('修订预告数据属性', { exact: true }).selectOption('forecast'); await panel.getByLabel('修订预告已人工核对口径', { exact: true }).check();
       await writeRound(panel, 'T1：盈利预告已被亏损预告取代；两个版本仍不是经审计实际。');
-      phase = 'failed-save-retains-draft';
+      await storageWrites.flush(page); phase = 'failed-save-retains-draft'; await storageWrites.setPhase(page, phase);
       await page.evaluate(() => { const native = IDBDatabase.prototype.transaction; IDBDatabase.prototype.transaction = function(...args) { if (this.name === 'vr-research-workflow' && args[1] === 'readwrite' && window.__failResearchWrites) throw new DOMException('Synthetic quota failure', 'QuotaExceededError'); return native.apply(this, args); }; window.__failResearchWrites = true; });
       await panel.getByTestId('check-save-round').click(); await panel.getByTestId('check-error').waitFor();
       assert.match(await panel.getByTestId('check-error').innerText(), /草稿/);
@@ -239,7 +242,7 @@ try {
       assert.ok(!(await panel.getByTestId('check-saved-round').innerText()).includes('T1：'));
       await panel.getByTestId('check-round-history').screenshot({ path: join(output, `T1-reopen-T0-${width}.png`) });
 
-      phase = 'two-page-conflict';
+      await storageWrites.flush(page); phase = 'two-page-conflict'; await storageWrites.setPhase(page, phase);
       const other = await context.newPage(); other.setDefaultTimeout(15000); const otherPanel = await openQuestion(other, q.id);
       await writeRound(panel, '并发旧页草稿必须保留。');
       await writeRound(otherPanel, '另一页先保存的第三轮。'); await otherPanel.getByTestId('check-save-round').click(); await otherPanel.getByText(/本轮已保存。/).waitFor();
@@ -261,7 +264,7 @@ try {
       await panel.getByTestId('check-save-round').click(); await panel.getByText(/本轮已保存。/).waitFor();
       assert.equal((await readDatabase(page)).rounds.length, 4); await other.close();
 
-      phase = 'manual-stage-history-counterexample';
+      await storageWrites.flush(page); phase = 'manual-stage-history-counterexample'; await storageWrites.setPhase(page, phase);
       await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption('');
       await panel.getByLabel('核对研究问题', { exact: true }).fill('合成重组事项现在处于什么阶段？');
       await panel.getByLabel('为什么开始研究', { exact: true }).fill('阶段语义反例的人工转录测试，不是自动事件识别或严格PIT。');
@@ -276,7 +279,7 @@ try {
       await panel.getByLabel('保存后的问题状态', { exact: true }).selectOption('paused'); await writeRound(panel, '暂停常规待办，人工打开仍可查看原轮次。'); await panel.getByTestId('check-save-round').click(); await panel.getByText(/本轮已保存。/).waitFor();
       assert.match(await panel.getByTestId('check-question-context').innerText(), /已暂停常规待办/);
       assert.equal((await readDatabase(page)).questions.find(item => item.id === stageFirst.id).status, 'paused');
-      phase = 'legacy-explicit-snapshot';
+      await storageWrites.flush(page); phase = 'legacy-explicit-snapshot'; await storageWrites.setPhase(page, phase);
       await page.evaluate(() => localStorage.setItem('vr-notes', JSON.stringify([{ id: 'synthetic-legacy', title: '旧记录合成样本', kind: '问AI', content: '原旧内容，来源正文未保全。', ts: 1, research: { securityCode: '600519', question: '旧问题' } }])));
       await panel.getByText('本地备份与旧记录显式导入', { exact: true }).click();
       await panel.getByRole('button', { name: '预览旧笔记导入', exact: true }).click();
@@ -289,7 +292,7 @@ try {
       await panel.getByRole('button', { name: '刷新问题列表', exact: true }).click();
       await panel.getByText(/旧笔记源已变化/).waitFor();
       assert.match(await panel.getByTestId('check-legacy-snapshot').innerText(), /原旧内容/);
-      phase = 'minimal-next-question-only';
+      await storageWrites.flush(page); phase = 'minimal-next-question-only'; await storageWrites.setPhase(page, phase);
       await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption('');
       await panel.getByLabel('核对研究问题', { exact: true }).fill('只有下一步的最小研究问题');
       await panel.getByLabel('下一项材料', { exact: true }).fill('先找原公告核对报告期间。');
@@ -298,8 +301,8 @@ try {
       const minimalRound = minimal.rounds.find(item => item.questionId === minimalQuestion.id);
       assert.equal(minimalRound.judgement, ''); assert.equal(minimalRound.limitations, '未记录 / 待核');
       assert.equal(minimalRound.nextMaterial, '先找原公告核对报告期间。');
-      phase = 'resume-fixture-init';
-      const fixture = resumeContextFixture();
+      await storageWrites.flush(page); phase = 'resume-fixture-init'; await storageWrites.setPhase(page, phase);
+      const fixture = resumeContextFixture(t0.createdAt + 1);
       fixture.rounds.filter(round => round.securityCode === '600519').forEach(round => { round.materials = t0.materials; });
       await page.evaluate(fixture => new Promise((resolve, reject) => {
         const request = indexedDB.open('vr-research-workflow');
@@ -324,7 +327,7 @@ try {
         assert.equal(new URL(page.url()).searchParams.get('round'), round);
       };
       const frames = () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
-      phase = 'resume-deep-link-history-and-tools';
+      await storageWrites.flush(page); phase = 'resume-deep-link-history-and-tools'; await storageWrites.setPhase(page, phase);
       const beforeResume = await readDatabase(page);
       await page.goto(href(qa, historical.id)); await settleSelection(qa, historical.id);
       assert.match(await panel.getByTestId('check-saved-round').innerText(), /第2轮原判断/);
@@ -342,7 +345,7 @@ try {
       assert.deepEqual(await readDatabase(page), beforeResume, 'deep links, refresh and five tool roundtrips never modify any saved object');
       await page.screenshot({ path: join(output, `resume-history-${width}.png`) });
 
-      phase = 'resume-question-only-replace-and-history';
+      await storageWrites.flush(page); phase = 'resume-question-only-replace-and-history'; await storageWrites.setPhase(page, phase);
       await page.goto('/watchlist');
       await page.goto(href(qa)); await settleSelection(qa, qa.headRoundId);
       await page.goBack(); assert.equal(new URL(page.url()).pathname, '/watchlist', 'question-only canonical replace must not insert a Back stop');
@@ -351,7 +354,7 @@ try {
       await page.goBack(); await settleSelection(qa, qa.headRoundId);
       await page.goForward(); await settleSelection(qa, historical.id);
 
-      phase = 'resume-two-drafts-single-owner';
+      await storageWrites.flush(page); phase = 'resume-two-drafts-single-owner'; await storageWrites.setPhase(page, phase);
       await page.goto('/watchlist'); await page.goto(href(qa, historical.id)); await settleSelection(qa, historical.id);
       const noteDraft = page.getByTestId('candidate-research-note').getByPlaceholder('先写目前的理解，不必形成正式结论', { exact: true });
       await noteDraft.fill('独立轻量草稿保持');
@@ -389,13 +392,13 @@ try {
       await singleDialog.getByRole('button', { name: '留下继续编辑', exact: true }).click();
       assert.equal(await noteDraft.inputValue(), '独立轻量草稿保持');
 
-      phase = 'resume-explicit-note-save';
-      const researchBeforeNote = await readDatabase(page), noteBefore = await page.evaluate(() => localStorage.getItem('vr-notes'));
+      await storageWrites.flush(page); phase = 'resume-explicit-note-save'; await storageWrites.setPhase(page, phase);
+      const researchBeforeNote = await readDatabase(page), noteBefore = await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes') || '[]'));
       await page.getByTestId('candidate-research-note').getByRole('button', { name: '保存暂定研究', exact: true }).click();
       await page.getByTestId('candidate-research-note').getByRole('button', { name: '已保存暂定研究', exact: true }).waitFor(); await frames();
       assert.deepEqual(await readDatabase(page), researchBeforeNote, 'note save does not write question/round/operation storage');
-      assert.notEqual(await page.evaluate(() => localStorage.getItem('vr-notes')), noteBefore);
-      phase = 'resume-explicit-round-save';
+      assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes') || '[]').length), noteBefore.length + 1);
+      await storageWrites.flush(page); phase = 'resume-explicit-round-save'; await storageWrites.setPhase(page, phase);
       await noteDraft.fill('研究保存不得清除另一份脏笔记');
       await panel.getByLabel('本轮判断', { exact: true }).fill('显式核对保存，不双写笔记');
       const notesBeforeRound = await page.evaluate(() => localStorage.getItem('vr-notes'));
@@ -408,13 +411,17 @@ try {
       const afterRound = await readDatabase(page), savedA = afterRound.questions.find(item => item.id === qa.id);
       assert.equal(new URL(page.url()).searchParams.get('round'), savedA.headRoundId);
       assert.equal(afterRound.rounds.length, researchBeforeNote.rounds.length + 1);
+      assert.equal(afterRound.operations.length, researchBeforeNote.operations.length + 1, 'one explicit research save has one original operation receipt');
       assert.deepEqual(afterRound.rounds.find(round => round.id === historical.id), historical);
       // Save the note explicitly, then inspect read-only recovery and recent browsing.
-      phase = 'resume-explicit-note-save';
+      await storageWrites.flush(page); phase = 'resume-explicit-second-note-save'; await storageWrites.setPhase(page, phase);
+      const noteCountBeforeSecond = await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes') || '[]').length);
       await page.getByTestId('candidate-research-note').getByRole('button', { name: '保存暂定研究', exact: true }).click();
       await page.getByTestId('candidate-research-note').getByRole('button', { name: '已保存暂定研究', exact: true }).waitFor(); await frames();
 
-      phase = 'resume-recent-and-invalid-targets';
+      assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes') || '[]').length), noteCountBeforeSecond + 1);
+      assert.deepEqual(await readDatabase(page), afterRound, 'second explicit note save remains note-only');
+      await storageWrites.flush(page); phase = 'resume-recent-and-invalid-targets'; await storageWrites.setPhase(page, phase);
       await panel.getByLabel('打开原研究轮次', { exact: true }).selectOption(historical.id); await settleSelection(qa, historical.id);
       await page.goto('/'); await page.getByTestId('recent-research').getByTestId('resume-research').filter({ hasText: '600519' }).click(); await settleSelection(qa, historical.id);
       const beforeInvalid = await readDatabase(page), recentBeforeInvalid = await page.evaluate(() => localStorage.getItem('vr-research-resume-v1'));
@@ -437,7 +444,7 @@ try {
       assert.match(await page.getByTestId('research-check-panel').innerText(), /尚无已保存核对轮次/);
       assert.deepEqual(await readDatabase(page), beforeInvalid, 'resolved/archived/paused opens do not reopen or create rounds');
 
-      phase = 'resume-late-context-and-retry';
+      await storageWrites.flush(page); phase = 'resume-late-context-and-retry'; await storageWrites.setPhase(page, phase);
       await page.goto(href(qa, historical.id)); await settleSelection(qa, historical.id);
       await page.evaluate(() => {
         const native = IDBDatabase.prototype.transaction;
@@ -475,7 +482,7 @@ try {
       await page.evaluate(() => { window.__denyResumeReads = false; });
       await panel.getByRole('button', { name: '重试读取已保存上下文', exact: true }).click(); await settleSelection(qa, savedA.headRoundId);
 
-      phase = 'resume-held-save-new-question';
+      await storageWrites.flush(page); phase = 'resume-held-save-new-question'; await storageWrites.setPhase(page, phase);
       await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa2.id); await settleSelection(qa2, qa2.headRoundId);
       await panel.getByLabel('本轮判断', { exact: true }).fill('Q2旧保存迟到不得覆盖Q1');
       await page.evaluate(() => {
@@ -510,7 +517,7 @@ try {
       await page.evaluate(() => { window.__restoreNewCompletion(); window.__releaseNewSave(); });
       await panel.getByText(/本轮已保存。/).waitFor(); await frames();
       assert.equal(new URL(page.url()).searchParams.get('question'), qa.id);
-      phase = 'resume-discard-held-report-list';
+      await storageWrites.flush(page); phase = 'resume-discard-held-report-list'; await storageWrites.setPhase(page, phase);
       await panel.getByLabel('本轮判断', { exact: true }).fill('放弃草稿应取消旧列表加载状态');
       const reportSummary = panel.getByText('MyReports 原文件与指定页（不新建文档仓）', { exact: true });
       if (!(await reportSummary.evaluate(node => node.parentElement.open))) await reportSummary.click();
@@ -524,16 +531,51 @@ try {
       heldReportList = null; releaseList(); await frames();
       await panel.getByRole('button', { name: '读取 / 刷新 MyReports 列表', exact: true }).click();
       await page.waitForFunction(() => document.querySelector('select[aria-label="本轮原文件"]')?.options.length > 1);
-      const allowedResearchPhases = ['resume-fixture-init', 'resume-explicit-round-save', 'resume-held-save-new-question'];
+      await storageWrites.flush(page); phase = 'resume-save-with-recent-storage-failure'; await storageWrites.setPhase(page, phase);
+      const beforeRecentFailure = await readDatabase(page);
+      await page.evaluate(() => {
+        const original = Storage.prototype.setItem;
+        window.__restoreRecentStorage = () => { Storage.prototype.setItem = original; };
+        Storage.prototype.setItem = function(key, value) { if (this === localStorage && key === 'vr-research-resume-v1') throw new DOMException('Synthetic preference failure', 'QuotaExceededError'); return original.call(this, key, value); };
+      });
+      await panel.getByLabel('本轮判断', { exact: true }).fill('浏览偏好失败不回滚已保存核对');
+      await panel.getByTestId('check-save-round').click(); await panel.getByText(/本轮已保存。/).waitFor(); await frames();
+      const afterRecentFailure = await readDatabase(page);
+      assert.equal(afterRecentFailure.rounds.length, beforeRecentFailure.rounds.length + 1);
+      assert.equal(afterRecentFailure.operations.length, beforeRecentFailure.operations.length + 1);
+      assert.equal(new URL(page.url()).searchParams.get('round'), afterRecentFailure.questions.find(question => question.id === qa.id).headRoundId);
+      await page.evaluate(() => window.__restoreRecentStorage());
+      await storageWrites.flush(page); phase = 'resume-new-browser-empty-store'; await storageWrites.setPhase(page, phase);
+      const emptyContext = await browser.newContext({ baseURL, viewport: { width, height: 960 }, serviceWorkers: 'block' });
+      const emptyExternal = [];
+      await emptyContext.routeWebSocket('**/*', socket => { emptyExternal.push(socket.url()); socket.close(); });
+      await emptyContext.route('**/*', route => {
+        const url = new URL(route.request().url());
+        if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' });
+        if (url.origin !== baseURL) { emptyExternal.push(url.href); return route.abort(); }
+        if (url.pathname.startsWith('/api/')) return route.fulfill({ status: 503, json: { detail: 'Synthetic empty-browser optional read' } });
+        return route.continue();
+      });
+      const emptyPage = await emptyContext.newPage();
+      try {
+        await emptyPage.goto(href(qa, historical.id)); await emptyPage.getByTestId('check-error').waitFor();
+        assert.match(await emptyPage.getByTestId('check-error').innerText(), /本浏览器找不到/);
+        assert.deepEqual(await readDatabase(emptyPage), { questions: [], rounds: [], operations: [], legacySources: [] });
+        assert.equal(await emptyPage.evaluate(() => localStorage.getItem('vr-research-resume-v1')), null);
+        assert.deepEqual(emptyExternal, []);
+      } finally { await emptyContext.close(); }
+      await storageWrites.flush(page);
+      assert.deepEqual(storageWrites.filter(event => event.kind === 'all-local-storage'), []);
+      const allowedResearchPhases = ['resume-fixture-init', 'resume-explicit-round-save', 'resume-held-save-new-question', 'resume-save-with-recent-storage-failure'];
       assert.deepEqual(storageWrites.filter(event => event.phase.startsWith('resume-') && event.kind === 'research' && !allowedResearchPhases.includes(event.phase)), [], 'pure resume/navigation/history performs zero native research writes');
-      assert.deepEqual(storageWrites.filter(event => event.phase.startsWith('resume-') && event.kind === 'note' && event.phase !== 'resume-explicit-note-save'), [], 'navigation never writes notes');
+      assert.deepEqual(storageWrites.filter(event => event.phase.startsWith('resume-') && event.kind === 'note' && !['resume-explicit-note-save', 'resume-explicit-second-note-save'].includes(event.phase)), [], 'navigation never writes notes');
       assert.ok(storageWrites.some(event => event.phase === 'resume-explicit-note-save' && event.kind === 'note'));
       assert.ok(storageWrites.some(event => event.phase === 'resume-explicit-round-save' && event.kind === 'research'));
 
-      phase = 'layout-and-no-side-effects';
+      await storageWrites.flush(page); phase = 'layout-and-no-side-effects'; await storageWrites.setPhase(page, phase);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'responsive page must not overflow horizontally');
       assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.deepEqual(writes, [], 'no formal state, AI, upload, import or index API writes');
-      results.push({ width, status: 'PASS', evidence: 'synthetic production-dist UI with real disposable IndexedDB; not natural usage or PDF/PIT proof', reads, writes, storageWrites });
+      results.push({ width, status: 'PASS', checkoutSha: buildManifest.checkoutSha, checkoutTree: buildManifest.checkoutTree, checks: storageWrites.phases, evidence: 'synthetic production-dist UI with real disposable IndexedDB; not natural usage or PDF/PIT proof', reads, writes, storageWrites });
     } catch (error) {
       results.push({ width, status: 'FAIL', phase, error: error.message, stack: error.stack, errors, external, reads, writes, storageWrites });
       await page.screenshot({ path: join(output, `failure-${width}.png`) }).catch(() => {}); throw error;
