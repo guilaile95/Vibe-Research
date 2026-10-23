@@ -15,7 +15,8 @@ Scope: independent engineering audit P1-02, P1-05 and P2-01, based on `ddf7f9e7`
 - A newly frozen decision must have a review boundary strictly after its
   service-generated commit instant. Preview uses server time, not caller-supplied
   historical `as_of`. Existing exact replay retains its identity and remains
-  permitted after expiry; this is not an import API for inventing past decisions.
+  permitted after expiry. Expiry during commit returns an actionable HTTP 409,
+  not a generic server failure; this is not an import API for inventing past decisions.
 - New full/partial execution timestamps more than five minutes ahead of server
   time are rejected. Existing future rows remain immutable. Current holdings and
   cash exclude effective future trades after corrections; tolerated clock-skew
@@ -28,7 +29,7 @@ Scope: independent engineering audit P1-02, P1-05 and P2-01, based on `ddf7f9e7`
 
 ## Verification and limitations
 
-The isolated offline domain regression contains 846 passing tests, including 20
+The isolated offline domain regression contains 847 passing tests, including 21
 new cross-domain cases: real FastAPI/SQLite legacy void, cascade rollback and
 historical recovery, valid-account/incomplete-decision-cost Outcome, expiry and
 exact replay, future holdings/cash, skew oversell, and concurrent sell insertion.

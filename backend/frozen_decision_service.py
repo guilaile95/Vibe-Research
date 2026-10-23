@@ -99,6 +99,10 @@ class FrozenDecisionValidationError(ValueError):
     """输入校验失败：该 payload 不被接受为正式冻结内容。"""
 
 
+class FrozenDecisionReviewBoundaryExpiredError(FrozenDecisionValidationError):
+    """A new decision cannot be CURRENT at an expired review boundary."""
+
+
 class FrozenDecisionReplayNotFoundError(FrozenDecisionValidationError):
     """重放目标 decision_id 不存在。
 
@@ -360,7 +364,9 @@ def _freeze_decision(
     decision_id = f"decision_{uuid.uuid4().hex}"
     commit_instant = _utc_now_iso()
     if cleaned["review_by"] <= commit_instant:
-        raise FrozenDecisionValidationError("review_by 必须晚于本次提交时间；历史记录只能按原身份精确重放")
+        raise FrozenDecisionReviewBoundaryExpiredError(
+            "review_by 必须晚于本次提交时间；历史记录只能按原身份精确重放"
+        )
     if pre_write_validator is not None:
         pre_write_validator(cleaned, commit_instant)
     snapshot = _build_snapshot(cleaned, decision_id, commit_instant)

@@ -209,3 +209,21 @@ def test_future_existing_trade_does_not_reduce_current_cash():
     store.insert_record(position.resolve_db_path(), record)
     derived = position.derive_positions()
     assert account_reality_service._ledger_cash_candidate(derived)["value"] == 100000
+
+
+def test_expiry_at_write_is_actionable_409_not_server_error(monkeypatch):
+    import decision_commit_router
+    monkeypatch.setattr(frozen, "_utc_now_iso", lambda: "2026-10-23T00:00:00.000000Z")
+    def write_after_preview(*args, **kwargs):
+        # Exercise the actual final write gate, after a formerly valid preview.
+        return frozen.freeze_decision(decision_payload(review_by="2026-08-30T00:00:00Z"))
+    monkeypatch.setattr(commit, "commit_decision_proposal", write_after_preview)
+    app = FastAPI()
+    app.include_router(decision_commit_router.router)
+    response = TestClient(app).post(f"/api/campaigns/{CAMPAIGN_ID}/decision-proposal/commit", json={
+        **_draft(), "as_of": "2026-08-16T00:00:00.000000Z",
+        "expected_proposal_fingerprint": "synthetic", "user_confirmed": True,
+    })
+    assert response.status_code == 409
+    assert "review_by" in response.json()["detail"]
+    assert frozen.list_decisions() == []
