@@ -828,3 +828,69 @@ def test_registered_orphan_sidecar_does_not_silently_disappear(tmp_path, monkeyp
     with pytest.raises(backup.BundleError, match='orphan'):
         backup.create_bundle(tmp_path / 'bad.zip', quiescent_probe=lambda: backup.QUIESCENT)
     assert (data / 'trade_ledger.sqlite3-wal').read_bytes() == b'synthetic-orphan'
+
+
+@pytest.mark.parametrize('environment', ['VR_REPORTS_DIR', 'VR_FACT_LAKE_ROOT', 'VIBE_RESEARCH_RESEARCH_DATA_DIR'])
+def test_business_root_equal_to_data_root_refuses_before_publication(tmp_path, monkeypatch, environment):
+    data = _minimal_data_root(tmp_path, monkeypatch)
+    monkeypatch.setenv(environment, str(data / '..' / 'data'))
+    original = data / 'synthetic-report.md'
+    original.write_text('SYNTHETIC legitimate research')
+    (data / 'index.json').write_text('[]')
+    archive = tmp_path / 'ambiguous.zip'
+    with pytest.raises(backup.BundleError, match='数据根目录'):
+        backup.create_bundle(archive, quiescent_probe=lambda: backup.QUIESCENT)
+    assert not archive.exists()
+    assert original.read_text() == 'SYNTHETIC legitimate research'
+    assert (data / 'index.json').read_text() == '[]'
+
+
+def test_nested_configured_database_with_registered_basename_roundtrips(tmp_path, monkeypatch):
+    data = _minimal_data_root(tmp_path, monkeypatch)
+    database = data / 'nested' / 'trade_ledger.sqlite3'
+    _wal_sqlite_snapshot(database)
+    monkeypatch.setenv('VIBE_RESEARCH_TRADE_LEDGER_DB', str(database))
+    original = {suffix: Path(str(database) + suffix).read_bytes() for suffix in ('', '-wal', '-shm')}
+    archive = tmp_path / 'nested.zip'
+    backup.create_bundle(archive, quiescent_probe=lambda: backup.QUIESCENT)
+    assert backup.verify_bundle(archive)['status'] == 'OK'
+    target = tmp_path / 'restored'
+    result = backup.restore_bundle(archive, target)
+    asset = next(item for item in result['assets'] if item['name'] == 'VIBE_RESEARCH_TRADE_LEDGER_DB')
+    restored = target / asset['archive_prefix']
+    for suffix, content in original.items():
+        assert Path(str(restored) + suffix).read_bytes() == content
+        assert Path(str(database) + suffix).read_bytes() == content
+    assert _quick_check(restored) == 'ok'
+
+
+@pytest.mark.parametrize('asset_name', ['reports', 'fact_lake', 'research_data_plane'])
+def test_verify_rejects_business_asset_claiming_broad_data_partition(tmp_path, monkeypatch, asset_name):
+    _minimal_data_root(tmp_path, monkeypatch)
+    original, forged = tmp_path / 'original.zip', tmp_path / 'forged.zip'
+    backup.create_bundle(original, quiescent_probe=lambda: backup.QUIESCENT)
+    def claim_data(bundle):
+        asset = next(item for item in bundle['assets'] if item['name'] == asset_name)
+        asset.update(archive_prefix='data', status='PRESENT')
+    _forge_bundle_manifest(original, forged, claim_data)
+    assert backup.verify_bundle(forged)['status'] == 'FAILED'
+    with pytest.raises(local_snapshot.RestoreRefused):
+        backup.restore_bundle(forged, tmp_path / 'restored')
+    assert not (tmp_path / 'restored').exists()
+
+
+def test_nested_database_alias_cannot_reintroduce_runtime_assets(tmp_path, monkeypatch):
+    data = _minimal_data_root(tmp_path, monkeypatch)
+    runtime = data / 'agent-runtime'
+    runtime.mkdir()
+    database = runtime / 'trade_ledger.sqlite3'
+    _sqlite(database)
+    alias = data / 'nested'
+    try:
+        alias.symlink_to(runtime, target_is_directory=True)
+    except OSError:
+        pytest.skip('directory symlinks unavailable')
+    monkeypatch.setenv('VIBE_RESEARCH_TRADE_LEDGER_DB', str(alias / database.name))
+    with pytest.raises(backup.BundleError, match='认证或运行时'):
+        backup.create_bundle(tmp_path / 'bad.zip', quiescent_probe=lambda: backup.QUIESCENT)
+    assert database.exists()

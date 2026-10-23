@@ -6,6 +6,8 @@
 
 安全版本 v0.2 只收集后端登记的业务 JSON / SQLite 资产、研报目录、Research Data Plane、显式 Fact Lake 和数据库覆盖配置。VR_DATA_DIR 内未登记文件不再自动入包；资产清单由 backend/vibe_data_backup.py 的 _DATA_FILES / _DATA_DIRECTORIES 统一维护。新增数据存储须同步登记，不能把整个用户目录当作业务数据。
 
+VR_REPORTS_DIR、VR_FACT_LAKE_ROOT 和 VIBE_RESEARCH_RESEARCH_DATA_DIR 不可配置为 VR_DATA_DIR 本身（包括等价路径）；此布局无法同时保证允许清单和业务完整性，备份会明确拒绝而不是生成遗漏数据的“成功”包。请改用独立业务子目录并在人工核对数据后重新备份；工具不会自动迁移原文件。显式数据库覆盖配置按完整路径登记，嵌套目录中的同名数据库仍会连同 sidecar 进入独立逻辑分区。
+
 认证与运行时目录（包括 agent-runtime、codex-home、.codex、sessions、private）和 auth.json 等认证文件在创建、验证、恢复三个入口均排除，大小写变体同样拒绝。登录状态不随备份迁移，恢复后需重新登录。
 
 旧 v0.1 包可能含认证/session 内容，工具不会把它认定为安全或自动恢复，也不会改写或删除原包。请保留原包于私人受保护位置，并优先从原数据重新生成 v0.2 包；若只剩旧包，先进行人工离线资产审查，不要直接解压到运行目录或分享旧包。

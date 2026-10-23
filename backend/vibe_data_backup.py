@@ -239,6 +239,14 @@ def discover_bundle_sources() -> tuple[
         os.environ.get(research_data_plane_path.RESEARCH_DATA_DIR_ENV, "").strip()
     )
 
+    # A business root equal to the broad data root cannot be enumerated safely:
+    # recursive collection admits runtime secrets, but the data allowlist drops
+    # research files. Refuse this ambiguous layout instead of certifying a loss.
+    for label, root in (("reports", reports), ("Fact Lake", fact_lake),
+                        ("Research Data Plane", research_data)):
+        if root is not None and _path_key(root) == _path_key(data_root):
+            raise BundleError(f"{label} 不可与数据根目录相同；请使用独立业务目录后重新备份")
+
     groups: list[tuple[str, Path]] = []
     assets: list[dict[str, str]] = []
     protected_paths: list[tuple[Path, str]] = [(data_root, "directory")]
@@ -363,7 +371,10 @@ def discover_bundle_sources() -> tuple[
             raise BundleError("数据库资产位于认证或运行时目录，拒绝备份")
         if db_path.suffix.lower() not in _DB_SUFFIXES:
             raise BundleError("数据库资产须为 SQLite 文件")
-        if outside_data_root or db_path.name not in _DATA_FILES:
+        registered_default = any(
+            _path_key(db_path) == _path_key(data_root / name) for name in _DATA_FILES
+        )
+        if not registered_default:
             slug = env_name.lower().replace("_", "-")
             external_overrides.extend(
                 _database_entries(
@@ -407,6 +418,8 @@ def discover_bundle_sources() -> tuple[
     source_to_archive: dict[str, str] = {}
     archive_paths: set[str] = set()
     for archive_path, source in raw_entries:
+        if any(part.casefold() in _EXCLUDED_NAMES for part in source.resolve().parts):
+            raise BundleError("数据资产解析到认证或运行时目录，拒绝备份")
         if _has_excluded_component(archive_path):
             continue
         key = _path_key(source)
@@ -738,6 +751,8 @@ def _validate_bundle(manifest: dict) -> dict:
         if not _safe_bundle_prefix(asset["archive_prefix"]):
             raise BundleError(f"vibe_bundle assets[{index}] archive prefix 不可信")
         prefix = asset["archive_prefix"]
+        if asset["name"] in {"reports", "fact_lake", "research_data_plane"} and prefix == "data":
+            raise BundleError("业务资产不可与数据根目录共用分区")
         if _has_excluded_component(prefix):
             raise BundleError(f"vibe_bundle assets[{index}] 命中排除项")
         present = asset["status"] in {"PRESENT", "EXTERNAL_OVERRIDE_INCLUDED"}
