@@ -32,10 +32,25 @@ const readDatabase = page => page.evaluate(() => new Promise((resolve, reject) =
   request.onerror = () => reject(request.error?.message);
   request.onsuccess = () => { const db = request.result, tx = db.transaction(['questions', 'rounds', 'operations', 'legacySources'], 'readonly'), questions = tx.objectStore('questions').getAll(), rounds = tx.objectStore('rounds').getAll(), operations = tx.objectStore('operations').getAll(), legacySources = tx.objectStore('legacySources').getAll(); tx.oncomplete = () => { resolve({ questions: questions.result, rounds: rounds.result, operations: operations.result, legacySources: legacySources.result }); db.close(); }; tx.onerror = () => reject(tx.error?.message); };
 }));
+async function waitForSavedSelection(page, questionId, roundId, expectedText) {
+  // A URL-driven historical selection completes after its readonly context load,
+  // not when selectOption dispatches change or the URL first changes.
+  await page.waitForFunction(({ q, r, text }) => {
+    const question = document.querySelector('select[aria-label="这只股票的研究问题"]');
+    const history = document.querySelector('select[aria-label="打开原研究轮次"]');
+    const editor = document.querySelector('textarea[aria-label="本轮判断"]');
+    const url = new URL(location.href);
+    return url.searchParams.get('question') === q && question?.value === q
+      && (r === undefined || (url.searchParams.get('round') === r && (!r || history?.value === r)))
+      && editor && !editor.closest('fieldset').disabled
+      && (!text || document.querySelector('[data-testid="check-saved-round"]')?.textContent.includes(text));
+  }, { q: questionId, r: roundId, text: expectedText });
+}
 async function openQuestion(page, questionId) {
   await page.goto('/candidates/600519#candidate-research-check');
   const panel = page.getByTestId('research-check-panel');
   await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(questionId);
+  await waitForSavedSelection(page, questionId);
   await panel.getByTestId('check-question-context').waitFor();
   return panel;
 }
@@ -238,6 +253,7 @@ try {
       assert.deepEqual(T1.rounds.find(round => round.id === t0.id), t0, 'T0 stays byte-equivalent in semantic JSON');
       assert.equal(T1.rounds.find(round => round.id !== t0.id).parentRoundId, t0.id);
       await panel.getByLabel('打开原研究轮次', { exact: true }).selectOption(t0.id);
+      await waitForSavedSelection(page, q.id, t0.id, t0.judgement);
       assert.match(await panel.getByTestId('check-saved-round').innerText(), /T0：只能确认/);
       assert.ok(!(await panel.getByTestId('check-saved-round').innerText()).includes('T1：'));
       await panel.getByTestId('check-round-history').screenshot({ path: join(output, `T1-reopen-T0-${width}.png`) });
@@ -249,11 +265,11 @@ try {
       const draftBeforeHistory = await panel.getByLabel('本轮判断', { exact: true }).inputValue();
       const secondRound = T1.rounds.find(round => round.id !== t0.id);
       await panel.getByLabel('打开原研究轮次', { exact: true }).selectOption(secondRound.id);
-      await panel.getByLabel('本轮判断', { exact: true }).waitFor({ state: 'visible' });
+      await waitForSavedSelection(page, q.id, secondRound.id, secondRound.judgement);
       await page.goBack();
-      await page.waitForFunction(id => new URL(location.href).searchParams.get('round') === id, t0.id);
+      await waitForSavedSelection(page, q.id, t0.id, t0.judgement);
       await page.goForward();
-      await page.waitForFunction(id => new URL(location.href).searchParams.get('round') === id, secondRound.id);
+      await waitForSavedSelection(page, q.id, secondRound.id, secondRound.judgement);
       assert.equal(await panel.getByLabel('本轮判断', { exact: true }).inputValue(), draftBeforeHistory);
       assert.equal(await page.getByRole('dialog', { name: '研究内容尚未保存' }).isVisible(), false);
       await panel.getByTestId('check-save-round').click(); await panel.getByTestId('check-error').waitFor();
@@ -275,6 +291,7 @@ try {
       const stages = await readDatabase(page), stageQuestion = stages.questions.find(item => item.id === stageFirst.id), stageRounds = stages.rounds.filter(item => item.questionId === stageFirst.id);
       assert.equal(stageQuestion.status, 'resolved'); assert.equal(stageRounds.length, 3);
       await panel.getByLabel('打开原研究轮次', { exact: true }).selectOption(stageFirst.headRoundId);
+      await waitForSavedSelection(page, stageFirst.id, stageFirst.headRoundId, "不能按背景句判断仍停牌");
       assert.match(await panel.getByTestId('check-saved-round').innerText(), /不能按背景句判断仍停牌/);
       await panel.getByLabel('保存后的问题状态', { exact: true }).selectOption('paused'); await writeRound(panel, '暂停常规待办，人工打开仍可查看原轮次。'); await panel.getByTestId('check-save-round').click(); await panel.getByText(/本轮已保存。/).waitFor();
       assert.match(await panel.getByTestId('check-question-context').innerText(), /已暂停常规待办/);
@@ -316,12 +333,7 @@ try {
       const first = fixture.rounds.find(round => round.questionId === qa.id);
       const href = (question, round = null) => `/candidates/${question.securityCode}?${new URLSearchParams({ return_to: '/watchlist', question: question.id, ...(round ? { round } : {}) })}#candidate-research-check`;
       const settleSelection = async (question, round) => {
-        await page.waitForFunction(({ q, r }) => {
-          const question = document.querySelector('select[aria-label="这只股票的研究问题"]');
-          const history = document.querySelector('select[aria-label="打开原研究轮次"]');
-          const editor = document.querySelector('textarea[aria-label="本轮判断"]');
-          return question?.value === q && (!r || history?.value === r) && editor && !editor.closest('fieldset').disabled;
-        }, { q: question.id, r: round });
+        await waitForSavedSelection(page, question.id, round, fixture.rounds.find(item => item.id === round)?.judgement);
         panel = page.getByTestId('research-check-panel');
         assert.equal(new URL(page.url()).searchParams.get('question'), question.id);
         assert.equal(new URL(page.url()).searchParams.get('round'), round);
