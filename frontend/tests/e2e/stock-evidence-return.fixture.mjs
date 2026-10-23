@@ -5,7 +5,21 @@ import assert from 'node:assert/strict';
 const localHref = page => { const url = new URL(page.url()); return url.pathname + url.search + url.hash; };
 const claimPlaceholder = '一句话陈述这条证据说了什么。例如：公司2024Q3营收同比+25%，超出市场一致预期+18%。';
 
-export async function checkStockEvidenceReturns({ page, question, round, candidateHref, waitForSelection, readDatabase, storageWrites, onWrite }) {
+// Shared executable contract: every formal request must belong to one explicit save.
+export function assertStockEvidenceWrites(writes) {
+  assert.equal(writes.length, 2, 'exactly two explicit Evidence saves');
+  for (const type of ['announcement', 'news']) {
+    const phase = `stock-evidence-explicit-save-${type}`;
+    const events = writes.filter(event => event.phase === phase);
+    assert.equal(events.length, 1, `${phase}: exactly one POST`);
+    assert.equal(events[0].method, 'POST');
+    assert.equal(events[0].path, '/api/evidence');
+    assert.equal(events[0].savingType, type);
+    assert.equal(events[0].body.evidence_type, type);
+  }
+}
+
+export async function checkStockEvidenceReturns({ page, question, round, candidateHref, waitForSelection, readDatabase, storageWrites, onWrite, setPhase }) {
   const initialDatabase = await readDatabase(page), initialWrites = storageWrites.length;
   const writes = [], checks = [];
   let savingType = null;
@@ -93,10 +107,12 @@ export async function checkStockEvidenceReturns({ page, question, round, candida
       await page.getByTestId('stock-data-candidate-entry').waitFor();
       const stockHref = localHref(page), beforeSave = writes.length;
       await openCapture(type, stockHref);
+      await setPhase(`stock-evidence-explicit-save-${type}`);
       savingType = type;
       await page.getByRole('button', { name: '保存', exact: true }).click();
       await returnedToStock(stockHref);
       savingType = null;
+      await setPhase('stock-evidence-return-chain');
       assert.equal(writes.length - beforeSave, 1, 'each explicit save creates exactly one Evidence POST');
       await page.getByTestId('stock-data-candidate-entry').click();
       await waitForSelection(page, question.id, round.id, round.judgement);

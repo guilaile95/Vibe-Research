@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { researchSelectionHref } from '../src/lib/researchResume.ts';
+import { assertStockEvidenceWrites } from './e2e/stock-evidence-return.fixture.mjs';
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
 const panel = read('../src/components/campaign/ResearchCheckPanel.tsx');
 const candidate = read('../src/pages/CandidateWorkspace.tsx');
@@ -25,7 +26,7 @@ test('one production-dist browser fixture owns full T0→reopen→T1→original 
   for (const token of ['hit-page-cancels-stale-read', 'held-save-discard-race', 'minimal-next-question-only', 'T0-first-question', 'close-reopen-T0', 'SPA-draft-retention', 'T1-availability-and-delayed-read', 'alignment-fail-closed', 'failed-save-retains-draft', 'two-page-conflict', 'manual-stage-history-counterexample', 'layout-and-no-side-effects']) assert.ok(browser.includes(token), token);
   assert.match(browser, /page\.close\(\); page = await context\.newPage/);
   assert.match(browser, /assert\.deepEqual\(T1\.rounds\.find\(round => round\.id === t0\.id\), t0/);
-  assert.match(browser, /assert\.deepEqual\(writes, \[\]/);
+  assert.match(browser, /assertStockEvidenceWrites\(writes\)/);
   assert.match(browser, /for \(const width of \[1440, 390, 320\]\)/);
 });
 
@@ -87,5 +88,19 @@ test('late validated visit records the live hash but never a different live loca
     window.location = new URL(href, window.location);
     visit(rendered);
     assert.equal(visits.length, 1, href);
+  }
+});
+
+
+test('capture write audit permits one POST in each explicit save phase and rejects navigation or extra writes', () => {
+  const saves = ['announcement', 'news'].map(type => ({ phase: `stock-evidence-explicit-save-${type}`, method: 'POST', path: '/api/evidence', savingType: type, body: { evidence_type: type } }));
+  assert.doesNotThrow(() => assertStockEvidenceWrites(saves));
+  for (const phase of ['stock-evidence-return-chain', 'resume-deep-link-history-and-tools', 'stock-evidence-explicit-save-news']) {
+    assert.throws(() => assertStockEvidenceWrites([{ ...saves[0], phase }, saves[1]]));
+  }
+  assert.throws(() => assertStockEvidenceWrites([...saves, saves[0]]));
+  assert.throws(() => assertStockEvidenceWrites(saves.slice(1)));
+  for (const mutation of [{ path: '/api/thesis' }, { method: 'PUT' }, { savingType: 'news' }, { body: { evidence_type: 'news' } }]) {
+    assert.throws(() => assertStockEvidenceWrites([{ ...saves[0], ...mutation }, saves[1]]));
   }
 });
