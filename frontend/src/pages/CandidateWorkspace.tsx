@@ -67,7 +67,6 @@ export function CandidateWorkspace() {
   const navigate = useNavigate();
   const currentHref = `${location.pathname}${location.search}${location.hash}`;
   const selection = useMemo(() => parseResearchSelection(location.search), [location.search]);
-  const currentHrefRef = useRef(currentHref); currentHrefRef.current = currentHref;
   const validatedLocation = useRef<string | null>(null);
   const previousContext = useRef(`${location.pathname}${location.search}`);
   if (previousContext.current !== `${location.pathname}${location.search}`) {
@@ -102,7 +101,9 @@ export function CandidateWorkspace() {
   }, [checkDirty, noteDirty]);
   const requestDiscard = useCallback((action: () => void) => setDiscardAction(() => action), []);
   const changeSelection = useCallback((questionId: string | null, roundId: string | null, replace = false, expectedHref?: string) => {
-    const from = currentHrefRef.current;
+    // Router state can be rendering a transition while browser history already
+    // contains a newer hash. Never replace that live location with an old render.
+    const from = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     // Only a receipt for the still-current operation may synchronize its exact saved identity.
     if (expectedHref !== undefined && expectedHref.split("#")[0] !== from.split("#")[0]) return;
     const to = researchSelectionHref(from, questionId, roundId);
@@ -114,9 +115,10 @@ export function CandidateWorkspace() {
     syncReceipt.current = null;
   }, [navigate, location.state]);
   const validatedVisit = useCallback((href: string) => {
-    if (href.split("#")[0] === currentHrefRef.current.split("#")[0]) {
-      validatedLocation.current = href.split("#")[0];
-      rememberResearchVisit(currentHrefRef.current);
+    const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (href.split("#")[0] === current.split("#")[0]) {
+      validatedLocation.current = current.split("#")[0];
+      rememberResearchVisit(current);
     }
   }, []);
   const validCode = /^\d{6}$/.test(code);
@@ -130,7 +132,9 @@ export function CandidateWorkspace() {
   const [valuationError, setValuationError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (validCode && (selection.status === "absent" || validatedLocation.current === `${location.pathname}${location.search}`)) rememberResearchVisit(`${location.pathname}${location.search}${location.hash}`);
+    const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (current.split("#")[0] !== `${location.pathname}${location.search}`) return;
+    if (validCode && (selection.status === "absent" || validatedLocation.current === `${location.pathname}${location.search}`)) rememberResearchVisit(current);
   }, [validCode, selection.status, location.pathname, location.search, location.hash]);
 
   useEffect(() => {

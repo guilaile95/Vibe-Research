@@ -57,7 +57,7 @@ function harness(path, name, overrides = {}, globals = {}) {
   }).outputText;
   vm.runInNewContext(js, {
     exports, document: { addEventListener() {}, removeEventListener() {} }, require: name => mods[name] ?? generic, FileReader: globalThis.FileReader, AbortController, DOMException, Error, console, URLSearchParams, Map, Set, Date,
-    window: { setTimeout: fn => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), addEventListener(type, fn) { listeners.set(type, fn); }, removeEventListener(type, fn) { if (listeners.get(type) === fn) listeners.delete(type); } }, confirm: () => true, ...globals,
+    window: { location: { pathname: '/', search: '', hash: '', ...mods['react-router-dom'].useLocation?.() }, setTimeout: fn => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id), addEventListener(type, fn) { listeners.set(type, fn); }, removeEventListener(type, fn) { if (listeners.get(type) === fn) listeners.delete(type); } }, confirm: () => true, ...globals,
   }, { filename: path });
   const render = (props = {}) => { scheduled = false; lastProps = props; cursor = 0; lastTree = exports[name](props); const current = pending; pending = []; current.forEach(fn => fn()); return lastTree; };
   return {

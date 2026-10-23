@@ -87,7 +87,7 @@ try {
   browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } : {}) });
   for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ baseURL, viewport: { width, height: 960 }, serviceWorkers: 'block' });
-    const errors = [], external = [], writes = [], reads = []; let phase = 'setup', reportStage = 0, delayed = null, heldReportList = null;
+    const errors = [], external = [], writes = [], reads = [], observations = []; let phase = 'setup', reportStage = 0, delayed = null, heldReportList = null;
     const storageWrites = await installResearchWriteAudit(context, () => phase);
     await context.routeWebSocket('**/*', socket => { external.push(socket.url()); socket.close(); });
     await context.route('**/*', async route => {
@@ -527,7 +527,9 @@ try {
       await panel.getByLabel('这只股票的研究问题', { exact: true }).selectOption(qa2.id);
       await page.waitForFunction(() => typeof window.__releaseContext === 'function');
       await page.getByRole('navigation', { name: '候选研究快速接续' }).getByRole('link', { name: '轻量笔记与 AI 草稿', exact: true }).click();
+      observations.push({ name: 'held-context-hash-before-release', href: page.url() });
       await page.evaluate(() => window.__releaseContext()); await settleSelection(qa2, qa2.headRoundId);
+      observations.push({ name: 'held-context-hash-after-release', href: page.url() });
       assert.equal(new URL(page.url()).hash, '#candidate-research-note', 'late question-only normalization keeps the latest hash');
       const hashResume = await page.evaluate(() => JSON.parse(localStorage.getItem('vr-research-resume-v1'))[0].href);
       assert.equal(new URL(hashResume, baseURL).searchParams.get('round'), qa2.headRoundId);
@@ -641,9 +643,9 @@ try {
       await storageWrites.flush(page); phase = 'layout-and-no-side-effects'; await storageWrites.setPhase(page, phase);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'responsive page must not overflow horizontally');
       assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.deepEqual(writes, [], 'no formal state, AI, upload, import or index API writes');
-      results.push({ width, status: 'PASS', checkoutSha: buildManifest.checkoutSha, checkoutTree: buildManifest.checkoutTree, checks: storageWrites.phases, evidence: 'synthetic production-dist UI with real disposable IndexedDB; not natural usage or PDF/PIT proof', reads, writes, storageWrites });
+      results.push({ width, status: 'PASS', checkoutSha: buildManifest.checkoutSha, checkoutTree: buildManifest.checkoutTree, checks: storageWrites.phases, evidence: 'synthetic production-dist UI with real disposable IndexedDB; not natural usage or PDF/PIT proof', reads, writes, storageWrites, observations });
     } catch (error) {
-      results.push({ width, status: 'FAIL', phase, error: error.message, stack: error.stack, errors, external, reads, writes, storageWrites });
+      results.push({ width, status: 'FAIL', phase, error: error.message, stack: error.stack, errors, external, reads, writes, storageWrites, observations });
       await page.screenshot({ path: join(output, `failure-${width}.png`) }).catch(() => {}); throw error;
     } finally { delayed?.release(); heldReportList?.release(); await context.close(); }
   }
