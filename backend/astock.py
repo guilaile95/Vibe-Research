@@ -611,11 +611,14 @@ def calc_peg(pe: float, cagr: float) -> float:
 
 
 def pe_digestion(current_pe: float, cagr: float, target_pe: float = 30) -> float:
+    if not all(math.isfinite(value) for value in (current_pe, cagr, target_pe)) or current_pe <= 0 or target_pe <= 0:
+        return float("inf")
     if current_pe <= target_pe:
         return 0.0
     if cagr <= 0:
         return float("inf")
-    return math.log(current_pe / target_pe) / math.log(1 + cagr)
+    # log1p 保留微小正增长；对数相减避免 PE 比值先溢出。
+    return (math.log(current_pe) - math.log(target_pe)) / math.log1p(cagr)
 
 
 def financials(code: str, *, include_health: bool = False, on_summary=None, strict: bool = False) -> dict:
@@ -931,8 +934,9 @@ def full_valuation(code: str, *, valuation_reader=None, on_quote=None) -> dict:
     def _eps(row: dict):
         # 同花顺对覆盖不全的股票会缺「均值」或给 '-' 占位，硬取会让整只票的估值接口 502
         try:
-            return float(str(row.get("均值", "")).replace(",", ""))
-        except ValueError:
+            value = float(str(row.get("均值", "")).replace(",", ""))
+            return value if math.isfinite(value) else None
+        except (ValueError, OverflowError):
             return None
 
     eps_26 = eps_27 = None
@@ -950,14 +954,21 @@ def full_valuation(code: str, *, valuation_reader=None, on_quote=None) -> dict:
     out["eps_26e"], out["eps_27e"] = eps_26, eps_27
     if eps_26 and eps_26 > 0:
         pe_26e = price / eps_26
+        if not math.isfinite(pe_26e) or pe_26e <= 0:
+            return out
         out["pe_26e"] = round(pe_26e, 1)
-        if eps_27:
+        if eps_27 is not None:
             cagr = eps_27 / eps_26 - 1
+            if not math.isfinite(cagr * 100):
+                return out
             out["cagr_pct"] = round(cagr * 100, 0)
+            # 已知下一期零盈利/亏损：保留增长观察，不给盈利估值结论。
+            if eps_27 <= 0:
+                return out
             peg = calc_peg(pe_26e, cagr)
-            out["peg"] = round(peg, 2) if peg != float("inf") else None
+            out["peg"] = round(peg, 2) if math.isfinite(peg) else None
             dig = pe_digestion(pe_26e, cagr)
-            out["digest_years"] = round(dig, 1) if dig != float("inf") else None
+            out["digest_years"] = round(dig, 1) if math.isfinite(dig) else None
     return out
 
 

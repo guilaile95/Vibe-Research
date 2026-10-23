@@ -725,37 +725,98 @@ def us_stock_kline_sina(ticker: str, num: int = 120) -> list[dict]:
 def stock_kline_yahoo(symbol: str, interval: str = "1d",
                        range_: str = "6mo") -> list[dict]:
     """
-    Yahoo Finance chart API — 美股+港股通用，零crumb
+    Yahoo Finance chart API 示例；可用性和使用许可须另行核实。
     symbol: "AAPL" (美股) 或 "0700.HK" (港股)
-    interval: "1d", "1wk", "1mo", "5m", "15m", "1h"
+    interval: "1m", "5m", "15m", "1h", "1d", "1wk", "1mo"
     range_: "1d", "5d", "1mo", "3mo", "6mo", "1y", "5y", "max"
     返回: [{date, open, high, low, close, volume}, ...]
+    日/周/月保留源周期标签，不重聚合，也不保证末根周期已完结。
     """
+    import math
+    from datetime import datetime
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    intraday = {"1m", "5m", "15m", "1h"}
+    if not isinstance(interval, str) or interval not in intraday | {"1d", "1wk", "1mo"}:
+        raise ValueError("unsupported interval")
+    if not isinstance(range_, str) or range_ not in {"1d", "5d", "1mo", "3mo", "6mo", "1y", "5y", "max"}:
+        raise ValueError("unsupported range")
     url = f"https://query2.finance.yahoo.com/v8/finance/chart/{symbol}"
     params = {"interval": interval, "range": range_}
     r = requests.get(url, params=params, headers={
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
     }, timeout=15)
     r.raise_for_status()
-    
-    d = r.json()
-    chart = d.get("chart", {}).get("result", [{}])[0]
-    timestamps = chart.get("timestamp", [])
-    quote = chart.get("indicators", {}).get("quote", [{}])[0]
-    
-    from datetime import datetime
-    result = []
+
+    data = r.json()
+    envelope = data.get("chart") if isinstance(data, dict) else None
+    charts = envelope.get("result") if isinstance(envelope, dict) else None
+    if not isinstance(charts, list) or len(charts) != 1 or envelope.get("error") or not isinstance(charts[0], dict):
+        raise ValueError("invalid Yahoo chart response")
+    chart = charts[0]
+    meta = chart.get("meta") or {}
+    granularity = meta.get("dataGranularity") if isinstance(meta, dict) else None
+    # max 等范围可能被服务端改成粗周期；不能仅按请求给响应贴标签。
+    aliases = {"1h": "60m"}
+    if not isinstance(granularity, str) or aliases.get(granularity, granularity) != aliases.get(interval, interval):
+        raise ValueError("missing or mismatched chart granularity")
+    timezone_name = meta.get("exchangeTimezoneName") if isinstance(meta, dict) else None
+    try:
+        exchange_tz = ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError, TypeError):
+        # 不能用本机时区、当下 gmtoffset 或 ticker 猜历史交易日期。
+        raise ValueError("missing or unsupported exchange timezone") from None
+    timestamps = chart.get("timestamp")
+    if not isinstance(timestamps, list):
+        raise ValueError("missing or invalid timestamp array")
+    indicators = chart.get("indicators") or {}
+    quotes = indicators.get("quote") if isinstance(indicators, dict) else None
+    if not isinstance(quotes, list) or len(quotes) != 1 or not isinstance(quotes[0], dict):
+        raise ValueError("invalid chart quote arrays")
+    quote = quotes[0]
+    columns = {key: quote.get(key) for key in ("open", "high", "low", "close")}
+    # 未知成交量仍为 None；不把小数成交量截断为 0，不改变源的股数单位。
+    columns["volume"] = quote.get("volume")
+    if columns["volume"] is None:
+        columns["volume"] = [None] * len(timestamps)
+    for key, values in columns.items():
+        if not isinstance(values, list) or len(values) != len(timestamps):
+            raise ValueError(f"unaligned chart column: {key}")
+
+    def finite_number(value):
+        try:
+            return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+        except OverflowError:
+            return False
+
+    by_timestamp = {}
     for i, ts in enumerate(timestamps):
-        result.append({
-            "date": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if "m" in interval or "h" in interval else datetime.fromtimestamp(ts).strftime("%Y-%m-%d"),
-            "open": round(quote["open"][i], 2) if quote["open"][i] else 0,
-            "high": round(quote["high"][i], 2) if quote["high"][i] else 0,
-            "low": round(quote["low"][i], 2) if quote["low"][i] else 0,
-            "close": round(quote["close"][i], 2) if quote["close"][i] else 0,
-            "volume": int(quote["volume"][i]) if quote["volume"][i] else 0,
-        })
-    return result
+        if not finite_number(ts):
+            raise ValueError(f"invalid timestamp at row {i}")
+        try:
+            local = datetime.fromtimestamp(ts, exchange_tz)
+        except (ValueError, OverflowError, OSError):
+            raise ValueError(f"invalid timestamp at row {i}") from None
+        # 分钟时间显式含 UTC offset，纽约秋季回拨的同名时刻仍可区分。
+        row = {"date": local.isoformat(sep=" ", timespec="minutes") if interval in intraday else local.strftime("%Y-%m-%d")}
+        for key, values in columns.items():
+            value = values[i]
+            if not (key == "volume" and value is None) and (not finite_number(value) or value < 0):
+                # 整个载荷失败关闭，不能漏掉一根 K 线后冒充连续序列。
+                raise ValueError(f"invalid chart row {i}: {key}")
+            row[key] = value  # 保留原始精度；真实 0 与未知不混淆。
+        if ts in by_timestamp and by_timestamp[ts] != row:
+            raise ValueError(f"conflicting duplicate timestamp at row {i}")
+        by_timestamp[ts] = row
+    # 精确重复去重但不累加成交量；乱序输入按原始时间戳升序输出。
+    return [by_timestamp[ts] for ts in sorted(by_timestamp)]
 ```
+
+本项目该函数仅为内嵌示例，并未接入 `backend/gstock.py`、行情 API 或 AI K 线工具。
+示例核对响应 `meta.dataGranularity` 与请求周期一致（仅 `1h` 与 `60m` 视为等价）；声明缺失或不匹配即失败，不把服务端降采样结果重贴标签。
+日期按响应中的 IANA 交易所时区转换（系统须有对应时区数据库）；时区元数据缺失或无效即失败，不猜测本机时区。
+空 `timestamp: []` 才是合法空序列；缺失 OHLC、错位数组、坏时间戳或冲突重复会带字段/行号拒绝整个载荷，不补零、不静默跳行。
+周/月标签仅转换到交易所日期，不重采样或标定完整周期。离线合成验证不代表 Yahoo 自动取数许可、实时可用性或全市场覆盖，也不扩大项目来源使用范围。
 
 ### 2.2 港股 K 线 — Yahoo（唯一可用源）
 
