@@ -305,7 +305,9 @@ def completed_overview() -> dict | None:
 
 def completed_snapshot_seed() -> tuple | None:
     """Reuse an already finished full-market observation across spawn boundaries."""
-    with _A_SHARE_SNAPSHOT_LOCK:
+    if not _A_SHARE_SNAPSHOT_LOCK.acquire(blocking=False):
+        return None
+    try:
         hit = _CACHE.get("a_share_snapshot")
         if not hit or time.time() - hit[0] >= _TTL:
             return None
@@ -316,6 +318,8 @@ def completed_snapshot_seed() -> tuple | None:
             return None
         return copy.deepcopy(hit)
 
+    finally:
+        _A_SHARE_SNAPSHOT_LOCK.release()
 
 def get_overview() -> dict:
     """市场情绪 + 板块资金（含缓存）。资金轮动由前端从 sectors 头尾取。"""

@@ -46,6 +46,7 @@ _CACHE_VALUE: dict[str, Any] | None = None
 _CACHE_MONOTONIC = 0.0
 _LAST_SUCCESSFUL: dict[str, Any] | None = None
 _REFRESH_LOCK = threading.Lock()
+_REFRESH_GENERATION = 0
 # Capacity belongs to the backend, not each refresh. Even injected synchronous
 # providers cannot create an unbounded number of lingering worker threads.
 _QUALIFICATION_EXECUTOR = ThreadPoolExecutor(
@@ -1122,8 +1123,9 @@ def clear_cache() -> None:
 
 
 def get_discovery(*, force_refresh: bool = False) -> dict[str, Any]:
-    global _CACHE_VALUE, _CACHE_MONOTONIC, _LAST_SUCCESSFUL
+    global _CACHE_VALUE, _CACHE_MONOTONIC, _LAST_SUCCESSFUL, _REFRESH_GENERATION
     with _CACHE_LOCK:
+        entered_generation = _REFRESH_GENERATION
         age = time.monotonic() - _CACHE_MONOTONIC
         if not force_refresh and _CACHE_VALUE is not None and age < CACHE_TTL_SECONDS:
             cached = copy.deepcopy(_CACHE_VALUE)
@@ -1148,9 +1150,21 @@ def get_discovery(*, force_refresh: bool = False) -> dict[str, Any]:
             "cache": {"hit": False, "age_seconds": 0, "refresh_in_progress": True},
         }
     try:
+        # Another admitted reader may have finished between our cache check and
+        # admission. Coalesce that overlap, including force requests; a force
+        # request arriving after completion still owns a new refresh.
+        with _CACHE_LOCK:
+            age = time.monotonic() - _CACHE_MONOTONIC
+            if (_CACHE_VALUE is not None and age < CACHE_TTL_SECONDS
+                    and (not force_refresh or _REFRESH_GENERATION != entered_generation)):
+                cached = copy.deepcopy(_CACHE_VALUE)
+                cached["cache"] = {"hit": True, "age_seconds": round(max(0.0, age), 3)}
+                return cached
+            previous = copy.deepcopy(_LAST_SUCCESSFUL)
         result = run_discovery()
         if result["status"] in {"normal", "partial"}:
             with _CACHE_LOCK:
+                _REFRESH_GENERATION += 1
                 _CACHE_VALUE = copy.deepcopy(result)
                 _CACHE_MONOTONIC = time.monotonic()
                 _LAST_SUCCESSFUL = copy.deepcopy(result)

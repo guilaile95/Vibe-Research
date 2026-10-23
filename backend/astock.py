@@ -1686,6 +1686,14 @@ def _map_board_row(d: dict) -> dict | None:
     }
 
 
+def _require_provider_success(payload: dict, status_key: str = "rc") -> None:
+    """Absence is unknown; an explicit failed/malformed status is never empty."""
+    if payload.get("success") is False or (
+        status_key in payload and (type(payload[status_key]) is not int or payload[status_key] != 0)
+    ):
+        raise RuntimeError("provider business status unavailable")
+
+
 def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: int = _BOARD_PAGE_SIZE) -> dict:
     """统一行业 / 概念 / 地域板块涨跌幅排名（东财 clist 分页）。
 
@@ -1739,6 +1747,8 @@ def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: i
                     timeout=15,
                     deadline=deadline,
                 )
+                if not 200 <= getattr(r, "status_code", 200) < 300:
+                    raise RuntimeError("board_ranking: HTTP error")
                 try:
                     payload = r.json()
                 except Exception as e:  # noqa: BLE001
@@ -1762,6 +1772,7 @@ def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: i
             raise RuntimeError(
                 f"board_ranking({board_type}) page {pn}: response is not a dict"
             )
+        _require_provider_success(payload)
         if "data" not in payload or payload["data"] is None:
             raise RuntimeError(
                 f"board_ranking({board_type}) page {pn}: missing data in response"
@@ -1804,6 +1815,8 @@ def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: i
             break
 
         for row in rows:
+            if not isinstance(row.get("f12"), str) or not isinstance(row.get("f14"), str):
+                raise RuntimeError("board_ranking: invalid board identity")
             mapped = _map_board_row(row)
             if mapped is None:
                 raise RuntimeError("board_ranking: invalid board identity")
@@ -1985,9 +1998,16 @@ def stock_fund_flow_120d(code: str, *, strict: bool = False) -> list[dict]:
     if strict:
         if not isinstance(d, dict) or not isinstance(d.get("data"), dict):
             raise ValueError("fund flow response missing data")
+        _require_provider_success(d)
+        _research_identity_rows([d["data"]], code)
         lines = d["data"].get("klines")
         if not isinstance(lines, list) or any(not isinstance(line, str) for line in lines):
             raise ValueError("fund flow response missing klines")
+        for line in lines:
+            day = line.split(",", 1)[0]
+            if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", day):
+                raise ValueError("fund flow row has invalid date")
+            datetime.strptime(day, "%Y-%m-%d")
     return _parse_fund_flow_rows(d)
 
 
@@ -2167,6 +2187,7 @@ def concept_blocks(code: str, *, strict: bool = False) -> dict:
         if strict:
             if not isinstance(d, dict) or not isinstance(d.get("data"), dict):
                 raise ValueError("concept_blocks response missing data object")
+            _require_provider_success(d)
             diff = d["data"].get("diff")
             if not isinstance(diff, (dict, list)):
                 raise ValueError("concept_blocks response missing diff collection")
@@ -2207,6 +2228,7 @@ def hot_concepts(code: str, *, strict: bool = False) -> list[dict]:
         if strict:
             if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
                 raise ValueError("hot_concepts response missing data list")
+            _require_provider_success(payload, "code")
             data = payload["data"]
             if any(not isinstance(item, dict) for item in data):
                 raise ValueError("hot_concepts response contains malformed rows")

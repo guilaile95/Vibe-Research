@@ -219,18 +219,25 @@ def _overview(*, timeout):
     """Bound response time separately from one globally admitted refresh lifetime."""
     global _OVERVIEW_FLIGHT, _OVERVIEW_THREAD, _OVERVIEW_CANCEL
     import market
+    deadline = time.monotonic() + max(0, min(timeout, TIMEOUT))
     session = market.observation_session()
     completed = market.completed_overview()
     if completed is not None:
         return completed
-    with _OVERVIEW_LOCK:
+    if not _OVERVIEW_LOCK.acquire(timeout=max(0, deadline - time.monotonic())):
+        raise PublicDataUnavailable("SOURCE_REFRESH_PENDING")
+    try:
         if _OVERVIEW_CLOSING:
             raise PublicDataUnavailable("SOURCE_CANCELLED")
-        with _LOCK:
+        if not _LOCK.acquire(timeout=max(0, deadline - time.monotonic())):
+            raise PublicDataUnavailable("SOURCE_REFRESH_PENDING")
+        try:
             hit = _CACHE.get(("overview", None))
             if (hit and time.monotonic() - hit[0] < 300
                     and market.overview_cacheable(hit[1], session)):
                 return copy.deepcopy(hit[1])
+        finally:
+            _LOCK.release()
         flight = _OVERVIEW_FLIGHT
         if flight is None or flight.done():
             if market.push2_guard.is_read_only():
@@ -248,8 +255,10 @@ def _overview(*, timeout):
                 _OVERVIEW_FLIGHT = None
                 _OVERVIEW_THREAD = None
                 raise
+    finally:
+        _OVERVIEW_LOCK.release()
     try:
-        value = copy.deepcopy(flight.result(timeout=max(0, min(timeout, TIMEOUT))))
+        value = copy.deepcopy(flight.result(timeout=max(0, deadline - time.monotonic())))
         # A refresh can straddle a session boundary. Keep its date/provenance;
         # never represent yesterday's completed observation as current.
         if isinstance(value, dict) and isinstance(value.get("sentiment"), dict):
