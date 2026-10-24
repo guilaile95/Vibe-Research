@@ -6,12 +6,16 @@ import os, sys, uuid
 from datetime import datetime, timezone
 sys.path.insert(0, os.getcwd())
 import campaign_store
+if os.environ.get("E2E_CLOCK_FILE"):
+    from temporal_clock import utc_now_iso
+else:
+    utc_now_iso = lambda: datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 campaign, _transition = campaign_store.transition_campaign(
     campaign_id=os.environ["E2E_CAMPAIGN_ID"],
     expected_status="PRE-ENTRY",
     to_status="ACTIVE",
     transition_id=f"campaign_transition_{uuid.uuid4().hex}",
-    transitioned_at=datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+    transitioned_at=utc_now_iso(),
 )
 assert campaign.get("status") == "ACTIVE", campaign
 print("ACTIVE_SEED_OK")

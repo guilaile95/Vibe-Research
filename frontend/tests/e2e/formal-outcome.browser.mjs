@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { createTemporalClock, CREATION_TIME, OBSERVATION_TIME } from "./temporal.fixture.mjs";
 import { seedActiveCampaign } from "./campaign-active-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -371,6 +372,8 @@ from datetime import datetime, timedelta
 import formal_trade_attribution as fta
 import formal_trade_attribution_store as ats
 import trade_attribution_runtime as tar
+from temporal_clock import install
+install()
 import trade_ledger_service as tls
 from fact_lake_store import initialize_fact_lake, payload_sha256
 from trade_calendar import completed_trade_date_at
@@ -478,6 +481,8 @@ function createOutcomeHistoryFillers(env, python, template, count = 50) {
   const script = `
 import json
 import os
+from temporal_clock import install
+install()
 import frozen_decision_service as frozen
 
 template = json.loads(os.environ['RQ1_FILLER_TEMPLATE'])
@@ -488,7 +493,7 @@ service_fields = {
     'snapshot_json',
 }
 payload = {key: value for key, value in template.items() if key not in service_fields}
-payload['review_by'] = '2099-09-09T10:00:00Z'
+payload['review_by'] = '2026-09-09T10:00:00Z'
 payload['source_refs'] = ['rq1:e2e-history-filler']
 created = [frozen.freeze_decision(payload)['decision_id'] for _ in range(count)]
 print(json.dumps(created))
@@ -513,6 +518,8 @@ function createHistoricalActionFixtures(env, python, template, specs) {
   const script = `
 import json
 import os
+from temporal_clock import install
+install()
 import frozen_decision_service as frozen
 
 template = json.loads(os.environ['REV2_ACTION_TEMPLATE'])
@@ -585,8 +592,10 @@ async function run() {
     const backend = `http://127.0.0.1:${backendPort}`;
     const frontend = `http://127.0.0.1:${frontendPort}`;
     const py = pythonConfig();
+    const clock = createTemporalClock(tempDataDir);
     const env = {
       ...process.env,
+      ...clock.env,
       VR_ALLOW_ORIGINS: frontend,
       VR_DATA_DIR: tempDataDir,
       VR_REPORTS_DIR: tempDataDir,
@@ -619,7 +628,8 @@ async function run() {
     const executablePath = chromiumPath();
     if (executablePath) launchOptions.executablePath = executablePath;
     browser = await chromium.launch(launchOptions);
-    const page = await browser.newPage();
+    const page = await browser.newPage({ timezoneId: "UTC" });
+    await page.clock.setFixedTime(new Date(CREATION_TIME));
     const consoleErrors = [];
     const exactOutcomeRequests = [];
     let outcomeListGate = null;
@@ -672,7 +682,7 @@ async function run() {
       firstCampaign.campaign_id,
       true,
       tempDataDir,
-      "2026-08-01T10:00",
+      "2026-08-29T10:00",
     );
     const normalSessionCase = deriveCompletedSessionEvaluationAsOf(
       pythonScriptConfig(),
@@ -691,8 +701,10 @@ async function run() {
       secondCampaign.campaign_id,
       false,
       tempDataDir,
-      "2026-08-02T10:00",
+      "2026-08-30T10:00",
     );
+    clock.set("2026-08-28T09:00:00.000000Z");
+    await page.clock.setFixedTime(new Date("2026-08-28T09:00:00Z"));
     const historyFillerIds = createOutcomeHistoryFillers(
       env,
       pythonScriptConfig(),
@@ -703,9 +715,9 @@ async function run() {
       pythonScriptConfig(),
       firstRun.committed.committed,
       [
-        { next_best_action: "WAIT", review_by: "2099-09-11T10:00:00Z", strategy: "SWING" },
-        { next_best_action: "HOLD", review_by: "2099-09-12T10:00:00Z", strategy: "MEDIUM" },
-        { next_best_action: "EXIT", review_by: "2099-09-13T10:00:00Z", strategy: "SWING" },
+        { next_best_action: "WAIT", review_by: "2026-09-11T10:00:00Z", strategy: "SWING" },
+        { next_best_action: "HOLD", review_by: "2026-09-12T10:00:00Z", strategy: "MEDIUM" },
+        { next_best_action: "EXIT", review_by: "2026-09-13T10:00:00Z", strategy: "SWING" },
       ],
     );
     const thirdRun = await freezeThroughBrowser(
@@ -715,13 +727,17 @@ async function run() {
       thirdCampaign.campaign_id,
       false,
       tempDataDir,
-      "2099-09-10T10:00",
+      "2026-09-10T10:00",
     );
     const runtimeEvaluation = deriveCompletedSessionEvaluationAsOf(
       pythonScriptConfig(),
       firstRun.committed.committed.committed_at,
     );
     const evaluationAsOf = runtimeEvaluation.evaluation_as_of;
+    assert.ok(Date.parse(evaluationAsOf) > Date.parse(secondRun.committed.committed.review_by));
+    assert.ok(Date.parse(evaluationAsOf) < Date.parse(OBSERVATION_TIME));
+    clock.set(OBSERVATION_TIME);
+    await page.clock.setFixedTime(new Date(OBSERVATION_TIME));
     env.OL1_CF_EVALUATION_AS_OF = evaluationAsOf;
     const fixtures = prepareTradeAndFactLake(env, pythonScriptConfig(), firstRun.committed.committed, secondRun.committed.committed);
     await waitHttp(`${backend}/api/health`);
