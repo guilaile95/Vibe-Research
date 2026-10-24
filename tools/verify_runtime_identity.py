@@ -38,18 +38,20 @@ def compare_identities(expected_sha: str, identities: dict) -> dict:
         value = value.get("data", value) if isinstance(value, dict) else {}
         if not isinstance(value, dict):
             value = {}
+        source_state = value.get("source_state")
+        source_state = source_state if isinstance(source_state, str) and source_state in {"clean", "modified", "unknown"} else "unknown"
         sha = value.get("git_sha")
         state = "UNVERIFIED"
         if value.get("service") == service and isinstance(sha, str) and re.fullmatch(r"[a-f0-9]{40}", sha):
-            if sha != expected_sha or value.get("source_state") == "modified":
+            if sha != expected_sha or source_state == "modified":
                 state = "MISMATCH"
-            elif value.get("source_state") == "clean":
+            elif source_state == "clean":
                 state = "SOURCE_MATCH"
         # Development HMR and arbitrary archives are not immutable build proof.
         if name == "frontend" and value.get("identity_scope") != "BUILD_SOURCE_SNAPSHOT" and state == "SOURCE_MATCH":
             state = "UNVERIFIED"
         results[name] = {"status": state, "git_sha": sha if isinstance(sha, str) and re.fullmatch(r"[a-f0-9]{40}", sha) else None,
-                         "source_state": value.get("source_state") if value.get("source_state") in {"clean", "modified", "unknown"} else "unknown"}
+                         "source_state": source_state}
     states = [value["status"] for value in results.values()]
     status = "MISMATCH" if "MISMATCH" in states else "SOURCE_MATCH" if all(x == "SOURCE_MATCH" for x in states) else "UNVERIFIED"
     return {"expected_sha": expected_sha, "status": status, "services": results,

@@ -27,6 +27,15 @@ class RuntimeIdentityTests(unittest.TestCase):
         data = self.fixtures(); data["frontend"]["identity_scope"] = "DEV_SERVER_STARTUP_SNAPSHOT_NOT_IMMUTABLE_ASSETS"
         self.assertEqual(compare_identities("a" * 40, data)["status"], "UNVERIFIED")
 
+    def test_malformed_source_state_is_unverified(self):
+        for key in self.fixtures():
+            for value in [[], {}, None, 1, True, "unexpected"]:
+                with self.subTest(service=key, value=value):
+                    data = self.fixtures(); data[key]["source_state"] = value
+                    report = compare_identities("a" * 40, data)
+                    self.assertEqual(report["status"], "UNVERIFIED")
+                    self.assertEqual(report["services"][key]["source_state"], "unknown")
+
     def test_endpoint_safety(self):
         self.assertEqual(local_origin("http://[::1]:8911/"), "http://[::1]:8911")
         for value in ["https://evil.example:8911", "http://127.0.0.1:8911?x=1",

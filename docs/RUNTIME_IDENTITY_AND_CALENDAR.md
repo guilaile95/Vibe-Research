@@ -20,7 +20,9 @@ python tools/verify_runtime_identity.py --expected-sha <完整40位提交>
 应使用固定生产构建验收，不把开发服务健康 marker 当部署证明。
 
 源码归档不应继承外层 Git 仓库身份。Linux 安装包的 manifest 记录源身份与逐文件哈希；
-先运行安装包既有 `verify`/启动完整性检查，保留包哈希。旧包缺身份时保持未知，
+当前 Linux 安装包也不包含 .git，故后端与 Agent Runtime 的运行身份采集仍返回 unknown；
+manifest 的 source_identity 和前端构建身份并不向这两个运行时提供身份，不能证明三服务 SOURCE_MATCH。
+先运行安装包既有 `verify`/启动完整性检查，保留包哈希。旧包缺身份时同样保持未知，
 不要手工填写一个 SHA 来制造通过，也不要为更新版本自动覆盖用户工作区。
 
 实际部署验收还需：确认目标机器和目录、隔离用户数据、备份与普通代码回滚策略、
