@@ -44,7 +44,7 @@ async function serverFor(label,dist) {
     // Same deterministic provider wait, unchanged for both builds; never counted as real provider performance.
     await sleep(20);
     const reply=fixtureReply(url);
-    if(reply===null){sourceErrors.push({label,path:path+url.search});res.writeHead(503);res.end(JSON.stringify({detail:'Synthetic unavailable source'}));return;}
+    if(reply==null){sourceErrors.push({label,path:path+url.search});res.writeHead(503);res.end(JSON.stringify({detail:'Synthetic unavailable source'}));return;}
     res.end(JSON.stringify(reply));return;
    }
    if(path==='/perf-storage'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><title>Isolated native storage performance</title>');return;}
@@ -84,9 +84,10 @@ try{
   const measure=async(name,action,ready)=>{
    const before=await page.evaluate(()=>({start:performance.now(),resourceCount:performance.getEntriesByType('resource').length,longCount:window.__perf?.longTasks.length||0})).catch(()=>({start:0,resourceCount:0,longCount:0}));
    const start=performance.now();await action();await ready();const firstUsefulMs=performance.now()-start;await settle(page);const completeMs=performance.now()-start;
-   const details=await page.evaluate(({before,name})=>{const nav=name.includes('reload')||name.includes('cold')||name.includes('document');const resources=performance.getEntriesByType('resource').slice(nav?0:before.resourceCount);const tasks=(window.__perf?.longTasks||[]).slice(nav?0:before.longCount);return {requests:resources.map(r=>({path:new URL(r.name).pathname+new URL(r.name).search,transferBytes:r.transferSize,decodedBytes:r.decodedBodySize,durationMs:r.duration})),longTaskCount:tasks.length,longTaskMs:tasks.reduce((s,t)=>s+t.duration,0),navigationType:performance.getEntriesByType('navigation')[0]?.type};},{before,name});
+   const details=await page.evaluate(({before,name})=>{const nav=name.includes('reload')||name.includes('cold')||name.includes('document');const resources=performance.getEntriesByType('resource').slice(nav?0:before.resourceCount);const tasks=(window.__perf?.longTasks||[]).slice(nav?0:before.longCount);return {requests:resources.map(r=>({path:new URL(r.name).pathname+new URL(r.name).search,transferBytes:r.transferSize,decodedBytes:r.decodedBodySize,durationMs:r.duration})),longTaskCount:tasks.length,longTaskMs:tasks.reduce((s,t)=>s+t.duration,0),navigationType:performance.getEntriesByType('navigation')[0]?.type,paints:performance.getEntriesByType('paint').map(e=>({name:e.name,startTime:e.startTime})),navigation:performance.getEntriesByType('navigation')[0]?.toJSON()};},{before,name});
    const metrics=Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(m=>[m.name,m.value]));
    if(trial>=0)rows.push({label:server.label,trial,name,firstUsefulMs,completeMs,...details,jsHeapUsedBytes:metrics.JSHeapUsedSize,taskDurationSeconds:metrics.TaskDuration});
+   if(trial===0&&['daily-cold','stock-document','pcb-content-route'].includes(name))await page.screenshot({path:join(output,`${server.label}-${name}.png`)});
   };
   await measure('daily-cold',()=>page.goto('/daily-review'),()=>page.getByText('合成基准指数',{exact:true}).waitFor());
   await measure('daily-warm-reload',()=>page.reload(),()=>page.getByText('合成基准指数',{exact:true}).waitFor());
