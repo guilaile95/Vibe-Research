@@ -64,9 +64,9 @@ test("fundflow uses latest observations without mutating or filling missing date
 
 test("StockData wires guarded independent source requests to both UI and AI context", () => {
   const source = readFileSync(new URL("../src/pages/StockData.tsx", import.meta.url), "utf8");
-  assert.match(source, /rid === runIdRef\.current\) set\(v\)/);
-  assert.match(source, /resolveReportEvidence\(api\.reportsWithCoverage\(c\).*\.then\(ok\(setReportResult\)\)/);
-  assert.match(source, /resolveEvidenceList\(api\.announcements\(c\).*\.then\(ok\(setAnnouncementResult\)\)/);
+  assert.match(source, /rid === runIdRef\.current && !context\.signal\.aborted\) set\(v\)/);
+  assert.match(source, /resolveReportEvidence\(context\.read\("reportsWithCoverage", signal => api\.reportsWithCoverage\(c, signal\)\).*\.then\(ok\(setReportResult\)\)/);
+  assert.match(source, /resolveEvidenceList\(context\.read\("announcements", signal => api\.announcements\(c, signal\)\).*\.then\(ok\(setAnnouncementResult\)\)/);
   assert.match(source, /reportEvidenceContext\(reportResult\)/);
   assert.match(source, /announcementEvidenceContext\(announcementResult\)/);
   assert.match(source, /data-source-state=\{reportResult.status\}/);
@@ -158,7 +158,7 @@ test("each secondary source wires an independently guarded request and visible s
     ["lockup", "Lockup", "lockup"], ["blocks", "Blocks", "blocks"], ["hotConcepts", "HotCon", "hotCon"],
     ["investorQa", "Qa", "qa"], ["percentile", "Pctl", "pctl"], ["news", "News", "news"],
   ]) {
-    const request = source.split("\n").find((line) => line.includes(`loadEvidenceSource(() => api.${method}(c)`));
+    const request = source.split("\n").find((line) => line.includes(`loadEvidenceSource(() => context.read("${method}", signal => api.${method}(c, signal))`));
     assert.ok(request, method);
     assert.ok(request.includes(`set${setter}Result, () => rid === runIdRef.current`), method);
     assert.ok(source.includes(`state={${state}Result}`), state);

@@ -126,17 +126,18 @@ function assertWatchStatus(value: WatchlistStatus): void {
 }
 
 /** 权威加载：先尝试迁移，再读后端。 */
-export async function loadWatchAuthoritative(): Promise<{
+export async function loadWatchAuthoritative(signal?: AbortSignal): Promise<{
   codes: string[];
   etag: string | null;
   status: WatchlistStatus["status"];
   migrated: boolean;
   migrationError?: string;
 }> {
-  let st = await getWatchlist();
+  let st = await getWatchlist(signal);
   assertWatchStatus(st);
   let migrated = false;
   let migrationError: string | undefined;
+  signal?.throwIfAborted();
   if (hasLocalDraft()) {
     try {
       const m = await migrateLocalWatchlistOnce(
@@ -148,7 +149,7 @@ export async function loadWatchAuthoritative(): Promise<{
       migrationError = error instanceof Error ? error.message : "本地草稿导入失败，请重试";
     }
     // A failed read after a successful import is not a retained-draft failure.
-    if (migrated) { st = await getWatchlist(); assertWatchStatus(st); }
+    if (migrated) { st = await getWatchlist(signal); assertWatchStatus(st); }
   }
   if (st.status === "valid") {
     return {

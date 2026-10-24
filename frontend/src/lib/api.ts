@@ -712,14 +712,14 @@ export const api = {
       signal ? { signal } : undefined,
     ),
   /** 顶部风险分析（影子模式，第一版）：按股票代码分析，signal 恒 unknown、不参与最终结论。 */
-  topRisk: (code: string, days = 120) =>
+  topRisk: (code: string, days = 120, signal?: AbortSignal) =>
     get<TopRiskAnalysis>(
-      `/market/top-risk?code=${encodeURIComponent(code)}${days != null ? `&days=${days}` : ""}`,
+      `/market/top-risk?code=${encodeURIComponent(code)}${days != null ? `&days=${days}` : ""}`, { signal },
     ),
   marketBoards: (type: "industry" | "concept" | "region" = "industry", topN = 20) =>
     get<TimedComponentEnvelope<BoardRankingData>>(`/market/boards?type=${type}&top_n=${topN}`),
-  globalStock: (symbol: string) => get<GlobalStock>(`/global/stock?symbol=${encodeURIComponent(symbol)}`),
-  hkCashflow: (symbol: string) => get<HkCashflow>(`/global/hk/cashflow?symbol=${encodeURIComponent(symbol)}`),
+  globalStock: (symbol: string, signal?: AbortSignal) => get<GlobalStock>(`/global/stock?symbol=${encodeURIComponent(symbol)}`, { signal }),
+  hkCashflow: (symbol: string, signal?: AbortSignal) => get<HkCashflow>(`/global/hk/cashflow?symbol=${encodeURIComponent(symbol)}`, { signal }),
   // ---- Native Intel（NATIVE-INTEL1，Vibe 本地持久化，无 sidecar / MCP）----
   nativeIntelStatus: () =>
     get<NativeIntelStatus>("/native-intel/status", { unwrapData: false }),
@@ -935,43 +935,43 @@ export const api = {
     const query = tradeDate ? `?trade_date=${encodeURIComponent(tradeDate)}` : "";
     return get<AiGeneratedResult<TPayload> | null>(`/ai-results/${resultType}${query}`, { signal });
   },
-  valuation: (code: string) => get<Valuation>(`/valuation?code=${code}`),
-  percentile: (code: string) => get<ValPercentile>(`/valuation/percentile?code=${code}`),
-  financials: (code: string) => get<Financials>(`/financials?code=${code}`),
-  announcements: (code: string) => get<Announcement[]>(`/announcements?code=${code}`),
-  quote: (codes: string) => get<Record<string, Quote>>(`/quote?codes=${codes}`),
-  reports: (code: string) => get<Report[]>(`/reports?code=${code}`),
-  reportsWithCoverage: async (code: string): Promise<ReportListResult> => {
-    const payload = await get<unknown>(`/reports?code=${encodeURIComponent(code)}`, { unwrapData: false });
+  valuation: (code: string, signal?: AbortSignal) => get<Valuation>(`/valuation?code=${code}`, { signal }),
+  percentile: (code: string, signal?: AbortSignal) => get<ValPercentile>(`/valuation/percentile?code=${code}`, { signal }),
+  financials: (code: string, signal?: AbortSignal) => get<Financials>(`/financials?code=${code}`, { signal }),
+  announcements: (code: string, signal?: AbortSignal) => get<Announcement[]>(`/announcements?code=${code}`, { signal }),
+  quote: (codes: string, signal?: AbortSignal) => get<Record<string, Quote>>(`/quote?codes=${codes}`, { signal }),
+  reports: (code: string, signal?: AbortSignal) => get<Report[]>(`/reports?code=${code}`, { signal }),
+  reportsWithCoverage: async (code: string, signal?: AbortSignal): Promise<ReportListResult> => {
+    const payload = await get<unknown>(`/reports?code=${encodeURIComponent(code)}`, { unwrapData: false, signal });
     const result = parseReportListResult(payload);
     if (!result) throw new ApiError("研报响应格式异常，请稍后重试", 502);
     return result;
   },
-  news: (code: string) => get<NewsItem[]>(`/news?code=${code}`),
-  margin: (code: string) => get<MarginRow[]>(`/margin?code=${code}`),
-  blockTrade: (code: string) => get<BlockTradeRow[]>(`/block-trade?code=${code}`),
-  holders: (code: string) => get<HolderRow[]>(`/holders?code=${code}`),
-  dividend: (code: string) => get<DividendRow[]>(`/dividend?code=${code}`),
-  fundFlow: (code: string) => get<FundFlowRow[]>(`/fund-flow?code=${code}`),
-  dragonTiger: (code: string) => get<DragonTiger>(`/dragon-tiger?code=${code}`),
-  lockup: (code: string) => get<Lockup>(`/lockup?code=${code}`),
-  blocks: (code: string) => get<Blocks>(`/blocks?code=${code}`),
-  hotConcepts: (code: string) => get<HotConcept[]>(`/hot-concepts?code=${code}`),
-  investorQa: (code: string) => get<QaRow[]>(`/investor-qa?code=${code}`),
+  news: (code: string, signal?: AbortSignal) => get<NewsItem[]>(`/news?code=${code}`, { signal }),
+  margin: (code: string, signal?: AbortSignal) => get<MarginRow[]>(`/margin?code=${code}`, { signal }),
+  blockTrade: (code: string, signal?: AbortSignal) => get<BlockTradeRow[]>(`/block-trade?code=${code}`, { signal }),
+  holders: (code: string, signal?: AbortSignal) => get<HolderRow[]>(`/holders?code=${code}`, { signal }),
+  dividend: (code: string, signal?: AbortSignal) => get<DividendRow[]>(`/dividend?code=${code}`, { signal }),
+  fundFlow: (code: string, signal?: AbortSignal) => get<FundFlowRow[]>(`/fund-flow?code=${code}`, { signal }),
+  dragonTiger: (code: string, signal?: AbortSignal) => get<DragonTiger>(`/dragon-tiger?code=${code}`, { signal }),
+  lockup: (code: string, signal?: AbortSignal) => get<Lockup>(`/lockup?code=${code}`, { signal }),
+  blocks: (code: string, signal?: AbortSignal) => get<Blocks>(`/blocks?code=${code}`, { signal }),
+  hotConcepts: (code: string, signal?: AbortSignal) => get<HotConcept[]>(`/hot-concepts?code=${code}`, { signal }),
+  investorQa: (code: string, signal?: AbortSignal) => get<QaRow[]>(`/investor-qa?code=${code}`, { signal }),
   industry: (top = 20) => get<IndustryData>(`/industry?top=${top}`),
   /** K 线（需 mootdx）：category 4=日 5=周 6=月 11=60分钟；依赖缺失抛 501。 */
-  kline: (code: string, category = 4, offset = 60) =>
-    request<{ data: KlineBar[]; annotation_context?: AnnotationContext | null }>(`/kline?code=${code}&category=${category}&offset=${offset}&annotation_context=true`, "GET", undefined, { unwrapData: false })
+  kline: (code: string, category = 4, offset = 60, signal?: AbortSignal) =>
+    request<{ data: KlineBar[]; annotation_context?: AnnotationContext | null }>(`/kline?code=${code}&category=${category}&offset=${offset}&annotation_context=true`, "GET", undefined, { unwrapData: false, signal })
       .then((result) => registerAnnotationContext(result.data, result.annotation_context)),
   /** 技术指标与价格触发（SMA/EMA/MACD/RSI/布林带/5-20 日均量比）；依赖缺失抛 501。 */
-  technicalIndicators: (code: string, period = "daily", days = 120) =>
-    get<TechnicalIndicators>(`/market/technical-indicators?code=${code}&period=${period}&days=${days}`),
+  technicalIndicators: (code: string, period = "daily", days = 120, signal?: AbortSignal) =>
+    get<TechnicalIndicators>(`/market/technical-indicators?code=${code}&period=${period}&days=${days}`, { signal }),
   /** 季报财务快照（需 mootdx，37 字段）；依赖缺失抛 501。 */
-  finance: (code: string) => get<Record<string, string | number | null>>(`/finance?code=${code}`),
+  finance: (code: string, signal?: AbortSignal) => get<Record<string, string | number | null>>(`/finance?code=${code}`, { signal }),
   /** 个股基本面：行业 / 总股本 / 上市时间等（需 akshare）；依赖缺失抛 501。 */
-  info: (code: string) => get<Record<string, string | number>>(`/info?code=${code}`),
+  info: (code: string, signal?: AbortSignal) => get<Record<string, string | number>>(`/info?code=${code}`, { signal }),
   /** 巨潮公告全文列表（需 akshare，备用源）；依赖缺失抛 501。 */
-  disclosure: (code: string) => get<DisclosureItem[]>(`/disclosure?code=${code}`),
+  disclosure: (code: string, signal?: AbortSignal) => get<DisclosureItem[]>(`/disclosure?code=${code}`, { signal }),
   readReportPages: (body: ReportPageReadRequest, signal?: AbortSignal) => request<ReportPageReadResult>("/myreports/page-read", "POST", body, { signal }),
   myReports: () => get<MyReport[]>("/myreports"),
   uploadReport: (name: string, contentB64: string, meta?: {
@@ -1061,12 +1061,12 @@ export const api = {
     get<SectorIndustryContextData>("/sector-research/industry-context"),
 
   /** Current-member industry and full-market relative performance for one A-share. */
-  stockRelativeContext: (code: string) =>
-    get<StockRelativeContext>(`/stock-relative-context?code=${encodeURIComponent(code)}`),
+  stockRelativeContext: (code: string, signal?: AbortSignal) =>
+    get<StockRelativeContext>(`/stock-relative-context?code=${encodeURIComponent(code)}`, { signal }),
 
   /** Current-member industry PE/PB context for one A-share. */
-  stockValuationContext: (code: string) =>
-    get<StockValuationContext>(`/stock-valuation-context?code=${encodeURIComponent(code)}`),
+  stockValuationContext: (code: string, signal?: AbortSignal) =>
+    get<StockValuationContext>(`/stock-valuation-context?code=${encodeURIComponent(code)}`, { signal }),
 
   // -------------------------------------------------------------------------
   // 投资逻辑与证据账本（Investment Thesis & Evidence Ledger）

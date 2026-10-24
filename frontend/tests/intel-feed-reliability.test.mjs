@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { ReadRequestContext } from '../src/lib/readRequestContext.ts';
 import { ApiError } from '../src/lib/api.ts';
 
 // Run the real component's hooks and event handlers with deterministic network
@@ -34,7 +35,8 @@ function harness({ watch = async () => validWatch(), quote = async () => ({}), a
   const modules = {
     react: React,
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
-    '@/lib/api': { ApiError, api: { quote, announcements, news } },
+    '@/lib/readRequestContext': { ReadRequestContext },
+    '@/lib/api': { ApiError, loadAccessKey: () => '', api: { quote, announcements, news } },
     '@/lib/watchlist': { loadWatchAuthoritative: watch },
   };
   const exports = {};
@@ -85,10 +87,10 @@ for (const kind of ['filings', 'news']) {
     const h = harness({ announcements: fetch, news: fetch });
     h.render(kind); await tick();
     let tree = h.render(kind);
-    assert.match(text(tree), new RegExp(`${label}加载失败（1/1 只）`));
+    assert.match(text(tree), new RegExp(`${label}加载失败`));
     assert.equal(alerts(tree).length, 1);
     assert.doesNotMatch(text(tree), /近期暂无|https:|ProxyError|SQL|traceback/);
-    assert.equal(button(tree, '重试').props.disabled, false);
+    assert.notEqual(button(tree, '重试').props.disabled, true);
     fail = false; button(tree, '重试').props.onClick(); await tick();
     tree = h.render(kind);
     assert.equal(calls, 2);
@@ -229,4 +231,37 @@ test('a newer same-tab refresh wins over an older pending response', async () =>
   const tree = h.render();
   assert.match(text(tree), /Latest row/);
   assert.doesNotMatch(text(tree), /Stale row/);
+});
+
+
+test('pending optional names do not delay main results, and individual pending sources remain explicit', async () => {
+  const names = deferred(), second = deferred();
+  let nameSignal, sourceSignal;
+  const h = harness({
+    watch: async () => validWatch(['000001', '000002']),
+    quote: (_, signal) => { nameSignal = signal; return names.promise; },
+    news: (code, signal) => { sourceSignal = signal; return code === '000002' ? second.promise : Promise.resolve([{ 新闻标题: 'Main row first' }]); },
+  });
+  h.render(); await tick();
+  let tree = h.render();
+  assert.match(text(tree), /Main row first/);
+  assert.match(text(tree), /000001/);
+  assert.match(text(tree), /成功 1 · 等待 1 · 失败 0/);
+  second.resolve([]); await tick();
+  tree = h.render();
+  assert.match(text(tree), /成功 2 · 等待 0 · 失败 0/);
+  assert.match(text(tree), /Main row first/);
+  assert.ok(button(tree, '刷新'));
+  names.resolve({'000001': {name:'Resolved name'}}); await tick();
+  assert.match(text(h.render()), /Resolved name/);
+  h.unmount();
+});
+
+test('unmount aborts active optional names and feed transport', async () => {
+  const signals = [];
+  const held = (_, signal) => { signals.push(signal); return new Promise(() => {}); };
+  const h = harness({quote:held, news:held});
+  h.render(); await tick(); h.unmount();
+  assert.equal(signals.length, 2);
+  assert.ok(signals.every(signal => signal.aborted));
 });

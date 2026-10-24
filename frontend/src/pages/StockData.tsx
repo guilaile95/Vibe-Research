@@ -1,3 +1,4 @@
+import { ReadRequestContext } from "@/lib/readRequestContext";
 import { financialAmount, financialEps } from "@/lib/globalFinancials";
 import { stockDebateHrefForResult } from "@/lib/debateHandoff";
 import { CompanyResearchPanel } from "@/components/research/CompanyResearchPanel";
@@ -36,7 +37,7 @@ import {
   togglePanelState,
 } from "@/components/ui/optionalDataPanelState";
 import {
-  api, ApiError, type Valuation, type NewsItem, type ValPercentile, type ValMetric,
+  api, ApiError, loadAccessKey, type Valuation, type NewsItem, type ValPercentile, type ValMetric,
   type Financials, type Announcement, type MarginRow, type BlockTradeRow, type HolderRow,
   type DividendRow, type FundFlowRow, type DragonTiger, type Lockup, type Blocks, type HotConcept, type QaRow,
   type GlobalStock, type HkCashflow, type KlineBar, type DisclosureItem, type TechnicalIndicators, type TopRiskAnalysis,
@@ -77,7 +78,7 @@ const round2 = (v: number | null | undefined, suffix = "") =>
 const pct = (v: number | null | undefined) =>
   v === null || v === undefined || !Number.isFinite(Number(v)) ? "—" : `${Number(v).toFixed(2)}%`;
 
-// 页面分区（纯视图状态）：常驻区 + 五个页签，只决定已有区块的挂载位置，不改变任何数据语义
+// 页面分区：常驻报价优先；五个页签按需读取，保持来源与覆盖语义。
 type StockDataTab = "overview" | "market" | "financials" | "events" | "capital";
 
 const STOCK_DATA_TABS: { key: StockDataTab; label: string }[] = [
@@ -138,7 +139,7 @@ export function StockData() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const urlCode = searchParams.get("code")?.trim().toUpperCase() ?? "";
-  /** 当前页签；默认概览。切换页签只改视图，不写任何状态、不改 activeCode。 */
+  /** 当前页签；默认概览。切换页签按需读取，不改业务状态或 activeCode。 */
   const [tab, setTab] = useState<StockDataTab>("overview");
   const [code, setCode] = useState("");
   /** 已提交查询的代码；面板请求只读此值，输入框改动不改 activeCode */
@@ -208,6 +209,13 @@ export function StockData() {
   /** 与 panelStates 同步的镜像，供事件处理器在 setState 外做纯决策（不在 updater 里写副作用） */
   const panelStatesRef = useRef<PanelStates>(createInitialPanelStates());
   const runIdRef = useRef(0);
+  const readContextRef = useRef<ReadRequestContext | null>(null);
+  const loadedTabsRef = useRef(new Set<StockDataTab>());
+  useEffect(() => () => {
+    runIdRef.current++;
+    activeCodeRef.current = "";
+    readContextRef.current?.cancel();
+  }, []);
   /** 最新 activeCode 的 ref，供异步回调读取（避免闭包过期） */
   const activeCodeRef = useRef("");
   /** 全局单调面板请求序号（跨 panel 递增，区分同股并发） */
@@ -229,6 +237,8 @@ export function StockData() {
   const fetchPanelData = useCallback((key: PanelId, requestCode: string) => {
     if (!/^\d{6}$/.test(requestCode)) return;
     const rid = runIdRef.current;
+    const context = readContextRef.current;
+    if (!context || context.signal.aborted) return;
     const boundCode = requestCode;
     const requestId = ++panelRequestSeqRef.current;
     latestPanelRequestIdRef.current[key] = requestId;
@@ -244,10 +254,10 @@ export function StockData() {
       try {
         let result: unknown;
         switch (key) {
-          case "kline":       result = await api.kline(boundCode); break;
-          case "finance":     result = await api.finance(boundCode); break;
-          case "info":        result = await api.info(boundCode); break;
-          case "disclosure":  result = await api.disclosure(boundCode); break;
+          case "kline":       result = await context.read("kline", signal => api.kline(boundCode, 4, 60, signal)); break;
+          case "finance":     result = await context.read("finance", signal => api.finance(boundCode, signal)); break;
+          case "info":        result = await context.read("info", signal => api.info(boundCode, signal)); break;
+          case "disclosure":  result = await context.read("disclosure", signal => api.disclosure(boundCode, signal)); break;
         }
 
         // 状态与数据同一条件：generation + activeCode + requestId 任一不匹配即全拒
@@ -353,13 +363,15 @@ export function StockData() {
   // 技术指标独立 fetch：与 K 线面板解耦，单独 loading/error，失败不影响其他区域
   useEffect(() => {
     const code = activeCode;
-    if (!/^\d{6}$/.test(code)) return;
+    if (!/^\d{6}$/.test(code) || tab !== "market") return;
+    const context = readContextRef.current;
+    if (!context) return;
     const rid = runIdRef.current;
     setTiLoading(true);
     setTiError(null);
     (async () => {
       try {
-        const env = await api.technicalIndicators(code);
+        const env = await context.read("technicalIndicators", signal => api.technicalIndicators(code, "daily", 120, signal));
         if (rid !== runIdRef.current || code !== activeCodeRef.current) return;
         setTiEnv(env);
         setTiError(null);
@@ -371,10 +383,14 @@ export function StockData() {
         if (rid === runIdRef.current && code === activeCodeRef.current) setTiLoading(false);
       }
     })();
-  }, [activeCode, tiQueryVersion]);
+  }, [activeCode, tiQueryVersion, tab]);
 
   const run = useCallback(async (requestedCode: string) => {
     const c = requestedCode.trim().toUpperCase();
+    readContextRef.current?.cancel();
+    const context = new ReadRequestContext(loadAccessKey);
+    readContextRef.current = context;
+    loadedTabsRef.current = new Set();
     const rid = ++runIdRef.current;
     // 正式换股：绑定 activeCode，重置全部可选面板
     setActiveCode(c);
@@ -401,9 +417,9 @@ export function StockData() {
     // 6 位纯数字 = A 股；否则（字母 / 港股短代码）走美股 / 港股（global-stock-data）
     if (!/^\d{6}$/.test(c)) {
       // 港股现金流独立回填（美股返回 404 → 静默留空，卡片不渲染）
-      api.hkCashflow(c).then((cf) => { if (rid === runIdRef.current) setCashflow(cf); }).catch(() => { if (rid === runIdRef.current) setCashflow(null); });
+
       try {
-        const g = await api.globalStock(c);
+        const g = await context.read("globalStock", signal => api.globalStock(c, signal));
         if (rid === runIdRef.current) setGStock(g);
       } catch (e) {
         if (rid === runIdRef.current) setErr(e instanceof ApiError ? e.message : "查询失败");
@@ -413,54 +429,9 @@ export function StockData() {
       return;
     }
 
-    // A 股：竞态守卫（快速换代码时只让最新一次回填）+ 资金面/筹码独立回填、不阻塞主数据
-    const ok = <T,>(set: (v: T) => void) => (v: T) => { if (rid === runIdRef.current) set(v); };
-    setReportResult({ status: "loading", data: [] });
-    setAnnouncementResult({ status: "loading", data: [] });
-    void resolveReportEvidence(api.reportsWithCoverage(c), "研报数据暂不可用").then(ok(setReportResult));
-    void resolveEvidenceList(api.announcements(c), "公告数据暂不可用").then(ok(setAnnouncementResult));
-    void loadEvidenceSource(() => api.margin(c), [], "融资融券数据暂不可用", setMarginResult, () => rid === runIdRef.current);
-    void loadEvidenceSource(() => api.blockTrade(c), [], "大宗交易数据暂不可用", setBlockTResult, () => rid === runIdRef.current);
-    void loadEvidenceSource(() => api.holders(c), [], "股东户数数据暂不可用", setHoldersResult, () => rid === runIdRef.current);
-    void loadEvidenceSource(() => api.dividend(c), [], "分红数据暂不可用", setDividendResult, () => rid === runIdRef.current);
-    void loadEvidenceSource(() => api.fundFlow(c), [], "资金流向数据暂不可用", setFundFlowResult, () => rid === runIdRef.current);
-    void loadEvidenceSource(() => api.dragonTiger(c), null, "龙虎榜数据暂不可用", setDtResult, () => rid === runIdRef.current, (data) => !data || (data.records.length === 0 && data.seats.buy.length === 0 && data.seats.sell.length === 0));
-    void loadEvidenceSource(() => api.lockup(c), null, "限售解禁数据暂不可用", setLockupResult, () => rid === runIdRef.current, (data) => !data || (data.upcoming.length === 0 && data.history.length === 0));
-    void loadEvidenceSource(() => api.blocks(c), null, "板块归属数据暂不可用", setBlocksResult, () => rid === runIdRef.current, (data) => !data || (data.concept_tags.length === 0 && data.boards.length === 0));
-    void loadEvidenceSource(() => api.hotConcepts(c), [], "热门概念数据暂不可用", setHotConResult, () => rid === runIdRef.current);
-    void loadEvidenceSource(() => api.investorQa(c), [], "投资者互动数据暂不可用", setQaResult, () => rid === runIdRef.current);
-    void loadEvidenceSource(() => api.percentile(c), null, "估值历史分位数据暂不可用", setPctlResult, () => rid === runIdRef.current, (data) => !data || (!data.metrics.pe_ttm && !data.metrics.pb));
-    void loadEvidenceSource(() => api.news(c), [], "个股新闻数据暂不可用", setNewsResult, () => rid === runIdRef.current);
-    // 顶部风险（影子模式）：独立加载/错误，不影响主页面数据
-    setTopRiskLoading(true);
-    setTopRiskErr(null);
-    setTopRisk(null);
-    api.topRisk(c).then(ok(setTopRisk)).catch((e) => {
-      if (rid === runIdRef.current) setTopRiskErr(e instanceof ApiError ? e.message : "顶部风险分析失败");
-    }).finally(() => {
-      if (rid === runIdRef.current) setTopRiskLoading(false);
-    });
-    setStockRelativeLoading(true);
-    api.stockRelativeContext(c).then(ok(setStockRelativeContext)).catch((e) => {
-      if (rid === runIdRef.current) setStockRelativeError(e instanceof ApiError ? e.message : "相对表现数据暂不可用");
-    }).finally(() => {
-      if (rid === runIdRef.current) setStockRelativeLoading(false);
-    });
-    setStockValuationLoading(true);
-    api.stockValuationContext(c).then(ok(setStockValuationContext)).catch((e) => {
-      if (rid === runIdRef.current) setStockValuationError(e instanceof ApiError ? e.message : "相对行业估值暂不可用");
-    }).finally(() => {
-      if (rid === runIdRef.current) setStockValuationLoading(false);
-    });
-    // K 线 / 季报财务 / 基本面 / 巨潮公告：均为可选依赖，改为按需展开加载（避免每次查询都发 501）
-    // Financial enrichment must not hold an already available quote hostage.
-    void api.financials(c).then((data) => {
-      if (rid === runIdRef.current) { setFin(data); setFinError(null); }
-    }).catch((e) => {
-      if (rid === runIdRef.current) setFinError(e instanceof ApiError ? e.message : "财务数据暂不可用");
-    });
+    // Primary quote is dispatched before any tab enrichment.
     try {
-      const v = await api.valuation(c);
+      const v = await context.read("valuation", signal => api.valuation(c, signal));
       if (rid === runIdRef.current) setVal(v);
     } catch (e) {
       if (rid === runIdRef.current) setErr(e instanceof ApiError ? e.message : "查询失败");
@@ -468,6 +439,73 @@ export function StockData() {
       if (rid === runIdRef.current) setLoading(false);
     }
   }, [commitPanelStates]);
+
+  // Each tab loads only its sources, once in the current committed query.
+  // New queries own a fresh queue; neither data nor in-flight work is shared across stocks/auth.
+  useEffect(() => {
+    const c = activeCode;
+    const context = readContextRef.current;
+    if (!c || !context || context.signal.aborted || loadedTabsRef.current.has(tab)) return;
+    const rid = runIdRef.current;
+    loadedTabsRef.current.add(tab);
+    const ok = <T,>(set: (v: T) => void) => (v: T) => { if (rid === runIdRef.current && !context.signal.aborted) set(v); };
+    if (!/^\d{6}$/.test(c)) {
+      if (tab === "financials") void context.read("hkCashflow", signal => api.hkCashflow(c, signal)).then(ok(setCashflow)).catch(() => {});
+      return;
+    }
+    if (tab === "events") {
+      setReportResult({ status: "loading", data: [] });
+      setAnnouncementResult({ status: "loading", data: [] });
+      void resolveReportEvidence(context.read("reportsWithCoverage", signal => api.reportsWithCoverage(c, signal)), "研报数据暂不可用").then(ok(setReportResult));
+      void resolveEvidenceList(context.read("announcements", signal => api.announcements(c, signal)), "公告数据暂不可用").then(ok(setAnnouncementResult));
+      void loadEvidenceSource(() => context.read("investorQa", signal => api.investorQa(c, signal)), [], "投资者互动数据暂不可用", setQaResult, () => rid === runIdRef.current);
+      void loadEvidenceSource(() => context.read("news", signal => api.news(c, signal)), [], "个股新闻数据暂不可用", setNewsResult, () => rid === runIdRef.current);
+    }
+    if (tab === "capital") {
+      void loadEvidenceSource(() => context.read("margin", signal => api.margin(c, signal)), [], "融资融券数据暂不可用", setMarginResult, () => rid === runIdRef.current);
+      void loadEvidenceSource(() => context.read("blockTrade", signal => api.blockTrade(c, signal)), [], "大宗交易数据暂不可用", setBlockTResult, () => rid === runIdRef.current);
+      void loadEvidenceSource(() => context.read("holders", signal => api.holders(c, signal)), [], "股东户数数据暂不可用", setHoldersResult, () => rid === runIdRef.current);
+      void loadEvidenceSource(() => context.read("dividend", signal => api.dividend(c, signal)), [], "分红数据暂不可用", setDividendResult, () => rid === runIdRef.current);
+      void loadEvidenceSource(() => context.read("fundFlow", signal => api.fundFlow(c, signal)), [], "资金流向数据暂不可用", setFundFlowResult, () => rid === runIdRef.current);
+      void loadEvidenceSource(() => context.read("dragonTiger", signal => api.dragonTiger(c, signal)), null, "龙虎榜数据暂不可用", setDtResult, () => rid === runIdRef.current, (data) => !data || (data.records.length === 0 && data.seats.buy.length === 0 && data.seats.sell.length === 0));
+      void loadEvidenceSource(() => context.read("lockup", signal => api.lockup(c, signal)), null, "限售解禁数据暂不可用", setLockupResult, () => rid === runIdRef.current, (data) => !data || (data.upcoming.length === 0 && data.history.length === 0));
+    }
+    if (tab === "financials") {
+      void context.read("financials", signal => api.financials(c, signal)).then((data) => {
+        if (rid === runIdRef.current) { setFin(data); setFinError(null); }
+      }).catch((e) => {
+        if (rid === runIdRef.current) setFinError(e instanceof ApiError ? e.message : "财务数据暂不可用");
+      });
+
+      void loadEvidenceSource(() => context.read("percentile", signal => api.percentile(c, signal)), null, "估值历史分位数据暂不可用", setPctlResult, () => rid === runIdRef.current, (data) => !data || (!data.metrics.pe_ttm && !data.metrics.pb));
+    }
+    if (tab === "overview") {
+      // 顶部风险（影子模式）：独立加载/错误，不影响主页面数据
+      setTopRiskLoading(true);
+      setTopRiskErr(null);
+      setTopRisk(null);
+      context.read("topRisk", signal => api.topRisk(c, 120, signal)).then(ok(setTopRisk)).catch((e) => {
+        if (rid === runIdRef.current) setTopRiskErr(e instanceof ApiError ? e.message : "顶部风险分析失败");
+      }).finally(() => {
+        if (rid === runIdRef.current) setTopRiskLoading(false);
+      });
+      setStockRelativeLoading(true);
+      context.read("stockRelativeContext", signal => api.stockRelativeContext(c, signal)).then(ok(setStockRelativeContext)).catch((e) => {
+        if (rid === runIdRef.current) setStockRelativeError(e instanceof ApiError ? e.message : "相对表现数据暂不可用");
+      }).finally(() => {
+        if (rid === runIdRef.current) setStockRelativeLoading(false);
+      });
+      setStockValuationLoading(true);
+      context.read("stockValuationContext", signal => api.stockValuationContext(c, signal)).then(ok(setStockValuationContext)).catch((e) => {
+        if (rid === runIdRef.current) setStockValuationError(e instanceof ApiError ? e.message : "相对行业估值暂不可用");
+      }).finally(() => {
+        if (rid === runIdRef.current) setStockValuationLoading(false);
+      });
+
+      void loadEvidenceSource(() => context.read("blocks", signal => api.blocks(c, signal)), null, "板块归属数据暂不可用", setBlocksResult, () => rid === runIdRef.current, (data) => !data || (data.concept_tags.length === 0 && data.boards.length === 0));
+      void loadEvidenceSource(() => context.read("hotConcepts", signal => api.hotConcepts(c, signal)), [], "热门概念数据暂不可用", setHotConResult, () => rid === runIdRef.current);
+    }
+  }, [activeCode, tiQueryVersion, tab]);
 
   useEffect(() => {
     if (urlCode === activeCodeRef.current) return;
@@ -719,7 +757,7 @@ export function StockData() {
 
       {(val || gstock) && (
         <>
-          {/* 页签栏：纯视图状态。切页签不加载其他页签的数据，也不写任何业务状态。 */}
+          {/* 页签栏：只加载当前页签所需数据，不写任何业务状态。 */}
           <div className="mb-3 flex flex-wrap gap-1 rounded-xl border border-border/60 bg-muted/20 p-1" role="tablist" aria-label="个股数据分区">
             {STOCK_DATA_TABS.map((item) => (
               <button
