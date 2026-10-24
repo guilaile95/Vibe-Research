@@ -1537,6 +1537,9 @@ async function runSmoke(page, mock, errors) {
   // 财务体检属于「财务与估值」页签。
   await openTab(page, "financials");
   const health = page.getByTestId("fundamental-health");
+  // Tab activation starts the financial read; mounting the loading card is not
+  // completion. Wait for a source-derived value before synchronous assertions.
+  await health.getByText("260.00 亿元", { exact: true }).waitFor();
   if (!(await health.isVisible().catch(() => false))) errors.push(`${label}: fundamental health module not visible`);
   for (const text of [
     "Growth · 增长",

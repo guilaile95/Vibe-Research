@@ -36,7 +36,7 @@ try {
     const context = await browser.newContext({ baseURL, viewport: { width, height: 960 }, serviceWorkers: 'block' });
     const errors = [], external = [], writes = [], reads = []; let record; let slow = false; let phase = 'fixture-init'; let portfolioAuthority = 'LEGACY_PORTFOLIO';
     const storageWrites = await installResearchWriteAudit(context, () => phase);
-    const started = deferred(), release = deferred();
+    const started = deferred(), release = deferred(), finished = deferred();
     await context.routeWebSocket('**/*', socket => { external.push(socket.url()); socket.close(); });
     await context.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url()), path = url.pathname;
@@ -59,7 +59,7 @@ try {
       if (path === '/api/evidence') return ok(navigationEvidencePage(record ? [record] : [], url.searchParams));
       if (path === '/api/campaigns' || path === '/api/thesis') return ok({ items: [], total: 0 });
       if (path === '/api/native-intel/security-context/600519') return ok({ status: 'normal', security: { code: '600519', company_name: '合成公司' }, mapping: { terms: [], errors: [] }, window_hours: 24, observation: { items: [], item_count: 0 }, rank_history: {} });
-      if (path === '/api/valuation' && url.searchParams.get('code') === '600519' && slow) { started.resolve(); await release.promise; return ok({ code: '600519', name: '旧股晚到', price: 1 }); }
+      if (path === '/api/valuation' && url.searchParams.get('code') === '600519' && slow) { started.resolve(); await release.promise; try { return await ok({ code: '600519', name: '旧股晚到', price: 1 }); } finally { finished.resolve(); } }
       const reply = readReply('GET', path, url.search); if (reply) return route.fulfill({ json: reply });
       return route.fulfill({ status: 503, json: { detail: 'Synthetic unavailable source' } });
     });
@@ -144,13 +144,14 @@ try {
       assert.equal(await page.getByTestId('candidate-stock-data-entry').getAttribute('href'), '/stock-data?code=600519');
       await storageWrites.flush(page); phase = 'late-old-quote'; await storageWrites.setPhase(page, phase);
       slow = true; await page.goto('/stock-data?code=600519'); await started.promise;
+      const cancelled = page.waitForEvent('requestfailed', { predicate: request => {
+        const url = new URL(request.url());
+        return url.pathname === '/api/valuation' && url.searchParams.get('code') === '600519';
+      } });
       await query.fill('600520'); await query.press('Enter');
       await page.waitForFunction(() => document.querySelector('[data-active-code="600520"]'));
-      const oldResponse = page.waitForResponse(response => {
-        const url = new URL(response.url());
-        return url.pathname === '/api/valuation' && url.searchParams.get('code') === '600519';
-      });
-      release.resolve(); await oldResponse;
+      assert.match((await cancelled).failure()?.errorText || '', /abort|cancel/i);
+      release.resolve(); await finished.promise;
       await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
       assert.equal(new URL(await page.getByTestId('stock-data-candidate-entry').getAttribute('href'), baseURL).pathname, '/candidates/600520');
       assert.equal(await page.getByText('旧股晚到', { exact: true }).count(), 0);
