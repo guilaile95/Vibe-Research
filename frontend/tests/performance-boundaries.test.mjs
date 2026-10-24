@@ -38,8 +38,8 @@ test('Date-only freeze preserves genuine performance entries, timers, RAF and ex
  assert.equal(vm.runInContext('performance.getEntriesByType("resource")[0].name',scope),'native-resource');
 });
 test('fake zero-entry telemetry fails instead of yielding a green performance report',()=>{
- const row={name:'daily-cold',firstUsefulMs:100,uiSettledMs:120,fetchStarted:1,navigation:{responseEnd:5},paints:[{name:'first-contentful-paint',startTime:50}],requests:[{path:'/assets/main.js',decodedBytes:100},{path:'/api/daily-review',decodedBytes:20}]};
+ const row={name:'daily-cold',firstUsefulMs:100,uiSettledMs:120,fetchStarted:1,navigation:{responseEnd:5},paints:[{name:'first-contentful-paint',startTime:50}],requests:[{path:'/assets/main.js',decodedBytes:100,transferBytes:400},{path:'/api/daily-review',decodedBytes:20}]};
  assert.doesNotThrow(()=>assertNativeTelemetry(row));
- for(const patch of [{requests:[]},{paints:[]},{navigation:null},{firstUsefulMs:-1},{uiSettledMs:90},{fetchStarted:0}])assert.throws(()=>assertNativeTelemetry({...row,...patch}));
+ for(const patch of [{requests:[]},{paints:[]},{navigation:null},{navigation:{responseEnd:0}},{requests:[{path:'/assets/main.js',decodedBytes:100,transferBytes:0},{path:'/api/daily-review',decodedBytes:20}]},{firstUsefulMs:-1},{uiSettledMs:90},{fetchStarted:0}])assert.throws(()=>assertNativeTelemetry({...row,...patch}));
  assert.doesNotMatch(source('./performance/frontend.browser.mjs'),/page\.clock/);
 });

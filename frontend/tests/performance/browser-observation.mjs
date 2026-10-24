@@ -40,9 +40,10 @@ export function assertNativeTelemetry(row) {
  if(!Number.isFinite(row.firstUsefulMs)||row.firstUsefulMs<0)throw Error('Missing native visible-content timestamp');
  if(!Number.isFinite(row.uiSettledMs)||row.uiSettledMs<row.firstUsefulMs)throw Error('Missing native UI-settle timestamp');
  if(documentFlow){
-  if(!row.navigation||!Number.isFinite(row.navigation.responseEnd))throw Error('Missing native navigation timing');
+  if(!row.navigation||!(row.navigation.responseEnd>0))throw Error('Missing native navigation timing');
   if(!row.requests.some(r=>r.path.endsWith('.js')&&r.decodedBytes>0))throw Error('Missing native JavaScript resource timings');
   if(!row.paints.some(p=>p.name==='first-contentful-paint'&&p.startTime>0))throw Error('Missing native FCP timing');
  }
+ if(row.name==='daily-cold'&&!row.requests.some(r=>r.path.endsWith('.js')&&r.transferBytes>0))throw Error('Missing cold JavaScript transfer bytes');
  if(row.name==='daily-cold'&&(!row.requests.some(r=>r.path==='/api/daily-review')||row.fetchStarted<1))throw Error('Missing real synthetic API request observation');
 }
