@@ -1,3 +1,4 @@
+import { selectCandidateRaceStrategy, assertEmptyCandidateRace } from './candidate-race-controls.fixture.mjs';
 import { storedCredential, routeCredentialStatus } from './credential-generation.fixture.mjs';
 import assert from "node:assert/strict";
 import { createReadStream, existsSync, readdirSync } from "node:fs";
@@ -1881,11 +1882,7 @@ try {
     await page.route('**/api/campaigns**',raceRoute);
     await page.goto(`http://127.0.0.1:${port}/candidates/600519?return_to=${encodeURIComponent('/candidates/600520')}`,{waitUntil:'networkidle'});
     const racingPanel=page.getByTestId('candidate-campaign-panel');
-    const racingStrategy = racingPanel.getByRole('radio', { name: 'SWING · 波段', exact: true });
-    // The sr-only input is not the clickable surface. Activate its visible
-    // enclosing label without force, then verify the controlled radio state.
-    await racingPanel.locator('label').filter({ has: racingStrategy }).click();
-    assert.equal(await racingStrategy.isChecked(), true);
+    await selectCandidateRaceStrategy(racingPanel);
     await racingPanel.getByTestId('create-candidate-campaign').click();await began;
     await page.getByRole('link',{name:'返回来源',exact:true}).click();
     await page.locator('[data-testid="candidate-workspace"][data-security-code="600520"]').waitFor();
@@ -1895,9 +1892,7 @@ try {
     const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/campaigns'&&r.request().method()==='POST');
     release();await (await response).finished();await page.waitForLoadState('networkidle');
     assert.equal(reads.length,count,'late create receipt cannot refresh its old context');
-    assert.equal(await racingPanel.getByText('暂无候选投资计划',{exact:true}).count(),1);
-    assert.doesNotMatch(await racingPanel.innerText(),/Late synthetic create failure/);
-    assert.equal(await racingPanel.getAttribute('data-security-code'),outcome==='return-to-A'?'600519':'600520');
+    await assertEmptyCandidateRace(racingPanel, outcome==='return-to-A'?'600519':'600520');
     await page.unroute('**/api/campaigns**',raceRoute);
   }
   console.log('PASS Candidate mutation ownership: A→B, A→B→A and late errors via real SPA navigation');
