@@ -45,6 +45,9 @@ jobs:
           python -m piptools compile --no-emit-index-url --output-file=requirements-dev-linux-py311.lock.txt requirements.txt requirements-dev.txt
           git diff --exit-code -- requirements-linux-py311.lock.txt requirements-dev-linux-py311.lock.txt
 
+      - name: Validate read-only runtime identity contracts
+        run: python -m unittest discover -s tools -p test_verify_runtime_identity.py
+
       - name: Run offline backend tests
         working-directory: backend
         env:
@@ -766,6 +769,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Verify cross-tab AI generation and dispatch races
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 3
+        run: node --import ./tests/e2e/runtime-env.mjs tests/e2e/ai-generation-remediation.browser.mjs
+
       - name: Run bounded AI and settings storage E2E
         if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend
@@ -1433,6 +1442,9 @@ jobs:
           tests/test_research_quality_diagnostics.py
           tests/test_valuation_digestion_contract.py
           tests/test_filing_evidence.py
+
+      - name: Validate read-only runtime identity contracts
+        run: python -m unittest discover -s tools -p test_verify_runtime_identity.py
 
       - name: Run offline backend tests
         working-directory: backend
