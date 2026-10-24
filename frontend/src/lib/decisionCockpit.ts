@@ -111,8 +111,8 @@ export interface Overview {
 // 自选股
 // ---------------------------------------------------------------------------
 
-export async function getWatchlist(): Promise<WatchlistStatus> {
-  return get<WatchlistStatus>("/watchlist");
+export async function getWatchlist(signal?: AbortSignal): Promise<WatchlistStatus> {
+  return get<WatchlistStatus>("/watchlist", { signal });
 }
 
 export async function getWatchlistAnomalies(): Promise<WatchlistAnomalies> {
