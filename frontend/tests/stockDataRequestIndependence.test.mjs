@@ -3,6 +3,11 @@ import test from 'node:test';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { build } from 'esbuild';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { fileURLToPath } from 'node:url';
+import { stockFinancialsFixture } from './e2e/stock-financials.fixture.mjs';
 import { ReadRequestContext } from '../src/lib/readRequestContext.ts';
 const source=readFileSync(new URL('../src/pages/StockData.tsx',import.meta.url),'utf8');
 const start=source.indexOf('  const run = useCallback(async');
@@ -62,4 +67,26 @@ test('actual primary failure is retryable and query cancellation clears current 
  const retry=h.run('600001');assert.equal(h.calls.length,2);
  h.calls[1].resolve({code:'600001'});await retry;
  assert.ok(h.events.some(([key,v])=>key==='setLoading'&&v===false));h.stop();
+});
+
+
+test('lazy financial source completion renders the actual snapshot and a unique readiness heading', async(t) => {
+ const root=fileURLToPath(new URL('../',import.meta.url));
+ const bundle=await build({entryPoints:[`${root}src/components/ui/EarningsSnapshot.tsx`],bundle:true,write:false,format:'esm',platform:'node',tsconfig:`${root}tsconfig.json`});
+ const {EarningsSnapshot}=await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
+ const h=harness();t.after(()=>h.stop());
+ const render=()=>renderToStaticMarkup(createElement(EarningsSnapshot,{fin:h.events.filter(([key])=>key==='setFin').at(-1)?.[1]??null,error:null}));
+ const task=h.run('000001');h.calls[0].resolve({code:'000001',price:11.5});await task;
+ assert.equal(h.calls.some(c=>c.method==='financials'),false,'inactive financials cannot be fetched eagerly');
+ assert.doesNotMatch(render(),/Growth · 增长/);
+ h.tab('financials');
+ assert.equal(h.calls.filter(c=>c.method==='financials').length,1);
+ assert.doesNotMatch(render(),/Growth · 增长/,'mounted card does not mean financial response completed');
+ h.calls.find(c=>c.method==='financials').resolve(stockFinancialsFixture());await tick();
+ const html=render();
+ assert.equal((html.match(/>Growth · 增长<\/h4>/g)||[]).length,1,'readiness heading uniquely identifies loaded facts');
+ assert.equal((html.match(/>260.00 亿元<\//g)||[]).length,3,'latest and two history rows intentionally repeat the amount: strict amount locator is invalid');
+ for(const text of ['Profitability · 盈利能力','Cash Flow Quality · 现金流质量','披露日期：未知（数据源未提供）','现金转化率','150.0%','自由现金流']) assert.ok(html.includes(text),text);
+ h.tab('overview');h.tab('financials');
+ assert.equal(h.calls.filter(c=>c.method==='financials').length,1,'return to the same tab reuses its source');
 });
