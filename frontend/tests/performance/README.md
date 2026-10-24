@@ -89,3 +89,9 @@ not part of either timing population and cannot disable their HTTP cache.
 memory router and synthetic page modules: matched-only loading, rejected import,
 superseding navigation, Back, and existing unsaved-draft blocker lifecycle.
 These tests do not substitute for native browser or target-machine verification.
+The outgoing page remains mounted but is inert while native route loading is
+pending. This prevents a clean editor from accepting a new unsaved edit after its
+navigation blocker already approved leaving. A separate non-timed browser case
+holds the daily-review chunk while leaving the actual thesis editor, verifies
+native inert prevents focus/keyboard input, and verifies Back restores editing.
+Navigation controls remain outside the inert subtree so navigation can supersede.

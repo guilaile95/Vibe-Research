@@ -330,7 +330,10 @@ export function Layout() {
           {navigation.state !== "idle" && (
             <p role="status" aria-live="polite" className="text-sm text-muted-foreground">页面加载中</p>
           )}
-          <Outlet />
+          {/* Keep drafts mounted, but prevent new edits after the blocker accepted a navigation. */}
+          <div inert={navigation.state !== "idle"} aria-busy={navigation.state !== "idle"}>
+            <Outlet />
+          </div>
         </div>
       </main>
     </div>

@@ -241,8 +241,11 @@ test('pending route navigation is announced without replacing or unmounting the 
   const pending = h.render();
   assert.ok(nodes(pending).some(n => n.props.role === 'status' && n.props['aria-live'] === 'polite'));
   assert.ok(nodes(pending).some(n => n.type === 'outlet'));
+  assert.ok(nodes(pending).some(n => n.type === 'div' && n.props.inert === true && n.props['aria-busy'] === true));
   state.state = 'idle';
-  assert.equal(nodes(h.render()).filter(n => n.props.role === 'status').length, 0);
+  const idle = h.render();
+  assert.equal(nodes(idle).filter(n => n.props.role === 'status').length, 0);
+  assert.ok(nodes(idle).some(n => n.type === 'div' && n.props.inert === false));
   h.unmount();
 });
 

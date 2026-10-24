@@ -117,6 +117,35 @@ try{
   await page.getByRole('heading',{name:'合成证券 600001',exact:true}).waitFor();
   routeRecovery.push({label:'candidate',route:'/stock-data',injectedChunkFailures:rejected,sanitizedError:true,reloadRecovered:true,scope:'Non-timed separate context'});
   await context.close();
+  // A clean editor must not accept new input after its navigation blocker approved leaving.
+  const editContext=await browser.newContext({baseURL:server.origin,viewport:{width:1440,height:960},serviceWorkers:'block'});
+  await editContext.addInitScript(installDateOnlyClock,Date.parse(ANCILLARY_CLOCK));
+  const editPage=await editContext.newPage();editPage.setDefaultTimeout(15000);
+  await editPage.goto('/thesis/new');
+  const title=editPage.getByPlaceholder('如：贵茅2024基本面拐点已确立');
+  await title.waitFor();
+  let releaseChunk;
+  const gate=new Promise(resolve=>{releaseChunk=resolve;});
+  let heldChunk=false;
+  await editContext.route('**/assets/DailyReview-*.js',async route=>{heldChunk=true;await gate;await route.continue();});
+  await editPage.locator('[data-nav-entry="today"]').click();
+  await editPage.locator('main [inert]').waitFor();
+  for(let attempt=0;attempt<100&&!heldChunk;attempt++)await sleep(10);
+  assert.ok(heldChunk,'The outgoing editor test must hold an actual lazy chunk');
+  assert.equal(await title.inputValue(),'');
+  const focused=await title.evaluate(element=>{element.focus();return document.activeElement===element;});
+  assert.equal(focused,false,'Native inert must prevent focus in the still-mounted editor');
+  await editPage.keyboard.type('must not become a new unsaved draft');
+  assert.equal(await title.inputValue(),'');
+  releaseChunk();
+  await editPage.getByText('合成基准指数',{exact:true}).waitFor();
+  await editPage.goBack();
+  await title.waitFor();
+  assert.equal(await title.evaluate(element=>element.closest('[inert]')!==null),false);
+  await title.fill('synthetic unsaved draft after back');
+  assert.equal(await title.inputValue(),'synthetic unsaved draft after back');
+  routeRecovery.push({label:'candidate',route:'/thesis/new',pendingEditorInert:true,backRestoresEditing:true,scope:'Non-timed separate context; no save'});
+  await editContext.close();
  }
  // Native IndexedDB measurement: seed raw synthetic records outside measured region, then run real store validation.
  const storage=[];
