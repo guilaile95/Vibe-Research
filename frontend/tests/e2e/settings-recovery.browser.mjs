@@ -1,3 +1,4 @@
+import { readCalendarStatusReply } from "./calendar-status.fixture.mjs";
 // Full production Settings route; synthetic noncredential APIs only. No backend/provider.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -69,8 +70,10 @@ async function scenario(browser, baseURL, spec, width, evidenceDir) {
         }
       }
       // Status is inert metadata, not a credential read. No credential/probe/runtime APIs allowed.
-      const allowed = ['/api/settings/platform', '/api/health', '/api/runtime-info', '/api/ai/credential-status', '/api/native-intel/sources', '/api/native-intel/config', '/api/native-intel/filter/profile'];
-      const reply = allowed.includes(url.pathname) ? readReply(method, url.pathname, url.search) : null;
+      const allowed = ['/api/settings/platform', '/api/health', '/api/runtime-info', '/api/calendar-status', '/api/ai/credential-status', '/api/native-intel/sources', '/api/native-intel/config', '/api/native-intel/filter/profile'];
+      const reply = url.pathname === '/api/calendar-status'
+        ? readCalendarStatusReply(method, url.pathname, url.search, width === 390 ? 'EXPIRING' : 'SUPPORTED')
+        : allowed.includes(url.pathname) ? readReply(method, url.pathname, url.search) : null;
       if (reply) return route.fulfill({ json: reply });
       unexpected.push(key); return route.fulfill({ status: 503, json: { detail: 'UNEXPECTED_SYNTHETIC_REQUEST' } });
     });
@@ -87,6 +90,10 @@ async function scenario(browser, baseURL, spec, width, evidenceDir) {
       dismissedToasts.push(message);
     };
     await page.goto('/settings');
+    await page.getByTestId('calendar-coverage-status').getByRole('status').filter({
+      hasText: `${width === 390 ? '覆盖即将到期' : '已确认范围'}：截至 2026-12-31`,
+    }).waitFor();
+    assert.ok(requests.includes('GET /api/calendar-status'), 'Settings reads bounded calendar metadata');
     const error = page.getByRole('alert').filter({ hasText: spec.error });
     const save = page.getByRole('button', { name: spec.save, exact: true });
     const field = page.getByTestId(spec.field);
@@ -157,8 +164,10 @@ async function runtimeScenario(browser, baseURL, width, evidenceDir) {
       if (method === 'GET' && url.pathname === '/api/agent-runtime/status' && !url.search) {
         statusReads++; return route.fulfill({ json: active.payload });
       }
-      const allowed = ['/api/settings/platform', '/api/health', '/api/runtime-info', '/api/ai/credential-status', '/api/native-intel/sources', '/api/native-intel/config', '/api/native-intel/filter/profile'];
-      const reply = allowed.includes(url.pathname) ? readReply(method, url.pathname, url.search) : null;
+      const allowed = ['/api/settings/platform', '/api/health', '/api/runtime-info', '/api/calendar-status', '/api/ai/credential-status', '/api/native-intel/sources', '/api/native-intel/config', '/api/native-intel/filter/profile'];
+      const reply = url.pathname === '/api/calendar-status'
+        ? readCalendarStatusReply(method, url.pathname, url.search, width === 390 ? 'EXPIRING' : 'SUPPORTED')
+        : allowed.includes(url.pathname) ? readReply(method, url.pathname, url.search) : null;
       if (reply) return route.fulfill({ json: reply });
       unexpected.push(key); return route.fulfill({ status: 503, json: { detail: 'UNEXPECTED_SYNTHETIC_REQUEST' } });
     });
@@ -166,6 +175,10 @@ async function runtimeScenario(browser, baseURL, width, evidenceDir) {
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
     await page.goto('/settings');
+    await page.getByTestId('calendar-coverage-status').getByRole('status').filter({
+      hasText: `${width === 390 ? '覆盖即将到期' : '已确认范围'}：截至 2026-12-31`,
+    }).waitFor();
+    assert.ok(requests.includes('GET /api/calendar-status'), 'Settings reads bounded calendar metadata');
     await page.getByRole('heading', { name: '订阅接入', exact: true }).waitFor();
     assert.equal(statusReads, 0, 'API mode must not probe the subscription runtime');
     const runtimeLine = page.locator('span').filter({ hasText: /^Runtime：Codex Subscription · / });
