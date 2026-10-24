@@ -64,11 +64,11 @@ async function serverFor(label,dist) {
  await new Promise(r=>server.listen(0,'127.0.0.1',r));return {label,root,server,origin:`http://127.0.0.1:${server.address().port}`};
 }
 function observe(){
- window.__perf={pending:0,longTasks:[]};
+ window.__perf={pending:0,started:0,longTasks:[]};
  try{new PerformanceObserver(list=>window.__perf.longTasks.push(...list.getEntries().map(e=>({startTime:e.startTime,duration:e.duration})))).observe({type:'longtask',buffered:true});}catch{}
- const fetch=window.fetch.bind(window);window.fetch=async(...args)=>{window.__perf.pending++;try{return await fetch(...args);}finally{window.__perf.pending--;}};
+ const fetch=window.fetch.bind(window);window.fetch=async(...args)=>{window.__perf.pending++;window.__perf.started++;try{const response=await fetch(...args);for(const method of ['json','text','arrayBuffer','blob']){const read=response[method].bind(response);response[method]=async(...values)=>{window.__perf.pending++;try{return await read(...values);}finally{window.__perf.pending--;}};}return response;}finally{window.__perf.pending--;}};
 }
-async function settle(page){await page.waitForFunction(()=>window.__perf?.pending===0);await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));}
+async function settle(page){for(let attempt=0;attempt<30;attempt++){await page.waitForFunction(()=>window.__perf?.pending===0);const started=await page.evaluate(()=>window.__perf.started);await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));if(await page.evaluate(started=>window.__perf.pending===0&&window.__perf.started===started,started))return;}throw Error('UI did not settle within bounded frame checks');}
 function quantile(values,p){return [...values].sort((a,b)=>a-b)[Math.ceil(values.length*p)-1];}
 const servers=await Promise.all([serverFor('baseline',args['baseline-dist']),serverFor('candidate',args['candidate-dist'])]);let browser;
 try{
@@ -83,10 +83,10 @@ try{
   const cdp=await context.newCDPSession(page);await cdp.send('Performance.enable');
   const measure=async(name,action,ready)=>{
    const before=await page.evaluate(()=>({start:performance.now(),resourceCount:performance.getEntriesByType('resource').length,longCount:window.__perf?.longTasks.length||0})).catch(()=>({start:0,resourceCount:0,longCount:0}));
-   const start=performance.now();await action();await ready();const firstUsefulMs=performance.now()-start;await settle(page);const completeMs=performance.now()-start;
+   const start=performance.now();await action();await ready();const firstUsefulMs=performance.now()-start;await settle(page);const uiSettledMs=performance.now()-start;
    const details=await page.evaluate(({before,name})=>{const nav=name.includes('reload')||name.includes('cold')||name.includes('document');const resources=performance.getEntriesByType('resource').slice(nav?0:before.resourceCount);const tasks=(window.__perf?.longTasks||[]).slice(nav?0:before.longCount);return {requests:resources.map(r=>({path:new URL(r.name).pathname+new URL(r.name).search,transferBytes:r.transferSize,decodedBytes:r.decodedBodySize,durationMs:r.duration})),longTaskCount:tasks.length,longTaskMs:tasks.reduce((s,t)=>s+t.duration,0),navigationType:performance.getEntriesByType('navigation')[0]?.type,paints:performance.getEntriesByType('paint').map(e=>({name:e.name,startTime:e.startTime})),navigation:performance.getEntriesByType('navigation')[0]?.toJSON()};},{before,name});
    const metrics=Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(m=>[m.name,m.value]));
-   if(trial>=0)rows.push({label:server.label,trial,name,firstUsefulMs,completeMs,...details,jsHeapUsedBytes:metrics.JSHeapUsedSize,taskDurationSeconds:metrics.TaskDuration});
+   if(trial>=0)rows.push({label:server.label,trial,name,firstUsefulMs,uiSettledMs,...details,jsHeapUsedBytes:metrics.JSHeapUsedSize,taskDurationSeconds:metrics.TaskDuration});
    if(trial===0&&['daily-cold','stock-document','pcb-content-route'].includes(name))await page.screenshot({path:join(output,`${server.label}-${name}.png`)});
   };
   await measure('daily-cold',()=>page.goto('/daily-review'),()=>page.getByText('合成基准指数',{exact:true}).waitFor());
@@ -126,10 +126,10 @@ try{
  }
 
  assert.deepEqual(writes,[]);assert.deepEqual(external,[]);
- const summary=[];for(const label of ['baseline','candidate'])for(const name of [...new Set(rows.map(r=>r.name))]){const group=rows.filter(r=>r.label===label&&r.name===name);summary.push({label,name,samples:group.length,firstUsefulP50Ms:quantile(group.map(r=>r.firstUsefulMs),.5),firstUsefulP95Ms:quantile(group.map(r=>r.firstUsefulMs),.95),completeP50Ms:quantile(group.map(r=>r.completeMs),.5),completeP95Ms:quantile(group.map(r=>r.completeMs),.95),medianTransferredBytes:quantile(group.map(r=>r.requests.reduce((s,q)=>s+q.transferBytes,0)),.5),medianRequests:quantile(group.map(r=>r.requests.length),.5)});}
+ const summary=[];for(const label of ['baseline','candidate'])for(const name of [...new Set(rows.map(r=>r.name))]){const group=rows.filter(r=>r.label===label&&r.name===name);summary.push({label,name,samples:group.length,firstUsefulP50Ms:quantile(group.map(r=>r.firstUsefulMs),.5),firstUsefulP95Ms:quantile(group.map(r=>r.firstUsefulMs),.95),uiSettledP50Ms:quantile(group.map(r=>r.uiSettledMs),.5),uiSettledP95Ms:quantile(group.map(r=>r.uiSettledMs),.95),medianTransferredBytes:quantile(group.map(r=>r.requests.reduce((s,q)=>s+q.transferBytes,0)),.5),medianRequests:quantile(group.map(r=>r.requests.length),.5)});}
  const buildIdentities=Object.fromEntries(servers.map(s=>[s.label,JSON.parse(readFileSync(join(s.root,'vibe-build.json'),'utf8'))]));
  const builds=Object.fromEntries(servers.map(s=>[s.label,measureBuild(s.root)]));
  assert.equal(builds.baseline.eagerPcbBody,true,'Baseline must reproduce eager content');assert.equal(builds.candidate.eagerPcbBody,false,'Candidate must defer unrelated full sector bodies');
- const report={buildIdentities,builds,sequence,schema:'frontend-performance.v1',node:process.version,browser:browser.version(),samples,warmup,scope:'Production assets over uncompressed loopback; 20 ms synthetic API wait; cold browser context, warm reload, OS cache not reset; external fonts removed; no live provider/model/user data; complete = ready marker + fetch idle + two animation frames',rows,summary,storage,unavailableSources:[...new Set(sourceErrors.map(r=>r.path))],writes,external};
+ const report={buildIdentities,builds,sequence,schema:'frontend-performance.v1',node:process.version,browser:browser.version(),samples,warmup,scope:'Production assets over uncompressed loopback; 20 ms synthetic API wait; cold browser context, warm reload, OS cache not reset; external fonts removed; no live provider/model/user data; UI-settled proxy = ready marker + fetch/body-read idle and unchanged request count across two animation frames; not full market-data completion',rows,summary,storage,unavailableSources:[...new Set(sourceErrors.map(r=>r.path))],writes,external};
  writeFileSync(join(output,'results.json'),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify({summary,storage},null,2));
 }catch(error){writeFileSync(join(output,'failure.json'),JSON.stringify({message:error.message,stack:error.stack,rows,sourceErrors,writes,external},null,2));throw error;}finally{await browser?.close();await Promise.all(servers.map(s=>new Promise(r=>s.server.close(r))));}

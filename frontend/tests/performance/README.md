@@ -21,9 +21,9 @@ a fixed 20 ms wait. Unknown sources return explicit 503, not fabricated success.
 
 The ready markers require a rendered synthetic index, named security, actual news
 body, and complete checked-in PCB research paragraph. All sources need not be
-available: this is deliberately a partial-market fixture. `completeMs` means
-that marker plus current fetch idle and two animation frames, not full market
-coverage. Requests measure resource entries (excluding the top-level document).
+available: this is deliberately a partial-market fixture. `uiSettledMs` is a UI-settle proxy: the marker plus current fetch/body-read
+idle and unchanged request count over two animation frames, not full market
+coverage or proof that future asynchronous work cannot start. Requests measure resource entries (excluding the top-level document).
 The report includes raw samples, P50/P95, JS heap, cumulative task duration,
 long tasks, response bytes, unavailable sources, production build identities and
 static bundle census. Task duration is cumulative per document, not a per-flow CPU
