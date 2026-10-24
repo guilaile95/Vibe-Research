@@ -358,6 +358,19 @@ def remove_report(reports_dir: Path, report_id: str) -> None:
 def status_map(
     reports_dir: Path, reports: list[dict[str, Any]], *, verify_source: bool = False,
 ) -> dict[str, dict[str, Any]]:
+    conn = _connect_readonly(reports_dir)
+    try:
+        return _status_map_in_snapshot(conn, reports_dir, reports, verify_source=verify_source)
+    except sqlite3.Error as exc:
+        raise ReportTextIndexCorruptedError() from exc
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _status_map_in_snapshot(
+    conn, reports_dir: Path, reports: list[dict[str, Any]], *, verify_source: bool = False,
+) -> dict[str, dict[str, Any]]:
     result = {}
     for report in reports:
         ext = str(report.get("ext") or "").lower()
@@ -367,15 +380,9 @@ def status_map(
             "indexed_at": "",
             "page_count": None,
         }
-    conn = _connect_readonly(reports_dir)
     if conn is None:
         return result
-    try:
-        rows = conn.execute("SELECT * FROM report_text_index").fetchall()
-    except sqlite3.Error as exc:
-        raise ReportTextIndexCorruptedError() from exc
-    finally:
-        conn.close()
+    rows = conn.execute("SELECT * FROM report_text_index").fetchall()
     by_id = {str(report.get("id")): report for report in reports}
     for row in rows:
         report = by_id.get(row["report_id"])
@@ -473,37 +480,67 @@ def current_search_hits(reports_dir: Path, hits: list[dict]) -> list[dict]:
     conn = _connect_readonly(reports_dir)
     if conn is None:
         return []
-    current = []
-    checked = {}
     try:
-        conn.execute("BEGIN")
-        for hit in hits:
-            page = hit.get("page")
-            if page is not None and (type(page) is not int or page <= 0):
-                continue
-            key = (hit.get("report_id"), 0 if page is None else page)
-            if key not in checked:
-                row = conn.execute(
-                    """SELECT c.text, i.file_sha256 FROM report_text_chunks c
-                       JOIN report_text_index i USING(report_id)
-                       WHERE c.report_id=? AND c.page=? AND i.status=?""",
-                    (*key, STATUS_SEARCHABLE),
-                ).fetchone()
-                checked[key] = (
-                    row["file_sha256"], _chunk_sha256(row["text"]),
-                    _SPACE_RE.sub(" ", row["text"]).strip(),
-                ) if row is not None and isinstance(row["text"], str) else None
-            value = checked[key]
-            snippet = hit.get("snippet")
-            if (value is not None and hit.get("file_sha256") == value[0]
-                    and hit.get("chunk_sha256") == value[1]
-                    and isinstance(snippet, str) and snippet and snippet in value[2]):
-                current.append(hit)
+        return _current_search_hits_in_snapshot(conn, hits)
     except sqlite3.Error as exc:
         raise ReportTextIndexCorruptedError() from exc
     finally:
         conn.close()
+
+
+def _current_search_hits_in_snapshot(conn, hits: list[dict]) -> list[dict]:
+    if conn is None or not hits:
+        return []
+    current = []
+    checked = {}
+    conn.execute("BEGIN")
+    for hit in hits:
+        page = hit.get("page")
+        if page is not None and (type(page) is not int or page <= 0):
+            continue
+        key = (hit.get("report_id"), 0 if page is None else page)
+        if key not in checked:
+            row = conn.execute(
+                """SELECT c.text, i.file_sha256 FROM report_text_chunks c
+                   JOIN report_text_index i USING(report_id)
+                   WHERE c.report_id=? AND c.page=? AND i.status=?""",
+                (*key, STATUS_SEARCHABLE),
+            ).fetchone()
+            checked[key] = (
+                row["file_sha256"], _chunk_sha256(row["text"]),
+                _SPACE_RE.sub(" ", row["text"]).strip(),
+            ) if row is not None and isinstance(row["text"], str) else None
+        value = checked[key]
+        snippet = hit.get("snippet")
+        if (value is not None and hit.get("file_sha256") == value[0]
+                and hit.get("chunk_sha256") == value[1]
+                and isinstance(snippet, str) and snippet and snippet in value[2]):
+            current.append(hit)
     return current
+
+
+def qualify_search_hits(
+    reports_dir: Path, reports: list[dict], hits: list[dict],
+) -> tuple[dict[str, dict[str, Any]], list[dict]]:
+    """Recheck selected source and chunk identities in one operation-local image.
+
+    This is a fresh boundary check, not reuse of the preceding search's snapshot.
+    The close-time unchanged check guards both results before they can escape.
+    """
+    conn = _connect_readonly(reports_dir)
+    try:
+        statuses = _status_map_in_snapshot(conn, reports_dir, reports, verify_source=True)
+        eligible = [hit for hit in hits
+                    if statuses.get(hit.get("report_id"), {}).get("text_index_status") == STATUS_SEARCHABLE
+                    and hit.get("file_sha256")
+                    and hit["file_sha256"] == statuses[hit["report_id"]].get("text_index_sha256")]
+        return statuses, _current_search_hits_in_snapshot(conn, eligible)
+    except sqlite3.Error as exc:
+        raise ReportTextIndexCorruptedError() from exc
+    finally:
+        if conn is not None:
+            conn.close()
+
 
 
 def search(
@@ -534,21 +571,25 @@ def search(
         candidates[report_id] = report
     if not candidates:
         return []
-    # Validate only scoped candidates; never read unrelated source documents.
-    statuses = status_map(reports_dir, list(candidates.values()), verify_source=True)
-    candidates = {rid: report for rid, report in candidates.items()
-                  if statuses[rid]["text_index_status"] == STATUS_SEARCHABLE}
-    if not candidates:
-        return []
-    terms = _search_terms(value, selected_reports=bool(requested))
-    if not terms:
-        raise ValueError("检索条件无效")
     conn = _connect_readonly(reports_dir)
     if conn is None:
         return []
-    placeholders = ",".join("?" for _ in candidates)
-    text_filters = " AND ".join("instr(lower(c.text), lower(?)) > 0" for _ in terms)
     try:
+        # Qualify sources and query chunks from the same private immutable image.
+        # No cache survives this operation: close rechecks the original index bytes.
+        # Keep source-file hashing, schema validation and all partial/error semantics.
+        statuses = _status_map_in_snapshot(
+            conn, reports_dir, list(candidates.values()), verify_source=True,
+        )
+        candidates = {rid: report for rid, report in candidates.items()
+                      if statuses[rid]["text_index_status"] == STATUS_SEARCHABLE}
+        if not candidates:
+            return []
+        terms = _search_terms(value, selected_reports=bool(requested))
+        if not terms:
+            raise ValueError("检索条件无效")
+        placeholders = ",".join("?" for _ in candidates)
+        text_filters = " AND ".join("instr(lower(c.text), lower(?)) > 0" for _ in terms)
         rows = conn.execute(
             f"""SELECT c.report_id, c.page, c.text, i.file_sha256, i.error_code
                 FROM report_text_chunks c JOIN report_text_index i USING(report_id)
