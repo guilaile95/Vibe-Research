@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { createTemporalClock, CREATION_TIME, OBSERVATION_TIME } from "./temporal.fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
@@ -120,14 +121,14 @@ function createRealFrozenDecision(env, campaignId) {
     asset_view: {}, trade_view: {}, portfolio_view: {},
     next_best_action: "BUY SMALL", action_envelope: {},
     maintain_conditions: [], upgrade_conditions: [], downgrade_conditions: [], invalidation_conditions: [],
-    strategy_horizon: "2w", review_by: "2099-01-01T00:00:00Z",
+    strategy_horizon: "2w", review_by: "2026-09-10T00:00:00Z",
     key_assumptions: [], event_invalidation_conditions: [],
     risk_policy_version: "tar1-risk", opportunity_policy_version: "tar1-opportunity",
     decision_policy_version: "tar1-decision", behavior_model_version: "tar1-behavior",
     data_quality: {}, evidence_confidence: null, inference_confidence: null, decision_confidence: null,
     evidence_refs: [], risk_refs: [], source_refs: [], user_confirmed: true,
   };
-  const script = "import json, os; import frozen_decision_service as s; print(json.dumps(s.freeze_decision(json.loads(os.environ['TAR1_DECISION_PAYLOAD']))))";
+  const script = "import json, os; from temporal_clock import install; install(); import frozen_decision_service as s; print(json.dumps(s.freeze_decision(json.loads(os.environ['TAR1_DECISION_PAYLOAD']))))";
   // 与 pythonConfig() 同构：PYTHON 显式指定时直接执行，Windows 用 py -3。
   const py = env.PYTHON
     ? { cmd: env.PYTHON, prefixArgs: [] }
@@ -156,8 +157,10 @@ async function run() {
     const backend = `http://127.0.0.1:${backendPort}`;
     const frontend = `http://127.0.0.1:${frontendPort}`;
     const py = pythonConfig();
+    const clock = createTemporalClock(tempDataDir);
     const env = {
       ...process.env,
+      ...clock.env,
       VR_ALLOW_ORIGINS: frontend,
       VR_DATA_DIR: tempDataDir,
       VR_REPORTS_DIR: tempDataDir,
@@ -169,8 +172,9 @@ async function run() {
       VIBE_RESEARCH_TRADE_ATTRIBUTION_DB: join(tempDataDir, "formal_trade_attributions.sqlite3"),
       VIBE_RESEARCH_TRADE_ORIGIN_DB: join(tempDataDir, "trade_origins.sqlite3"),
       PYTHONUNBUFFERED: "1",
+      PYTHONPATH: [__dirname, backendDir, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
     };
-    backendProc = spawn(py.cmd, [...py.args, "app:app", "--host", "127.0.0.1", "--port", String(backendPort)], { cwd: backendDir, env, stdio: ["ignore", "pipe", "pipe"] });
+    backendProc = spawn(py.cmd, [...py.args, "temporal_backend_harness:app", "--host", "127.0.0.1", "--port", String(backendPort)], { cwd: backendDir, env, stdio: ["ignore", "pipe", "pipe"] });
     backendProc.stdout.on("data", (chunk) => { backendLog += chunk.toString(); });
     backendProc.stderr.on("data", (chunk) => { backendLog += chunk.toString(); });
     await waitHttp(`${backend}/api/health`);
@@ -185,10 +189,11 @@ async function run() {
     await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/transitions`, "POST", { expected_status: "DRAFT", to_status: "RESEARCHING" });
     await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/transitions`, "POST", { expected_status: "RESEARCHING", to_status: "PRE-ENTRY" });
     const decision = createRealFrozenDecision(env, campaign.campaign_id);
+    clock.set(OBSERVATION_TIME);
     const trade = await jsonRequest(backend, "/api/trades", "POST", {
       fee: 0, other_cost: 0,
       code: "600519", name: "贵州茅台", operation: "buy", execution_status: "full",
-      actual_price: 100, actual_quantity: 1, executed_at: "2098-01-01T01:00:00Z",
+      actual_price: 100, actual_quantity: 1, executed_at: "2026-08-29T01:00:00Z",
     });
 
     staticServer = await startStaticServer(frontendDist, frontendPort);
@@ -196,7 +201,8 @@ async function run() {
     const executablePath = chromiumPath();
     if (executablePath) launchOptions.executablePath = executablePath;
     browser = await chromium.launch(launchOptions);
-    const page = await browser.newPage();
+    const page = await browser.newPage({ timezoneId: "UTC" });
+    await page.clock.setFixedTime(new Date(OBSERVATION_TIME));
     const consoleErrors = [];
     page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
     page.on("response", async (response) => {
@@ -229,7 +235,7 @@ async function run() {
     const secondTrade = await jsonRequest(backend, "/api/trades", "POST", {
       fee: 0, other_cost: 0,
       code: "600519", name: "贵州茅台", operation: "add", execution_status: "full",
-      actual_price: 101, actual_quantity: 1, executed_at: "2098-01-01T01:01:00Z",
+      actual_price: 101, actual_quantity: 1, executed_at: "2026-08-29T01:01:00Z",
     });
 
     await page.reload({ waitUntil: "networkidle" });
@@ -319,7 +325,7 @@ async function run() {
       {
         operation,
         status,
-        executionTime = "2098-01-02T10:00",
+        executionTime = "2026-08-30T10:00",
         fee = status === "partial" ? "0" : "12.50",
         otherCost = status === "partial" ? "0" : "3.25",
       } = {},
@@ -406,12 +412,12 @@ async function run() {
     await fillCreateForm(executedModal, {
       operation: "buy",
       status: "full",
-      executionTime: "2098-01-02T10:00",
+      executionTime: "2026-08-30T10:00",
       fee: "12.50",
       otherCost: "3.25",
     });
-    const expectedExecutedIso = await page.evaluate(() => new Date("2098-01-02T10:00").toISOString());
-    await executedModal.getByText("本地时间：2098-01-02T10:00", { exact: true }).waitFor();
+    const expectedExecutedIso = await page.evaluate(() => new Date("2026-08-30T10:00").toISOString());
+    await executedModal.getByText("本地时间：2026-08-30T10:00", { exact: true }).waitFor();
     await executedModal.getByText(/浏览器解析时区：/).waitFor();
     await executedModal.getByText(/UTC offset：UTC[+-]\d{2}:\d{2}/).waitFor();
     await executedModal.getByText(`Canonical UTC ISO：${expectedExecutedIso}`, { exact: true }).waitFor();
@@ -443,8 +449,8 @@ async function run() {
 
     // --- TRT1 + TRT2：显式 ADD + PARTIAL 使用 0 费用并保持同一 readback 语义 ---
     const partialModal = await openCreateModal();
-    await fillCreateForm(partialModal, { operation: "add", status: "partial", executionTime: "2098-01-03T11:15", fee: "0", otherCost: "0" });
-    const expectedPartialIso = await page.evaluate(() => new Date("2098-01-03T11:15").toISOString());
+    await fillCreateForm(partialModal, { operation: "add", status: "partial", executionTime: "2026-08-31T11:15", fee: "0", otherCost: "0" });
+    const expectedPartialIso = await page.evaluate(() => new Date("2026-08-31T11:15").toISOString());
     await partialModal.getByText(`Canonical UTC ISO：${expectedPartialIso}`, { exact: true }).waitFor();
     const [partialResponse] = await Promise.all([
       waitForCreatedTrade(),

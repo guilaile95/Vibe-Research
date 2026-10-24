@@ -7,7 +7,7 @@
  * The current product keeps only the Codex page-context boundary: no research
  * runner, MCP tools, shell, web, apps, plugins, skills or multi-agent surface.
  */
-import { spawnSync } from "node:child_process";
+import { runProbe } from "./probe.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -105,8 +105,8 @@ function parseMcpList(stdout) {
   return [...new Set(parsed.map((item) => item.name))].sort();
 }
 
-export function effectiveMcpNames({ binary, codexHome, cwd, sourceEnv = process.env, run = spawnSync }) {
-  const result = run(binary, [
+export async function effectiveMcpNames({ binary, codexHome, cwd, sourceEnv = process.env, run = runProbe, signal }) {
+  const result = await run(binary, [
     "-c", "features.apps=false",
     "-c", "features.enable_mcp_apps=false",
     "-c", "features.plugins=false",
@@ -115,7 +115,8 @@ export function effectiveMcpNames({ binary, codexHome, cwd, sourceEnv = process.
     cwd,
     env: engineEnv(codexHome, sourceEnv),
     encoding: "utf8",
-    timeout: 20_000,
+    timeout: 2_000,
+    signal,
     windowsHide: true,
   });
   if (result.error || result.status !== 0) {
@@ -162,9 +163,9 @@ export function foreignSkillFiles(codexHome) {
   return [...out].sort();
 }
 
-export function isolatedCodexOptions({ binary, codexHome, cwd, sourceEnv = process.env }) {
+export async function isolatedCodexOptions({ binary, codexHome, cwd, sourceEnv = process.env, run = runProbe, signal }) {
   const env = engineEnv(codexHome, sourceEnv);
-  const mcpNames = effectiveMcpNames({ binary, codexHome, cwd, sourceEnv });
+  const mcpNames = await effectiveMcpNames({ binary, codexHome, cwd, sourceEnv, run, signal });
   const skills = foreignSkillFiles(codexHome);
   return {
     env,

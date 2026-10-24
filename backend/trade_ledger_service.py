@@ -5,7 +5,7 @@ import json
 import os
 import re
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +43,10 @@ _ADVICE_SNAPSHOT_KEYS = frozenset({
 
 class TradeValidationError(ValueError):
     pass
+
+
+class TradeReconciliationRequiredError(TradeValidationError):
+    """A new fact would make the canonical ledger inconsistent; nothing was written."""
 
 
 class TradeNotFoundError(store.TradeNotFoundError):
@@ -526,10 +530,24 @@ def compute_fields(record: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _execution_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def create_trade(data: dict[str, Any]) -> dict[str, Any]:
     record = validate_and_build_record(data)
     db_path = resolve_db_path()
-    store.insert_record(db_path, record)
+    if record["execution_status"] != "not_executed":
+        executed = datetime.fromisoformat(record["executed_at"])
+        if executed > _execution_now() + timedelta(minutes=5):
+            raise TradeValidationError("executed_at 不能是未来成交时间；计划请使用 not_executed")
+    # The insert and its canonical proof share one transaction. Legacy records
+    # remain recordable without inventing opening balances or lot allocations.
+    import position_reality_service
+    store.insert_record(
+        db_path, record,
+        pre_commit_validator=position_reality_service.validate_trade_insert_on_connection,
+    )
     return compute_fields(record)
 
 
@@ -575,5 +593,9 @@ def void_trade(trade_id: str, reason: str) -> dict[str, Any]:
         raise TradeValidationError(f"reason 超过最大长度 {_MAX_REASON_LEN}")
 
     db_path = resolve_db_path()
-    updated_record = store.void_record_atomic(db_path, trade_id, reason_clean)
+    import position_reality_service
+    result = position_reality_service.void_trade_with_cascade(trade_id, reason_clean)
+    updated_record = result["voided_trade"]
+    if updated_record is None:  # recovery preserves the original void identity
+        updated_record = store.get_record(db_path, trade_id)
     return compute_fields(updated_record)

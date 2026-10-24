@@ -95,7 +95,8 @@ def _handle(msg: dict) -> None:
         params = msg.get("params") or {}
         name = params.get("name", "")
         args = params.get("arguments") or {}
-        data = chat._exec_tool(name, args)
+        from safe_outputs import safe_tool_data
+        data = safe_tool_data(chat._exec_tool(name, args))
         is_error = isinstance(data, dict) and "error" in data
         _result(rid, {
             "content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False)}],
@@ -122,7 +123,8 @@ def main() -> None:
             _handle(msg)
         except Exception as e:  # noqa: BLE001 — 单条消息出错不拖垮 server
             if msg.get("id") is not None:
-                _error(msg["id"], -32603, f"内部错误：{e}")
+                from safe_outputs import public_error
+                _error(msg["id"], -32603, public_error())
 
 
 if __name__ == "__main__":

@@ -295,8 +295,9 @@ class TestVoidCascadeApi:
             "target_event_type": "trade",
             "after_payload": {"actual_quantity": 50},
         })
-        # 既有端点作废（不级联）→ 制造孤儿
-        client.post(f"/api/trades/{trade_id}/void", json={"reason": "既有 void"})
+        # 构造修复前历史孤儿；现行公开 void 已统一级联。
+        import trade_ledger_store
+        trade_ledger_store.void_record_atomic(svc.resolve_db_path(), trade_id, "historical orphan fixture")
         derived_before = client.get("/api/position/derived")
         assert derived_before.status_code == 500
         # 新端点恢复 → 200 ALREADY_VOIDED_RECOVERED

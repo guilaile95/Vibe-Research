@@ -973,6 +973,12 @@ async function runNormalEnvelopeTest(page, mock, errors) {
     }
   }
 
+  // Capital sources are deliberately lazy: exercise their real owning tab
+  // before asserting every malformed object fixture was consumed.
+  if (mock.state.objectEndpointCalls.some(call => ["/api/dragon-tiger", "/api/lockup"].includes(call.pathname))) {
+    errors.push(`${label}: inactive capital sources were fetched eagerly`);
+  }
+  await page.getByRole("tab", { name: "资金与筹码", exact: true }).click();
   const expectedObjectEndpoints = ["/api/dragon-tiger", "/api/lockup", "/api/blocks"];
   const allObjectMocksRequested = await waitUntil(() =>
     expectedObjectEndpoints.every((pathname) =>

@@ -99,6 +99,8 @@ try {
   let releaseFilings;
   let signalFilings;
   let pendingFilings;
+  let delayedFilingsStarted = 0;
+  const delayedFilingsDeliveries = [];
   const json = (route, data, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(status === 200 ? { data } : { detail: data }) });
   await page.route("**/api/watchlist", async (route) => {
     if (watchMode === "error") return json(route, unsafeDetail, 502);
@@ -113,9 +115,13 @@ try {
     await page.route(`**/api/${endpoint}?**`, async (route) => {
       const code = new URL(route.request().url()).searchParams.get("code");
       if (endpoint === "announcements" && feedMode === "delayed") {
-        signalFilings();
-        await pendingFilings;
-        return json(route, [{ title: "Old announcement must not render", date: "2026-09-30", type: "公告", url: "" }]);
+        const delivery = (async () => {
+          await pendingFilings;
+          await json(route, [{ title: "Old announcement must not render", date: "2026-09-30", type: "公告", url: "" }]);
+        })();
+        delayedFilingsDeliveries.push(delivery);
+        if (++delayedFilingsStarted === 2) signalFilings();
+        return delivery;
       }
       if (feedMode === "failure" || (feedMode === "partial" && code === "000002")) return json(route, unsafeDetail, 502);
       if (feedMode === "dependency") return json(route, unsafeDetail, 501);
@@ -149,7 +155,8 @@ try {
     for (const failure of ["failure", "malformed"]) {
       feedMode = failure;
       await page.getByRole("button", { name: "重试", exact: true }).click();
-      await page.getByRole("alert").getByText(`${label}加载失败（2/2 只）`, { exact: false }).waitFor();
+      await page.getByRole("alert").getByText(`${label}加载失败，请重试。`, { exact: true }).waitFor();
+      await page.getByTestId("feed-coverage").getByText("成功 0 · 等待 0 · 失败 2（按股票来源）；名称补充不影响结果。", { exact: true }).waitFor();
       assert.equal(await page.getByText(title, { exact: true }).count(), 0);
       await assertNoFalseEmpty();
     }
@@ -167,9 +174,12 @@ try {
   feedMode = "success";
   await page.getByRole("button", { name: "公开新闻", exact: true }).click();
   await page.getByText("Synthetic retained news", { exact: true }).first().waitFor();
-  const oldRequestFinished = page.waitForResponse((response) => response.url().includes("/api/announcements?"));
+  // The old tab's reads are cancelled, so a browser response event is no longer
+  // guaranteed. Wait for both held route handlers to deliver, then assert that
+  // neither late result can replace the new tab's rows.
+  assert.equal(delayedFilingsDeliveries.length, 2);
   releaseFilings();
-  await oldRequestFinished;
+  await Promise.all(delayedFilingsDeliveries);
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.equal(await page.getByText("Old announcement must not render", { exact: true }).count(), 0);
   assert.equal(await page.getByText("Synthetic retained news", { exact: true }).count(), 2);

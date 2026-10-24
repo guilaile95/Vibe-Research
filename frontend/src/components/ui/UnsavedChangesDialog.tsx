@@ -9,9 +9,10 @@ export function useUnsavedChanges(dirty: boolean, saving: boolean) {
     currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search
   ));
   useEffect(() => {
+    if (blocker.state === "blocked" && !dirty && !saving) { blocker.reset(); return; }
     if (blocker.state === "blocked") dialogRef.current?.showModal();
     else dialogRef.current?.close();
-  }, [blocker.state]);
+  }, [blocker.state, dirty, saving]);
   useEffect(() => {
     if (!dirty && !saving) return;
     const warn = (event: BeforeUnloadEvent) => {

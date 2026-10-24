@@ -25,7 +25,7 @@ test("generateTomorrowPlan body carries only trade_date/llm/force (no authoritat
     assert.equal(capturedBody.trade_date, "2026-07-24");
     assert.equal(capturedBody.force, false);
     assert.equal(capturedBody.llm.model, "x");
-    assert.equal(Object.hasOwn(capturedBody.llm, "revision"), false);
+    assert.equal(Object.hasOwn(capturedBody.llm, "revision"), true);
     // 绝不提交权威数据字段
     assert.equal(capturedBody.candidates, undefined);
     assert.equal(capturedBody.signals, undefined);

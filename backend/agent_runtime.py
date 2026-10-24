@@ -58,6 +58,11 @@ def _safe_status_payload(payload: object) -> dict:
         "version": str(payload.get("version")) if payload.get("version") else None,
     }
 
+    if "dispatch_available" in payload:
+        result["dispatch_available"] = payload.get("dispatch_available") is True
+    if "modelConnectivity" in payload:
+        result.update(runtimeFamily="codex-subscription", requestedModel=None,
+                      resolvedModel=None, modelConnectivity="unknown", lastProbe=None)
     # Optional for compatibility with older runtime servers. Never copy raw details.
     if "auth_kind" in payload:
         kind = payload.get("auth_kind")
@@ -117,6 +122,7 @@ def stream_chat(
     *, session: str, message: str, context: str, cancel_event: threading.Event,
     history: list[dict[str, str]] | tuple = (),
     owned_cleanup: bool = False,
+    config: dict | None = None,
 ) -> Iterator[dict]:
     finished = threading.Event()
     response = None
@@ -151,6 +157,8 @@ def stream_chat(
     )
     watcher.start()
     try:
+        import ai_credential_store
+        ai_credential_store.dispatch_config(config or {})
         with _request(
             "POST", f"{_base_url()}/chat",
             json={"session": session, "message": message, "context": context, "history": list(history)},
@@ -161,6 +169,7 @@ def stream_chat(
                 raise AgentRuntimeError(
                     "RUNTIME_REJECTED", "Codex Subscription Runtime 拒绝了本轮请求", response.status_code
                 )
+            terminal = None
             for raw in response.iter_lines():
                 if cancel_event.is_set():
                     return
@@ -176,7 +185,16 @@ def stream_chat(
                     raise AgentRuntimeError(
                         "RUNTIME_BAD_RESPONSE", "Codex Subscription Runtime 返回无效"
                     )
-                yield event
+                if terminal:
+                    raise AgentRuntimeError("RUNTIME_BAD_RESPONSE", "模型响应在终止后仍有数据")
+                if event.get("type") in {"done", "error"}:
+                    terminal = event
+                else:
+                    yield event
+            if not terminal and not cancel_event.is_set():
+                raise AgentRuntimeError("RUNTIME_BAD_RESPONSE", "模型响应流未完整结束")
+            if terminal and not cancel_event.is_set():
+                yield terminal
     except AgentRuntimeError:
         raise
     except requests.RequestException as exc:

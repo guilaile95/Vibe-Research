@@ -6,7 +6,7 @@ import ai_tools
 import app
 import astock
 
-SAFE = "投资者互动数据暂不可用；不能据此判断没有问答。"
+SAFE = "数据获取失败，请稍后重试。"
 VALID = {'rows': [{'mainContent': 'fixture question', 'attachedContent': None}]}
 
 
@@ -54,7 +54,9 @@ def test_failures_are_safe_not_cached_and_recover(provider, target, value):
         app.investor_qa('000001')
     assert error.value.status_code == 502
     model = ai_tools.exec_tool('query_investor_qa', {'code': '000001'})
-    assert model == {'error': f'query_investor_qa 执行失败：{SAFE}'}
+    # The AI boundary deliberately normalizes provider failures, not empty data.
+    assert model == {'error': SAFE}
+    assert 'fixture-secret' not in str(model)
     before = len(provider['calls'])
     provider['lookup'], provider['page'] = {'data': [{'secid': 'fixture-org'}]}, VALID
     assert app.investor_qa('000001')['data'][0]['question'] == 'fixture question'

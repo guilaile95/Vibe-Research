@@ -1,5 +1,5 @@
 // Browser fixtures model a saved synthetic credential generation, not a bypass
-// of the production preflight. Keep client-only revision out of model requests.
+// of the production preflight. Preserve revision as a server-side dispatch precondition.
 export const syntheticRevision = '1';
 export const storedCredential = model => ({ ...model, revision: syntheticRevision });
 export function credentialStatus(model) {

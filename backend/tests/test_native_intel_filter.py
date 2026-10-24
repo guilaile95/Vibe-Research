@@ -299,6 +299,9 @@ def test_batch_classification_min_score_caching_and_partial_failure(test_db: str
     def mock_runner(cfg: Any, msgs: list[dict[str, str]]) -> str:
         nonlocal call_count
         call_count += 1
+        assert cfg["provider"] == "deepseek"
+        assert cfg["revision"] == "7"
+        assert cfg["_task_budget"].max_calls == 8
         return json.dumps([
             {"id": inserted_ids[0], "tag_id": 1, "score": 0.9},
             {"id": inserted_ids[1], "tag_id": 1, "score": 0.6},  # below min_score 0.75
@@ -308,6 +311,7 @@ def test_batch_classification_min_score_caching_and_partial_failure(test_db: str
     res = service.classify_items(
         "default",
         item_ids=inserted_ids[:4],
+        cfg={"provider": "deepseek", "model": "synthetic", "revision": "7"},
         model_runner=mock_runner,
         path=test_db,
     )
@@ -319,6 +323,7 @@ def test_batch_classification_min_score_caching_and_partial_failure(test_db: str
     res_cached = service.classify_items(
         "default",
         item_ids=inserted_ids[:3],
+        cfg={"provider": "deepseek", "model": "synthetic", "revision": "7"},
         model_runner=mock_runner,
         path=test_db,
     )
@@ -359,6 +364,21 @@ def test_batch_classification_min_score_caching_and_partial_failure(test_db: str
         "default", prof["profile_fingerprint"], item_ids=[inserted_ids[4]], db_path=test_db
     )
     assert inserted_ids[4] not in cls_map
+
+    from unittest.mock import patch
+    # Old API or unknown Codex identities must not satisfy a new API dispatch.
+    prof = service.get_filter_profile("default", test_db)
+    original = store.get_item_analyses
+    records = original("default", prof["profile_fingerprint"], inserted_ids[:3], db_path=test_db)
+    for stale_identity in ("cli-codex:unknown/default", "deepseek:previous-model"):
+        with patch.object(store, "get_item_analyses", return_value={
+            key: {**value, "provider_identity": stale_identity} for key, value in records.items()
+        }):
+            outcome = service.classify_items("default", item_ids=inserted_ids[:3],
+                cfg={"provider": "deepseek", "model": "synthetic", "revision": "7"},
+                model_runner=mock_runner, path=test_db)
+        assert outcome["status"] == "SUCCESS"
+    assert call_count == 3
 
 
 # ---------------------------------------------------------------------------

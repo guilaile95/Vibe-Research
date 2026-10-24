@@ -87,11 +87,11 @@ async function runScenario(browser, baseURL, backend, width, scenario, evidenceD
       if (!url.pathname.startsWith("/api/")) return route.continue();
       requests.push(`${request.method()} ${url.pathname}${url.search}`);
       if (scenario === "debate" && request.method() === "POST" && url.pathname === "/api/debate") {
-        const body = request.postDataJSON(); assert.deepEqual(body.llm, syntheticLlm); assert.equal(body.code, "600519");
+        const body = request.postDataJSON(); assert.deepEqual(body.llm, syntheticStoredLlm); assert.equal(body.code, "600519");
         return route.fulfill({ contentType: "application/x-ndjson", body: encode(debateEvents(body.rounds, debateMode)) });
       }
       if (scenario === "notes-mobile" && request.method() === "POST" && url.pathname === "/api/reflect") {
-        const body = request.postDataJSON(); assert.deepEqual(body.llm, syntheticLlm);
+        const body = request.postDataJSON(); assert.deepEqual(body.llm, syntheticStoredLlm);
         return route.fulfill({ contentType: "application/x-ndjson", body: encode([{ type: "delta", text: "SYNTHETIC_MOBILE_AUDIT" }, ...(reflectionComplete ? [{ type: "done", content: "SYNTHETIC_MOBILE_AUDIT", truncated: true }] : [])]) });
       }
       if (realRouteAllowed(request.method(), url.pathname, scenario)) {
@@ -118,7 +118,7 @@ async function runScenario(browser, baseURL, backend, width, scenario, evidenceD
     page = await context.newPage(); page.setDefaultTimeout(10000);
     if (scenario.startsWith("history-") || scenario === "calendar-422") await page.clock.setFixedTime(new Date(ANCILLARY_CLOCK));
     page.on("pageerror", error => errors.push(error.message)); page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
-    const notes = () => page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes") || "[]"));
+    const notes = () => page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")));
     if (scenario === "debate" || scenario === "notes-mobile") {
       await page.goto("/__storage_probe");
       await page.evaluate(cfg => localStorage.setItem("vr-llm", JSON.stringify(cfg)), syntheticStoredLlm);
@@ -150,7 +150,7 @@ async function runScenario(browser, baseURL, backend, width, scenario, evidenceD
         assert.equal((await notes()).length, 2); await page.reload(); assert.equal((await notes()).length, 2);
         checks.push("real done + complete three/five stages save original ticker and survive reload");
       } else {
-        await page.evaluate(() => localStorage.setItem("vr-notes", JSON.stringify([{ id: "synthetic-mobile-note", kind: "复盘", title: "SYNTHETIC_MOBILE_NOTE", content: "SYNTHETIC_ORIGINAL_CONTENT", ts: 1 }])));
+        await page.evaluate(() => (localStorage.removeItem("vr-notes.v2"), localStorage.setItem("vr-notes", JSON.stringify([{ id: "synthetic-mobile-note", kind: "复盘", title: "SYNTHETIC_MOBILE_NOTE", content: "SYNTHETIC_ORIGINAL_CONTENT", ts: 1 }]))));
         await page.goto("/notes"); await page.getByText("SYNTHETIC_MOBILE_NOTE", { exact: true }).click();
         await page.getByRole("button", { name: "反思审计", exact: true }).click();
         await page.getByRole("alert").filter({ hasText: "反思未完整结束" }).waitFor();

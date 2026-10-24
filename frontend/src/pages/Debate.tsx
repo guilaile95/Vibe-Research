@@ -46,17 +46,20 @@ export function Debate() {
   const [stages, setStages] = useState<StageBox[]>([]);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const saveEpoch = useRef(0), saving = useRef(false);
   const [analyzedCode, setAnalyzedCode] = useState("");
   const [completed, setCompleted] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => () => {
+    saveEpoch.current++;
     const controller = abortRef.current;
     abortRef.current = null;
     controller?.abort();
   }, []);
 
   const reset = () => {
+    saveEpoch.current++; saving.current = false;
     setCompleted(false);
     setStatus(""); setProgress([]); setMissing([]); setPartial([]); setStages([]); setError(""); setSaved(false);
   };
@@ -131,16 +134,16 @@ export function Debate() {
     setRunning(false);
   }
 
-  function save() {
-    if (!finished || running || saved) return;
+  async function save() {
+    if (!finished || running || saved || saving.current) return;
+    saving.current = true; const epoch = saveEpoch.current;
     const body = stages.map((s) => `## ${s.label}\n\n${s.content}`).join("\n\n---\n\n");
     try {
-      addNote("多空辩论", `多空辩论 · ${analyzedCode}`, body);
-      setSaved(true);
-      setError("");
+      await addNote("多空辩论", `多空辩论 · ${analyzedCode}`, body);
+      if (epoch === saveEpoch.current) { setSaved(true); setError(""); }
     } catch (error) {
-      setError(error instanceof Error ? error.message : "研究记录保存失败");
-    }
+      if (epoch === saveEpoch.current) setError(error instanceof Error ? error.message : "研究记录保存失败");
+    } finally { if (epoch === saveEpoch.current) saving.current = false; }
   }
 
   const finished = completed && stages.length > 0 && stages.every((s) => s.done);

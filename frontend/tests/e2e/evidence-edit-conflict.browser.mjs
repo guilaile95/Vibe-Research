@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { thesisFixture } from "./thesis-list.browser.mjs";
 
 const dist = fileURLToPath(new URL("../../dist/", import.meta.url));
 const output = process.env.EVIDENCE_EDIT_CONFLICT_BROWSER_OUTPUT_DIR || mkdtempSync(join(tmpdir(), "evidence-edit-conflict-"));
@@ -57,6 +58,8 @@ try {
     if (url.origin === "https://fonts.googleapis.com") return route.fulfill({ contentType: "text/css", body: "" });
     if (url.origin !== base) { outbound.push(url.origin); return route.abort(); }
     if (!url.pathname.startsWith("/api/")) return route.continue();
+    if (url.pathname === "/api/evidence" && method === "GET") return route.fulfill({ json: { data: { items:[current],total:1,limit:50,offset:0 } } });
+    if (url.pathname === "/api/thesis/guard-thesis" && method === "GET") return route.fulfill({ json: { data: { thesis:{...thesisFixture(3,"000001"),id:"guard-thesis"}, evidence_links:[] } } });
     if (url.pathname === "/api/evidence/ev-next" && method === "GET") return route.fulfill({ json: { data: { ...seed(), id: "ev-next", claim: "Next route record" } } });
     if (url.pathname === "/api/evidence/ev-conflict") {
       const held = heldRequest?.method === method ? heldRequest : null;
@@ -151,6 +154,36 @@ try {
   await open(b); held = holdNext("DELETE");
   await confirmClick(b, b.getByRole("button", { name: "删除", exact: true }), true);
   await bounded(held.started.promise); await navigateNext(b); await assertNext(b, held, "DELETE");
+  // P2-11: actual keyboard editing, browser Back, modal Escape/stay and
+  // pending-save navigation. No pushState shortcuts for these guard assertions.
+  version += 1; current = seed();
+  await b.goto(`${base}/evidence`);
+  await b.locator('a[href^="/evidence/ev-conflict"]').first().click(); await ready(b); await edit(b);
+  const claim=b.getByLabel("证据论断",{exact:true});await claim.press("End");await claim.pressSequentially(" keyboard dirty");
+  await b.goBack();
+  let guard=b.getByRole("dialog",{name:"内容尚未保存"});await guard.waitFor();
+  await b.keyboard.press("Escape");await guard.waitFor({state:"hidden"});
+  assert.match(await claim.inputValue(),/keyboard dirty/);assert.match(new URL(b.url()).pathname,/ev-conflict$/);
+  await b.getByTestId("evidence-detail-back").click();await guard.waitFor();
+  await guard.getByRole("button",{name:"留在此页",exact:true}).click();
+  const savingHeld=holdNext("PUT");await save(b);await bounded(savingHeld.started.promise);
+  await b.getByTestId("evidence-detail-back").click();
+  guard=b.getByRole("dialog",{name:"保存正在进行中"});await guard.waitFor();
+  assert.equal(await guard.getByRole("button",{name:"放弃未保存内容并离开",exact:true}).isDisabled(),true);
+  const saveResponse=b.waitForResponse(r=>new URL(r.url()).pathname==="/api/evidence/ev-conflict"&&r.request().method()==="PUT");
+  savingHeld.release.resolve();await (await saveResponse).finished();await ready(b);
+  await b.getByRole("dialog").waitFor({state:"hidden"});
+  await b.getByTestId("evidence-detail-back").click();await b.waitForURL(`${base}/evidence`);
+  // Thesis editor has the same explicit-save boundary, independently of Evidence.
+  await b.goto(`${base}/thesis/guard-thesis`);await edit(b);
+  const title=b.getByLabel(/标题/).first();await title.press("End");await title.pressSequentially(" unsaved thesis");
+  await b.locator('a[href="/thesis"]').first().click();
+  guard=b.getByRole("dialog",{name:"内容尚未保存"});await guard.waitFor();
+  await guard.getByRole("button",{name:"留在此页",exact:true}).click();assert.match(await title.inputValue(),/unsaved thesis/);
+  const unloadCancelled=await b.evaluate(()=>{const e=new Event("beforeunload",{cancelable:true});window.dispatchEvent(e);return e.defaultPrevented;});assert.equal(unloadCancelled,true);
+  await b.locator('a[href="/thesis"]').first().click();await guard.waitFor();
+  await guard.getByRole("button",{name:"放弃未保存内容并离开",exact:true}).click();await b.waitForURL(`${base}/thesis`);
+  console.log("PASS Evidence/Thesis dirty guards: keyboard, Back, Escape, explicit discard, beforeunload and pending-save lockout");
   assert.deepEqual(errors, []); assert.deepEqual(outbound, []);
   await b.screenshot({ path: join(output, "complete-next-route.png"), fullPage: true });
   status = "PASS";

@@ -126,11 +126,11 @@ try {
   assert.equal(legacyResult.added, 1);
   assert.deepEqual(ok(await invoke(page, 'importLegacy', [oldRaw, 'import-legacy'])), legacyResult);
   assert.equal(await page.evaluate(() => localStorage.getItem('vr-notes')), oldRaw);
-  await peer.evaluate(async () => { const oldClient = await import('/src/lib/notes.ts'); oldClient.addNote('普通笔记', '旧页新增', '不能覆盖独立研究链'); });
-  const changedRaw = await peer.evaluate(() => localStorage.getItem('vr-notes'));
+  await peer.evaluate(async () => { const oldClient = await import('/src/lib/notes.ts'); await oldClient.addNote('普通笔记', '旧页新增', '不能覆盖独立研究链'); });
+  const changedRaw = await peer.evaluate(async () => (await import('/src/lib/notes.ts')).notesSourceRaw());
   assert.equal(ok(await invoke(page, 'checkLegacySource', [changedRaw])).changed, true);
   assert.equal(ok(await invoke(page, 'getQuestion', ['question'])).headRoundId, winner.round.id);
-  await peer.evaluate(async () => { const oldClient = await import('/src/lib/notes.ts'); oldClient.clearNotes(); });
+  await peer.evaluate(async () => { const oldClient = await import('/src/lib/notes.ts'); await oldClient.clearNotes(); });
   assert.equal(ok(await invoke(page, 'getRounds', ['question'])).length, 2);
   assert.deepEqual(ok(await invoke(page, 'listLegacyNotes', []))[0].payload.unknownMetadata, { retained: true });
   mark('explicit legacy read-only import preserves raw; old-client writes/clear cannot affect new domain');
@@ -427,6 +427,54 @@ try {
   assert.ok(lifecycle.elapsed < 2000);
   assert.equal(lifecycle.versionAfterTimeout, 1);
   mark('versionchange closes cooperative client; blocked is bounded, late upgrade aborts, explicit retry recovers');
+
+  // P1-04: native cross-tab locks, not simulated hooks or storage events.
+  const notesContext = await browser.newContext();
+  const noteTabs = await Promise.all([notesContext.newPage(), notesContext.newPage()]);
+  for (const tab of noteTabs) { await tab.goto(origin); await tab.evaluate(async () => { window.notesApi = await import('/src/lib/notes.ts'); }); }
+  const retainedLegacy = JSON.stringify([{ id:'retained', kind:'manual', title:'Legacy raw', content:'synthetic', ts:1 }]);
+  await noteTabs[0].evaluate(raw => localStorage.setItem('vr-notes', raw), retainedLegacy);
+  // Queue both writers behind a genuinely held origin lock, then release together.
+  await noteTabs[0].evaluate(() => { window.noteLock = navigator.locks.request(window.notesApi.NOTES_WRITE_LOCK, () => new Promise(resolve => { window.releaseNoteLock = resolve; })); });
+  await noteTabs[0].waitForFunction(() => Boolean(window.releaseNoteLock));
+  const additions = noteTabs.map((tab, i) => tab.evaluate(async i => { window.addQueued = true; return window.notesApi.addNote('manual', `Tab ${i}`, `body ${i}`); }, i));
+  for (const tab of noteTabs) await tab.waitForFunction(() => window.addQueued);
+  await noteTabs[0].evaluate(() => window.releaseNoteLock());
+  await Promise.all(additions);
+  const both = await noteTabs[1].evaluate(() => window.notesApi.loadNotesState());
+  assert.equal(both.error, ''); assert.equal(both.notes.length, 3);
+  assert.equal(await noteTabs[1].evaluate(() => localStorage.getItem('vr-notes')), retainedLegacy);
+  const newBackup = JSON.stringify({ schema_version:'vibe-notes.backup.v1', exported_at:'2026-10-23T00:00:00Z', notes:[{id:'imported',kind:'manual',title:'Imported',content:'synthetic',ts:2}] });
+  await Promise.all([noteTabs[0].evaluate(() => window.notesApi.deleteNote('retained')), noteTabs[1].evaluate(raw => window.notesApi.importNotesBackupJson(raw), newBackup)]);
+  assert.deepEqual((await noteTabs[0].evaluate(() => window.notesApi.loadNotesState().notes.map(n=>n.id))).sort(), [...both.notes.filter(n=>n.id!=='retained').map(n=>n.id),'imported'].sort());
+  await noteTabs[0].evaluate(() => window.notesApi.clearNotes());
+  await noteTabs[1].evaluate(() => window.notesApi.addNote('manual','After clear','synthetic'));
+  await noteTabs[1].reload(); await noteTabs[1].evaluate(async () => { window.notesApi=await import('/src/lib/notes.ts'); });
+  assert.deepEqual(await noteTabs[1].evaluate(() => window.notesApi.loadNotesState().notes.map(n=>n.title)), ['After clear']);
+  const acknowledged = await noteTabs[0].evaluate(() => localStorage.getItem('vr-notes.v2'));
+  await noteTabs[0].evaluate(() => localStorage.setItem('vr-notes','[]')); // Deliberately non-cooperating historical client.
+  const conflictState = await noteTabs[1].evaluate(async () => { let rejected=false; try {await window.notesApi.addNote('manual','Blocked','synthetic');} catch {rejected=true;} return {rejected,state:window.notesApi.loadNotesState(),raw:localStorage.getItem('vr-notes.v2'),archive:JSON.parse(window.notesApi.notesRecoveryArchive())}; });
+  assert.equal(conflictState.rejected,true); assert.match(conflictState.state.error,/旧版本页面/); assert.equal(conflictState.raw,acknowledged); assert.equal(conflictState.archive.legacyRaw,'[]');assert.equal(conflictState.archive.currentRaw,acknowledged);
+  await notesContext.close();
+  mark('native notes multi-tab add/delete/import/clear serialize; legacy bytes preserved and old-version conflict fails closed');
+
+  const largeReceipt = await page.evaluate(async () => {
+    const {reportPageMaterials}=await import('/src/lib/researchCheck.ts');
+    const report={id:'many-pages',name:'synthetic.pdf',size:1,industry:'synthetic',ext:'.pdf',ts:1,file_sha256:'a'.repeat(64),page_count:200};
+    const requested=Array.from({length:200},(_,i)=>i+1);
+    const result={report_id:report.id,file_sha256:report.file_sha256,scope:'INDEXED_PAGE_TEXT_ONLY',full_report_read:false,requested,returned_chars:12000,complete_requested_text:false,coverage:{readable:requested.slice(0,8),omitted:requested.slice(8),invalid:[],unreadable:[],error:[]},items:requested.map(page=>page<=8?{page,status:'readable',reason:'AVAILABLE',text:'中'.repeat(1500),returned_chars:1500,indexed_chars:1500,truncated:false}:{page,status:'omitted',reason:'PAGE_BUDGET'})};
+    const materials=await reportPageMaterials(report,result,'600001',1,200);
+    const now=Date.now();const question={id:'large-q',securityCode:'600001',question:'bounded receipt',createdAt:now,origin:{kind:'manual',label:'synthetic',capturedAt:now}};
+    const round={id:'large-r',questionId:question.id,securityCode:'600001',parentRoundId:null,createdAt:now,materials,calculation:null,judgement:'partial',limitations:'not full report',nextMaterial:'next',reviewedMaterialKeys:[],ignoredMaterialKeys:[],coverage:'partial'};
+    const store=window.api.createResearchWorkflowStore({dbName:'many-pages'});await store.createQuestion({operationId:'large-op',question,initialRound:round});
+    let reads=0;const original=IDBObjectStore.prototype.getAll;IDBObjectStore.prototype.getAll=function(...args){reads++;return original.apply(this,args);};
+    let readback;try {await store.readWorkspace('600001',null);readback=await store.getQuestionContext('large-q');}finally{IDBObjectStore.prototype.getAll=original;}
+    const backup=await store.exportBackup();const restored=window.api.createResearchWorkflowStore({dbName:'many-pages-restored'});await restored.importBackup(backup,'import-large');
+    const restoredRound=(await restored.getQuestionContext('large-q')).rounds[0];
+    const matches=JSON.stringify(restoredRound)===JSON.stringify(readback.rounds[0]);store.close();restored.close();return {reads,matches,materials:restoredRound.materials.length,bytes:new TextEncoder().encode(JSON.stringify(restoredRound)).length};
+  });
+  assert.deepEqual({...largeReceipt,bytes:0},{reads:8,matches:true,materials:200,bytes:0});assert.ok(largeReceipt.bytes<2*1024*1024);
+  mark('200 requested pages/12000 text characters save, reopen and backup/import with v2 provenance; workspace reads use 8 getAll calls');
 
   await page.evaluate(checks => { document.body.innerText = ['Native IndexedDB acceptance', ...checks.map(check => `PASS ${check.name}`), 'Scope: synthetic data; lost-response is a same-operation retry simulation, not an injected delivery failure. Abort/quota faults are injected; no actual quota pressure, OS crash, private-mode retention or power-loss durability claim.'].join('\n\n'); }, checks);
   await page.screenshot({ path: join(output, 'native-indexeddb-acceptance.png'), fullPage: true });

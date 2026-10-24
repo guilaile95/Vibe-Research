@@ -20,6 +20,7 @@ from typing import Any, Callable
 from urllib.parse import urlsplit
 
 import chat
+from ai_providers import execution_identity, config_cache_identity
 import native_intel_store as store
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,8 @@ def get_effective_ai_config(cfg: dict[str, Any] | None = None, path: str | None 
             model = "gpt-5-codex"
         return {
             "provider": provider,
+            "revision": target_cfg.get("revision"),
+            "_task_budget": target_cfg.get("_task_budget") or chat.ModelTaskBudget(timeout=180, max_calls=2, max_tokens=4000, max_chars=48000),
             "model": model,
             "baseURL": str(target_cfg.get("baseURL") or ""),
             "apiKey": str(target_cfg.get("apiKey") or ""),
@@ -72,6 +75,8 @@ def get_effective_ai_config(cfg: dict[str, Any] | None = None, path: str | None 
     if scheduled is not None and str(scheduled.get("provider") or "").strip():
         return {
             "provider": str(scheduled["provider"]),
+            "revision": scheduled.get("revision"),
+            "_task_budget": chat.ModelTaskBudget(timeout=180, max_calls=2, max_tokens=4000, max_chars=48000),
             "model": str(scheduled.get("model") or ""),
             "baseURL": str(scheduled.get("baseURL") or ""),
             "apiKey": str(scheduled.get("apiKey") or ""),
@@ -95,6 +100,8 @@ def invoke_llm_text(
         raise ValueError("AI_CONFIG_REQUIRED: 尚未提供有效 AI 配置，请先在设置中配置模型接入")
 
     provider = str(cfg["provider"]).strip()
+    from ai_providers import provider_kind
+    provider_kind(provider)
     if provider.startswith("cli-") and provider != "cli-codex":
         raise ValueError(f"UNSUPPORTED_AI_PROVIDER: 不受支持的 CLI Provider '{provider}'，仅支持 'cli-codex'")
 
@@ -144,6 +151,7 @@ def compute_ai_input_fingerprint(
     prompt_version: str,
     target_language: str | None = None,
     extra: dict[str, Any] | None = None,
+    config_identity: str | None = None,
 ) -> str:
     """计算确定性的 SHA-256 fingerprint，用于工件缓存校验。"""
     serialized = json.dumps({
@@ -154,6 +162,7 @@ def compute_ai_input_fingerprint(
         "prompt_version": prompt_version,
         "target_language": target_language or "",
         "extra": extra or {},
+        "config_identity": config_identity,
     }, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
@@ -238,7 +247,7 @@ def analyze_deep_read(
     try:
         effective_cfg = get_effective_ai_config(cfg, path)
         provider = str(effective_cfg.get("provider") or "")
-        model = str(effective_cfg.get("model") or "")
+        model = execution_identity(effective_cfg)["model"]
     except Exception:
         return {
             "status": "ERROR",
@@ -263,9 +272,10 @@ def analyze_deep_read(
         "content_sha256": content_sha256,
     }
     input_fingerprint = compute_ai_input_fingerprint(
-        "deep_read", input_facts, provider, model, PROMPT_VERSION_DEEP_READ
+        "deep_read", input_facts, provider, model, PROMPT_VERSION_DEEP_READ,
+        config_identity=config_cache_identity(effective_cfg),
     )
-    cached = store.find_cached_ai_artifact(
+    cached = None if provider == "cli-codex" else store.find_cached_ai_artifact(
         "deep_read", input_fingerprint, provider, model, path
     )
     if cached:
@@ -697,7 +707,7 @@ def analyze_report(
     """
     effective_cfg = get_effective_ai_config(cfg, path)
     provider = effective_cfg.get("provider", "cli-codex")
-    model = effective_cfg.get("model", "gpt-5-codex")
+    model = execution_identity(effective_cfg)["model"]
 
     facts_fp, facts_text, counts = _prepare_analysis_facts(
         report_data,
@@ -713,11 +723,12 @@ def analyze_report(
     scope_key = f"report:{mode}:{scope}"
 
     input_fingerprint = compute_ai_input_fingerprint(
-        "analysis", facts_fp, provider, model, PROMPT_VERSION_ANALYSIS, language
+        "analysis", facts_fp, provider, model, PROMPT_VERSION_ANALYSIS, language,
+        config_identity=config_cache_identity(effective_cfg),
     )
 
     # 查缓存
-    cached = store.find_cached_ai_artifact("analysis", input_fingerprint, provider, model, path)
+    cached = None if provider == "cli-codex" else store.find_cached_ai_artifact("analysis", input_fingerprint, provider, model, path)
     if cached:
         payload = dict(cached["payload"])
         payload["cached"] = True
@@ -881,13 +892,14 @@ def translate_text(
 
     effective_cfg = get_effective_ai_config(cfg, path)
     provider = effective_cfg.get("provider", "cli-codex")
-    model = effective_cfg.get("model", "gpt-5-codex")
+    model = execution_identity(effective_cfg)["model"]
 
     input_fingerprint = compute_ai_input_fingerprint(
-        "translation_single", raw_text, provider, model, PROMPT_VERSION_TRANSLATION, target_language
+        "translation_single", raw_text, provider, model, PROMPT_VERSION_TRANSLATION, target_language,
+        config_identity=config_cache_identity(effective_cfg),
     )
 
-    cached = store.find_cached_ai_artifact("translation_single", input_fingerprint, provider, model, path)
+    cached = None if provider == "cli-codex" else store.find_cached_ai_artifact("translation_single", input_fingerprint, provider, model, path)
     if cached and _complete_single_translation(cached.get("payload"), raw_text):
         payload = dict(cached["payload"])
         payload["cached"] = True
@@ -957,7 +969,7 @@ def translate_batch(
 
     effective_cfg = get_effective_ai_config(cfg, path)
     provider = effective_cfg.get("provider", "cli-codex")
-    model = effective_cfg.get("model", "gpt-5-codex")
+    model = execution_identity(effective_cfg)["model"]
 
     # 若所有输入均为空或空白，直接原样返回，不调用模型
     if not any((t or "").strip() for t in texts):
@@ -984,10 +996,11 @@ def translate_batch(
         }
 
     input_fingerprint = compute_ai_input_fingerprint(
-        "translation_batch", texts, provider, model, PROMPT_VERSION_TRANSLATION, target_language
+        "translation_batch", texts, provider, model, PROMPT_VERSION_TRANSLATION, target_language,
+        config_identity=config_cache_identity(effective_cfg),
     )
 
-    cached = store.find_cached_ai_artifact("translation_batch", input_fingerprint, provider, model, path)
+    cached = None if provider == "cli-codex" else store.find_cached_ai_artifact("translation_batch", input_fingerprint, provider, model, path)
     if cached and _complete_batch_translation(cached.get("payload"), texts):
         payload = dict(cached["payload"])
         payload["cached"] = True
@@ -1119,13 +1132,14 @@ def extract_entities(
 
     effective_cfg = get_effective_ai_config(cfg, path)
     provider = effective_cfg.get("provider", "cli-codex")
-    model = effective_cfg.get("model", "gpt-5-codex")
+    model = execution_identity(effective_cfg)["model"]
 
     input_fingerprint = compute_ai_input_fingerprint(
-        "entities", raw_text, provider, model, PROMPT_VERSION_ENTITIES
+        "entities", raw_text, provider, model, PROMPT_VERSION_ENTITIES,
+        config_identity=config_cache_identity(effective_cfg),
     )
 
-    cached = store.find_cached_ai_artifact("entities", input_fingerprint, provider, model, path)
+    cached = None if provider == "cli-codex" else store.find_cached_ai_artifact("entities", input_fingerprint, provider, model, path)
     if cached:
         payload = dict(cached["payload"])
         payload["cached"] = True
@@ -1270,13 +1284,14 @@ def analyze_sentiment(
 
     effective_cfg = get_effective_ai_config(cfg, path)
     provider = effective_cfg.get("provider", "cli-codex")
-    model = effective_cfg.get("model", "gpt-5-codex")
+    model = execution_identity(effective_cfg)["model"]
 
     input_fingerprint = compute_ai_input_fingerprint(
-        "sentiment", {"text": raw_text, "topic": topic or ""}, provider, model, PROMPT_VERSION_SENTIMENT
+        "sentiment", {"text": raw_text, "topic": topic or ""}, provider, model, PROMPT_VERSION_SENTIMENT,
+        config_identity=config_cache_identity(effective_cfg),
     )
 
-    cached = store.find_cached_ai_artifact("sentiment", input_fingerprint, provider, model, path)
+    cached = None if provider == "cli-codex" else store.find_cached_ai_artifact("sentiment", input_fingerprint, provider, model, path)
     if cached:
         payload = dict(cached["payload"])
         payload["cached"] = True

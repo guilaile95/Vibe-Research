@@ -1,3 +1,4 @@
+import { notesSourceRaw } from "@/lib/notes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -115,12 +116,16 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
   const refreshQuestions = useCallback(async () => {
     const generation = ++listGeneration.current; setLoading(true);
     const current = () => mounted.current && generation === listGeneration.current;
-    try { const rows = await store.listQuestions(code); if (current()) setQuestions(rows);
-      try {
-        const imported = await store.listLegacyNotes();
-        const oldSource = await store.checkLegacySource(localStorage.getItem("vr-notes"));
-        if (current()) { setLegacyNotes(imported); if (oldSource.changed) setLegacyNotice("旧笔记源已变化。已导入快照仍保留，但没有自动重新导入；可预览后决定是否再复制。"); }
-      } catch { if (current()) setLegacyNotice("旧记录状态暂不可检查；未自动迁移或覆盖。研究问题功能不依赖旧记录。"); } }
+    try {
+      let raw: string | null = null;
+      try { raw = notesSourceRaw(); }
+      catch { if (current()) setLegacyNotice("旧记录状态暂不可检查；未自动迁移或覆盖。研究问题功能不依赖旧记录。"); }
+      const workspace = await store.readWorkspace(code, raw);
+      if (current()) {
+        setQuestions(workspace.questions); setLegacyNotes(workspace.legacyNotes);
+        if (workspace.legacySource.changed) setLegacyNotice("旧笔记源已变化。已导入快照仍保留，但没有自动重新导入；可预览后决定是否再复制。");
+      }
+    }
     catch (cause) { if (current()) setError(failure(cause)); }
     finally { if (current()) setLoading(false); }
   }, [code]);
@@ -269,7 +274,7 @@ export function ResearchCheckPanel({ code, records, evidenceStatus, returnTo, or
   async function previewLegacy() {
     const generation = ++legacyGeneration.current;
     try {
-      const raw = localStorage.getItem("vr-notes") || "[]", preview = await store.previewLegacy(raw);
+      const raw = notesSourceRaw() || "[]", preview = await store.previewLegacy(raw);
       if (mounted.current && generation === legacyGeneration.current) { setLegacyPreview({ raw, count: preview.notes.length }); setLegacyNotice(`找到 ${preview.notes.length} 条旧记录。仅在确认后复制为只读历史资料，不补造当时的原文，也不自动合并为研究轮次。`); }
     } catch (cause) { if (mounted.current && generation === legacyGeneration.current) setLegacyNotice(failure(cause)); }
   }

@@ -63,7 +63,9 @@ def transport(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError('network forbidden')
     monkeypatch.setattr(socket.socket, 'connect', forbidden)
-    monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    monkeypatch.setattr(socket, 'getaddrinfo', lambda host, port, **k: [(0, 0, 0, '', (host if host[0].isdigit() else '8.8.8.8', port))])
+    monkeypatch.setattr(chat.model_transport.requests.utils, 'get_environ_proxies', lambda *_: {})
+    monkeypatch.setattr(chat, '_dispatch_config', lambda cfg: cfg)
     monkeypatch.setattr(chat, '_PUBLIC_MODE', False)
     sessions = []
     def install(status, body=b'{}'):
@@ -72,7 +74,7 @@ def transport(monkeypatch):
         adapter = MemoryAdapter(status, body)
         session.mount('https://', adapter)
         session.mount('http://', adapter)
-        monkeypatch.setattr(chat.requests, 'post', session.post)
+        monkeypatch.setattr(chat.model_transport, 'post', lambda *a, endpoint=None, **kw: session.post(*a, **kw))
         sessions.append(session)
         return adapter
     yield install
@@ -145,12 +147,12 @@ def test_local_provider_still_allowed_and_metadata_denied_before_http(transport)
 @pytest.mark.parametrize('stream', [False, True])
 def test_request_explicitly_disables_redirects(transport, monkeypatch, stream):
     adapter = transport(200, b'{}')
-    post = chat.requests.post
+    post = chat.model_transport.post
     def checked_post(*args, **kwargs):
         assert kwargs['allow_redirects'] is False
         assert kwargs['hooks']['response'] is chat._reject_model_redirect
         return post(*args, **kwargs)
-    monkeypatch.setattr(chat.requests, 'post', checked_post)
+    monkeypatch.setattr(chat.model_transport, 'post', checked_post)
     if stream:
         chat._call_llm_stream(CFG, [], False).close()
     else:

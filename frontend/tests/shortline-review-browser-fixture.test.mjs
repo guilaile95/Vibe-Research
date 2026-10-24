@@ -8,7 +8,8 @@ test('actual API goldens retain daily/weekly/missing scopes and unverified autho
 test('fixture accepts only explicit synthetic generation bodies and exact reads',()=>{
  const origin='http://127.0.0.1:1234',f=createShortlineFixture(origin),p='/api/shortline-review/';
  for(const [path,method,body]of [[p+'preview?trade_date='+DAY+'&mode=daily&x=1','GET'],[p+'versions?trade_date='+DAY+'&trade_date='+DAY+'&mode=daily','GET'],[p+'generate','PUT',{}],[p+'generate','POST',{llm:{apiKey:'unexpected'}}]])assert.equal(f.handle(origin+path,method,body).kind,'deny');
- const clean=createShortlineFixture(origin);const body={trade_date:DAY,mode:'daily',bundle_id:golden.daily.preview.bundle_id,generation_id:'f'.repeat(32),llm:{provider:'cli-codex',baseURL:'',apiKey:'',model:'SYNTHETIC_OFFLINE'}};
+ const clean=createShortlineFixture(origin);const body={trade_date:DAY,mode:'daily',bundle_id:golden.daily.preview.bundle_id,generation_id:'f'.repeat(32),llm:{revision:'1',provider:'cli-codex',baseURL:'',apiKey:'',model:'SYNTHETIC_OFFLINE'}};
+ for (const revision of [undefined, '0', '2']) { const stale=createShortlineFixture(origin); assert.equal(stale.handle(origin+p+'generate','POST',{...body,llm:{...body.llm,revision}}).kind,'deny'); }
  const stream=clean.handle(origin+p+'generate','POST',body);assert.equal(stream.kind,'stream');assert.equal(clean.saved.size,0);stream.commit();assert.equal(clean.saved.size,1);assert.equal(clean.handle(origin+p+'version/'+body.generation_id).body.data.fact_verification,'NOT_PERFORMED');
  assert.equal(clean.handle('https://external.invalid'+p+'versions?trade_date='+DAY+'&mode=daily').kind,'deny');
 });

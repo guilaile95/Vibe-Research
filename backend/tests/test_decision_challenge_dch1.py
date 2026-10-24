@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decision_clock_fixtures import historical_decision_server_clock as _historical_decision_server_clock  # noqa: F401
+
 import json
 import sqlite3
 from copy import deepcopy

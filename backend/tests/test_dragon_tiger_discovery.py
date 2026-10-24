@@ -214,7 +214,11 @@ def test_market_route_wraps_read_only_envelope_and_existing_per_security_route_i
     assert response.json()["data"] == envelope
 
     sentinel = {"records": [], "seats": {"buy": [], "sell": []}, "institution": {"buy_amt": 0, "sell_amt": 0, "net_amt": 0}}
-    monkeypatch.setattr(app_module.astock, "dragon_tiger_board", lambda code: sentinel)
+    def strict_board(code, *, strict):
+        assert code == "600001"
+        assert strict is True
+        return sentinel
+    monkeypatch.setattr(app_module.astock, "dragon_tiger_board", strict_board)
     per_security = client.get("/api/dragon-tiger?code=600001")
     assert per_security.status_code == 200
     assert per_security.json()["data"] == sentinel

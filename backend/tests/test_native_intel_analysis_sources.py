@@ -4,7 +4,10 @@ from unittest.mock import patch
 import pytest
 import native_intel_ai as ai
 
-CFG = {"provider": "cli-codex", "model": "fixture"}
+# Cache fixtures need a concrete API model identity. Codex subscription execution
+# reports unknown/default and deliberately cannot reuse derived AI artifacts.
+CFG = {"provider": "openai-compatible", "model": "fixture",
+       "baseURL": "https://model.invalid/v1", "apiKey": "SYNTHETIC", "revision": 1}
 VALID = json.dumps({key: {} if key == "standalone_summaries" else "fixture" for key in ai.REQUIRED_ANALYSIS_KEYS})
 
 
@@ -81,10 +84,27 @@ def test_legacy_cache_not_filled_from_current_candidates():
 
 def test_cached_snapshot_immutable_and_matches_saved_artifact():
     original = run({"items": [item("old")]})
-    with patch.object(ai.store, "find_cached_ai_artifact", return_value={"payload": original, "artifact_id": original["artifact_id"]}):
+    saved_payload = json.dumps(original, sort_keys=True)
+    with patch.object(ai.store, "find_cached_ai_artifact", return_value={"payload": original, "artifact_id": original["artifact_id"]}), patch.object(ai, "invoke_llm_text") as invoke:
         cached = ai.analyze_report({"items": [item("current")]}, cfg=CFG)
     assert cached["input_sources"] == original["input_sources"]
     assert cached["input_sources"]["items"][0]["title"] == "old"
+    assert cached["cached"] is True
+    assert json.dumps(original, sort_keys=True) == saved_payload
+    invoke.assert_not_called()
+
+
+def test_unknown_codex_identity_uses_current_inputs_without_cache():
+    old = {"status": "SUCCESS", "core_trends": "old"}
+    cfg = {"provider": "cli-codex", "model": "legacy-label", "revision": 1}
+    with patch.object(ai.store, "find_cached_ai_artifact", return_value={"payload": old, "artifact_id": "old-id"}) as lookup, patch.object(ai.store, "save_ai_artifact") as save:
+        result = ai.analyze_report({"items": [item("current")]}, cfg=cfg, model_runner=lambda *_: VALID)
+    lookup.assert_not_called()
+    assert result["status"] == "SUCCESS"
+    assert result["cached"] is False
+    assert result["model"] == "unknown/default"
+    assert result["input_sources"]["items"][0]["title"] == "current"
+    assert save.call_args.kwargs["payload"] == result
 
 
 def test_invocation_error_does_not_claim_submitted_or_success():

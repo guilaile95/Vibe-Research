@@ -361,6 +361,6 @@ test("Campaign AI consent preview is model-free and generation serializes exact 
   const llm = { revision: "1", provider: "api", model: "synthetic", baseURL: "https://model.example/v1", apiKey: "synthetic" };
   store["vr-llm"] = JSON.stringify(llm);
   await api.generateCampaignAIDraft("campaign-one", llm, "a".repeat(64));
-  const { revision: _revision, ...wireLlm } = llm;
+  const wireLlm = llm;
   assert.deepEqual(JSON.parse(lastRequest().body!), { llm: wireLlm, confirm_private_context: true, expected_context_fingerprint: "a".repeat(64) });
 });

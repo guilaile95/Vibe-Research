@@ -73,7 +73,7 @@ try {
           const body = req.postDataJSON();
           assert.deepEqual(Object.keys(body).sort(), ['confirm_private_context', 'expected_context_fingerprint', 'llm']);
           assert.equal(body.confirm_private_context, true); assert.equal(body.expected_context_fingerprint, 'a'.repeat(64));
-          assert.deepEqual(body.llm, { provider: 'api-compatible', model: 'synthetic-model', baseURL: 'https://model.example/v1', apiKey: 'synthetic' });
+          assert.deepEqual(body.llm, { revision: '1', provider: 'api-compatible', model: 'synthetic-model', baseURL: 'https://model.example/v1', apiKey: 'synthetic' });
           generations++;
           if (mode === 'held-generate') { held.started.resolve(); await held.release.promise; }
           await route.fulfill({ json: { data: generation(campaign) } });

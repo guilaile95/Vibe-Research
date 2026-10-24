@@ -26,23 +26,16 @@ UNAVAILABLE_CREDENTIAL = "UNAVAILABLE_CREDENTIAL"
 _LOCK = threading.Lock()
 _LOGGER = logging.getLogger("ai_credential")
 
-_API_PROVIDERS = frozenset(
-    {
-        "deepseek",
-        "silicon",
-        "openai",
-        "minimax",
-        "openrouter",
-        "groq",
-        "together",
-        "mimo",
-        "openai-compatible",
-    }
-)
+from ai_providers import API_PROVIDERS as _API_PROVIDERS
+
 
 
 class CredentialStoreError(ValueError):
     """Public credential error; message must never contain an API key."""
+
+
+class UnsafeCredentialURL(CredentialStoreError):
+    """Known schema/revision, but URL cannot be used for authenticated dispatch."""
 
 
 def data_dir() -> Path:
@@ -98,13 +91,8 @@ def _atomic_write(path: Path, data: dict[str, Any]) -> None:
 
 
 def _sanitize_base_url(url: str) -> str:
-    raw = (url or "").strip()
-    if not raw:
-        return ""
-    parsed = urlparse(raw)
-    if parsed.scheme and parsed.netloc:
-        return f"{parsed.scheme}://{parsed.netloc}"
-    return parsed.netloc or parsed.path.split("/")[0]
+    from safe_outputs import safe_url_origin
+    return safe_url_origin(url)
 
 
 def _validate_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -127,6 +115,15 @@ def _validate_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise CredentialStoreError(
             "BAD_ARGUMENT: API Compatible 需要 baseURL、apiKey 和 model"
         )
+    try:
+        parsed = urlparse(base_url)
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError()
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError()
+        parsed.port
+    except ValueError:
+        raise UnsafeCredentialURL("BAD_ARGUMENT: baseURL 不允许凭据或无效地址") from None
     return {
         "schema_version": SCHEMA_VERSION,
         "provider": provider,
@@ -183,6 +180,10 @@ def _state() -> tuple[int, dict[str, Any] | None, str | None]:
         raise CredentialStoreError("CREDENTIAL_STATE_UNAVAILABLE")
     try:
         record = _validate_payload(raw)
+    except UnsafeCredentialURL:
+        # Preserve an already validated revision so the owner can explicitly
+        # replace/clear unsafe legacy configuration. Never make it runnable.
+        return revision, None, raw.get("updated_at")
     except CredentialStoreError:
         raise CredentialStoreError("CREDENTIAL_STATE_UNAVAILABLE") from None
     record["updated_at"] = str(raw.get("updated_at") or "")
@@ -240,8 +241,8 @@ def load() -> dict[str, Any] | None:
     """Return the full record including apiKey. Scheduled AI only."""
     with _LOCK:
         try:
-            _, record, _ = _state()
-            return record
+            revision, record, _ = _state()
+            return {**record, "revision": str(revision)} if record else None
         except CredentialStoreError:
             return None
 
@@ -250,7 +251,7 @@ def scheduled_config() -> tuple[dict[str, Any] | None, str | None]:
     record = load()
     if record is None:
         return None, UNAVAILABLE_CREDENTIAL
-    return {key: record[key] for key in ("provider", "model", "baseURL", "apiKey")}, None
+    return {key: record[key] for key in ("provider", "model", "baseURL", "apiKey", "revision")}, None
 
 
 def status() -> dict[str, Any]:
@@ -261,3 +262,20 @@ def status() -> dict[str, Any]:
             result = _status(None, None)
             result["error"] = "CREDENTIAL_STATE_UNAVAILABLE"
             return result
+
+
+def dispatch_config(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Linearize admission against save/clear in the single backend writer.
+
+    Already admitted calls may finish. Every later model dispatch (including a
+    repair/tool round) revalidates, so clearing does not revive captured keys.
+    Missing revision is intentionally fail-closed for old clients.
+    """
+    expected = _revision(candidate.get("revision"))
+    with _LOCK:
+        revision, record, _ = _state()
+        if record is None or revision != expected:
+            raise CredentialConflict("CREDENTIAL_REVISION_CONFLICT")
+        if any(candidate.get(key, "") != record[key] for key in ("provider", "model", "baseURL", "apiKey")):
+            raise CredentialConflict("CREDENTIAL_REVISION_CONFLICT")
+        return {**candidate, **record, "revision": str(revision)}

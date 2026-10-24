@@ -273,12 +273,61 @@ def _sectors() -> list[dict]:
     return out
 
 
+def observation_session() -> str | None:
+    return trade_calendar.observation_trade_date_at(datetime.now(timezone.utc).isoformat(timespec="seconds"))
+
+
+def overview_cacheable(result: object, session: str | None) -> bool:
+    """One cache qualification for parent and worker, never a status upgrade."""
+    if session is None or not isinstance(result, dict):
+        return False
+    sentiment = result.get("sentiment") or {}
+    if not isinstance(sentiment, dict) or sentiment.get("date") != session or sentiment.get("is_stale"):
+        return False
+    provenance = sentiment.get("emotion_provenance") or {}
+    if not isinstance(provenance, dict) or provenance.get("is_stale"):
+        return False
+    return sentiment.get("status") == "normal" or (
+        sentiment.get("status") == "partial" and sentiment.get("breadth_status") == "normal"
+        and _usable_qualified_pools(provenance.get("pool_observations"))
+    )
+
+
+def completed_overview() -> dict | None:
+    """Read only: never initiate provider work while checking a public cache."""
+    hit = _CACHE.get("overview")
+    session = observation_session()
+    if (hit and len(hit) == 3 and hit[2] == session and time.time() - hit[0] < _TTL
+            and overview_cacheable(hit[1], session)):
+        return copy.deepcopy(hit[1])
+    return None
+
+
+def completed_snapshot_seed() -> tuple | None:
+    """Reuse an already finished full-market observation across spawn boundaries."""
+    if not _A_SHARE_SNAPSHOT_LOCK.acquire(blocking=False):
+        return None
+    try:
+        hit = _CACHE.get("a_share_snapshot")
+        if not hit or time.time() - hit[0] >= _TTL:
+            return None
+        observation = hit[1]
+        observed_at = observation.get("observed_at") if isinstance(observation, dict) else None
+        session = observation_session()
+        if session is None or not observed_at or trade_calendar.observation_trade_date_at(observed_at) != session:
+            return None
+        return copy.deepcopy(hit)
+
+    finally:
+        _A_SHARE_SNAPSHOT_LOCK.release()
+
 def get_overview() -> dict:
     """市场情绪 + 板块资金（含缓存）。资金轮动由前端从 sectors 头尾取。"""
     session = trade_calendar.observation_trade_date_at(datetime.now(timezone.utc).isoformat(timespec="seconds"))
     hit = _CACHE.get("overview")
-    if hit and len(hit) == 3 and hit[2] == session and time.time() - hit[0] < _TTL:
-        return hit[1]
+    if (hit and len(hit) == 3 and hit[2] == session and time.time() - hit[0] < _TTL
+            and overview_cacheable(hit[1], session)):
+        return copy.deepcopy(hit[1])
 
     def build():
         if push2_guard.is_read_only():
@@ -291,13 +340,7 @@ def get_overview() -> dict:
     # Qualified-success partial aggregates remain reusable in read-only views.
     # Real partial/failure must not suppress retries; status is never upgraded.
     result = build()
-    sentiment = result.get("sentiment") or {}
-    provenance = sentiment.get("emotion_provenance") or {}
-    qualified_success = (
-        sentiment.get("status") == "partial" and sentiment.get("breadth_status") == "normal"
-        and _usable_qualified_pools(provenance.get("pool_observations"))
-    )
-    if session is not None and (sentiment.get("status") == "normal" or qualified_success):
+    if overview_cacheable(result, session):
         _CACHE["overview"] = (time.time(), result, session)
     return result
 

@@ -132,7 +132,7 @@ for (const [name, statusReply] of [
   assert.equal(f.state.local.revision, "1");
 });
 
-test("all three actual transports strip only client revision without mutating caller", async () => {
+test("all three actual transports preserve dispatch revision without mutating caller", async () => {
   const api = await import("../src/lib/api.ts");
   const legacy = await import("../src/lib/ndjson.ts");
   const golden = JSON.parse(readFileSync(new URL("./fixtures/credential-model-wire.json", import.meta.url), "utf8"));

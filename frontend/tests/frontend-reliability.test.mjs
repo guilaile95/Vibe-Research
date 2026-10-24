@@ -1,3 +1,4 @@
+import "./helpers/notes-locks.ts";
 import * as debateHandoff from "../src/lib/debateHandoff.ts";
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -276,74 +277,74 @@ test('sidebar denied writes keep session toggles usable and retain the last save
 });
 
 const noteProps = { kind: 'test', title: 'Synthetic research', content: 'Synthetic content' };
-test('failed note save keeps the button retryable and shows an error', () => {
+test('failed note save keeps the button retryable and shows an error', async () => {
   globalThis.localStorage = { ...workingStorage, setItem() { throw Error('quota'); } };
   const h = harness('components/ui/SaveNoteButton.tsx', 'SaveNoteButton');
-  find(h.render(noteProps), 'button').props.onClick();
+  (await find(h.render(noteProps), 'button').props.onClick());
   const tree = h.render(noteProps);
   assert.equal(find(tree, 'button').props.disabled, false);
   assert.match(label(tree), /无法保存/);
   assert.equal(notes.loadNotes().length, 0);
   globalThis.localStorage = workingStorage;
-  find(tree, 'button').props.onClick();
+  (await find(tree, 'button').props.onClick());
   assert.match(label(h.render(noteProps)), /已存入沉淀/);
 });
-test('save state follows the exact content identity', () => {
+test('save state follows the exact content identity', async () => {
   const h = harness('components/ui/SaveNoteButton.tsx', 'SaveNoteButton');
-  find(h.render(noteProps), 'button').props.onClick();
+  (await find(h.render(noteProps), 'button').props.onClick());
   assert.equal(find(h.render(noteProps), 'button').props.disabled, true);
   for (const changed of [{ ...noteProps, title: 'Other' }, { ...noteProps, content: 'Other' }, { ...noteProps, kind: 'Other' }]) {
     assert.equal(find(h.render(changed), 'button').props.disabled, false);
   }
   const next = { ...noteProps, content: 'New research' };
-  find(h.render(next), 'button').props.onClick();
+  (await find(h.render(next), 'button').props.onClick());
   assert.equal(notes.loadNotes().length, 2);
   assert.equal(notes.loadNotes()[0].content, next.content);
 });
-test('note mutations and import reject failed writes and preserve stored records', () => {
-  notes.addNote('test', 'Synthetic', 'Research');
+test('note mutations and import reject failed writes and preserve stored records', async () => {
+  (await notes.addNote('test', 'Synthetic', 'Research'));
   const original = storage.get('vr-notes');
   const id = notes.loadNotes()[0].id;
   globalThis.localStorage = { ...workingStorage, setItem() { throw Error('quota'); }, removeItem() { throw Error('denied'); } };
-  assert.throws(() => notes.addNote('test', 'new', 'new'), /无法保存/);
-  assert.throws(() => notes.deleteNote(id), /无法保存/);
-  assert.throws(() => notes.clearNotes(), /无法清除/);
-  assert.throws(() => notes.importNotesBackupJson(notes.createNotesBackupJson([])), /无法保存/);
+  (await assert.rejects(async () => (await notes.addNote('test', 'new', 'new')), /无法保存/));
+  (await assert.rejects(async () => (await notes.deleteNote(id)), /无法保存/));
+  (await assert.rejects(async () => (await notes.clearNotes()), /无法保存/));
+  (await assert.rejects(async () => (await notes.importNotesBackupJson(notes.createNotesBackupJson([]))), /无法保存/));
   assert.equal(storage.get('vr-notes'), original);
 });
-test('read denial and malformed stored notes render errors and never overwrite unreadable data', () => {
+test('read denial and malformed stored notes render errors and never overwrite unreadable data', async () => {
   for (const raw of ['[null]', '{}', 'broken', '[{"id":"bad"}]', JSON.stringify([{ id:'duplicate', kind:'test', title:'test', content:'test', ts:1 }, { id:'duplicate', kind:'test', title:'test', content:'test', ts:2 }])]) {
     storage.set('vr-notes', raw);
     const h = harness('pages/Notes.tsx', 'Notes');
     const tree = h.render();
     assert.ok(nodes(tree).find(node => node.props?.role === 'alert'));
-    assert.throws(() => notes.addNote('test', 'new', 'new'));
-    assert.throws(() => notes.importNotesBackupJson(notes.createNotesBackupJson([])));
+    (await assert.rejects(async () => (await notes.addNote('test', 'new', 'new'))));
+    (await assert.rejects(async () => (await notes.importNotesBackupJson(notes.createNotesBackupJson([])))));
     assert.equal(storage.get('vr-notes'), raw);
   }
   globalThis.localStorage = { ...workingStorage, getItem() { throw Error('denied'); } };
   assert.match(notes.loadNotesState().error, /无法读取/);
-  assert.throws(() => notes.addNote('test', 'new', 'new'), /无法读取/);
+  (await assert.rejects(async () => (await notes.addNote('test', 'new', 'new')), /无法读取/));
 });
-test('notes UI retains rows after failed delete and clear', () => {
-  notes.addNote('test', 'Synthetic retained record', 'Research');
+test('notes UI retains rows after failed delete and clear', async () => {
+  (await notes.addNote('test', 'Synthetic retained record', 'Research'));
   const h = harness('pages/Notes.tsx', 'Notes');
   globalThis.localStorage = { ...workingStorage, setItem() { throw Error('quota'); }, removeItem() { throw Error('denied'); } };
   let tree = h.render();
-  nodes(tree).find(node => node.props?.title === '删除').props.onClick();
+  (await nodes(tree).find(node => node.props?.title === '删除').props.onClick());
   tree = h.render();
   assert.match(label(tree), /Synthetic retained record/);
   assert.match(label(tree), /无法保存/);
-  find(tree, 'button', '清空').props.onClick();
+  (await find(tree, 'button', '清空').props.onClick());
   tree = h.render();
   assert.match(label(tree), /Synthetic retained record/);
-  assert.match(label(tree), /无法清除/);
+  assert.match(label(tree), /无法保存/);
 });
-test('notes save at capacity reports failure rather than silently evicting user research', () => {
+test('notes save at capacity reports failure rather than silently evicting user research', async () => {
   storage.set('vr-notes', JSON.stringify(Array.from({ length: notes.NOTES_LIMIT }, (_, i) => ({ id: String(i), kind:'test', title:'test', content:'test', ts:i }))));
   const raw = storage.get('vr-notes');
   const h = harness('components/ui/SaveNoteButton.tsx', 'SaveNoteButton');
-  find(h.render(noteProps), 'button').props.onClick();
+  (await find(h.render(noteProps), 'button').props.onClick());
   assert.match(label(h.render(noteProps)), /200 条上限/);
   assert.doesNotMatch(label(h.render(noteProps)), /已存入沉淀/);
   assert.equal(storage.get('vr-notes'), raw);
@@ -363,7 +364,7 @@ test('completed Debate notes retain the analyzed ticker after input edits', asyn
   } } });
   await startDebate(h);
   let tree = h.render(); find(tree, 'input').props.onChange({ target: { value: '000001' } });
-  tree = h.render(); find(tree, 'button', '存入沉淀').props.onClick();
+  tree = h.render(); (await find(tree, 'button', '存入沉淀').props.onClick());
   assert.equal(requested, '600519');
   assert.match(notes.loadNotes()[0].title, /600519/);
   assert.doesNotMatch(notes.loadNotes()[0].title, /000001/);
@@ -407,7 +408,7 @@ test('late successful Debate response cannot overwrite a completed retry or its 
   calls[0].handlers.onError('STALE ERROR');
   calls[0].resolve(); await old;
   const tree = h.render(); assert.doesNotMatch(label(tree), /STALE/);
-  find(tree, 'button', '存入沉淀').props.onClick();
+  (await find(tree, 'button', '存入沉淀').props.onClick());
   assert.match(notes.loadNotes()[0].title, /000001/);
   assert.doesNotMatch(notes.loadNotes()[0].content, /STALE/);
 });
@@ -546,10 +547,10 @@ test('settings backend save failure preserves browser credentials but explicit c
   assert.equal(messages.some(([kind]) => kind === 'success'), false);
 });
 
-test('silent storage no-ops and readback failures cannot claim save/clear success', () => {
+test('silent storage no-ops and readback failures cannot claim save/clear success', async () => {
   globalThis.localStorage = { ...workingStorage, setItem() {} };
   assert.throws(() => llm.saveLlm(dummyConfig), /无法保存/);
-  assert.throws(() => notes.addNote('test', 'test', 'test'), /无法保存/);
+  (await assert.rejects(async () => (await notes.addNote('test', 'test', 'test')), /无法保存/));
   globalThis.localStorage = workingStorage;
   llm.saveLlm(dummyConfig);
   globalThis.localStorage = { ...workingStorage, removeItem() {} };
@@ -598,23 +599,23 @@ test('full-market partial/stale results label retained observations and excluded
 });
 
 test('reflection persistence failure preserves the generated text and allows retry', async () => {
-  notes.addNote('test', 'Synthetic source', 'Source research');
+  (await notes.addNote('test', 'Synthetic source', 'Source research'));
   const h = harness('pages/Notes.tsx', 'Notes', { '@/lib/agents': { reflectStream:async (content, title, handlers) => { handlers.onDelta('Synthetic reflection'); } } });
   find(h.render(), 'button', 'Synthetic source').props.onClick();
   await find(h.render(), 'button', '反思审计').props.onClick();
   globalThis.localStorage = { ...workingStorage, setItem() { throw Error('quota'); } };
-  find(h.render(), 'button', '把审计结果存为新记录').props.onClick();
+  (await find(h.render(), 'button', '把审计结果存为新记录').props.onClick());
   let tree = h.render();
   assert.match(label(tree), /无法保存/); assert.match(label(tree), /Synthetic reflection/);
   assert.equal(find(tree, 'button', '把审计结果存为新记录').props.disabled, false);
   globalThis.localStorage = workingStorage;
-  find(tree, 'button', '把审计结果存为新记录').props.onClick();
+  (await find(tree, 'button', '把审计结果存为新记录').props.onClick());
   tree = h.render();
   assert.match(label(tree), /已存为新记录/);
   assert.equal(notes.loadNotes().length, 2);
 });
 test('leaving Notes aborts reflection and ignores late callbacks', async () => {
-  notes.addNote('test', 'Synthetic source', 'Source research');
+  (await notes.addNote('test', 'Synthetic source', 'Source research'));
   const d = deferred(); let signal, callbacks;
   const h = harness('pages/Notes.tsx', 'Notes', { '@/lib/agents': { reflectStream:(content, title, handlers, s) => { signal = s; callbacks = handlers; return d.promise; } } });
   find(h.render(), 'button', 'Synthetic source').props.onClick();
@@ -625,7 +626,7 @@ test('leaving Notes aborts reflection and ignores late callbacks', async () => {
   assert.doesNotMatch(label(h.render()), /STALE/);
 });
 
-test('candidate research explicitly selects sources, saves tentative notes, and resumes from the same stock context', () => {
+test('candidate research explicitly selects sources, saves tentative notes, and resumes from the same stock context', async () => {
   const record = { id:'synthetic-evidence', subject_type:'stock', subject_id:'600519', deleted:0, claim:'Synthetic uncertainty', source_title:'Synthetic source', source_date:null, source_url:'https://example.com/research', classification:'unknown', confidence:'low' };
   const returnTo = '/candidates/600519?return_to=%2Fscreener%3Fstrategy%3DSWING';
   const props = { code:'600519', records:[record], evidenceStatus:'ready', returnTo, suggestedQuestion:'What should be checked?' };
@@ -643,7 +644,7 @@ test('candidate research explicitly selects sources, saves tentative notes, and 
   assert.equal(ai.props.noteMetadata.sourceLinks[0].url, record.source_url);
   nodes(tree).find(node => node.type === 'textarea' && node.props.placeholder.includes('下次打开')).props.onChange({target:{value:'Check the actual filing'}});
   tree = h.render(props);
-  find(tree, 'button', '保存暂定研究').props.onClick();
+  (await find(tree, 'button', '保存暂定研究').props.onClick());
   tree = h.render(props);
   assert.match(label(tree), /已保存暂定研究/);
   assert.match(label(tree), /Check the actual filing/);
@@ -662,7 +663,7 @@ test('candidate research explicitly selects sources, saves tentative notes, and 
   assert.equal(find(noteTree, 'link', '回到当时的研究位置').props.to, saved.research.returnTo);
 });
 
-test('candidate note save failure stays retryable and never claims a record was saved', () => {
+test('candidate note save failure stays retryable and never claims a record was saved', async () => {
   const h = harness('components/campaign/CandidateResearchNote.tsx', 'CandidateResearchNote');
   const props = {code:'600519', records:[], evidenceStatus:'error', returnTo:'/candidates/600519'};
   let tree = h.render(props);
@@ -670,26 +671,26 @@ test('candidate note save failure stays retryable and never claims a record was 
   nodes(tree).find(node => node.type === 'textarea' && node.props.placeholder.includes('目前')).props.onChange({target:{value:'Tentative user view'}});
   tree = h.render(props);
   globalThis.localStorage = {...workingStorage, setItem(){throw Error('quota');}};
-  find(tree, 'button', '保存暂定研究').props.onClick();
+  (await find(tree, 'button', '保存暂定研究').props.onClick());
   tree = h.render(props);
   assert.match(label(tree), /无法保存/);
   assert.doesNotMatch(label(tree), /已保存暂定研究/);
   assert.equal(notes.loadNotes().length, 0);
   globalThis.localStorage = workingStorage;
-  find(tree, 'button', '保存暂定研究').props.onClick();
+  (await find(tree, 'button', '保存暂定研究').props.onClick());
   assert.equal(notes.loadNotes().length, 1);
 });
 
 test('reflection of a stock-tagged note stays in the filtered research context without becoming a user conclusion', async () => {
   const metadata = {securityCode:'600519', question:'Original question', sourceLinks:[{title:'Synthetic source', url:'https://example.com/source'}], returnTo:'/candidates/600519#candidate-research-note', tentativeView:'User view', nextQuestion:'User next step'};
-  const saved = notes.addNote('暂定研究', 'Stock-tagged note', 'Synthetic user view', metadata)[0];
+  const saved = (await notes.addNote('暂定研究', 'Stock-tagged note', 'Synthetic user view', metadata))[0];
   const params = new URLSearchParams({security_code:'600519', note:saved.id});
   const h = harness('pages/Notes.tsx', 'Notes', {
     'react-router-dom':{useSearchParams:()=>[params,()=>{}], Link:'link'},
     '@/lib/agents':{reflectStream:async (_content, _title, handlers)=>handlers.onDelta('Synthetic AI audit')},
   });
   await find(h.render(), 'button', '反思审计').props.onClick();
-  find(h.render(), 'button', '把审计结果存为新记录').props.onClick();
+  (await find(h.render(), 'button', '把审计结果存为新记录').props.onClick());
   assert.match(label(h.render()), /反思 · Stock-tagged note/);
   const audit = notes.loadNotes()[0];
   assert.equal(audit.kind, '反思审计');
@@ -789,7 +790,7 @@ test('Settings checks live access storage before probing and refreshes cross-tab
 });
 
 
-test('candidate unsaved guard follows only meaningful text, save success, and actual route changes', () => {
+test('candidate unsaved guard follows only meaningful text, save success, and actual route changes', async () => {
   let shouldBlock;
   const blocker = { state: 'unblocked', location: { pathname:'/notes', search:'', hash:'' }, reset() { this.state = 'unblocked'; }, proceed() { this.state = 'proceeding'; } };
   const workspace = harness('pages/CandidateWorkspace.tsx', 'CandidateWorkspace', {
@@ -838,12 +839,12 @@ test('candidate unsaved guard follows only meaningful text, save success, and ac
   assert.equal(unload.prevented, true);
   assert.equal(unload.returnValue, '');
   globalThis.localStorage = {...workingStorage, setItem(){throw Error('quota');}};
-  find(h.render(props), 'button', '保存暂定研究').props.onClick();
+  (await find(h.render(props), 'button', '保存暂定研究').props.onClick());
   h.render(props);
   assert.equal(blocks(), true);
   assert.equal(workspace.hasListener('beforeunload'), true);
   globalThis.localStorage = workingStorage;
-  find(h.render(props), 'button', '保存暂定研究').props.onClick();
+  (await find(h.render(props), 'button', '保存暂定研究').props.onClick());
   h.render(props);
   assert.equal(blocks(), false);
   assert.equal(workspace.hasListener('beforeunload'), false);
@@ -872,7 +873,7 @@ test('candidate unsaved guard follows only meaningful text, save success, and ac
 });
 
 test('failed reflection keeps partial text but cannot reuse previous completion to save', async () => {
-  notes.addNote('test', 'Synthetic source', 'Source research');
+  (await notes.addNote('test', 'Synthetic source', 'Source research'));
   let fail = false;
   const h = harness('pages/Notes.tsx', 'Notes', { '@/lib/agents': { reflectStream:async (_content, _title, handlers) => {
     handlers.onDelta(fail ? 'INCOMPLETE AUDIT' : 'complete audit');
@@ -882,7 +883,7 @@ test('failed reflection keeps partial text but cannot reuse previous completion 
   find(h.render(), 'button', 'Synthetic source').props.onClick();
   await find(h.render(), 'button', '反思审计').props.onClick();
   assert.match(label(h.render()), /未覆盖全文/);
-  find(h.render(), 'button', '把审计结果存为新记录').props.onClick();
+  (await find(h.render(), 'button', '把审计结果存为新记录').props.onClick());
   assert.match(notes.loadNotes().find(n=>n.kind==='反思审计').content, /未覆盖全文/);
   fail = true;
   await nodes(h.render()).find(node => node.type === 'button' && label(node) === '反思审计').props.onClick();

@@ -66,12 +66,25 @@ def _allowed(url: str) -> bool:
         return False
 
 
-def test_ssrf_local_mode():
+def test_ssrf_local_mode(monkeypatch):
+    import socket
+    import model_transport
+    # Endpoint binding now resolves in local mode too; DNS/proxy policy must be
+    # deterministic and offline, not depend on the runner's DNS or proxy.
+    monkeypatch.setattr(model_transport.requests.utils, "get_environ_proxies", lambda url: {})
+    def resolve(host, port, **kwargs):
+        address = "8.8.8.8" if host == "api.deepseek.com" else host
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
+    monkeypatch.setattr(model_transport.socket, "getaddrinfo", resolve)
     assert chat._PUBLIC_MODE is False  # 测试进程未设 VR_API_KEY
     assert _allowed("https://api.deepseek.com") is True
     assert _allowed("http://127.0.0.1:11434") is True   # 本机 Ollama 等，本地放行
     assert _allowed("http://169.254.169.254/latest") is False  # 云元数据，始终挡
     assert _allowed("ftp://evil/x") is False
+    # A familiar provider hostname must not bypass resolved-address validation.
+    monkeypatch.setattr(model_transport.socket, "getaddrinfo", lambda *a, **k: [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 443))])
+    assert _allowed("https://api.deepseek.com") is False
 
 
 def test_ssrf_public_mode_blocks_internal(monkeypatch):

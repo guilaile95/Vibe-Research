@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decision_clock_fixtures import synthetic_execution_clock as _synthetic_execution_clock  # noqa: F401
+
 import concurrent.futures
 import os
 from copy import deepcopy

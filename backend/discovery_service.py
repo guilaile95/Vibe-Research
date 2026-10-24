@@ -20,10 +20,10 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
-import astock
 import market
 import native_intel_service
 import native_intel_store
+import public_data_budget
 import research_data_plane as rdp
 from trade_calendar import OBSERVATION_AUTHORITY_REF, observation_trade_date_at
 
@@ -33,7 +33,7 @@ QUEUE_LIMIT = 12
 QUALIFICATION_LIMIT = 24
 EXCLUDED_LIMIT = 60
 OUTSIDE_CORE_SAMPLE_LIMIT = 5
-QUALIFICATION_WORKERS = 6
+QUALIFICATION_WORKERS = public_data_budget.PUBLIC_DATA_WORKERS
 QUALIFICATION_TIMEOUT_SECONDS = 45.0
 CATALYST_WINDOW_DAYS = 30
 EARLY_LISTING_CALENDAR_DAYS = 90
@@ -45,6 +45,15 @@ _CACHE_LOCK = threading.Lock()
 _CACHE_VALUE: dict[str, Any] | None = None
 _CACHE_MONOTONIC = 0.0
 _LAST_SUCCESSFUL: dict[str, Any] | None = None
+_REFRESH_LOCK = threading.Lock()
+_REFRESH_GENERATION = 0
+# Capacity belongs to the backend, not each refresh. Even injected synchronous
+# providers cannot create an unbounded number of lingering worker threads.
+_QUALIFICATION_EXECUTOR = ThreadPoolExecutor(
+    max_workers=QUALIFICATION_WORKERS, thread_name_prefix="discovery-stage3",
+)
+# One bounded shortlist may queue while the prior workers are being cancelled.
+_QUALIFICATION_SLOTS = threading.BoundedSemaphore(QUALIFICATION_LIMIT + QUALIFICATION_WORKERS)
 
 
 @dataclass(frozen=True)
@@ -135,23 +144,85 @@ def _percentile(values: list[float], fraction: float) -> float | None:
 
 def _default_full_market() -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
+    receipts: list[dict[str, Any]] = []
+    seen_codes: set[str] = set()
     offset = 0
     first: dict[str, Any] | None = None
     while True:
-        page = rdp.query_full_market(latest=True, limit=rdp._MAX_LIMIT, offset=offset)
+        # Resolve latest once. An active-manifest replacement cannot change the
+        # immutable artifact used by any following page.
+        page = rdp.query_full_market(
+            latest=True, limit=rdp._MAX_LIMIT, offset=offset,
+            **({"snapshot_id": first["snapshot_id"]} if first is not None else {}),
+        )
+        if not isinstance(page, dict) or page.get("status") not in {"normal", "partial"}:
+            raise rdp.ResearchDataPlaneUnavailableError("RDP full-market is unavailable")
+        snapshot_id = page.get("snapshot_id")
+        as_of = page.get("as_of")
+        receipt = page.get("replay_receipt")
+        total = page.get("total_rows")
+        page_rows = page.get("rows")
+        if (not isinstance(snapshot_id, str) or not re.fullmatch(r"[0-9a-f]{64}", snapshot_id)
+                or not isinstance(as_of, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", as_of)
+                or type(total) is not int or total < 0 or not isinstance(page_rows, list)
+                or type(page.get("returned_rows")) is not int or page["returned_rows"] != len(page_rows)
+                or not isinstance(page.get("coverage"), dict) or not isinstance(page.get("provenance"), dict)
+                or not isinstance(receipt, dict)):
+            raise rdp.ResearchDataPlaneValidationError("invalid full-market page contract")
+        try:
+            date.fromisoformat(as_of)
+        except ValueError as exc:
+            raise rdp.ResearchDataPlaneValidationError("invalid full-market as_of") from exc
         if first is None:
             first = page
-        rows.extend(page.get("rows") or [])
+        elif any(page.get(key) != first.get(key) for key in (
+                "snapshot_id", "as_of", "total_rows", "coverage", "provenance", "status",
+                "dataset_id", "provider_id", "adjustment")):
+            raise rdp.ResearchDataPlaneValidationError("full-market page identity changed")
+        parameters = receipt.get("parameters")
+        if (receipt.get("snapshot_id") != snapshot_id
+                or receipt.get("artifact_sha256") != page["provenance"].get("artifact_sha256")
+                or receipt.get("query") != "query_full_market"
+                or not isinstance(parameters, dict) or parameters.get("offset") != offset
+                or parameters.get("limit") != rdp._MAX_LIMIT):
+            raise rdp.ResearchDataPlaneValidationError("full-market receipt identity changed")
+        for row in page_rows:
+            code = row.get("code") if isinstance(row, dict) else None
+            if (not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code)
+                    or code in seen_codes):
+                raise rdp.ResearchDataPlaneValidationError("invalid or duplicate full-market security")
+            seen_codes.add(code)
+        rows.extend(page_rows)
+        receipts.append(copy.deepcopy(receipt))
         next_offset = page.get("next_offset")
+        if len(rows) > total:
+            raise rdp.ResearchDataPlaneValidationError("full-market page coverage exceeded")
         if next_offset is None:
+            if len(rows) != total or page.get("next_page") is not None:
+                raise rdp.ResearchDataPlaneValidationError("full-market page coverage incomplete")
             break
-        if not isinstance(next_offset, int) or next_offset <= offset:
+        if (type(next_offset) is not int or not page_rows
+                or next_offset != offset + len(page_rows) or next_offset >= total
+                or page.get("next_page") != {"offset": next_offset, "snapshot_id": snapshot_id}):
             raise rdp.ResearchDataPlaneValidationError("full-market pagination did not progress")
         offset = next_offset
-    result = dict(first or {})
-    result["rows"] = rows
-    result["returned_rows"] = len(rows)
+    result = dict(first)
+    # Each source receipt hashes one bounded response. Do not relabel the first
+    # page's hash as a receipt for this aggregated row collection.
+    result.pop("replay_receipt", None)
+    result.update(rows=rows, returned_rows=len(rows), next_offset=None, next_page=None,
+                  page_receipts=receipts, receipt_scope="PAGED_SOURCE_RESPONSES")
     return result
+
+
+def _default_financials(code: str, *, timeout: float | None = None,
+                        cancel_event: threading.Event | None = None) -> dict[str, Any]:
+    return public_data_budget.run("discovery_financials", code, timeout=timeout, cancel_event=cancel_event)
+
+
+def _default_announcements(code: str, *, timeout: float | None = None,
+                           cancel_event: threading.Event | None = None) -> dict[str, Any]:
+    return public_data_budget.run("discovery_announcements", code, timeout=timeout, cancel_event=cancel_event)
 
 
 def _default_native_intel(codes: list[str]) -> dict[str, Any]:
@@ -171,8 +242,8 @@ DEFAULT_PROVIDERS = DiscoveryProviders(
     full_market=_default_full_market,
     # Stage 3 needs one bounded financial clue fetch, not the three-statement
     # StockData expansion performed by include_health=True.
-    financials=lambda code: astock.financials(code, include_health=False),
-    announcements=lambda code: astock.announcements(code, strict=True, with_coverage=True),
+    financials=_default_financials,
+    announcements=_default_announcements,
     native_intel=_default_native_intel,
 )
 
@@ -243,6 +314,15 @@ def _full_market_rows(
             provenance_refs=[f"research-data-plane:{ref}"],
             reason_code=sorted(temporal_reasons)[0] if temporal_reasons else None,
         )
+        # Preserve the immutable source identity and the exact page-scoped
+        # receipts/coverage rather than only retaining an artifact label.
+        for source_key, dataset_key in (("snapshot_id", "snapshot_id"),
+                                        ("page_receipts", "page_receipts"),
+                                        ("replay_receipt", "replay_receipt"),
+                                        ("receipt_scope", "receipt_scope"),
+                                        ("coverage", "source_coverage")):
+            if source_key in envelope:
+                dataset[dataset_key] = copy.deepcopy(envelope[source_key])
         return envelope, rows, dataset
     except Exception:  # provider boundary: degrade to UNKNOWN instead of failing the whole scan
         dataset = _dataset(
@@ -431,13 +511,43 @@ def _announcement_date(row: dict[str, Any]) -> date | None:
         return None
 
 
-def _qualify_one(code: str, providers: DiscoveryProviders, as_of: date) -> dict[str, Any]:
+def _qualification_error(phase: str, reason: str) -> dict[str, Any]:
+    if phase == "fundamental":
+        return {"status": "ERROR", "clue": None, "source_ref": "astock.financials", "reason_code": reason}
+    return {"status": "ERROR", "count": 0, "latest": None,
+            "source_ref": "astock.announcements", "reason_code": reason}
+
+
+def _qualify_one(code: str, providers: DiscoveryProviders, as_of: date, *,
+                 cancel_event: threading.Event, deadline: float,
+                 progress: dict[str, dict[str, Any]], progress_lock: threading.Lock) -> dict[str, Any]:
+    def cancelled() -> bool:
+        return cancel_event.is_set() or time.monotonic() >= deadline
+
+    def call(provider: Callable) -> Any:
+        if cancelled():
+            raise public_data_budget.PublicDataUnavailable("SOURCE_CANCELLED")
+        if provider is _default_financials or provider is _default_announcements:
+            return provider(code, timeout=min(public_data_budget.TIMEOUT, max(0.0, deadline - time.monotonic())),
+                            cancel_event=cancel_event)
+        # Dependency-injected local providers keep the simple callable contract.
+        # They share bounded admission; no timed-out call can start a next phase.
+        return provider(code)
+
+    def publish(phase: str, result: dict[str, Any]) -> None:
+        with progress_lock:
+            if not cancelled():
+                progress.setdefault(code, {})[phase] = result
+
     try:
-        fundamental = _fundamental_result(providers.financials(code))
-    except Exception:  # provider boundary: expose a fixed state, never raw exception text
-        fundamental = {"status": "ERROR", "clue": None, "source_ref": "astock.financials"}
+        fundamental = _fundamental_result(call(providers.financials))
+    except Exception as exc:  # expose a fixed state, never raw exception text
+        fundamental = _qualification_error("fundamental", exc.code if isinstance(exc, public_data_budget.PublicDataUnavailable) else "PROVIDER_ERROR")
+    publish("fundamental", fundamental)
+    if cancelled():
+        return {"fundamental": fundamental, "announcements": _qualification_error("announcements", "TIMEOUT")}
     try:
-        payload = providers.announcements(code)
+        payload = call(providers.announcements)
         announcements = payload.get("rows", []) if isinstance(payload, dict) else payload or []
         if not isinstance(announcements, list):
             raise ValueError("announcement rows must be a list")
@@ -466,8 +576,9 @@ def _qualify_one(code: str, providers: DiscoveryProviders, as_of: date) -> dict[
             } if recent else None,
             "source_ref": "astock.announcements",
         }
-    except Exception:
-        announcement_result = {"status": "ERROR", "count": 0, "latest": None, "source_ref": "astock.announcements"}
+    except Exception as exc:
+        announcement_result = _qualification_error("announcements", exc.code if isinstance(exc, public_data_budget.PublicDataUnavailable) else "PROVIDER_ERROR")
+    publish("announcements", announcement_result)
     return {"fundamental": fundamental, "announcements": announcement_result}
 
 
@@ -485,30 +596,49 @@ def _qualify(
         intel = {"status": "error", "stats": {}, "terms": [], "reason_code": "PROVIDER_ERROR"}
 
     results: dict[str, dict[str, Any]] = {}
-    executor = ThreadPoolExecutor(max_workers=QUALIFICATION_WORKERS, thread_name_prefix="discovery-stage3")
-    futures = {executor.submit(_qualify_one, code, providers, as_of): code for code in codes}
-    # Provider clients keep their own per-call timeout; this outer cap prevents
-    # one slow shortlist member from blocking the whole Discovery response.
-    done, pending = wait(futures, timeout=QUALIFICATION_TIMEOUT_SECONDS)
+    progress: dict[str, dict[str, Any]] = {}
+    progress_lock = threading.Lock()
+    cancel_event = threading.Event()
+    deadline = time.monotonic() + QUALIFICATION_TIMEOUT_SECONDS
+    futures = {}
+    for code in codes:
+        if not _QUALIFICATION_SLOTS.acquire(blocking=False):
+            results[code] = {phase: _qualification_error(phase, "SOURCE_BUSY")
+                             for phase in ("fundamental", "announcements")}
+            continue
+        try:
+            future = _QUALIFICATION_EXECUTOR.submit(
+                _qualify_one, code, providers, as_of, cancel_event=cancel_event,
+                deadline=deadline, progress=progress, progress_lock=progress_lock,
+            )
+        except Exception:
+            _QUALIFICATION_SLOTS.release()
+            raise
+        future.add_done_callback(lambda _future, slots=_QUALIFICATION_SLOTS: slots.release())
+        futures[future] = code
+    done, pending = wait(futures, timeout=max(0.0, deadline - time.monotonic()))
+    if pending:
+        cancel_event.set()
+        for future in pending:
+            future.cancel()
+        if providers.financials is _default_financials and providers.announcements is _default_announcements:
+            # Default providers are killable processes. Wait for their bounded
+            # kill/reap cleanup, not only the response timeout, before returning.
+            wait(pending, timeout=2.5)
     for future in done:
         code = futures[future]
         try:
             results[code] = future.result()
         except Exception:
+            results[code] = {phase: _qualification_error(phase, "PROVIDER_ERROR")
+                             for phase in ("fundamental", "announcements")}
+    with progress_lock:
+        for future in pending:
+            code = futures[future]
             results[code] = {
-                "fundamental": {"status": "ERROR", "clue": None, "source_ref": "astock.financials"},
-                "announcements": {"status": "ERROR", "count": 0, "latest": None, "source_ref": "astock.announcements"},
+                phase: copy.deepcopy(progress.get(code, {}).get(phase)) or _qualification_error(phase, "TIMEOUT")
+                for phase in ("fundamental", "announcements")
             }
-    for future in pending:
-        future.cancel()
-        code = futures[future]
-        results[code] = {
-            "fundamental": {"status": "ERROR", "clue": None, "source_ref": "astock.financials", "reason_code": "TIMEOUT"},
-            "announcements": {"status": "ERROR", "count": 0, "latest": None, "source_ref": "astock.announcements", "reason_code": "TIMEOUT"},
-        }
-    # ponytail: provider calls are already limited to a 24-stock shortlist; a
-    # shared job runner is only warranted if concurrent manual refreshes become real.
-    executor.shutdown(wait=False, cancel_futures=True)
 
     terms_by_code: dict[str, list[dict[str, Any]]] = {}
     for term in intel.get("terms") or []:
@@ -541,6 +671,7 @@ def _qualify(
         "completed": len(done),
         "timed_out": len(pending),
         "requested": len(codes),
+        "busy": len(codes) - len(futures),
     }
     return results, intel_summary, provider_summary
 
@@ -992,8 +1123,9 @@ def clear_cache() -> None:
 
 
 def get_discovery(*, force_refresh: bool = False) -> dict[str, Any]:
-    global _CACHE_VALUE, _CACHE_MONOTONIC, _LAST_SUCCESSFUL
+    global _CACHE_VALUE, _CACHE_MONOTONIC, _LAST_SUCCESSFUL, _REFRESH_GENERATION
     with _CACHE_LOCK:
+        entered_generation = _REFRESH_GENERATION
         age = time.monotonic() - _CACHE_MONOTONIC
         if not force_refresh and _CACHE_VALUE is not None and age < CACHE_TTL_SECONDS:
             cached = copy.deepcopy(_CACHE_VALUE)
@@ -1001,17 +1133,48 @@ def get_discovery(*, force_refresh: bool = False) -> dict[str, Any]:
             return cached
         previous = copy.deepcopy(_LAST_SUCCESSFUL)
 
-    result = run_discovery()
-    if result["status"] in {"normal", "partial"}:
+    if not _REFRESH_LOCK.acquire(blocking=False):
+        if previous is not None:
+            previous["status"] = "stale"
+            previous["cache"] = {"hit": True, "age_seconds": None, "refresh_in_progress": True}
+            return previous
+        return {
+            "schema_version": SCHEMA_VERSION, "status": "unavailable",
+            "reason_code": "DISCOVERY_REFRESH_IN_PROGRESS", "as_of": None,
+            "fetched_at": None, "last_successful_at": None, "refresh_attempted_at": _iso_now(),
+            "market_context": {"status": "unavailable", "core_universe_count": 0, "sector_count": 0},
+            "funnel": {"core_universe": 0, "cheap_scan_passed": 0, "qualification_candidates": 0,
+                       "queue_items": {strategy: 0 for strategy in STRATEGIES}, "excluded": 0},
+            "datasets": [], "queues": {strategy: [] for strategy in STRATEGIES}, "excluded": [],
+            "limitations": ["Discovery 刷新进行中；本次请求未重复启动上游工作。"],
+            "cache": {"hit": False, "age_seconds": 0, "refresh_in_progress": True},
+        }
+    try:
+        # Another admitted reader may have finished between our cache check and
+        # admission. Coalesce that overlap, including force requests; a force
+        # request arriving after completion still owns a new refresh.
         with _CACHE_LOCK:
-            _CACHE_VALUE = copy.deepcopy(result)
-            _CACHE_MONOTONIC = time.monotonic()
-            _LAST_SUCCESSFUL = copy.deepcopy(result)
+            age = time.monotonic() - _CACHE_MONOTONIC
+            if (_CACHE_VALUE is not None and age < CACHE_TTL_SECONDS
+                    and (not force_refresh or _REFRESH_GENERATION != entered_generation)):
+                cached = copy.deepcopy(_CACHE_VALUE)
+                cached["cache"] = {"hit": True, "age_seconds": round(max(0.0, age), 3)}
+                return cached
+            previous = copy.deepcopy(_LAST_SUCCESSFUL)
+        result = run_discovery()
+        if result["status"] in {"normal", "partial"}:
+            with _CACHE_LOCK:
+                _REFRESH_GENERATION += 1
+                _CACHE_VALUE = copy.deepcopy(result)
+                _CACHE_MONOTONIC = time.monotonic()
+                _LAST_SUCCESSFUL = copy.deepcopy(result)
+            return result
+        if previous is not None:
+            previous["status"] = "stale"
+            previous["refresh_attempted_at"] = result.get("refresh_attempted_at") or result["fetched_at"]
+            previous["limitations"] = [*previous.get("limitations", []), "本次刷新失败；当前展示最后一次成功结果。"]
+            previous["cache"] = {"hit": True, "age_seconds": None, "refresh_failed": True}
+            return previous
         return result
-    if previous is not None:
-        previous["status"] = "stale"
-        previous["refresh_attempted_at"] = result.get("refresh_attempted_at") or result["fetched_at"]
-        previous["limitations"] = [*previous.get("limitations", []), "本次刷新失败；当前展示最后一次成功结果。"]
-        previous["cache"] = {"hit": True, "age_seconds": None, "refresh_failed": True}
-        return previous
-    return result
+    finally:
+        _REFRESH_LOCK.release()

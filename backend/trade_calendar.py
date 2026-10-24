@@ -356,3 +356,35 @@ def next_trade_date(current_trade_date: str) -> Optional[str]:
     if idx >= len(sessions) - 1 or sessions[idx] != current_trade_date:
         return None
     return sessions[idx + 1]
+
+
+def coverage_status(today: date | None = None) -> dict:
+    """Public artifact maintenance metadata, never a guessed future calendar."""
+    current = today if today is not None else _today_shanghai()
+    if not isinstance(current, date) or isinstance(current, datetime):
+        raise ValueError("today must be a calendar date")
+    valid = _load_calendar() is not None
+    remaining = (_SUPPORTED_END - current).days
+    if not valid:
+        state = "INVALID_ARTIFACT"
+    elif current < _SUPPORTED_START:
+        state = "OUT_OF_RANGE"
+    elif remaining < 0:
+        state = "EXPIRED"
+    elif remaining <= 90:
+        state = "EXPIRING"
+    else:
+        state = "SUPPORTED"
+    return {
+        "calendar_id": _CALENDAR_ID,
+        "schema_version": _SCHEMA_VERSION,
+        "as_of_date": current.isoformat(),
+        "supported_start": _SUPPORTED_START.isoformat(),
+        "supported_end": _SUPPORTED_END.isoformat(),
+        "days_until_coverage_end": remaining,
+        "status": state,
+        "future_dates_inferred": False,
+        "maintenance_required": state != "SUPPORTED",
+        "source_policy": _SOURCE_POLICY,
+        "next_action": "VERIFY_SSE_SZSE_OFFICIAL_CALENDAR" if state != "SUPPORTED" else "NONE",
+    }

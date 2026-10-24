@@ -139,7 +139,9 @@ def test_legacy_opening_consumed_until_flat_then_score():
 
 
 def test_same_time_opposite_side_unknown_but_split_buy_supported():
-    bootstrap()
+    # Both same-instant orderings must be solvent at the strict write boundary.
+    # Personal review still cannot infer which side executed first.
+    bootstrap(100)
     trade(); trade("sell", hour=10)
     assert svc.view()["diagnostics"][0]["reason"] == "SAME_INSTANT_ORDER_UNKNOWN"
 
@@ -152,8 +154,20 @@ def test_split_fills_and_flat_denominator():
     assert w["flat"] == 1 and w["closed_count"] == 1 and w["win_rate_excluding_flat"] is None
 
 
-def test_oversell_blocks_fabricated_completion():
-    bootstrap(); trade(); trade("sell", quantity=200, day=22)
+def test_oversell_blocks_fabricated_completion(monkeypatch):
+    bootstrap(); trade()
+    before = trade_ledger_store.list_records(ledger.resolve_db_path())
+    with pytest.raises(ledger.TradeReconciliationRequiredError):
+        trade("sell", quantity=200, day=22)
+    assert trade_ledger_store.list_records(ledger.resolve_db_path()) == before
+    assert svc.view()["closed_episodes"] == []
+
+    # New writes reject oversells. Still exercise the read-side guard for legacy
+    # inconsistent history without bypassing or weakening the write validator.
+    sell = {**before[0], "trade_id": "legacy-oversell", "operation": "sell",
+            "actual_quantity": 200, "executed_at": "2026-07-22T10:00:00+08:00"}
+    events = account_event_store.list_events(ledger.resolve_db_path())
+    monkeypatch.setattr(svc, "_ledger_rows", lambda conn: ([*before, sell], events))
     v = svc.view()
     assert v["closed_episodes"] == []
     assert v["diagnostics"][0]["reason"] == "OVERSELL_OR_MISSING_HISTORY"

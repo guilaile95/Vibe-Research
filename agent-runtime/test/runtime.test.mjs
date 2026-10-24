@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import { AgentRuntime, RuntimeError } from "../src/runtime.mjs";
@@ -21,41 +20,21 @@ function tempDir(t, name) {
   return dir;
 }
 
-test("effective MCP isolation uses the real Codex config and ignores inactive profiles", (t) => {
-  const root = tempDir(t, "vibe-mcp");
-  const codexHome = path.join(root, "codex-home");
-  const cwd = path.join(root, "session");
-  fs.mkdirSync(codexHome, { recursive: true });
-  fs.mkdirSync(cwd, { recursive: true });
-  fs.writeFileSync(path.join(codexHome, "config.toml"), [
-    "[mcp_servers.active]",
-    'url = "https://active.invalid/mcp"',
-    "[profiles.legacy.mcp_servers.dormant]",
-    'url = "https://inactive.invalid/mcp"',
-    "",
-  ].join("\n"));
+// All CLI responses below are injected. No test enumerates real MCP servers.
+const syntheticProbe = async () => ({ status: 0, stdout: "[]" });
 
-  const binary = resolveBundledCodexBinary();
-  const names = effectiveMcpNames({ binary, codexHome, cwd });
+test("effective MCP isolation applies the verified discovery result", async () => {
+  const calls = [];
+  const names = await effectiveMcpNames({ binary: "synthetic", codexHome: "/synthetic/home", cwd: "/synthetic/session",
+    run: async (...args) => { calls.push(args); return { status: 0, stdout: '[{"name":"active"}]' }; } });
   assert.deepEqual(names, ["active"]);
-  const override = mcpDisableOverride(names);
-  assert.match(override, /"active"\s*=\s*\{\s*"enabled"\s*=\s*false\s*\}/);
-  assert.doesNotMatch(override, /dormant/);
-
-  const parsed = spawnSync(binary, ["-c", override, "mcp", "list", "--json"], {
-    cwd,
-    env: engineEnv(codexHome),
-    encoding: "utf8",
-    timeout: 20_000,
-    windowsHide: true,
-  });
-  assert.equal(parsed.status, 0, String(parsed.stderr || parsed.error?.message || "config parse failed"));
-  const servers = JSON.parse(String(parsed.stdout || "[]"));
-  assert.deepEqual(servers.map((item) => [item.name, item.enabled]), [["active", false]]);
+  assert.match(mcpDisableOverride(names), /"active"\s*=\s*\{\s*"enabled"\s*=\s*false\s*\}/);
+  assert.deepEqual(calls[0][1].slice(-3), ["mcp", "list", "--json"]);
+  assert.equal(calls[0][2].timeout, 2000);
 });
 
-test("MCP discovery fails closed when the exact engine cannot prove effective config", () => {
-  assert.throws(
+test("MCP discovery fails closed when the exact engine cannot prove effective config", async () => {
+  await assert.rejects(
     () => effectiveMcpNames({
       binary: "codex",
       codexHome: "C:/tmp/codex-home",
@@ -92,7 +71,7 @@ test("page chat reuses one isolated thread and never creates formal authority st
       },
     };
   };
-  const runtime = new AgentRuntime({ sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot }, codexFactory });
+  const runtime = new AgentRuntime({ probeProcess: syntheticProbe, sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot }, codexFactory });
   t.after(() => runtime.shutdown());
   runtime.status = () => ({ installed: true, authenticated: true, available: true, status: "ready" });
 
@@ -146,7 +125,7 @@ test("history window truncation rejects the hidden old thread and rehydrates vis
   const prompts = [];
   let starts = 0;
   let answers = 0;
-  const runtime = new AgentRuntime({
+  const runtime = new AgentRuntime({ probeProcess: syntheticProbe,
     sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot },
     codexFactory: () => ({
       startThread() {
@@ -187,7 +166,7 @@ test("same-length changed history rejects the hidden old thread", async (t) => {
   const dataRoot = tempDir(t, "vibe-agent-history-digest");
   const prompts = [];
   let starts = 0;
-  const runtime = new AgentRuntime({
+  const runtime = new AgentRuntime({ probeProcess: syntheticProbe,
     sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot },
     codexFactory: () => ({
       startThread() {
@@ -248,11 +227,11 @@ test("runtime restart rehydrates the displayed complete history", async (t) => {
     return runtime;
   };
 
-  const first = ready(new AgentRuntime({ sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot }, codexFactory }));
+  const first = ready(new AgentRuntime({ probeProcess: syntheticProbe, sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot }, codexFactory }));
   await first.chat({ session: "page-restart", message: "TURN_1", context: "价格：100" });
   first.shutdown();
 
-  const second = ready(new AgentRuntime({ sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot }, codexFactory }));
+  const second = ready(new AgentRuntime({ probeProcess: syntheticProbe, sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot }, codexFactory }));
   t.after(() => second.shutdown());
   await second.chat({
     session: "page-restart",
@@ -272,7 +251,7 @@ test("runtime restart rehydrates the displayed complete history", async (t) => {
 test("capacity eviction rehydrates the same session from complete history", async (t) => {
   const dataRoot = tempDir(t, "vibe-agent-eviction");
   const prompts = [];
-  const runtime = new AgentRuntime({
+  const runtime = new AgentRuntime({ probeProcess: syntheticProbe,
     sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot },
     codexFactory: () => ({
       startThread() {
@@ -314,7 +293,7 @@ test("capacity eviction rehydrates the same session from complete history", asyn
 
 test("history limits and message shape fail closed", async (t) => {
   const dataRoot = tempDir(t, "vibe-agent-history-shape");
-  const runtime = new AgentRuntime({ sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot }, codexFactory: () => ({}) });
+  const runtime = new AgentRuntime({ probeProcess: syntheticProbe, sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot }, codexFactory: () => ({}) });
   t.after(() => runtime.shutdown());
   runtime.status = () => ({ installed: true, authenticated: true, available: true, status: "ready" });
 
@@ -332,7 +311,7 @@ test("history limits and message shape fail closed", async (t) => {
 test("any completed tool item fails closed and discards the session", async (t) => {
   const dataRoot = tempDir(t, "vibe-agent-tool-violation");
   let starts = 0;
-  const runtime = new AgentRuntime({
+  const runtime = new AgentRuntime({ probeProcess: syntheticProbe,
     sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot },
     codexFactory: () => ({
       startThread() {
@@ -366,7 +345,7 @@ test("any completed tool item fails closed and discards the session", async (t) 
 test("internal Codex runtime rejects mcp_tool_call with TOOL_SURFACE_VIOLATION", async (t) => {
   const dataRoot = tempDir(t, "vr-agent-runtime-mcp");
 
-  const runtime = new AgentRuntime({
+  const runtime = new AgentRuntime({ probeProcess: syntheticProbe,
     sourceEnv: { ...process.env, VR_DATA_DIR: dataRoot },
     codexFactory: () => ({
       startThread() {
@@ -397,7 +376,7 @@ for (const mode of ["explicit", "disconnect", "deadline", "pre-aborted"]) {
     const external = new AbortController();
     let started;
     const ready = new Promise((resolve) => { started = resolve; });
-    const runtime = new AgentRuntime({
+    const runtime = new AgentRuntime({ probeProcess: syntheticProbe,
       sourceEnv: { ...process.env, VR_DATA_DIR: root },
       codexFactory: () => ({ startThread: () => ({
         async runStreamed(_prompt, { signal }) {

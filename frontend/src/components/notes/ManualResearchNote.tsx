@@ -30,28 +30,29 @@ function ManualResearchNoteForm({ initialCode, disabled, onClose, onSaved }: {
   const baseline = useRef(JSON.stringify(draft));
   const [error, setError] = useState("");
   const saving = useRef(false);
+  const [busy, setBusy] = useState(false);
   const dirty = JSON.stringify(draft) !== baseline.current;
-  const { complete, dialog } = useUnsavedChanges(dirty, false);
+  const { complete, dialog } = useUnsavedChanges(dirty, busy);
   const discardDialog = useRef<HTMLDialogElement>(null);
   const cancelButton = useRef<HTMLButtonElement>(null);
   const change = (key: keyof ManualResearchNoteDraft, value: string) => {
     setDraft(current => ({ ...current, [key]: value }));
     setError("");
   };
-  function save(event: FormEvent) {
+  async function save(event: FormEvent) {
     event.preventDefault();
     if (saving.current || disabled) return;
-    saving.current = true;
+    saving.current = true; setBusy(true);
     setError("");
     try {
       const payload = manualResearchNotePayload(draft);
-      const notes = addNote(payload.kind, payload.title, payload.content, payload.research);
+      const notes = await addNote(payload.kind, payload.title, payload.content, payload.research);
       complete();
       onSaved(notes);
       onClose();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "保存失败，输入已保留，请重试。");
-      saving.current = false;
+      saving.current = false; setBusy(false);
     }
   }
   const stay = () => { discardDialog.current?.close(); cancelButton.current?.focus(); };
@@ -65,7 +66,7 @@ function ManualResearchNoteForm({ initialCode, disabled, onClose, onSaved }: {
         <p className="mt-2 text-sm text-muted-foreground">本次输入尚未保存。已有记录不会被更改。</p>
         <div className="mt-4 flex flex-wrap gap-3">
           <button type="button" autoFocus className={button} onClick={stay}>继续编辑</button>
-          <button type="button" className={button} onClick={() => { complete(); onClose(); }}>放弃本次输入</button>
+          <button type="button" className={button} disabled={busy} onClick={() => { if (!saving.current) { complete(); onClose(); } }}>放弃本次输入</button>
         </div>
       </dialog>
       <div>
@@ -73,6 +74,7 @@ function ManualResearchNoteForm({ initialCode, disabled, onClose, onSaved }: {
         <p className="mt-1 text-sm leading-6 text-muted-foreground">写下资料事实、暂定看法和待核对问题。保存后仍是用户暂定记录，不会自动成为正式证据、投资逻辑或决策。</p>
       </div>
       <form aria-label="新建研究记录" onSubmit={save} className="space-y-4">
+        <fieldset disabled={busy} className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="sm:col-span-2"><label htmlFor="manual-note-title" className="text-sm">记录标题</label>
             <input id="manual-note-title" autoFocus required maxLength={120} className={control} value={draft.title} onChange={event => change("title", event.target.value)} placeholder="这条记录要解决什么问题？" /></div>
@@ -96,6 +98,7 @@ function ManualResearchNoteForm({ initialCode, disabled, onClose, onSaved }: {
           <button type="submit" disabled={disabled} className={`${button} border-primary/30 bg-primary/10 text-primary`}><Save aria-hidden="true" className="h-4 w-4" />保存研究记录</button>
           <button ref={cancelButton} type="button" className={button} onClick={() => { if (dirty) discardDialog.current?.showModal(); else onClose(); }}>取消</button>
         </div>
+        </fieldset>
       </form>
     </GlassCard>
   );

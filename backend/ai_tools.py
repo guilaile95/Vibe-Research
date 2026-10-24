@@ -13,6 +13,8 @@ chat.py / mcp_server.py / debate.py 共用本模块，新增工具只需改这�
 
 from __future__ import annotations
 
+from safe_outputs import public_error, safe_tool_data
+
 import math
 from datetime import date, datetime, timezone
 from urllib.parse import urlsplit
@@ -565,16 +567,16 @@ def exec_tool(name: str, args: dict):
     """执行工具，返回可序列化结果（失败返回 error 字段，不抛）。"""
     fn = _HANDLERS.get(name)
     if fn is None:
-        return {"error": f"未知工具 {name}"}
+        return {"error": "未知工具"}
     try:
-        return fn(args or {})
+        return safe_tool_data(fn(args or {}))
     except gstock.SearchAmbiguous:
         return {"error": gstock.SEARCH_AMBIGUOUS_MESSAGE}
     except gstock.SearchUnavailable:
         return {"error": gstock.SEARCH_UNAVAILABLE_MESSAGE}
-    except astock.DependencyMissing as e:
-        return {"error": str(e)}
-    except KeyError as e:
-        return {"error": f"{name} 缺少必填参数 {e}"}
-    except Exception as e:  # noqa: BLE001 — 工具错误回喂给模型，不中断循环
-        return {"error": f"{name} 执行失败：{e}"}
+    except astock.DependencyMissing:
+        return {"error": "数据源依赖不可用"}
+    except KeyError:
+        return {"error": "缺少必填参数"}
+    except Exception:  # noqa: BLE001 — 工具错误回喂给模型，不中断循环
+        return {"error": public_error()}

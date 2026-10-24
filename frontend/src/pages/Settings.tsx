@@ -147,7 +147,7 @@ export function Settings() {
       toast.error("请选择 Codex Subscription");
       return;
     }
-    if (m.provider === "cli-codex" && !runtimeStatus?.available) {
+    if (m.provider === "cli-codex" && !(runtimeStatus?.dispatch_available ?? runtimeStatus?.authenticated)) {
       toast.error("Codex Subscription 尚未连接，请先完成登录");
       return;
     }
@@ -255,11 +255,11 @@ export function Settings() {
               <span className="text-muted-foreground/60"> Agent 只能接收当前页面上下文，没有 Shell、磁盘读取、网页搜索、MCP 或正式写权限。</span>
             </p>
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/20 p-3 text-xs">
-              <span className={runtimeStatus?.available ? "text-success" : "text-muted-foreground"}>
+              <span className={runtimeStatus?.authenticated ? "text-success" : "text-muted-foreground"}>
                 Runtime：{runtimeStatus?.runtime || "Codex Subscription"} · {
                   runtimeStatus?.auth_kind === "api_key" ? "当前为 API key 登录，订阅接入需要 ChatGPT 登录" :
                   runtimeStatus?.status === "probe_failed" ? "登录状态检测未完成，请重试（现有登录不会被清除）" :
-                  runtimeStatus?.status === "ready" ? "已连接" :
+                  (runtimeStatus?.status === "authenticated_unprobed" || runtimeStatus?.status === "ready") ? "已登录 · 模型连通性未验证" :
                   runtimeStatus?.status === "login_pending" ? "等待登录" :
                   runtimeStatus?.status === "login_failed" ? "登录未完成" :
                   runtimeStatus?.status === "not_authenticated" ? "未连接" : "Runtime 未启动"
@@ -275,7 +275,7 @@ export function Settings() {
                 {runtimeBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
                 检查
               </button>
-              {!runtimeStatus?.available && runtimeStatus?.status !== "login_pending" && (
+              {!runtimeStatus?.authenticated && runtimeStatus?.status !== "login_pending" && (
                 <button
                   type="button"
                   onClick={() => void loginCodex()}
