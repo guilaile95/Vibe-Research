@@ -311,9 +311,9 @@ export function validateResearchRound(value: unknown): ResearchRound {
   return result;
 }
 /** All accepted rounds must belong to exactly one complete, linear same-security chain. */
-export function validateResearchChains(questions: readonly ResearchQuestion[], rounds: readonly ResearchRound[]): void {
-  const qs = new Map(questions.map(question => [question.id, validateResearchQuestion(question)]));
-  const rs = new Map(rounds.map(round => [round.id, validateResearchRound(round)]));
+export function validateResearchChains(questions: readonly ResearchQuestion[], rounds: readonly ResearchRound[]): { questions: ResearchQuestion[]; rounds: ResearchRound[] } {
+  const qs = new Map(questions.map(value => { const question = validateResearchQuestion(value); return [question.id, question]; }));
+  const rs = new Map(rounds.map(value => { const round = validateResearchRound(value); return [round.id, round]; }));
   if (qs.size !== questions.length || rs.size !== rounds.length) fail('研究备份有重复身份');
   const versions = new Map<string, string>();
   for (const round of rs.values()) for (const material of round.materials) {
@@ -343,6 +343,8 @@ export function validateResearchChains(questions: readonly ResearchQuestion[], r
     if (question.revision < count || canonicalJson([...processed].sort()) !== canonicalJson([...question.reviewedMaterialKeys].sort())) fail('研究链头、版本或复核基线不匹配');
   }
   if (visited.size !== rs.size) fail('备份含未接入完整研究链的孤立轮次');
+  // Return the fully validated records so callers need not repeat expensive material validation.
+  return { questions: [...qs.values()], rounds: [...rs.values()] };
 }
 export function parseLegacyResearchNotes(raw: string | null): LegacyResearchNote[] {
   let parsed: unknown;

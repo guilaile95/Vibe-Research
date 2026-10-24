@@ -214,3 +214,42 @@ def test_screener_full_market_wrapper_keeps_query_validation_distinct(tmp_path, 
             root=root,
             filters=[{"metric": "return_5d", "operator": "gt", "value": 10**400}],
         )
+
+
+def test_full_market_materializes_one_request_local_cross_section(tmp_path, monkeypatch):
+    root = tmp_path / 'rdp'
+    rdp.import_csv(_write_fixture(tmp_path), root=root, imported_at='2026-03-08T00:00:00Z')
+    original = rdp.duckdb.connect
+    statements = []
+    connections = []
+    class TracedConnection:
+        def __init__(self, connection):
+            self.connection = connection
+            self.closed = False
+        def execute(self, sql, *args, **kwargs):
+            statements.append(sql)
+            return self.connection.execute(sql, *args, **kwargs)
+        def close(self):
+            self.closed = True
+            self.connection.close()
+    def connect(*args, **kwargs):
+        proxy = TracedConnection(original(*args, **kwargs))
+        connections.append(proxy)
+        return proxy
+    monkeypatch.setattr(rdp.duckdb, 'connect', connect)
+    first = rdp.query_full_market(root=root, limit=1, filters=[{'metric':'latest_close','operator':'gt','value':20}])
+    assert first['returned_rows'] == 1
+    assert first['total_rows'] == 2
+    assert first['coverage']['universe_count'] == 3
+    assert sum('ROW_NUMBER() OVER' in sql for sql in statements) == 1
+    assert sum('read_parquet(?)' in sql for sql in statements) == 3  # validation + target + computation
+    assert all(c.closed for c in connections)
+    # Another call must recompute and revalidate, not reuse an unchecked cache.
+    statements.clear()
+    second = rdp.query_full_market(root=root, limit=1, offset=1, snapshot_id=first['snapshot_id'],
+                                  filters=[{'metric':'latest_close','operator':'gt','value':20}])
+    assert second['rows'][0]['code'] != first['rows'][0]['code']
+    assert second['replay_receipt']['parameters']['offset'] == 1
+    assert sum('ROW_NUMBER() OVER' in sql for sql in statements) == 1
+    assert sum('read_parquet(?)' in sql for sql in statements) == 3
+    assert all(c.closed for c in connections)

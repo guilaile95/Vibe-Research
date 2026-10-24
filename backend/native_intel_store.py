@@ -770,180 +770,222 @@ def get_item_rank_state(
     with _LOCK:
         try:
             with _connect(path) as conn:
-                item = conn.execute(
-                    """
-                    SELECT i.item_id, i.source_id, i.first_seen_at, i.last_seen_at,
-                           i.observation_count, s.has_real_rank, s.source_type,
-                           s.name AS source_name, s.enabled, s.deleted_at, s.re_enabled_at,
-                           s.re_enabled_after_run_id
-                    FROM intel_items i
-                    LEFT JOIN intel_sources s ON s.source_id = i.source_id
-                    WHERE i.item_id = ?
-                    """,
-                    (item_id,),
-                ).fetchone()
-                if item is None:
-                    return {}
-                has_real_rank = bool(item["has_real_rank"])
-                source_id = str(item["source_id"])
-                # 严格按 (item_id, source_id) 双重限定，杜绝跨平台 rank 污染
-                observations = [
-                    {"observed_at": r["observed_at"], "rank": int(r["rank"])}
-                    for r in conn.execute(
-                        """
-                        SELECT observed_at, rank FROM intel_observations
-                        WHERE item_id = ? AND source_id = ? AND rank IS NOT NULL
-                        ORDER BY observed_at DESC, obs_id DESC LIMIT ?
-                        """,
-                        (item_id, source_id, -1 if include_history else 2),
-                    ).fetchall()
-                ]
-                observations.reverse()
-                result: dict[str, Any] = {
-                    "item_id": int(item["item_id"]),
-                    "source_id": source_id,
-                    "source_name": item["source_name"],
-                    "source_type": item["source_type"],
-                    "has_real_rank": has_real_rank,
-                    "first_seen_at": item["first_seen_at"],
-                    "last_seen_at": item["last_seen_at"],
-                    "observation_count": int(item["observation_count"] or 0),
-                    "observations": observations,
-                }
-
-                last_run_row = conn.execute(
-                    """
-                    SELECT sr.run_id, sr.status, sr.error_kind, r.started_at
-                    FROM intel_source_runs sr
-                    JOIN intel_fetch_runs r ON r.run_id = sr.run_id
-                    WHERE sr.source_id = ?
-                    ORDER BY sr.rowid DESC
-                    LIMIT 1
-                    """,
-                    (source_id,),
-                ).fetchone()
-                last_run = dict(last_run_row) if last_run_row else None
-                result["last_run_id"] = last_run["run_id"] if last_run else None
-
-                # 1. 停用 / 删除：状态必须显式降级为 DISABLED，绝不伪装为 ON_LIST / OFF_LIST
-                is_disabled = (
-                    item["enabled"] is None
-                    or not bool(item["enabled"])
-                    or item["deleted_at"] is not None
-                )
-                if is_disabled:
-                    result["current_state"] = ITEM_STATE_DISABLED
-                    result["current_rank"] = observations[-1]["rank"] if observations else None
-                    result["previous_rank"] = (
-                        observations[-2]["rank"] if len(observations) >= 2 else None
-                    )
-                    result["rank_delta"] = (
-                        result["previous_rank"] - result["current_rank"]
-                        if result["current_rank"] is not None and result["previous_rank"] is not None
-                        else None
-                    )
-                    return result
-
-                if not has_real_rank:
-                    result["current_state"] = ITEM_STATE_NO_RANK_SEMANTICS
-                    result["current_rank"] = None
-                    result["previous_rank"] = None
-                    result["rank_delta"] = None
-                    result["last_run_id"] = None
-                    return result
-
-                # 2. 重新启用：在新的成功抓取发生前，必须保持 UNKNOWN，不得由旧 run 恢复为 ON_LIST
-                re_after = item["re_enabled_after_run_id"]
-                if re_after is not None:
-                    if last_run is None or last_run["run_id"] == re_after:
-                        result["current_state"] = ITEM_STATE_UNKNOWN
-                        result["current_rank"] = observations[-1]["rank"] if observations else None
-                        result["previous_rank"] = (
-                            observations[-2]["rank"] if len(observations) >= 2 else None
-                        )
-                        result["rank_delta"] = (
-                            result["previous_rank"] - result["current_rank"]
-                            if result["current_rank"] is not None and result["previous_rank"] is not None
-                            else None
-                        )
-                        return result
-
-                last_successful = (
-                    last_run is not None
-                    and last_run["status"] in (SOURCE_RUN_OK, SOURCE_RUN_EMPTY)
-                )
-                if not last_successful:
-                    # 从未抓取成功，或最近一次失败：现状未知，保留最后真实排名
-                    result["current_state"] = ITEM_STATE_UNKNOWN
-                    result["current_rank"] = observations[-1]["rank"] if observations else None
-                    result["previous_rank"] = (
-                        observations[-2]["rank"] if len(observations) >= 2 else None
-                    )
-                    result["rank_delta"] = (
-                        result["previous_rank"] - result["current_rank"]
-                        if result["current_rank"] is not None and result["previous_rank"] is not None
-                        else None
-                    )
-                    return result
-
-                # 3. 数据时效（Freshness / Stale 检查）：超过时效窗口的数据必须标记为 STALE，不得伪造实时在榜
-                is_stale = False
-                if last_run and last_run.get("started_at"):
-                    try:
-                        started_dt = datetime.fromisoformat(
-                            str(last_run["started_at"]).replace("Z", "+00:00")
-                        )
-                        if (now or datetime.now(timezone.utc)) - started_dt > timedelta(hours=stale_after_hours):
-                            is_stale = True
-                    except ValueError:
-                        is_stale = True
-
-                if is_stale:
-                    result["current_state"] = ITEM_STATE_STALE
-                    result["current_rank"] = observations[-1]["rank"] if observations else None
-                    result["previous_rank"] = (
-                        observations[-2]["rank"] if len(observations) >= 2 else None
-                    )
-                    result["rank_delta"] = (
-                        result["previous_rank"] - result["current_rank"]
-                        if result["current_rank"] is not None and result["previous_rank"] is not None
-                        else None
-                    )
-                    return result
-
-                present = False
-                if last_run is not None:
-                    seen = conn.execute(
-                        "SELECT 1 FROM intel_observations WHERE item_id = ? AND source_id = ? AND run_id = ?",
-                        (item_id, source_id, last_run["run_id"]),
-                    ).fetchone()
-                    present = seen is not None
-                current_rank = None
-                if present and last_run is not None:
-                    row = conn.execute(
-                        """
-                        SELECT rank FROM intel_observations
-                        WHERE item_id = ? AND source_id = ? AND run_id = ? AND rank IS NOT NULL
-                        ORDER BY observed_at DESC, obs_id DESC LIMIT 1
-                        """,
-                        (item_id, source_id, last_run["run_id"]),
-                    ).fetchone()
-                    current_rank = int(row["rank"]) if row and row["rank"] is not None else None
-                previous_rank = observations[-2]["rank"] if len(observations) >= 2 else None
-                if current_rank is None:
-                    current_rank = observations[-1]["rank"] if observations else None
-                    previous_rank = observations[-2]["rank"] if len(observations) >= 2 else None
-                result["current_state"] = ITEM_STATE_ON_LIST if present else ITEM_STATE_OFF_LIST
-                result["current_rank"] = current_rank
-                result["previous_rank"] = previous_rank
-                result["rank_delta"] = (
-                    previous_rank - current_rank
-                    if current_rank is not None and previous_rank is not None
-                    else None
-                )
-                return result
+                return _item_rank_state(conn, item_id, stale_after_hours=stale_after_hours,
+                                        include_history=include_history, now=now)
         except sqlite3.DatabaseError as e:
             raise NativeIntelStoreError() from e
+
+
+def get_item_rank_states(
+    item_ids: list[int],
+    db_path: str | Path | None = None,
+    *,
+    stale_after_hours: int = STALE_AFTER_HOURS,
+    include_history: bool = True,
+    now: datetime | None = None,
+) -> dict[int, dict[str, Any]]:
+    """Derive the same bounded cohort on one initialized SQLite connection.
+
+    All requested histories retain the single-item validation/error behavior.
+    No skipped unselected history, persistent cache, or source identity shortcut.
+    """
+    if len(item_ids) > 500:
+        raise ValueError("rank cohort exceeds 500 items")
+    if not item_ids:
+        return {}
+    path = Path(db_path) if db_path else get_default_db_path()
+    initialize_store(path)
+    with _LOCK:
+        try:
+            with _connect(path) as conn:
+                return {item_id: _item_rank_state(conn, item_id,
+                            stale_after_hours=stale_after_hours,
+                            include_history=include_history, now=now)
+                        for item_id in item_ids}
+        except sqlite3.DatabaseError as e:
+            raise NativeIntelStoreError() from e
+
+
+def _item_rank_state(
+    conn: sqlite3.Connection,
+    item_id: int,
+    *,
+    stale_after_hours: int,
+    include_history: bool,
+    now: datetime | None,
+) -> dict[str, Any]:
+    item = conn.execute(
+        """
+        SELECT i.item_id, i.source_id, i.first_seen_at, i.last_seen_at,
+               i.observation_count, s.has_real_rank, s.source_type,
+               s.name AS source_name, s.enabled, s.deleted_at, s.re_enabled_at,
+               s.re_enabled_after_run_id
+        FROM intel_items i
+        LEFT JOIN intel_sources s ON s.source_id = i.source_id
+        WHERE i.item_id = ?
+        """,
+        (item_id,),
+    ).fetchone()
+    if item is None:
+        return {}
+    has_real_rank = bool(item["has_real_rank"])
+    source_id = str(item["source_id"])
+    # 严格按 (item_id, source_id) 双重限定，杜绝跨平台 rank 污染
+    observations = [
+        {"observed_at": r["observed_at"], "rank": int(r["rank"])}
+        for r in conn.execute(
+            """
+            SELECT observed_at, rank FROM intel_observations
+            WHERE item_id = ? AND source_id = ? AND rank IS NOT NULL
+            ORDER BY observed_at DESC, obs_id DESC LIMIT ?
+            """,
+            (item_id, source_id, -1 if include_history else 2),
+        ).fetchall()
+    ]
+    observations.reverse()
+    result: dict[str, Any] = {
+        "item_id": int(item["item_id"]),
+        "source_id": source_id,
+        "source_name": item["source_name"],
+        "source_type": item["source_type"],
+        "has_real_rank": has_real_rank,
+        "first_seen_at": item["first_seen_at"],
+        "last_seen_at": item["last_seen_at"],
+        "observation_count": int(item["observation_count"] or 0),
+        "observations": observations,
+    }
+
+    last_run_row = conn.execute(
+        """
+        SELECT sr.run_id, sr.status, sr.error_kind, r.started_at
+        FROM intel_source_runs sr
+        JOIN intel_fetch_runs r ON r.run_id = sr.run_id
+        WHERE sr.source_id = ?
+        ORDER BY sr.rowid DESC
+        LIMIT 1
+        """,
+        (source_id,),
+    ).fetchone()
+    last_run = dict(last_run_row) if last_run_row else None
+    result["last_run_id"] = last_run["run_id"] if last_run else None
+
+    # 1. 停用 / 删除：状态必须显式降级为 DISABLED，绝不伪装为 ON_LIST / OFF_LIST
+    is_disabled = (
+        item["enabled"] is None
+        or not bool(item["enabled"])
+        or item["deleted_at"] is not None
+    )
+    if is_disabled:
+        result["current_state"] = ITEM_STATE_DISABLED
+        result["current_rank"] = observations[-1]["rank"] if observations else None
+        result["previous_rank"] = (
+            observations[-2]["rank"] if len(observations) >= 2 else None
+        )
+        result["rank_delta"] = (
+            result["previous_rank"] - result["current_rank"]
+            if result["current_rank"] is not None and result["previous_rank"] is not None
+            else None
+        )
+        return result
+
+    if not has_real_rank:
+        result["current_state"] = ITEM_STATE_NO_RANK_SEMANTICS
+        result["current_rank"] = None
+        result["previous_rank"] = None
+        result["rank_delta"] = None
+        result["last_run_id"] = None
+        return result
+
+    # 2. 重新启用：在新的成功抓取发生前，必须保持 UNKNOWN，不得由旧 run 恢复为 ON_LIST
+    re_after = item["re_enabled_after_run_id"]
+    if re_after is not None:
+        if last_run is None or last_run["run_id"] == re_after:
+            result["current_state"] = ITEM_STATE_UNKNOWN
+            result["current_rank"] = observations[-1]["rank"] if observations else None
+            result["previous_rank"] = (
+                observations[-2]["rank"] if len(observations) >= 2 else None
+            )
+            result["rank_delta"] = (
+                result["previous_rank"] - result["current_rank"]
+                if result["current_rank"] is not None and result["previous_rank"] is not None
+                else None
+            )
+            return result
+
+    last_successful = (
+        last_run is not None
+        and last_run["status"] in (SOURCE_RUN_OK, SOURCE_RUN_EMPTY)
+    )
+    if not last_successful:
+        # 从未抓取成功，或最近一次失败：现状未知，保留最后真实排名
+        result["current_state"] = ITEM_STATE_UNKNOWN
+        result["current_rank"] = observations[-1]["rank"] if observations else None
+        result["previous_rank"] = (
+            observations[-2]["rank"] if len(observations) >= 2 else None
+        )
+        result["rank_delta"] = (
+            result["previous_rank"] - result["current_rank"]
+            if result["current_rank"] is not None and result["previous_rank"] is not None
+            else None
+        )
+        return result
+
+    # 3. 数据时效（Freshness / Stale 检查）：超过时效窗口的数据必须标记为 STALE，不得伪造实时在榜
+    is_stale = False
+    if last_run and last_run.get("started_at"):
+        try:
+            started_dt = datetime.fromisoformat(
+                str(last_run["started_at"]).replace("Z", "+00:00")
+            )
+            if (now or datetime.now(timezone.utc)) - started_dt > timedelta(hours=stale_after_hours):
+                is_stale = True
+        except ValueError:
+            is_stale = True
+
+    if is_stale:
+        result["current_state"] = ITEM_STATE_STALE
+        result["current_rank"] = observations[-1]["rank"] if observations else None
+        result["previous_rank"] = (
+            observations[-2]["rank"] if len(observations) >= 2 else None
+        )
+        result["rank_delta"] = (
+            result["previous_rank"] - result["current_rank"]
+            if result["current_rank"] is not None and result["previous_rank"] is not None
+            else None
+        )
+        return result
+
+    present = False
+    if last_run is not None:
+        seen = conn.execute(
+            "SELECT 1 FROM intel_observations WHERE item_id = ? AND source_id = ? AND run_id = ?",
+            (item_id, source_id, last_run["run_id"]),
+        ).fetchone()
+        present = seen is not None
+    current_rank = None
+    if present and last_run is not None:
+        row = conn.execute(
+            """
+            SELECT rank FROM intel_observations
+            WHERE item_id = ? AND source_id = ? AND run_id = ? AND rank IS NOT NULL
+            ORDER BY observed_at DESC, obs_id DESC LIMIT 1
+            """,
+            (item_id, source_id, last_run["run_id"]),
+        ).fetchone()
+        current_rank = int(row["rank"]) if row and row["rank"] is not None else None
+    previous_rank = observations[-2]["rank"] if len(observations) >= 2 else None
+    if current_rank is None:
+        current_rank = observations[-1]["rank"] if observations else None
+        previous_rank = observations[-2]["rank"] if len(observations) >= 2 else None
+    result["current_state"] = ITEM_STATE_ON_LIST if present else ITEM_STATE_OFF_LIST
+    result["current_rank"] = current_rank
+    result["previous_rank"] = previous_rank
+    result["rank_delta"] = (
+        previous_rank - current_rank
+        if current_rank is not None and previous_rank is not None
+        else None
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------

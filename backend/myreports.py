@@ -1297,9 +1297,10 @@ def build_chat_report_context(
     hit_limit_reached = len(hits) >= CHAT_REPORT_HIT_LIMIT
     reports = {report["id"]: report for report in _load_index_raw() if report.get("id") in selected_set} if selected else {}
     try:
-        statuses = fulltext.status_map(REPORTS_DIR, list(reports.values()), verify_source=True)
+        statuses, verified_hits = fulltext.qualify_search_hits(REPORTS_DIR, list(reports.values()), hits)
     except fulltext.ReportTextIndexCorruptedError:
         statuses = {rid: {"text_index_status": fulltext.STATUS_ERROR} for rid in reports}
+        verified_hits = []
     # Recheck immediately before model-context construction: hits can outlive
     # their original file or index generation. Invalidated hits consume no budget.
     rejected = set()
@@ -1314,10 +1315,6 @@ def build_chat_report_context(
             current_hits.append(hit)
     # The source file may be unchanged while a reindex corrects extraction.
     # Recheck exact supplied chunks, not wall-clock extraction timestamps.
-    try:
-        verified_hits = fulltext.current_search_hits(REPORTS_DIR, current_hits)
-    except fulltext.ReportTextIndexCorruptedError:
-        verified_hits = []
     verified_ids = {id(hit) for hit in verified_hits}
     rejected.update(hit["report_id"] for hit in current_hits if id(hit) not in verified_ids)
     current_hits = verified_hits

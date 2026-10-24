@@ -33,10 +33,8 @@ export default defineConfig(async ({ mode }) => {
           manualChunks(id) {
             const normalized = id.replace(/\\/g, "/");
 
-            // 板块研究数据体量大：按路径拆到独立 chunk（含 Windows 路径）
-            if (normalized.includes("/src/data/sectorResearch")) {
-              return "sector-research";
-            }
+            // Preserve sector content dynamic-import boundaries. Grouping all sector
+            // modules here makes the synchronous metadata import eagerly load every body.
 
             if (!normalized.includes("/node_modules/")) {
               return;

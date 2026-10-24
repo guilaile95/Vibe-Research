@@ -1054,6 +1054,11 @@ def trending(
 
     prev_titles = {r["title_key"] for r in prev_rows}
     has_rank_sources = store.any_source_has_real_rank(target)
+    # Retain full-cohort rank derivation and failure semantics, while avoiding
+    # one schema initialization and two SQLite connections per item.
+    rank_states = store.get_item_rank_states(
+        [int(row["item_id"]) for row in current_rows if row.get("has_real_rank")], target,
+    )
     items: list[dict[str, Any]] = []
     for row in current_rows:
         entry = {
@@ -1062,7 +1067,7 @@ def trending(
         }
         if row.get("has_real_rank"):
             # 热榜条目：附真实当前/上次排名与 delta（观测推导，非伪造）
-            state = store.get_item_rank_state(int(row["item_id"]), target)
+            state = rank_states[int(row["item_id"])]
             entry.update(
                 {
                     "rank": state.get("current_rank"),
@@ -1666,6 +1671,8 @@ def status(path: str | None = None) -> dict[str, Any]:
     )
     health = store.get_source_health(target)
     item_count = store.count_items(target)
+    directory_size = store.get_security_directory_size(target)
+    config = store.get_native_intel_config(target)
 
     failing = [h for h in health if h["last_status"] == store.SOURCE_RUN_FAILED]
     never_run = [h for h in health if h["run_count"] == 0]
@@ -1699,8 +1706,8 @@ def status(path: str | None = None) -> dict[str, Any]:
         },
         "source_health": health,
         "directory": {
-            "status": STATUS_NORMAL if store.get_security_directory_size(target) else STATUS_UNAVAILABLE,
-            "size": store.get_security_directory_size(target),
+            "status": STATUS_NORMAL if directory_size else STATUS_UNAVAILABLE,
+            "size": directory_size,
             "synced_at": store.get_meta("directory_synced_at", target),
             "note": "按证券查询并缓存名称/行业，不阻塞页面同步全市场目录",
         },
@@ -1710,35 +1717,35 @@ def status(path: str | None = None) -> dict[str, Any]:
             "semantics": "RSS 源不提供真实排名；rank / rank_history 恒为空，不补 0",
         },
         "freshness": {
-            "enabled": bool(store.get_native_intel_config(target).get("rss_freshness_enabled")),
-            "global_max_age_days": int(store.get_native_intel_config(target).get("rss_global_max_age_days", 1)),
+            "enabled": bool(config.get("rss_freshness_enabled")),
+            "global_max_age_days": int(config.get("rss_global_max_age_days", 1)),
             "excluded_count": store.count_freshness_excluded_rss_items(target),
         },
         "proxies": {
             "crawler_proxy": {
-                "enabled": bool(store.get_native_intel_config(target).get("crawler_proxy_enabled")),
-                "configured": bool(store.get_native_intel_config(target).get("crawler_proxy_url")),
-                "url": store.redact_proxy_url(store.get_native_intel_config(target).get("crawler_proxy_url")),
+                "enabled": bool(config.get("crawler_proxy_enabled")),
+                "configured": bool(config.get("crawler_proxy_url")),
+                "url": store.redact_proxy_url(config.get("crawler_proxy_url")),
             },
             "rss_proxy": {
-                "enabled": bool(store.get_native_intel_config(target).get("rss_proxy_enabled")),
-                "configured": bool(store.get_native_intel_config(target).get("rss_proxy_url")),
-                "url": store.redact_proxy_url(store.resolve_rss_proxy(store.get_native_intel_config(target))),
+                "enabled": bool(config.get("rss_proxy_enabled")),
+                "configured": bool(config.get("rss_proxy_url")),
+                "url": store.redact_proxy_url(store.resolve_rss_proxy(config)),
                 "using_crawler_fallback": bool(
-                    store.get_native_intel_config(target).get("rss_proxy_enabled")
-                    and not store.get_native_intel_config(target).get("rss_proxy_url")
-                    and store.get_native_intel_config(target).get("crawler_proxy_url")
+                    config.get("rss_proxy_enabled")
+                    and not config.get("rss_proxy_url")
+                    and config.get("crawler_proxy_url")
                 ),
             },
         },
         "standalone": {
-            "enabled": bool(store.get_native_intel_config(target).get("standalone_enabled")),
-            "source_count": len(store.get_native_intel_config(target).get("standalone_source_ids", [])),
-            "max_items": int(store.get_native_intel_config(target).get("standalone_max_items", 20)),
+            "enabled": bool(config.get("standalone_enabled")),
+            "source_count": len(config.get("standalone_source_ids", [])),
+            "max_items": int(config.get("standalone_max_items", 20)),
         },
         "display": {
-            "region_order": store.get_native_intel_config(target).get("region_order", list(store.DEFAULT_NATIVE_INTEL_CONFIG["region_order"])),
-            "regions_enabled": store.get_native_intel_config(target).get("regions_enabled", dict(store.DEFAULT_NATIVE_INTEL_CONFIG["regions_enabled"])),
+            "region_order": config.get("region_order", list(store.DEFAULT_NATIVE_INTEL_CONFIG["region_order"])),
+            "regions_enabled": config.get("regions_enabled", dict(store.DEFAULT_NATIVE_INTEL_CONFIG["regions_enabled"])),
         },
     }
 

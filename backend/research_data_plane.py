@@ -951,17 +951,23 @@ def query_full_market(
                 ") "
             )
             cte_params = [str(artifact), target_date_text, target_date_text]
+            # This request's coverage, filtered count and page must read the same
+            # computed cross-section. Materialize once on this private in-memory
+            # connection rather than rescanning/windowing the immutable artifact
+            # three times. No cross-request cache or validation bypass is added.
+            connection.execute(
+                "CREATE TEMP TABLE full_market_computed AS " + base_cte + "SELECT * FROM computed",
+                cte_params,
+            )
             stats = connection.execute(
-                base_cte
-                + "SELECT COUNT(*), "
+                "SELECT COUNT(*), "
                 + "COUNT(*) FILTER (WHERE ma20_status = 'normal'), "
                 + "COUNT(*) FILTER (WHERE ma20_status = 'INSUFFICIENT_HISTORY'), "
                 + "COUNT(*) FILTER (WHERE ma20_status = 'normal' AND close_vs_ma20 > 0), "
                 + "COUNT(*) FILTER (WHERE ma60_status = 'normal'), "
                 + "COUNT(*) FILTER (WHERE ma60_status = 'INSUFFICIENT_HISTORY'), "
                 + "COUNT(*) FILTER (WHERE ma60_status = 'normal' AND close_vs_ma60 > 0), "
-                + "COUNT(*) FILTER (WHERE ma20_status = 'STALE') FROM computed",
-                cte_params,
+                + "COUNT(*) FILTER (WHERE ma20_status = 'STALE') FROM full_market_computed",
             ).fetchone()
             total_universe = int(stats[0] or 0)
             ma20_evaluable = int(stats[1] or 0)
@@ -981,22 +987,21 @@ def query_full_market(
                 )
                 filter_params = [value for _, _, value in normalized_filters]
             rows_query = (
-                base_cte
-                + "SELECT code, latest_date, latest_close, return_5d, return_20d, return_60d, "
+                "SELECT code, latest_date, latest_close, return_5d, return_20d, return_60d, "
                 "ma20, ma60, close_vs_ma20, close_vs_ma60, avg_volume_20d, current_volume, volume_ratio_20d, "
                 "observations_count, return_5d_status, return_20d_status, return_60d_status, ma20_status, ma60_status, "
                 "close_vs_ma20_status, close_vs_ma60_status, avg_volume_20d_status, volume_ratio_20d_status "
-                "FROM computed"
+                "FROM full_market_computed"
                 + filter_clause
                 + f" ORDER BY {sort_by} {sort_order.upper()} NULLS LAST, code ASC LIMIT ? OFFSET ?"
             )
             rows_result = connection.execute(
                 rows_query,
-                cte_params + filter_params + [limit, offset],
+                filter_params + [limit, offset],
             ).fetchall()
-            count_query = base_cte + "SELECT COUNT(*) FROM computed" + filter_clause
+            count_query = "SELECT COUNT(*) FROM full_market_computed" + filter_clause
             filtered_total = int(
-                connection.execute(count_query, cte_params + filter_params).fetchone()[0] or 0
+                connection.execute(count_query, filter_params).fetchone()[0] or 0
             )
         except Exception as exc:
             raise ResearchDataPlaneValidationError("full-market cross-section query failed closed") from exc
