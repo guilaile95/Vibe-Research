@@ -7,6 +7,7 @@
  * - Covers query binding, deferred K-line expand, cache, retry, and race guards
  */
 import { chromium } from "playwright";
+import { stockFinancialsFixture } from "./stock-financials.fixture.mjs";
 import { runCompanyResearch } from "./company-research.fixture.mjs";
 import { runKlineResearchEvents } from "./kline-research-events.fixture.mjs";
 import { createReadStream, existsSync } from "node:fs";
@@ -771,59 +772,7 @@ function createApiMockController() {
     }
 
     if (pathname.includes("/financials")) {
-      const latest = {
-        period: "2026-06-30",
-        period_end: "2026-06-30",
-        report_date: null,
-        revenue: "1000亿",
-        revenue_yoy: "8%",
-        net_profit: "200亿",
-        net_profit_yoy: "10%",
-        deduct_net_profit: "190亿",
-        deduct_net_profit_yoy: "9%",
-        eps: 0, // Synthetic numeric zero must remain a visible fact.
-        bvps: "15.0",
-        roe: "12%",
-        gross_margin: "40%",
-        net_margin: "20%",
-        op_cf_ps: "2.1",
-        current_ratio: "1.8",
-        quick_ratio: "1.4",
-        debt_to_equity_ratio: "0.5",
-        debt_ratio: "33%",
-        revenue_amount: 100_000_000_000,
-        net_profit_amount: 20_000_000_000,
-        parent_holder_net_profit_amount: 19_000_000_000,
-        operating_cash_flow: 30_000_000_000,
-        capital_expenditure: 4_000_000_000,
-        free_cash_flow: 26_000_000_000,
-        assets_total: 200_000_000_000,
-        cash: 50_000_000_000,
-        accounts_receivable: 10_000_000_000,
-        total_debt: 80_000_000_000,
-        holder_equity_total: 120_000_000_000,
-        cash_conversion_ratio: 1.5,
-        free_cash_flow_margin: 0.26,
-        accrual_ratio: -0.05,
-        receivables_pressure: 0.1,
-        net_cash_ratio: -0.15,
-      };
-      await route.fulfill(
-        jsonOk({
-          ...latest,
-          history: [latest, { ...latest, period: "2026-03-31", period_end: "2026-03-31" }],
-          data_quality: {
-            status: "normal",
-            source: "tonghuashun_via_akshare",
-            fetch_mode: "snapshot",
-            report_basis: "cumulative_report_period",
-            point_in_time_supported: false,
-            publication_date_known: false,
-            missing_fields: [],
-            warnings: [],
-          },
-        }),
-      );
+      await route.fulfill(jsonOk(stockFinancialsFixture()));
       return;
     }
 
@@ -1538,8 +1487,9 @@ async function runSmoke(page, mock, errors) {
   await openTab(page, "financials");
   const health = page.getByTestId("fundamental-health");
   // Tab activation starts the financial read; mounting the loading card is not
-  // completion. Wait for a source-derived value before synchronous assertions.
-  await health.getByText("260.00 亿元", { exact: true }).waitFor();
+  // completion. Wait for the unique loaded-facts heading before assertions;
+  // amounts repeat intentionally in the latest facts and historical table.
+  await health.getByRole("heading", { name: "Growth · 增长", exact: true }).waitFor();
   if (!(await health.isVisible().catch(() => false))) errors.push(`${label}: fundamental health module not visible`);
   for (const text of [
     "Growth · 增长",

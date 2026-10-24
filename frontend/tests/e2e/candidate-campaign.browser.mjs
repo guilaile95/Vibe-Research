@@ -1881,7 +1881,11 @@ try {
     await page.route('**/api/campaigns**',raceRoute);
     await page.goto(`http://127.0.0.1:${port}/candidates/600519?return_to=${encodeURIComponent('/candidates/600520')}`,{waitUntil:'networkidle'});
     const racingPanel=page.getByTestId('candidate-campaign-panel');
-    await racingPanel.getByRole('radio',{name:/SWING/}).check({force:true});
+    const racingStrategy = racingPanel.getByRole('radio', { name: 'SWING · 波段', exact: true });
+    // The sr-only input is not the clickable surface. Activate its visible
+    // enclosing label without force, then verify the controlled radio state.
+    await racingPanel.locator('label').filter({ has: racingStrategy }).click();
+    assert.equal(await racingStrategy.isChecked(), true);
     await racingPanel.getByTestId('create-candidate-campaign').click();await began;
     await page.getByRole('link',{name:'返回来源',exact:true}).click();
     await page.locator('[data-testid="candidate-workspace"][data-security-code="600520"]').waitFor();
