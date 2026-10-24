@@ -10,6 +10,7 @@ const expression = source.match(/Runtime：\{runtimeStatus\?\.runtime[^\n]+\n([\
 assert.ok(expression, 'Settings runtime label expression must remain testable');
 const label = runtimeStatus => vm.runInNewContext(`(${expression})`, { runtimeStatus });
 for (const [status, kind, expected] of [
+  ['authenticated_unprobed', 'chatgpt', '已登录 · 模型连通性未验证'],
   ['ready', 'chatgpt', '已登录 · 模型连通性未验证'],
   ['not_authenticated', 'api_key', '当前为 API key 登录，订阅接入需要 ChatGPT 登录'],
   ['not_authenticated', 'logged_out', '未连接'],
