@@ -4,6 +4,8 @@ import json
 
 import pytest
 
+from model_stream_fixtures import install_completion_stream
+
 import ai_tools
 import chat
 import debate
@@ -52,7 +54,7 @@ def test_exact_source_provenance_reaches_model_and_consumers(monkeypatch, tool, 
     def llm(_cfg, messages, use_tools):
         sent.append(copy.deepcopy(messages))
         return {'choices': [{'message': next(responses)}]}
-    monkeypatch.setattr(chat, '_call_llm', llm)
+    install_completion_stream(monkeypatch, chat, llm)
     chat.run_chat({}, [{'role': 'user', 'content': 'fixture'}])
     data = json.loads(next(m['content'] for m in sent[1] if m['role'] == 'tool'))['data']
     for key in keys:

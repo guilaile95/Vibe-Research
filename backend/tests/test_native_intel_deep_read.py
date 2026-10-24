@@ -5,10 +5,17 @@ from __future__ import annotations
 import json
 import urllib.error
 from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
 
 import native_intel_ai as ai
 import native_intel_ext_sources as ext
 import native_intel_store as store
+
+
+API_CFG = {"provider": "openai-compatible", "model": "deep-read-test",
+           "baseURL": "https://model.invalid/v1", "apiKey": "SYNTHETIC", "revision": 1}
 
 
 def test_read_source_content_prefers_repository_readme_and_fails_closed_for_local_url():
@@ -68,7 +75,8 @@ def test_deep_read_ai_marks_external_data_and_caches_only_derived_payload(tmp_pa
         messages.append(prompt_messages)
         return "摘要\n- 仅记录来源事实\n关键点\n- 需要核验\n待核验\n- 原始链接"
 
-    cfg = {"provider": "cli-codex", "model": "deep-read-test"}
+    # An explicit API model is cacheable; unresolved Codex models are not.
+    cfg = API_CFG
     first = ai.analyze_deep_read(
         item,
         raw_content,
@@ -102,3 +110,51 @@ def test_deep_read_ai_marks_external_data_and_caches_only_derived_payload(tmp_pa
     assert artifact is not None
     assert raw_content not in json.dumps(artifact["payload"], ensure_ascii=False)
     assert artifact["payload"]["analysis"] == first["analysis"]
+
+
+@pytest.mark.parametrize("change", [
+    {"model": "different-model"},
+    {"baseURL": "https://other-model.invalid/v1"},
+    {"revision": 2},
+])
+def test_deep_read_cache_requires_same_execution_identity(tmp_path: Path, change):
+    db = tmp_path / "native-intel.sqlite3"
+    store.initialize_store(db)
+    runner = Mock(return_value="Synthetic derived annotation")
+    item = {"item_id": 7, "title": "Synthetic source"}
+
+    def analyze(cfg):
+        return ai.analyze_deep_read(item, "Source facts", ext.DEEP_READ_ARTICLE_BODY,
+                                    "https://example.com/source", cfg=cfg,
+                                    model_runner=runner, path=str(db))
+
+    first = analyze(API_CFG)
+    changed = analyze({**API_CFG, **change})
+    repeated = analyze({**API_CFG, **change})
+
+    assert first["status"] == changed["status"] == repeated["status"] == "SUCCESS"
+    assert first["cached"] is changed["cached"] is False
+    assert changed["artifact_id"] != first["artifact_id"]
+    assert repeated["cached"] is True
+    assert repeated["artifact_id"] == changed["artifact_id"]
+    assert runner.call_count == 2
+
+
+def test_deep_read_unknown_codex_identity_never_reuses_cache(tmp_path: Path):
+    db = tmp_path / "native-intel.sqlite3"
+    store.initialize_store(db)
+    runner = Mock(return_value="Synthetic derived annotation")
+    item = {"item_id": 7, "title": "Synthetic source"}
+    cfg = {"provider": "cli-codex", "model": "legacy-label", "revision": 1}
+    results = [
+        ai.analyze_deep_read(item, "Source facts", ext.DEEP_READ_ARTICLE_BODY,
+                             "https://example.com/source", cfg=cfg,
+                             model_runner=runner, path=str(db))
+        for _ in range(2)
+    ]
+
+    assert all(result["status"] == "SUCCESS" for result in results)
+    assert all(result["model"] == "unknown/default" for result in results)
+    assert all(result["cached"] is False for result in results)
+    assert results[0]["artifact_id"] != results[1]["artifact_id"]
+    assert runner.call_count == 2

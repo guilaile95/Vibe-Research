@@ -690,7 +690,11 @@ def test_analyze_disconnect_during_save_cancels_transaction(monkeypatch):
     assert b'"type": "done"' not in response_chunks
 
 
-def test_analyze_codex_disconnect_cancels_agent_runtime(monkeypatch):
+def test_analyze_codex_disconnect_cancels_agent_runtime(monkeypatch, tmp_path):
+    import ai_credential_store
+    monkeypatch.setattr(ai_credential_store, "credential_path", lambda: tmp_path / "credentials.json")
+    config = {"provider": "cli-codex", "model": "codex", "baseURL": "", "apiKey": ""}
+    saved = ai_credential_store.save(config, expected_revision="0")
     monkeypatch.setattr(
         chat_layer, "prepare_daily_review_analysis", MagicMock(return_value=_prepared())
     )
@@ -709,6 +713,7 @@ def test_analyze_codex_disconnect_cancels_agent_runtime(monkeypatch):
     monkeypatch.setattr(chat_layer.agent_runtime, "stream_chat", stream_chat)
     body = json.dumps({
         "llm": {
+            "revision": saved["revision"],
             "provider": "cli-codex",
             "model": "codex",
             "baseURL": "",

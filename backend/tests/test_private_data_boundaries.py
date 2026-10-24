@@ -12,6 +12,8 @@ import threading
 from pathlib import Path
 
 import pytest
+
+from model_stream_fixtures import install_completion_stream
 import ai_tools
 import chat
 import company_research
@@ -115,14 +117,20 @@ def test_generic_chat_and_mcp_reject_private_read_and_managed_write_tools(privat
     captured = []
     def fake_model(cfg, messages, use_tools):
         captured.append(copy.deepcopy(messages))
-        if len(captured) == 1:
+        if len(captured) % 2 == 1:
             return {"choices": [{"message": {"role": "assistant", "tool_calls": [
                 {"id": str(i), "function": {"name": name, "arguments": '{"path":"trade_ledger.sqlite3","value":"attempted-write"}'}}
-                for i, name in enumerate(names)]}}]}
+                for i, name in enumerate(batch)]}}]}
         return {"choices": [{"message": {"role": "assistant", "content": "Rejected unavailable tools"}}]}
-    monkeypatch.setattr(chat, "_call_llm", fake_model)
-    result = chat.run_chat({}, [{"role": "user", "content": "Public market research"}])
-    assert len(result["trace"]) == len(names)
+    install_completion_stream(monkeypatch, chat, fake_model)
+    traces = []
+    # Exercise every prohibited name while respecting the production per-task
+    # tool budget instead of inflating or bypassing its admission limit.
+    for start in range(0, len(names), 10):
+        batch = names[start:start + 10]
+        result = chat.run_chat({}, [{"role": "user", "content": "Public market research"}])
+        traces.extend(result["trace"])
+    assert [row["tool"] for row in traces] == names
     replies = []
     monkeypatch.setattr(mcp_server, "_result", lambda rid, result: replies.append(result))
     for name in names:
