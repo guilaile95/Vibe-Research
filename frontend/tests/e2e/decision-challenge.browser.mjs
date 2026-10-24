@@ -411,6 +411,7 @@ async function run() {
       `stale proposal must not silently bind the old challenge: body=${staleCommitBody}`,
     );
 
+    await page.clock.setFixedTime(new Date(clock.advance()));
     const withoutChallenge = await createFrozenCurrentThesis(backend, env, "DCH1 without challenge");
     await page.goto(`${frontend}/campaigns/${withoutChallenge.campaign_id}/decision-proposal`, { waitUntil: "networkidle" });
     await fillProposalDraft(page);
@@ -427,6 +428,7 @@ async function run() {
       "no-challenge freeze must not invent a challenge ref",
     );
 
+    await page.clock.setFixedTime(new Date(clock.advance()));
     const readErrorCampaign = await createFrozenCurrentThesis(backend, env, "DCH2 read error");
     challengeReadFailureCampaignId = readErrorCampaign.campaign_id;
     challengeReadFailureStatus = 500;

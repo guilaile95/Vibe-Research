@@ -1,4 +1,4 @@
-import { renameSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 // Explicit phases shared by the API process, seed subprocesses and browser.
@@ -14,5 +14,11 @@ export function createTemporalClock(dataDir) {
     renameSync(`${file}.next`, file);
   };
   set(CREATION_TIME);
-  return { env: { E2E_CLOCK_FILE: file }, set };
+  const advance = (seconds = 1) => {
+    if (!Number.isFinite(seconds) || seconds <= 0) throw new Error("E2E clock must advance");
+    const instant = new Date(Date.parse(readFileSync(file, "utf8")) + seconds * 1000).toISOString();
+    set(instant);
+    return instant;
+  };
+  return { env: { E2E_CLOCK_FILE: file }, set, advance };
 }

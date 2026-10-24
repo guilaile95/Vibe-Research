@@ -232,6 +232,7 @@ async function run() {
     await page.getByText("Campaign 已激活", { exact: true }).waitFor();
     assert.equal((await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}`)).status, "ACTIVE");
 
+    await page.clock.setFixedTime(new Date(clock.advance()));
     const secondTrade = await jsonRequest(backend, "/api/trades", "POST", {
       fee: 0, other_cost: 0,
       code: "600519", name: "贵州茅台", operation: "add", execution_status: "full",
@@ -309,12 +310,14 @@ async function run() {
     ), { timeout: 60000 });
     // 创建表单与详情面板都是 fixed 遮罩；用标题精确锁定创建弹窗。
     const openCreateModal = async () => {
+      await page.clock.setFixedTime(new Date(clock.advance()));
       await page.reload({ waitUntil: "networkidle" });
       await page.getByRole("button", { name: "新建交易" }).click();
       return page.locator("div.fixed.inset-0").filter({ hasText: "新建交易流水" });
     };
     const continuationUrl = `${frontend}/trades?create=1&code=600519&campaign_id=${campaign.campaign_id}&decision_id=${decision.decision_id}&next_best_action=BUY%20SMALL`;
     const openContinuationModal = async () => {
+      await page.clock.setFixedTime(new Date(clock.advance()));
       await page.goto(continuationUrl, { waitUntil: "networkidle" });
       const modal = page.locator("div.fixed.inset-0").filter({ hasText: "新建交易流水" });
       await modal.getByText("从 Frozen Decision 续接实际执行", { exact: true }).waitFor();

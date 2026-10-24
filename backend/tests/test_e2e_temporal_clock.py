@@ -173,6 +173,28 @@ def test_real_api_thesis_formalization_preview_freeze_readback(clock, api):
     assert frozen["thesis"]["formal_state"] == "frozen"
     assert evidence_thesis_store._is_canonical_utc_timestamp(frozen["thesis"]["frozen_at"])
     assert not evidence_thesis_store._is_canonical_utc_timestamp(frozen["thesis"]["frozen_at"].replace("+00:00", "Z"))
+    # DCR1 late-edit stage: a stale reviewed timestamp must cause 409,
+    # then an explicit re-review can append exactly one delta.
+    module.advance()
+    late = request_data(api, "POST", "/api/evidence", {
+        "subject_type": "stock", "subject_id": "600519", "evidence_type": "news",
+        "claim": "post-freeze synthetic", "source_title": "version one", "source_url": None,
+        "source_date": "2026-08-28", "accessed_at": module.utc_now_iso(), "classification": "fact", "confidence": "high",
+    })
+    stale_delta = {"delta_state": "WEAKENED", "reason": "explicit review", "new_evidence": [
+        {"evidence_id": late["id"], "stance": "oppose", "expected_updated_at": late["updated_at"]},
+    ]}
+    update = {key: late[key] for key in ("evidence_type", "claim", "source_title", "source_url", "source_date", "accessed_at", "classification", "confidence")}
+    module.advance()
+    edited = request_data(api, "PUT", f"/api/evidence/{late['id']}", {**update, "source_title": "version two", "expected_edit_token": late["edit_token"]})
+    assert edited["updated_at"] != late["updated_at"]
+    rejected = api.post(f"/api/thesis/{thesis_id}/deltas", json=stale_delta)
+    assert rejected.status_code == 409, rejected.text
+    assert request_data(api, "GET", f"/api/thesis/{thesis_id}/deltas")["items"] == []
+    module.advance()
+    stale_delta["new_evidence"][0]["expected_updated_at"] = edited["updated_at"]
+    request_data(api, "POST", f"/api/thesis/{thesis_id}/deltas", stale_delta)
+    assert len(request_data(api, "GET", f"/api/thesis/{thesis_id}/deltas")["items"]) == 1
     campaign_id = campaign["campaign_id"]
     request_data(api, "POST", f"/api/campaigns/{campaign_id}/thesis-binding", {"thesis_id": thesis_id}, 201)
     for old, new in (("DRAFT", "RESEARCHING"), ("RESEARCHING", "PRE-ENTRY")):
@@ -224,6 +246,15 @@ def test_real_api_trade_reconciliation_and_attribution(clock, api):
     reconciled = request_data(api, "GET", f"{base}/reconciliation")
     assert reconciled["allocation_state"] == "ALLOCATED", reconciled
     assert reconciled["decision_id"] == decision["decision_id"]
+    module.advance()
+    second = request_data(api, "POST", "/api/trades", {
+        "code": "600519", "name": "synthetic", "operation": "add", "execution_status": "full",
+        "actual_price": 101, "actual_quantity": 1, "executed_at": "2026-08-29T01:01:00Z", "fee": 0, "other_cost": 0,
+    })
+    listing = request_data(api, "GET", "/api/trades?include_voided=false&limit=10&offset=0")
+    assert [row["trade_id"] for row in listing] == [second["trade_id"], trade["trade_id"]]
+    assert request_data(api, "GET", f"/api/trades/{listing[-1]['trade_id']}/reconciliation")["allocation_state"] == "ALLOCATED"
+    assert request_data(api, "GET", f"/api/trades/{listing[0]['trade_id']}/reconciliation")["allocation_state"] == "UNALLOCATED"
 
 
 def test_real_api_outcome_preserves_pre_evaluation_trade_visibility(clock, api):
@@ -245,3 +276,48 @@ def test_real_api_outcome_preserves_pre_evaluation_trade_visibility(clock, api):
     after = request_data(api, "GET", path)
     assert after["actual_capital_outcome"] == before["actual_capital_outcome"]
     assert after["decision_snapshot_hash"] == before["decision_snapshot_hash"]
+
+
+def run_actual_seed_contract(mode, extra):
+    import json
+    import os
+    import subprocess
+    import sys
+    root = Path(__file__).resolve().parents[2]
+    env = {**os.environ, "PYTHON": sys.executable, **extra}
+    env.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        ["node", str(root / "frontend/tests/e2e/temporal-seeds.contract.mjs"), mode],
+        cwd=root / "backend", env=env, capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def test_actual_active_seed_without_pythonpath(clock, api):
+    campaign = request_data(api, "POST", "/api/campaigns", {"security_code": "600519", "strategy": "SWING"}, 201)
+    campaign_id = campaign["campaign_id"]
+    for old, new in (("DRAFT", "RESEARCHING"), ("RESEARCHING", "PRE-ENTRY")):
+        request_data(api, "POST", f"/api/campaigns/{campaign_id}/transitions", {"expected_status": old, "to_status": new})
+    result = run_actual_seed_contract("active", {"TEMPORAL_CAMPAIGN_ID": campaign_id})
+    assert result["status"] == "ACTIVE_SEED_OK"
+    assert request_data(api, "GET", f"/api/campaigns/{campaign_id}")["status"] == "ACTIVE"
+
+
+def test_actual_history_seed_has_total_order_and_exact_page_boundary(clock, api, monkeypatch):
+    import json
+    import frozen_decision_service as frozen
+    module, _ = clock
+    first = frozen.freeze_decision(valid_payload(review_by="2026-08-29T10:00:00Z"))
+    module.advance()
+    second = frozen.freeze_decision(valid_payload(review_by="2026-08-30T10:00:00Z"))
+    seeded = run_actual_seed_contract("history", {"TEMPORAL_DECISION_TEMPLATE": json.dumps(second)})
+    monkeypatch.setenv("E2E_CLOCK_FILE", seeded["clock"])
+    third = frozen.freeze_decision(valid_payload(review_by="2026-09-10T10:00:00Z"))
+    all_rows = frozen.list_decisions(limit=100)
+    times = [row["committed_at"] for row in all_rows]
+    assert times == sorted(set(times)), "all seeded decisions have distinct chronological timestamps"
+    page = frozen.list_decisions(limit=50)
+    assert [row["decision_id"] for row in page] == [first["decision_id"], second["decision_id"], *seeded["fillers"][:48]]
+    assert third["decision_id"] not in {row["decision_id"] for row in page}
+    assert seeded["fillers"][0] in {row["decision_id"] for row in page}
