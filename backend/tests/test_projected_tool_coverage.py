@@ -4,6 +4,8 @@ import json
 
 import pytest
 
+from model_stream_fixtures import install_completion_stream
+
 import ai_tools
 import chat
 import debate
@@ -110,7 +112,7 @@ def test_nonstream_chat_consumes_real_projection_without_extra_tool_calls(source
         sent.append(copy.deepcopy(messages))
         return {'choices': [{'message': next(replies)}]}
 
-    monkeypatch.setattr(chat, '_call_llm', call)
+    install_completion_stream(monkeypatch, chat, call)
     response = chat.run_chat({}, [{'role': 'user', 'content': 'fixture request'}])
     assert len(calls) == 1 and response['rounds'] == 2
     assert response['trace'][0]['status'] == 'partial'
