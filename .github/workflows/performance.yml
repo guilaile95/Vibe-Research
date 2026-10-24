@@ -7,6 +7,8 @@ on:
     branches: [feature/research-system-v01]
     paths:
       - "frontend/vite.config.ts"
+      - "frontend/src/router.tsx"
+      - "frontend/src/components/layout/Layout.tsx"
       - "frontend/src/lib/researchWorkflow.ts"
       - "frontend/src/lib/researchWorkflowStore.ts"
       - "frontend/tests/performance/**"
@@ -14,6 +16,8 @@ on:
   pull_request:
     paths:
       - "frontend/vite.config.ts"
+      - "frontend/src/router.tsx"
+      - "frontend/src/components/layout/Layout.tsx"
       - "frontend/src/lib/researchWorkflow.ts"
       - "frontend/src/lib/researchWorkflowStore.ts"
       - "frontend/tests/performance/**"
@@ -40,7 +44,7 @@ jobs:
       - name: Check out immutable performance baseline
         uses: actions/checkout@v7
         with:
-          ref: c16ade49174a26597de05244ac9f70d2855c590a
+          ref: 2393b8416aee16a88a7edd4e3027d913f27fe846
           path: performance-baseline
 
       - name: Set up Node.js
@@ -71,6 +75,7 @@ jobs:
           --baseline-dist performance-baseline/frontend/dist
           --candidate-dist candidate/frontend/dist
           --output performance-evidence
+          --comparison route-lazy
 
       - name: Preserve raw performance samples and identity
         if: always()

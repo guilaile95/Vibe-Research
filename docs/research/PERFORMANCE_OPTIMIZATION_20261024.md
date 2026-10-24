@@ -72,8 +72,12 @@ verified on the actual final SHA; this note does not predeclare them.
 
 ## Benchmark maintenance
 
-The separate path-filtered performance workflow compares the candidate with the
-immutable c16ade baseline on the same runner, exact dependency lock, and browser.
+The first-phase path-filtered performance workflow compared the candidate with
+the immutable c16ade baseline on the same runner, exact dependency lock, and browser.
+The subsequent bounded core-route experiment explicitly compares against the
+first-phase candidate `2393b8416aee16a88a7edd4e3027d913f27fe846` using the
+`route-lazy` comparison mode. Both phase-two builds must retain lazy sector
+content; changing the reference does not overwrite the first-phase evidence.
 It does not add timing thresholds to ordinary correctness CI. Both full source
 trees are sibling checkouts so build identity is not dirtied by nested fixtures.
 When dependencies or relevant UI contracts intentionally change, review and

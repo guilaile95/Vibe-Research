@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, Outlet, useLocation } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigation } from "react-router-dom";
 import {
   Activity,
   BarChart3,
@@ -70,6 +70,7 @@ function focusableIn(container: HTMLElement | null) {
 
 export function Layout() {
   const { pathname } = useLocation();
+  const navigation = useNavigation();
   const { dark, toggle } = useDarkMode();
   const [collapsed, setCollapsed] = useState(() => storageGet("vr-sidebar") === "collapsed");
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -326,7 +327,13 @@ export function Layout() {
           {pageManagesSectionNav(currentPattern) ? null : (
             <SectionNav ownerId={currentOwner} pathname={pathname} title={currentTitle} />
           )}
-          <Outlet />
+          {navigation.state !== "idle" && (
+            <p role="status" aria-live="polite" className="text-sm text-muted-foreground">页面加载中</p>
+          )}
+          {/* Keep drafts mounted, but prevent new edits after the blocker accepted a navigation. */}
+          <div inert={navigation.state !== "idle"} aria-busy={navigation.state !== "idle"}>
+            <Outlet />
+          </div>
         </div>
       </main>
     </div>
