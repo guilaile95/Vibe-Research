@@ -272,6 +272,13 @@ def _overview(*, timeout):
         raise PublicDataUnavailable("SOURCE_REFRESH_PENDING") from None
 
 
+def _guard_valuation(operation, value):
+    if operation == "valuation" and isinstance(value, dict):
+        import astock
+        return astock.enforce_forecast_window(value)
+    return value
+
+
 def run(operation, code=None, *, timeout=None, _target=None, cancel_event=None):
     if timeout is None:
         timeout = TIMEOUT
@@ -283,7 +290,7 @@ def run(operation, code=None, *, timeout=None, _target=None, cancel_event=None):
     with _LOCK:
         hit = _CACHE.get(key)
         if hit and time.monotonic() - hit[0] < 30:
-            return copy.deepcopy(hit[1])
+            return _guard_valuation(operation, copy.deepcopy(hit[1]))
         if key in _INFLIGHT:
             raise PublicDataUnavailable("SOURCE_BUSY")
         _INFLIGHT.add(key)
@@ -291,7 +298,7 @@ def run(operation, code=None, *, timeout=None, _target=None, cancel_event=None):
         kwargs = {"timeout": timeout}
         if cancel_event is not None:
             kwargs["cancel_event"] = cancel_event
-        value = _run_process(operation, code, **kwargs)
+        value = _guard_valuation(operation, _run_process(operation, code, **kwargs))
         # Missing/failed results never suppress retry.
         cacheable = isinstance(value, dict) and (
             operation == "valuation" and value.get("price") is not None and value.get("status") != "partial" or

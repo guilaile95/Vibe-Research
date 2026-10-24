@@ -535,14 +535,15 @@ export function StockData() {
   // 次级预测指标挪到「财务与估值」页签：不删除、不补新字段、不换算法。
   const forecastMetrics: { k: string; v: string; testId: string }[] = val ? [
     { k: "26E EPS", v: fmt(val.eps_26e), testId: "stock-forecast-eps-26e" },
-    { k: "前向PE", v: fmt(val.pe_26e), testId: "stock-forecast-pe-26e" },
+    { k: "26E PE", v: fmt(val.pe_26e), testId: "stock-forecast-pe-26e" },
     { k: "PEG", v: fmt(val.peg), testId: "stock-forecast-peg" },
     { k: "消化年数", v: fmt(val.digest_years, " 年"), testId: "stock-forecast-digest-years" },
   ] : [];
 
   const aiContext = val
     ? `个股：${val.name}（${val.code}）\n现价 ${val.price} · PE(TTM) ${fmt(val.pe_ttm)} · PB ${fmt(val.pb)} · 市值 ${fmt(val.mcap_yi, "亿")}\n` +
-      `26E EPS ${val.eps_26e ?? "—"} · 前向PE ${val.pe_26e ?? "—"} · PEG ${val.peg ?? "—"} · 消化 ${val.digest_years ?? "—"}年 · 机构覆盖 ${val.analyst_count ?? "未知"} 家\n` +
+      `26E EPS ${val.eps_26e ?? "—"} · 26E PE ${val.pe_26e ?? "—"} · PEG ${val.peg ?? "—"} · 消化 ${val.digest_years ?? "—"}年 · 机构覆盖 ${val.analyst_count ?? "未知"} 家\n` +
+      (val.forecast_note ? `一致预期说明：${val.forecast_note}\n` : "") +
       `估值历史分位：${evidenceStatusText(pctlResult)}\n` +
       (pctl?.metrics.pe_ttm ? `估值历史分位(近5年)：PE-TTM 处于 ${pctl.metrics.pe_ttm.percentile}% 分位、PB 处于 ${pctl.metrics.pb?.percentile ?? "—"}% 分位\n` : "") +
       financialEvidenceContext(fin) + "\n" +

@@ -208,13 +208,18 @@ def evaluate_value(
     # 一致预期 EPS / 前向 PE / CAGR / PEG（full_valuation）
     fv = full_valuation if isinstance(full_valuation, dict) else None
     if fv:
-        eps_26e = _safe_float(fv.get("eps_26e"))
+        from astock import enforce_forecast_window
+        fv = enforce_forecast_window(fv)
+        expired = fv.get("forecast_status") == "EXPIRED"
+        eps_26e = None if expired else _safe_float(fv.get("eps_26e"))
         pe_26e = _safe_float(fv.get("pe_26e"))
         cagr_pct = _safe_float(fv.get("cagr_pct"))
         peg = _safe_float(fv.get("peg"))
         pe_ttm = _safe_float(fv.get("pe_ttm"))
         fv_ctx = {
             "source": "full_valuation",
+            "forecast_status": fv.get("forecast_status"),
+            "forecast_note": fv.get("forecast_note"),
             "eps_26e": eps_26e,
             "eps_27e": _safe_float(fv.get("eps_27e")),
             "pe_26e": pe_26e,

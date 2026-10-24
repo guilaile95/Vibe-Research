@@ -866,6 +866,24 @@ def valuation_percentile(code: str, period: str = "近五年") -> dict:
     return {"period": "近5年", "metrics": metrics}
 
 
+def enforce_forecast_window(value: dict) -> dict:
+    """Expire the fixed 2026→2027 scoring window, not explicit-year source facts.
+
+    Reapply on cached reads and scoring: a request/cache may cross Shanghai
+    midnight. This is independent of trading sessions and does not infer 2028.
+    """
+    out = dict(value)
+    if datetime.now(timezone(timedelta(hours=8))).year > 2026:
+        out.update(forecast_status="EXPIRED", pe_26e=None, cagr_pct=None,
+                   peg=None, digest_years=None)
+        note = "2026→2027 一致预期窗口已过期；仅保留明确年度的 EPS 原始预测，不作为当前前向估值或评分依据"
+        previous = out.get("forecast_note")
+        out["forecast_note"] = (
+            f"{note}；{previous}" if previous and note not in previous else previous or note
+        )
+    return out
+
+
 def full_valuation(code: str, *, valuation_reader=None, on_quote=None) -> dict:
     """单票完整估值：腾讯现价 + 东财 TTM PE/PB/总市值 + 一致预期 EPS。
 
@@ -901,7 +919,7 @@ def full_valuation(code: str, *, valuation_reader=None, on_quote=None) -> dict:
     }
 
     if on_quote is not None:
-        on_quote(dict(out))
+        on_quote(enforce_forecast_window(out))
 
     try:
         row = (valuation_reader or eastmoney_stock_valuation)(code)
@@ -919,17 +937,17 @@ def full_valuation(code: str, *, valuation_reader=None, on_quote=None) -> dict:
     out.update(pe_ttm=pe_ttm, pb=pb, mcap_yi=mcap_yi)
 
     if on_quote is not None:
-        on_quote(dict(out))
+        on_quote(enforce_forecast_window(out))
 
     try:
         rows = profit_forecast(code)
     except DependencyMissing:
         out["forecast_note"] = "一致预期需安装 akshare"
-        return out
+        return enforce_forecast_window(out)
     except Exception:
         out["analyst_count"] = None
         out["forecast_note"] = "一致预期来源暂不可用；保留已取得的行情与估值字段"
-        return out
+        return enforce_forecast_window(out)
 
     def _eps(row: dict):
         # 同花顺对覆盖不全的股票会缺「均值」或给 '-' 占位，硬取会让整只票的估值接口 502
@@ -952,24 +970,27 @@ def full_valuation(code: str, *, valuation_reader=None, on_quote=None) -> dict:
             eps_27 = _eps(row)
 
     out["eps_26e"], out["eps_27e"] = eps_26, eps_27
+    out = enforce_forecast_window(out)
+    if out.get("forecast_status") == "EXPIRED":
+        return out
     if eps_26 and eps_26 > 0:
         pe_26e = price / eps_26
         if not math.isfinite(pe_26e) or pe_26e <= 0:
-            return out
+            return enforce_forecast_window(out)
         out["pe_26e"] = round(pe_26e, 1)
         if eps_27 is not None:
             cagr = eps_27 / eps_26 - 1
             if not math.isfinite(cagr * 100):
-                return out
+                return enforce_forecast_window(out)
             out["cagr_pct"] = round(cagr * 100, 0)
             # 已知下一期零盈利/亏损：保留增长观察，不给盈利估值结论。
             if eps_27 <= 0:
-                return out
+                return enforce_forecast_window(out)
             peg = calc_peg(pe_26e, cagr)
             out["peg"] = round(peg, 2) if math.isfinite(peg) else None
             dig = pe_digestion(pe_26e, cagr)
             out["digest_years"] = round(dig, 1) if math.isfinite(dig) else None
-    return out
+    return enforce_forecast_window(out)
 
 
 # ===========================================================================
