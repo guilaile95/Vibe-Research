@@ -537,6 +537,16 @@ try {
       await page.evaluate(() => window.__releaseContext()); await settleSelection(qa2, qa2.headRoundId);
       observations.push({ name: 'held-context-hash-after-release', href: page.url() });
       assert.equal(new URL(page.url()).hash, '#candidate-research-note', 'late question-only normalization keeps the latest hash');
+      // Normalizing a question-only URL starts a second readonly validation.
+      // A ready editor and updated address bar can precede that durable visit.
+      // Wait for the precise saved position, not just the earlier render.
+      await page.waitForFunction(({ question, round, hash }) => {
+        const href = JSON.parse(localStorage.getItem('vr-research-resume-v1') || '[]')[0]?.href;
+        if (!href) return false;
+        const saved = new URL(href, location.origin);
+        return saved.searchParams.get('question') === question
+          && saved.searchParams.get('round') === round && saved.hash === hash;
+      }, { question: qa2.id, round: qa2.headRoundId, hash: '#candidate-research-note' });
       const hashResume = await page.evaluate(() => JSON.parse(localStorage.getItem('vr-research-resume-v1'))[0].href);
       assert.equal(new URL(hashResume, baseURL).searchParams.get('round'), qa2.headRoundId);
       assert.equal(new URL(hashResume, baseURL).hash, '#candidate-research-note');

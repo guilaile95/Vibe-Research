@@ -1742,6 +1742,7 @@ try {
   await researchNote.getByLabel("本次要核对的问题").fill("后来的问题，不能覆盖旧回答来源");
   await researchNote.getByRole("button", { name: "围绕这个问题问 AI", exact: true }).click();
   await aiPanel.getByRole("button", { name: "存入沉淀", exact: true }).click();
+  await aiPanel.getByRole("button", { name: "已存入沉淀", exact: true }).waitFor();
   const savedAi = await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]"))[0]);
   assert.equal(savedAi.research.question, "合成问题：盈利是否有现金流支持？");
   assert.equal(savedAi.research.sourceLinks[0].url, "https://example.com/research-fixture", "answer retains its original selection after page inputs change");
