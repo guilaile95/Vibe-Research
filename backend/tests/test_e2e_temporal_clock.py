@@ -140,7 +140,8 @@ def request_data(api, method, path, payload=None, status=200):
     return response.json()["data"]
 
 
-def test_real_api_thesis_formalization_preview_freeze_readback(clock, api):
+@pytest.mark.parametrize("close_campaign", [False, True])
+def test_real_api_thesis_formalization_preview_freeze_readback(clock, api, close_campaign):
     import campaign_store
     import uuid
     import evidence_thesis_store
@@ -214,6 +215,37 @@ def test_real_api_thesis_formalization_preview_freeze_readback(clock, api):
     committed = request_data(api, "POST", f"{base}/commit", commit_payload)
     decision = committed["committed"]
     assert decision["committed_at"] == module.utc_now_iso()
+    if close_campaign:
+        # The browser's terminal race follows its second successful decision.
+        # First-freeze authority changes are not equivalent to this later stage.
+        first_decision = decision
+        module.advance()
+        preview = request_data(api, "POST", f"{base}/preview", draft)
+        commit_payload = {**draft, "as_of": preview["proposal"]["as_of"], "expected_proposal_fingerprint": preview["proposal_fingerprint"], "user_confirmed": True}
+        decision = request_data(api, "POST", f"{base}/commit", commit_payload)["committed"]
+        assert decision["decision_id"] != first_decision["decision_id"]
+        repeated = request_data(api, "POST", f"{base}/preview", draft)
+        assert repeated["proposal_fingerprint"] == preview["proposal_fingerprint"], "same phase is the prior proposal, not a new freeze"
+        module.advance()
+        pending = request_data(api, "POST", f"{base}/preview", draft)
+        assert pending["proposal_fingerprint"] != preview["proposal_fingerprint"]
+        new_commit = {**draft, "as_of": pending["proposal"]["as_of"], "expected_proposal_fingerprint": pending["proposal_fingerprint"], "user_confirmed": True}
+        request_data(api, "POST", f"/api/campaigns/{campaign_id}/transitions", {"expected_status": "ACTIVE", "to_status": "CLOSED"})
+        rejected = api.post(f"{base}/commit", json=new_commit)
+        assert rejected.status_code == 409, rejected.text
+        assert request_data(api, "GET", f"{base}/committed")["total"] == 2
+        assert request_data(api, "GET", f"{base}/committed/{first_decision['decision_id']}")["committed"] == first_decision
+        exact_retry = request_data(api, "POST", f"{base}/commit", commit_payload)
+        assert exact_retry["idempotent"] is True
+        assert exact_retry["committed"] == decision
+        # The browser's remaining terminal case has no Thesis binding at all.
+        no_thesis = request_data(api, "POST", "/api/campaigns", {"security_code": "000001", "strategy": "SWING"}, 201)
+        no_thesis_path = f"/api/campaigns/{no_thesis['campaign_id']}"
+        request_data(api, "POST", f"{no_thesis_path}/transitions", {"expected_status": "DRAFT", "to_status": "REJECTED"})
+        assert request_data(api, "GET", no_thesis_path)["status"] == "REJECTED"
+        assert api.get(f"{no_thesis_path}/thesis-binding").status_code == 404
+        assert api.post(f"{no_thesis_path}/decision-proposal/preview", json=draft).status_code == 409
+        assert request_data(api, "GET", f"{no_thesis_path}/decision-proposal/committed")["total"] == 0
     file.write_text("2026-09-02T08:00:00Z")
     readback = request_data(api, "GET", f"{base}/committed/{decision['decision_id']}")
     assert readback["committed"] == decision
