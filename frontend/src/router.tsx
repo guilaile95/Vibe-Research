@@ -4,15 +4,12 @@ import { Layout } from "@/components/layout/Layout";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import { hasSectorResearchWorkspace } from "@/data/sectorResearch";
 
-const DailyReview = lazy(() => import("@/pages/DailyReview").then((m) => ({ default: m.DailyReview })));
 const MarketCloudPage = lazy(() => import("@/pages/MarketCloudPage").then((m) => ({ default: m.MarketCloudPage })));
 const Intel = lazy(() => import("@/pages/Intel").then((m) => ({ default: m.Intel })));
-const Sectors = lazy(() => import("@/pages/Sectors").then((m) => ({ default: m.Sectors })));
 const SectorDetail = lazy(() => import("@/pages/SectorDetail").then((m) => ({ default: m.SectorDetail })));
 const SectorResearchPage = lazy(() => import("@/pages/SectorResearchPage").then((m) => ({ default: m.SectorResearchPage })));
 const Portfolio = lazy(() => import("@/pages/Portfolio").then((m) => ({ default: m.Portfolio })));
 const DecisionCockpit = lazy(() => import("@/pages/DecisionCockpit").then((m) => ({ default: m.DecisionCockpit })));
-const StockData = lazy(() => import("@/pages/StockData").then((m) => ({ default: m.StockData })));
 const CandidateWorkspace = lazy(() => import("@/pages/CandidateWorkspace").then((m) => ({ default: m.CandidateWorkspace })));
 const Screener = lazy(() => import("@/pages/Screener").then((m) => ({ default: m.Screener })));
 const MarketHistory = lazy(() => import("@/pages/MarketHistory").then((m) => ({ default: m.MarketHistory })));
@@ -65,6 +62,17 @@ function withSuspense(node: ReactNode) {
   );
 }
 
+// Route-level chunk failures are caught by the data router before rendering.
+// Do not print the rejected import URL or raw error; a reload retries the chunk.
+function RouteLoadError() {
+  return (
+    <div role="alert" className="m-4 rounded-lg border border-destructive/30 p-4 text-sm">
+      <p>页面加载失败（网络或资源版本异常）</p>
+      <button type="button" onClick={() => window.location.reload()}>重新加载页面</button>
+    </div>
+  );
+}
+
 function SectorResearchTagRoute() {
   const { key } = useParams();
   if (!hasSectorResearchWorkspace(key)) {
@@ -78,14 +86,32 @@ export const router = createBrowserRouter([
     element: <Layout />,
     children: [
       { path: "/", element: <Navigate to="/daily-review" replace /> },
-      { path: "/daily-review", element: withSuspense(<DailyReview />) },
+      {
+        path: "/daily-review",
+        // Resolve only the matched route before render, avoiding a React.lazy retry.
+        lazy: async () => {
+          const { DailyReview } = await import("@/pages/DailyReview");
+          return { element: withSuspense(<DailyReview />) };
+        },
+        hydrateFallbackElement: <PageFallback />,
+        errorElement: <RouteLoadError />,
+      },
       { path: "/market-cloud", element: withSuspense(<MarketCloudPage />) },
       { path: "/market-history", element: withSuspense(<MarketHistory />) },
       { path: "/intel", element: withSuspense(<Intel />) },
       { path: "/signals", element: withSuspense(<Signals />) },
       { path: "/signals/:tab", element: withSuspense(<Signals />) },
       { path: "/debate", element: withSuspense(<Debate />) },
-      { path: "/sectors", element: withSuspense(<Sectors />) },
+      {
+        path: "/sectors",
+        // Resolve only the matched route before render, avoiding a React.lazy retry.
+        lazy: async () => {
+          const { Sectors } = await import("@/pages/Sectors");
+          return { element: withSuspense(<Sectors />) };
+        },
+        hydrateFallbackElement: <PageFallback />,
+        errorElement: <RouteLoadError />,
+      },
       { path: "/sectors/:key/:tag", element: <SectorResearchTagRoute /> },
       { path: "/sectors/:key", element: withSuspense(<SectorDetail />) },
       { path: "/portfolio", element: withSuspense(<Portfolio />) },
@@ -100,7 +126,16 @@ export const router = createBrowserRouter([
       { path: "/cockpit", element: withSuspense(<DecisionCockpit />) },
       { path: "/decision-inbox", element: withSuspense(<DecisionInbox />) },
       { path: "/campaigns/:campaignId/decision-proposal", element: withSuspense(<DecisionProposalReview />) },
-      { path: "/stock-data", element: withSuspense(<StockData />) },
+      {
+        path: "/stock-data",
+        // Resolve only the matched route before render, avoiding a React.lazy retry.
+        lazy: async () => {
+          const { StockData } = await import("@/pages/StockData");
+          return { element: withSuspense(<StockData />) };
+        },
+        hydrateFallbackElement: <PageFallback />,
+        errorElement: <RouteLoadError />,
+      },
       { path: "/candidates/:code", element: withSuspense(<CandidateWorkspace />) },
       { path: "/screener", element: withSuspense(<Screener />) },
       { path: "/watchlist", element: withSuspense(<Watchlist />) },

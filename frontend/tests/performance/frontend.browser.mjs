@@ -16,6 +16,8 @@ import { measureBuild } from './build-assets.mjs';
 import { installDateOnlyClock, observeBrowser, assertNativeTelemetry } from './browser-observation.mjs';
 const args = Object.fromEntries(process.argv.slice(2).reduce((pairs,arg,i,all)=>arg.startsWith('--')?[...pairs,[arg.slice(2),all[i+1]]]:pairs,[]));
 assert.ok(args['baseline-dist'] && args['candidate-dist'] && args.output, 'Pass --baseline-dist --candidate-dist --output');
+const comparison=args.comparison||'sector-chunks';
+assert.ok(['sector-chunks','route-lazy'].includes(comparison),'Unknown comparison mode');
 const output=resolve(args.output);mkdirSync(output,{recursive:true});
 const samples=Number(process.env.PERF_BROWSER_SAMPLES||21), warmup=1;
 assert.ok(Number.isInteger(samples)&&samples>=3);
@@ -79,7 +81,7 @@ try{
   const measure=async(name,markerKey,action,ready)=>{
    const before=await page.evaluate(()=>({start:performance.now(),resourceCount:performance.getEntriesByType('resource').length,longCount:window.__perf?.longTasks.length||0})).catch(()=>({start:0,resourceCount:0,longCount:0}));
    const start=performance.now();await action();await ready();const driverObservedFirstUsefulMs=performance.now()-start;await settle(page);await page.waitForFunction(key=>Number.isFinite(window.__perf.markers[key]?.uiSettledAt),markerKey);const driverObservedUiSettledMs=performance.now()-start;
-   const details=await page.evaluate(({before,name,markerKey})=>{const nav=name.includes('reload')||name.includes('cold')||name.includes('document');const resources=performance.getEntriesByType('resource').slice(nav?0:before.resourceCount);const tasks=(window.__perf?.longTasks||[]).slice(nav?0:before.longCount);const marker=window.__perf.markers[markerKey],offset=nav?0:before.start;return {timeOrigin:performance.timeOrigin,markerOffsetMs:offset,firstUsefulMs:marker.at-offset,uiSettledMs:marker.uiSettledAt-offset,fetchStarted:window.__perf.started,requests:resources.map(r=>({path:new URL(r.name).pathname+new URL(r.name).search,transferBytes:r.transferSize,decodedBytes:r.decodedBodySize,durationMs:r.duration})),longTaskCount:tasks.length,longTaskMs:tasks.reduce((s,t)=>s+t.duration,0),navigationType:performance.getEntriesByType('navigation')[0]?.type,paints:performance.getEntriesByType('paint').map(e=>({name:e.name,startTime:e.startTime})),navigation:performance.getEntriesByType('navigation')[0]?.toJSON()};},{before,name,markerKey});
+   const details=await page.evaluate(({before,name,markerKey})=>{const nav=name.includes('reload')||name.includes('cold')||name.includes('document');const resources=performance.getEntriesByType('resource').slice(nav?0:before.resourceCount);const tasks=(window.__perf?.longTasks||[]).slice(nav?0:before.longCount);const marker=window.__perf.markers[markerKey],offset=nav?0:before.start;return {timeOrigin:performance.timeOrigin,markerOffsetMs:offset,firstUsefulMs:marker.at-offset,uiSettledMs:marker.uiSettledAt-offset,fetchStarted:window.__perf.started,requests:resources.map(r=>({path:new URL(r.name).pathname+new URL(r.name).search,transferBytes:r.transferSize,decodedBytes:r.decodedBodySize,durationMs:r.duration,startTimeMs:r.startTime,responseEndMs:r.responseEnd})),longTaskCount:tasks.length,longTaskMs:tasks.reduce((s,t)=>s+t.duration,0),navigationType:performance.getEntriesByType('navigation')[0]?.type,paints:performance.getEntriesByType('paint').map(e=>({name:e.name,startTime:e.startTime})),navigation:performance.getEntriesByType('navigation')[0]?.toJSON()};},{before,name,markerKey});
    const metrics=Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(m=>[m.name,m.value]));
    assertNativeTelemetry({name,...details});
    if(trial>=0)rows.push({label:server.label,trial,name,driverObservedFirstUsefulMs,driverObservedUiSettledMs,...details,jsHeapUsedBytes:metrics.JSHeapUsedSize,cumulativeTaskDurationSeconds:metrics.TaskDuration});
@@ -93,6 +95,28 @@ try{
   await measure('sector-document','sectors',()=>page.goto('/sectors'),()=>page.getByRole('heading',{name:'板块中心',exact:true}).waitFor());
   await measure('pcb-content-route','pcb',()=>page.locator('a[href="/sectors/pcb/overview"]').first().click(),()=>page.getByText(/^AI 服务器用 PCB 可理解为 AI 机柜内的电气互连骨架/).waitFor());
   assert.deepEqual(errors,[],`${server.label} page errors`);await context.close();
+ }
+ // Non-timed correctness context only: interception must never affect measured HTTP cache.
+ const routeRecovery=[];
+ if(comparison==='route-lazy'){
+  const server=servers.find(s=>s.label==='candidate');
+  const context=await browser.newContext({baseURL:server.origin,viewport:{width:1440,height:960},serviceWorkers:'block'});
+  await context.addInitScript(installDateOnlyClock,Date.parse(ANCILLARY_CLOCK));
+  const page=await context.newPage();page.setDefaultTimeout(15000);
+  let rejected=0;
+  const chunkPattern='**/assets/StockData-*.js';
+  await context.route(chunkPattern,route=>{rejected++;return route.abort('failed');});
+  await page.goto('/stock-data?code=600001');
+  await page.getByRole('alert').filter({hasText:'页面加载失败（网络或资源版本异常）'}).waitFor();
+  assert.ok(rejected>0,'The route chunk failure must actually be injected');
+  const errorText=await page.getByRole('alert').innerText();
+  assert.doesNotMatch(errorText,/https?:|\/assets\/|TypeError|stack/i);
+  assert.equal(await page.getByRole('heading',{name:'合成证券 600001',exact:true}).count(),0);
+  await context.unroute(chunkPattern);
+  await page.getByRole('button',{name:'重新加载页面',exact:true}).click();
+  await page.getByRole('heading',{name:'合成证券 600001',exact:true}).waitFor();
+  routeRecovery.push({label:'candidate',route:'/stock-data',injectedChunkFailures:rejected,sanitizedError:true,reloadRecovered:true,scope:'Non-timed separate context'});
+  await context.close();
  }
  // Native IndexedDB measurement: seed raw synthetic records outside measured region, then run real store validation.
  const storage=[];
@@ -125,7 +149,7 @@ try{
  const summary=[];for(const label of ['baseline','candidate'])for(const name of [...new Set(rows.map(r=>r.name))]){const group=rows.filter(r=>r.label===label&&r.name===name);summary.push({label,name,samples:group.length,firstUsefulP50Ms:quantile(group.map(r=>r.firstUsefulMs),.5),firstUsefulP95Ms:quantile(group.map(r=>r.firstUsefulMs),.95),uiSettledP50Ms:quantile(group.map(r=>r.uiSettledMs),.5),uiSettledP95Ms:quantile(group.map(r=>r.uiSettledMs),.95),medianSubresourceTransferredBytes:quantile(group.map(r=>r.requests.reduce((s,q)=>s+q.transferBytes,0)),.5),medianRequests:quantile(group.map(r=>r.requests.length),.5)});}
  const buildIdentities=Object.fromEntries(servers.map(s=>[s.label,JSON.parse(readFileSync(join(s.root,'vibe-build.json'),'utf8'))]));
  const builds=Object.fromEntries(servers.map(s=>[s.label,measureBuild(s.root)]));
- assert.equal(builds.baseline.eagerPcbBody,true,'Baseline must reproduce eager content');assert.equal(builds.candidate.eagerPcbBody,false,'Candidate must defer unrelated full sector bodies');
- const report={buildIdentities,builds,sequence,schema:'frontend-performance.v2',node:process.version,browser:browser.version(),samples,warmup,timingAuthority:'Native performance.now + MutationObserver visible-geometry DOM-ready proxies (not paint or interactivity); document offsets from navigation origin, SPA offsets from pre-action page timestamp; driver-observed polling durations retained separately; Date-only wall clock override',scope:'Production assets over uncompressed loopback; 20 ms synthetic API wait; cold browser context, warm reload, OS cache not reset; external fonts removed; no live provider/model/user data; UI-settled proxy = ready marker + fetch/body-read idle and unchanged request count across two animation frames; not full market-data completion',rows,summary,storage,unavailableSources:[...new Set(sourceErrors.map(r=>r.path))],writes,external};
+ assert.equal(builds.baseline.eagerPcbBody,comparison==='sector-chunks',comparison==='sector-chunks'?'Baseline must reproduce eager content':'Route experiment baseline must already defer sector content');assert.equal(builds.candidate.eagerPcbBody,false,'Candidate must defer unrelated full sector bodies');
+ const report={comparison,routeRecovery,buildIdentities,builds,sequence,schema:'frontend-performance.v2',node:process.version,browser:browser.version(),samples,warmup,timingAuthority:'Native performance.now + MutationObserver visible-geometry DOM-ready proxies (not paint or interactivity); document offsets from navigation origin, SPA offsets from pre-action page timestamp; driver-observed polling durations retained separately; Date-only wall clock override',scope:'Production assets over uncompressed loopback; 20 ms synthetic API wait; cold browser context, warm reload, OS cache not reset; external fonts removed; no live provider/model/user data; UI-settled proxy = ready marker + fetch/body-read idle and unchanged request count across two animation frames; not full market-data completion',rows,summary,storage,unavailableSources:[...new Set(sourceErrors.map(r=>r.path))],writes,external};
  writeFileSync(join(output,'results.json'),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify({summary,storage},null,2));
 }catch(error){writeFileSync(join(output,'failure.json'),JSON.stringify({message:error.message,stack:error.stack,rows,sourceErrors,writes,external},null,2));throw error;}finally{await browser?.close();await Promise.all(servers.map(s=>new Promise(r=>s.server.close(r))));}

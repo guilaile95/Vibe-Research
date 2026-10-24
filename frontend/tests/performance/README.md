@@ -61,3 +61,31 @@ all samples; do not publish exploratory timings as a final user-machine result.
 Counts initial HTML JS assets and gzip-equivalent bytes. The HTTP benchmark serves
 uncompressed static data; gzip figures are a deterministic comparison, not actual
 wire compression. Verifies full PCB content is still included in emitted chunks.
+
+## Route-loading experiment
+
+Use `--comparison route-lazy` when comparing the published first-stage optimization
+commit (2393b8416aee16a88a7edd4e3027d913f27fe846) with the route-loading candidate.
+This explicitly requires both builds to retain lazy sector content. The default
+`sector-chunks` comparison still requires the original eager-sector baseline.
+All fixtures, native clocks, alternating order and sample counts are unchanged.
+Resource rows now retain native `startTimeMs` and `responseEndMs` to distinguish
+chunk/API work from the interval before the visible DOM marker.
+
+Only three routes use the existing data router's `lazy` capability: daily review,
+stock data and sectors. This is an experiment pending same-runner browser evidence,
+not a claim of a measured latency improvement. Existing nested Suspense, error
+boundaries, browser history and unsaved-change blockers are retained.
+Official contracts: https://reactrouter.com/start/data/route-object#lazy and
+https://react.dev/reference/react/Suspense#caveats. React groups Suspense reveals;
+loading the matched route before render avoids an unnecessary route-code suspend,
+without patching React or loading other routes eagerly.
+
+In `route-lazy` mode, a separate non-timed browser context blocks the StockData
+route chunk, asserts the generic failure UI contains no URL/stack, then removes
+the interception and uses the actual reload button to recover. This context is
+not part of either timing population and cannot disable their HTTP cache.
+`router-lazy.test.mjs` evaluates the actual route definitions with the installed
+memory router and synthetic page modules: matched-only loading, rejected import,
+superseding navigation, Back, and existing unsaved-draft blocker lifecycle.
+These tests do not substitute for native browser or target-machine verification.

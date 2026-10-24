@@ -226,12 +226,25 @@ const workingStorage = { getItem: key => storage.get(key) ?? null, setItem: (key
 test.beforeEach(() => { storage.clear(); globalThis.localStorage = workingStorage; });
 test.afterEach(() => { globalThis.localStorage = workingStorage; storage.clear(); });
 
-const layoutHarness = () => harness('components/layout/Layout.tsx', 'Layout', {
-  'react-router-dom': { useLocation: () => ({ pathname: '/notes' }), Link: 'link', Outlet: 'outlet' },
+const layoutHarness = (navigationState = { state: 'idle' }) => harness('components/layout/Layout.tsx', 'Layout', {
+  'react-router-dom': { useLocation: () => ({ pathname: '/notes' }), useNavigation: () => navigationState, Link: 'link', Outlet: 'outlet' },
   '@/hooks/useDarkMode': { useDarkMode: () => ({ dark: false, toggle() {} }) },
   '@/lib/storage': preferenceStorage, '@/lib/navigation': navigation,
 }, { localStorage: globalThis.localStorage });
 const sidebarControl = (tree, name) => nodes(tree).find(node => node.type === 'button' && node.props['aria-label'] === name);
+
+test('pending route navigation is announced without replacing or unmounting the active outlet', () => {
+  const state = { state: 'idle' };
+  const h = layoutHarness(state);
+  assert.equal(nodes(h.render()).filter(n => n.props.role === 'status').length, 0);
+  state.state = 'loading';
+  const pending = h.render();
+  assert.ok(nodes(pending).some(n => n.props.role === 'status' && n.props['aria-live'] === 'polite'));
+  assert.ok(nodes(pending).some(n => n.type === 'outlet'));
+  state.state = 'idle';
+  assert.equal(nodes(h.render()).filter(n => n.props.role === 'status').length, 0);
+  h.unmount();
+});
 
 test('sidebar valid preferences persist and missing or corrupt values default to expanded', () => {
   for (const value of [null, 'expanded', 'collapsed', '', 'true', '{broken']) {
