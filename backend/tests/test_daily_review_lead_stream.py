@@ -11,6 +11,7 @@ import pytest
 import app as app_module
 import chat
 from test_chat_sse_stream import sse
+from model_stream_phase_fixtures import isolate_stream_phase
 from test_daily_review_lead_api import LLM, URL, events, isolated, post  # noqa: F401
 
 
@@ -152,10 +153,7 @@ def test_async_total_deadline_bounds_headers_body_and_trickling(monkeypatch, pha
     cancelled_reads = []
     active_reads = set()
     owner_task = None
-    clock = 0.0
-    if phase in ("before_first_read", "between_reads"):
-        # Advance only the model deadline, independently of the event-loop clock.
-        monkeypatch.setattr(chat, "time", SimpleNamespace(monotonic=lambda: clock))
+    entered = []
 
     async def read(awaitable):
         task = asyncio.current_task()
@@ -171,6 +169,9 @@ def test_async_total_deadline_bounds_headers_body_and_trickling(monkeypatch, pha
 
     class Body(httpx.AsyncByteStream):
         async def __aiter__(self):
+            entered.append("body")
+            if phase in ("body_pause", "trickling"):
+                clock.start()
             try:
                 while True:
                     yield sse({"choices": [{"delta": {"content": "partial"}}]})
@@ -185,32 +186,34 @@ def test_async_total_deadline_bounds_headers_body_and_trickling(monkeypatch, pha
             closed.append(True)
 
     async def handler(request):
-        nonlocal clock
+        entered.append("headers")
         if phase == "before_headers":
+            clock.start()
             try:
                 await read(asyncio.Event().wait())
             finally:
                 interrupted.append(True)
         if phase == "before_first_read":
-            clock += 1.0
+            clock.advance(1.0)
         return httpx.Response(200, stream=Body())
 
+    clock = isolate_stream_phase(monkeypatch, handler)
     # Prepare the mock client outside the short header/body deadline budget.
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: client)
 
     async def exercise():
-        nonlocal clock, owner_task
-        # Thread startup is not the header/body phase this test exercises.
-        await anyio.to_thread.run_sync(lambda: None)
+        nonlocal owner_task
+        # DNS preparation has independent blocking/cancellation coverage.
         owner_task = asyncio.current_task()
         result = []
         with pytest.raises(chat.ModelTransportError, match="超时"):
             async for event in chat.stream_api_messages(LLM, []):
                 result.append(event)
                 if phase == "between_reads":
-                    clock += 1.0
+                    clock.advance(1.0)
         assert all(event["type"] != "done" for event in result)
+        assert entered == (["headers"] if phase in ("before_headers", "before_first_read") else ["headers", "body"])
         assert not active_reads
         if phase in ("before_headers", "body_pause"):
             assert cancelled_reads == [True]

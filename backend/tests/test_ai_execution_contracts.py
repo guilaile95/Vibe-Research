@@ -15,12 +15,13 @@ import chat
 import model_transport as transport
 import native_intel_ai
 import native_intel_filter
+from offline_network_fixtures import block_external_connections
 
 
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch, tmp_path):
     monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(socket.socket, "connect", lambda *_a, **_k: pytest.fail("real TCP forbidden"))
+    block_external_connections(monkeypatch)
     monkeypatch.setattr(transport.requests.utils, "get_environ_proxies", lambda *_: {})
     monkeypatch.setattr(socket, "getaddrinfo", lambda host, port, **_: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (host if host[0].isdigit() else "8.8.8.8", port))])
 
@@ -44,7 +45,7 @@ def test_every_settings_provider_reaches_filter_dispatch(monkeypatch, provider):
 
 
 def test_provider_registry_matches_actual_frontend_options():
-    text = (Path(__file__).parents[2] / "frontend/src/lib/ai-models.ts").read_text()
+    text = (Path(__file__).parents[2] / "frontend/src/lib/ai-models.ts").read_text(encoding="utf-8")
     import re
     values = set(re.findall(r'^  \| "([^"]+)"', text, re.M))
     assert values == ai_providers.API_PROVIDERS | {"cli-codex"}
@@ -214,7 +215,10 @@ def test_actual_requests_proxy_protocol_uses_numeric_connect_and_verified_host(m
     response.close()
     assert connects == [(endpoint.proxy.address, 8080)]
     assert names == (["proxy.invalid"] if proxy_scheme == "https" else []) + ["model.invalid"]
-    assert b"CONNECT 8.8.8.8:443 HTTP/1.0" in b"".join(writes)
+    # CPython 3.12 upgraded stdlib CONNECT from HTTP/1.0 to HTTP/1.1.
+    # Both use the identical pinned numeric authority; neither may tunnel DNS.
+    connect_line = b"".join(writes).split(b"\r\n", 1)[0]
+    assert connect_line in (b"CONNECT 8.8.8.8:443 HTTP/1.0", b"CONNECT 8.8.8.8:443 HTTP/1.1")
     assert b"Host: model.invalid" in b"".join(writes)
 
 @pytest.mark.parametrize('events', [[{'type': 'done'}, {'type': 'done'}], [{'type': 'done'}, {'type': 'delta', 'text': 'late'}]])
