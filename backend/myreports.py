@@ -50,7 +50,7 @@ def _migrate_legacy() -> None:
         os.replace(tmp, REPORTS_DIR)  # 同盘原子改名：复制中断不会留半套研报挡住下次重试
     except OSError as e:
         # 迁移失败不阻塞启动，但要出声——旧数据原样保留在 _OLD_DEFAULT_DIR，可手工复制
-        print(f"[vibe-research] 研报数据迁移失败（旧数据仍在 {_OLD_DEFAULT_DIR}）: {e}", file=sys.stderr)
+        print("[vibe-research] 研报数据迁移失败（旧数据仍保留）", file=sys.stderr)
 
 
 _migrate_legacy()
@@ -379,7 +379,7 @@ def _migrate_index() -> None:
         _save_index(items)
     except Exception as e:  # noqa: BLE001
         # 迁移失败不阻塞启动；旧条目原样保留，下次启动会重试。
-        print(f"[vibe-research] 研报索引元数据迁移失败（旧条目保留，不影响启动）：{e}", file=sys.stderr)
+        print("[vibe-research] 研报索引元数据迁移失败（旧条目保留，不影响启动）", file=sys.stderr)
 
 
 def _upgrade_entry(e: dict) -> None:
@@ -570,6 +570,9 @@ def save_report(
     ext = os.path.splitext(fname)[1].lower()
     if ext not in ALLOWED_EXT:
         raise ReportError(f"不支持的文件类型 {ext or '（无扩展名）'}；支持：PDF / Word / txt / md / 表格 / 图片")
+    # Reject before decoding: base64 expands memory even before the blob cap.
+    if len(content_b64) > ((MAX_BYTES + 2) // 3) * 4 + 1024:
+        raise ReportError("文件编码内容超过大小上限")
     # base64 可能带 data:URI 前缀（前端 FileReader.readAsDataURL），剥掉逗号前半段
     if content_b64.startswith("data:"):
         parts = content_b64.split(",", 1)
@@ -581,7 +584,7 @@ def save_report(
     try:
         blob = base64.b64decode(raw_b64, validate=True)
     except (binascii.Error, ValueError) as e:
-        raise ReportError(f"文件内容解码失败：{e}") from e
+        raise ReportError("文件内容解码失败") from None
     if not blob:
         raise ReportError("文件为空")
     if len(blob) > MAX_BYTES:

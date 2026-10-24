@@ -187,7 +187,7 @@ try {
   assert.match(await page.getByTestId("native-intel-deep-read-content").innerText(), /First-party repository README/);
   assert.match(await page.getByTestId("native-intel-deep-read-analysis").innerText(), /facts stay non-authoritative/);
   assert.equal(deepReadBody.llm.model, credential.model);
-  assert.equal("revision" in deepReadBody.llm, false);
+  assert.deepEqual(deepReadBody.llm, credential);
   console.log("Native Intel GitHub Trending + HF Daily Papers + HN: PASS");
 } finally {
   if (browser) await browser.close();

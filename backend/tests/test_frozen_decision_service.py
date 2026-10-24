@@ -1,6 +1,8 @@
 """Frozen Decision Ledger 服务层测试：确认门、严格验证、确定性哈希、幂等重放。"""
 from __future__ import annotations
 
+from decision_clock_fixtures import historical_decision_server_clock as _historical_decision_server_clock  # noqa: F401
+
 import json
 import sqlite3
 from pathlib import Path

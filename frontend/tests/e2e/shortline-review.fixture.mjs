@@ -20,7 +20,7 @@ export function createShortlineFixture(origin){
  }
  if(method==='POST'&&u.pathname==='/api/shortline-review/generate'&&!u.search){
   const g=golden[scenario];if(!g.events||!body||!/^[a-f0-9]{32}$/.test(body.generation_id))return deny('invalid generation');
-  const expected={trade_date:DAY,mode:g.preview.mode,bundle_id:g.preview.bundle_id,generation_id:body.generation_id,llm:{provider:'cli-codex',baseURL:'',apiKey:'',model:'SYNTHETIC_OFFLINE'}};
+  const expected={trade_date:DAY,mode:g.preview.mode,bundle_id:g.preview.bundle_id,generation_id:body.generation_id,llm:{revision:'1',provider:'cli-codex',baseURL:'',apiKey:'',model:'SYNTHETIC_OFFLINE'}};
   if(!isDeepStrictEqual(body,expected)||saved.has(body.generation_id))return deny('generation payload mismatch');
   const events=structuredClone(g.events);for(const e of events)if(e.type==='done')e.generation_id=body.generation_id;
   const version=structuredClone(g.version);version.generation_id=body.generation_id;

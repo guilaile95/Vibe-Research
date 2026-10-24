@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { createTemporalClock, CREATION_TIME } from "./temporal.fixture.mjs";
 import { seedActiveCampaign } from "./campaign-active-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -307,8 +308,10 @@ async function run() {
     const backend = `http://127.0.0.1:${backendPort}`;
     const frontend = `http://127.0.0.1:${frontendPort}`;
     const py = pythonConfig();
+    const clock = createTemporalClock(tempDataDir);
     const env = {
       ...process.env,
+      ...clock.env,
       VR_DATA_DIR: tempDataDir,
       VR_REPORTS_DIR: tempDataDir,
       VIBE_RESEARCH_TRADE_LEDGER_DB: join(tempDataDir, "trade_ledger.sqlite3"),
@@ -346,7 +349,8 @@ async function run() {
     } catch {
       browser = await chromium.launch({ headless: true, channel: "chrome" });
     }
-    const page = await browser.newPage();
+    const page = await browser.newPage({ timezoneId: "UTC" });
+    await page.clock.setFixedTime(new Date(CREATION_TIME));
     await page.route("https://fonts.googleapis.com/**", (route) => route.fulfill({ contentType: "text/css", body: "" }));
     const consoleErrors = [];
     const failedRequests = [];
@@ -749,6 +753,8 @@ async function run() {
         await page.unroute(probeRoute);
       }
     }
+    clock.set("2026-08-29T08:00:00.000000Z");
+    await page.clock.setFixedTime(new Date("2026-08-29T08:00:00Z"));
     const apiWriteMarker = apiWriteRequests.length;
     // 1) 通过正常界面创建此前不存在的新证据（evidence 创建 ≠ 研究变化已确认）。
     await page.goto(`${frontend}/evidence/new?subject_type=stock&subject_id=600519&return_to=${encodeURIComponent(`/thesis/${thesisId}`)}`, { waitUntil: "domcontentloaded" });
@@ -782,6 +788,8 @@ async function run() {
     const updatedEvidence = Object.fromEntries(["evidence_type", "claim", "source_title", "source_url", "source_date", "accessed_at", "classification", "confidence"].map((key) => [key, evidenceBefore[key]]));
     updatedEvidence.expected_edit_token = evidenceBefore.edit_token;
     updatedEvidence.source_title = "渠道复核周记 v2";
+    // The stale-review guard compares updated_at, so this is a later mutation.
+    await page.clock.setFixedTime(new Date(clock.advance()));
     await jsonRequest(backend, `/api/evidence/${newOptionValue}`, "PUT", updatedEvidence);
     const rejected = page.waitForResponse((response) => response.url().endsWith(`/thesis/${thesisId}/deltas`) && response.request().method() === "POST" && response.status() === 409);
     await page.getByTestId("confirm-thesis-delta").click();
@@ -796,6 +804,7 @@ async function run() {
     await page.getByLabel("变更原因").fill("冻结后渠道复核走弱，重新核对 v2 后确认削弱");
     assert.equal(await acknowledgment.isChecked(), false, "draft edits must invalidate acknowledgment");
     await acknowledgment.check();
+    await page.clock.setFixedTime(new Date(clock.advance()));
     failDeltaReadback = true;
     await page.getByTestId("confirm-thesis-delta").click();
     await page.getByTestId("delta-write-status").waitFor({ timeout: 10000 });
@@ -819,6 +828,7 @@ async function run() {
       "the only business writes must be evidence creation and the explicit delta confirmation",
     );
     await deltaPanel.screenshot({ path: join(shotDir, "delta-readback-recovered.png") });
+    await page.clock.setFixedTime(new Date(clock.advance()));
     // 3) 决策复核页：摘要接住新 delta（当前状态削弱），连续性识别 ADDED，冻结原文未改写。
     await page.goto(`${frontend}/campaigns/${campaign.campaign_id}/decision-proposal`, { waitUntil: "domcontentloaded" });
     await page.locator('[data-horizon-source="CURRENT_THESIS"]').waitFor({ timeout: 30000 });
@@ -833,7 +843,7 @@ async function run() {
     await page.getByTestId("research-brief").screenshot({ path: join(shotDir, "post-freeze-delta-brief.png") });
     if (readbackVariant === "valid") {
       // R6 path one ends at a new explicitly committed decision, not merely ADDED.
-      await page.getByLabel("下次必须重新检查的时间").fill("2099-01-01T10:00");
+      await page.getByLabel("下次必须重新检查的时间").fill("2026-09-10T10:00");
       await page.getByLabel("这个判断成立依赖什么").fill("渠道更新 v2 后重新评估");
       await page.getByLabel("出现什么情况说明判断错了").fill("动销继续恶化");
       await page.getByLabel("对这只股票的判断").selectOption("SUPPORT");
@@ -856,7 +866,20 @@ async function run() {
       assert.ok(successfulCommitBody, "successful commit request must be observable");
       const beforeTerminal = await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/decision-proposal/committed`);
 
+      // This is a new pending proposal, not an exact retry of the prior freeze.
+      // A fixed as_of with unchanged input deliberately identifies the old replay.
+      const pendingPhase = clock.advance();
+      await page.clock.setFixedTime(new Date(pendingPhase));
+      const pendingPreviewResponse = page.waitForResponse((response) => (
+        response.request().method() === "POST"
+        && response.url().endsWith(`/api/campaigns/${campaign.campaign_id}/decision-proposal/preview`)
+      ));
       await page.getByRole("button", { name: "预览决策草案" }).click();
+      const pendingPreview = await pendingPreviewResponse;
+      assert.equal(pendingPreview.status(), 200, await pendingPreview.text());
+      const pendingProposal = (await pendingPreview.json()).data;
+      assert.notEqual(pendingProposal.proposal_fingerprint, successfulCommitBody.expected_proposal_fingerprint, "terminal race must exercise a new proposal rather than an allowed exact replay");
+      assert.equal(Date.parse(pendingProposal.proposal.as_of), Date.parse(pendingPhase));
       await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
       await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/transitions`, "POST", {
         expected_status: "ACTIVE",
@@ -865,11 +888,11 @@ async function run() {
       const terminalCommitResponse = page.waitForResponse((response) => (
         response.request().method() === "POST"
         && response.url().endsWith(`/api/campaigns/${campaign.campaign_id}/decision-proposal/commit`)
-        && response.status() === 409
       ));
       await page.getByRole("checkbox", { name: /我已检查股票判断、操作倾向、组合限制/ }).check();
       await page.getByRole("button", { name: "确认并冻结正式决策" }).click();
-      await terminalCommitResponse;
+      const terminalResponse = await terminalCommitResponse;
+      assert.equal(terminalResponse.status(), 409, `[terminal admission] phase=${pendingPhase} url=${page.url()} body=${await terminalResponse.text()}`);
       const terminalReadonly = page.getByTestId("terminal-campaign-decision-readonly");
       await terminalReadonly.waitFor();
       assert.equal(await terminalReadonly.getAttribute("data-campaign-status"), "CLOSED");

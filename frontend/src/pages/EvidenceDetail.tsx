@@ -1,3 +1,4 @@
+import { useUnsavedChanges } from "@/components/ui/UnsavedChangesDialog";
 import { AnnouncementGroupsCard } from "@/components/research/AnnouncementGroupsCard";
 import { FilingEvidenceCard } from "@/components/research/FilingEvidenceCard";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -138,6 +139,8 @@ export function EvidenceDetail() {
   const [latestErr, setLatestErr] = useState<string | null>(null);
   const [latestMissing, setLatestMissing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const editBaseline = useRef("");
+  const { dialog: unsavedDialog, complete: completeNavigation } = useUnsavedChanges(editing && JSON.stringify(form) !== editBaseline.current, busy);
   const [editErr, setEditErr] = useState<string | null>(null);
   const [temporal, setTemporal] = useState<EvidenceTemporalAuthority | null>(null);
   const [temporalLoading, setTemporalLoading] = useState(false);
@@ -266,7 +269,7 @@ export function EvidenceDetail() {
   const startEdit = () => {
     if (!record || record.deleted || conflict || busy) return;
     setEditToken(record.edit_token);
-    setForm({
+    const initialForm: Partial<EvidenceRecord> = {
       subject_type: record.subject_type,
       subject_id: record.subject_id,
       evidence_type: record.evidence_type,
@@ -277,7 +280,9 @@ export function EvidenceDetail() {
       accessed_at: toDateTimeLocal(record.accessed_at),
       classification: record.classification,
       confidence: record.confidence,
-    });
+    };
+    editBaseline.current = JSON.stringify(initialForm);
+    setForm(initialForm);
     setEditErr(null);
     setEditing(true);
   };
@@ -313,7 +318,7 @@ export function EvidenceDetail() {
       if (rid !== runIdRef.current) return;
       if (e instanceof ApiError && (e.status === 409 || e.status === 404)) {
         setConflict(true);
-        setEditErr("证据已被其他操作修改或删除。你的全部草稿已保留，尚未覆盖服务器内容。");
+        setEditErr("证据已被其他操作修改或删除。你的全部草稿仅在当前页面保留，尚未覆盖服务器内容；刷新或离开前请复制备份。");
         await fetchLatest();
       } else {
         setEditErr(e instanceof ApiError ? e.message : "保存失败");
@@ -332,6 +337,7 @@ export function EvidenceDetail() {
     try {
       await api.evidenceDelete(id, record.edit_token);
       if (rid !== runIdRef.current) return;
+      completeNavigation();
       nav(returnTo || "/evidence");
     } catch (e) {
       if (rid !== runIdRef.current) return;
@@ -376,6 +382,7 @@ export function EvidenceDetail() {
 
   return (
     <div>
+      {unsavedDialog}
       <Link to={returnTo} data-testid="evidence-detail-back" className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
         <ArrowLeft className="h-4 w-4" /> {backLabel}
       </Link>

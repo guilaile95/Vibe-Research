@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { ReadRequestContext } from '../src/lib/readRequestContext.ts';
 import { ApiError } from '../src/lib/api.ts';
 import * as panels from '../src/components/ui/optionalDataPanelState.ts';
 import * as evidence from '../src/lib/stockDataEvidence.ts';
@@ -30,12 +31,13 @@ function harness(globalStock, initialQuery = "AAP", valuation = async () => { th
     '@/lib/candidateCampaign':candidate,
     '@/lib/internalReturnTo':internalReturn,
     '@/lib/utils':{cn:(...items)=>items.join(' ')},
-    '@/lib/api':{ApiError,api:new Proxy({globalStock,valuation,hkCashflow:async()=>{throw new ApiError('not HK',404);}}, {get:(target,key)=>key in target?target[key]:()=>Promise.reject(new Error(`Synthetic unavailable API ${String(key)}`))})},
+    '@/lib/readRequestContext':{ReadRequestContext},
+    '@/lib/api':{ApiError,loadAccessKey:()=>'',api:new Proxy({globalStock,valuation,hkCashflow:async()=>{throw new ApiError('not HK',404);}}, {get:(target,key)=>key in target?target[key]:()=>Promise.reject(new Error(`Synthetic unavailable API ${String(key)}`))})},
   };
   const exports={};
   const source=ts.transpileModule(readFileSync(new URL('../src/pages/StockData.tsx',import.meta.url),'utf8'),{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
   vm.runInNewContext(source,{exports,require:name=>modules[name]??stub,URLSearchParams});
-  return {render(){cursor=0;const tree=exports.StockData();const queue=pending;pending=[];queue.forEach(fn=>fn());return tree;},query(value){query=value;}};
+  return {render(){cursor=0;const tree=exports.StockData();const queue=pending;pending=[];queue.forEach(fn=>fn());return tree;},query(value){query=value;},unmount(){effects.forEach(effect=>effect?.cleanup?.());}};
 }
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function text(tree){if(tree==null||typeof tree==='boolean')return '';if(typeof tree!=='object')return String(tree);return Array.isArray(tree)?tree.map(text).join(''):text(tree.props?.children);}
@@ -87,4 +89,12 @@ test('production candidate entry remains bound to latest query after late quote 
   const tree = h.render();
   assert.equal(new URL(candidateLink(tree).props.to, 'http://localhost').pathname, '/candidates/600520');
   assert.doesNotMatch(text(tree), /LATE_OLD/);
+});
+
+test('actual StockData unmount aborts active read transport and rejects its late result', async () => {
+  let signal, resolve;
+  const h=harness((_symbol, receivedSignal)=>{signal=receivedSignal;return new Promise(r=>{resolve=r;});}, 'AAPL');
+  h.render();await tick();h.unmount();
+  assert.equal(signal.aborted,true);
+  resolve({code:'AAPL',name:'Too late'});await tick();
 });

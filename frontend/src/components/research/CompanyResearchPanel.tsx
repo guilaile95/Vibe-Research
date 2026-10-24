@@ -91,11 +91,13 @@ export function CompanyResearchPanel({ subject }: { subject: Subject }) {
     } catch (e) { if (active()) setError(e instanceof Error ? e.message : "研究历史读取失败"); }
     finally { if (active()) { historyOwner.current = null; setHistoryBusy(false); } }
   };
-  const save = () => {
+  const save = async () => {
     if (!record || savedRuns.current.has(record.run_id)) return;
+    const saveGeneration = generation.current;
+    const current = () => generation.current === saveGeneration && contextRef.current === context;
     savedRuns.current.add(record.run_id);
-    try { addNote("公司研究", `${subject.market}:${subject.symbol} 六阶段研究`, researchNote(record)); setSaved(true); }
-    catch (e) { savedRuns.current.delete(record.run_id); setError(e instanceof Error ? e.message : "研究记录保存失败"); }
+    try { await addNote("公司研究", `${subject.market}:${subject.symbol} 六阶段研究`, researchNote(record)); if (current()) setSaved(true); }
+    catch (e) { savedRuns.current.delete(record.run_id); if (current()) setError(e instanceof Error ? e.message : "研究记录保存失败"); }
   };
   return <details className="mb-4 rounded-xl border border-border p-4" data-testid="company-research">
     <summary className="cursor-pointer font-semibold">六阶段公司研究 · {subject.market}:{subject.symbol}</summary>

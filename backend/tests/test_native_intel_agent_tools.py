@@ -438,10 +438,11 @@ def test_req_28_agent_status_codex_unavailable(tmp_agent_db):
     ):
         status = tools.get_intel_status()
         assert status["ai"]["available"] is False
-        assert status["ai"]["authenticated"] is False
+        assert status["ai"]["authenticated"] is None
+        assert status["ai"]["configured"] is False
 
 
-def test_req_29_agent_status_codex_authenticated(tmp_agent_db):
+def test_req_29_unconfigured_status_never_falls_back_to_authenticated_codex(tmp_agent_db):
     tools = agent_tools.NativeIntelAgentTools(tmp_agent_db)
     with patch(
         "agent_runtime.status",
@@ -453,8 +454,10 @@ def test_req_29_agent_status_codex_authenticated(tmp_agent_db):
         },
     ):
         status = tools.get_intel_status()
-        assert status["ai"]["available"] is True
-        assert status["ai"]["authenticated"] is True
+        assert status["ai"]["available"] is False
+        assert status["ai"]["authenticated"] is None
+        assert status["ai"]["provider"] is None
+        assert status["ai"]["modelConnectivity"] == "unknown"
 
 
 def test_req_30_real_mcp_tool_call_rejected_by_runtime():

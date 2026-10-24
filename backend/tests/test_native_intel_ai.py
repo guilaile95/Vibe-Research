@@ -59,7 +59,7 @@ def tmp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     import ai_credential_store as cred_store
     cred_store.save(
-        {"provider": "cli-codex", "model": "gpt-5-codex"},
+        {"provider": "openai-compatible", "model": "synthetic", "baseURL": "https://model.invalid", "apiKey": "SYNTHETIC"},
         expected_revision=cred_store.status()["revision"],
     )
     cred_path = cred_store.credential_path().resolve()
@@ -435,7 +435,7 @@ def test_same_input_cache_hit(tmp_db):
         })
 
     report = reporting.generate_report(path=tmp_db, mode="CURRENT", commit=False)
-    cfg = {"provider": "cli-codex", "model": "gpt-5-codex"}
+    cfg = {"provider": "openai-compatible", "model": "synthetic", "baseURL": "https://model.invalid", "apiKey": "SYNTHETIC"}
     res1 = ai.analyze_report(report, cfg=cfg, model_runner=mock_runner, path=tmp_db)
     assert call_count == 1
     assert res1["cached"] is False
@@ -1018,7 +1018,7 @@ def test_req_11_to_15_cache_fingerprint_mutations_and_hit(tmp_db):
             "rss_insights": "无", "outlook_strategy": "无", "standalone_summaries": {}
         })
 
-    cfg = {"provider": "cli-codex", "model": "gpt-5-codex"}
+    cfg = {"provider": "openai-compatible", "model": "synthetic", "baseURL": "https://model.invalid", "apiKey": "SYNTHETIC"}
     base_item = {
         "item_key": "fixed_key_001", "url": "https://news.com/1",
         "title": "基准新闻标题", "summary": "基准摘要内容", "published_at": "2026-09-05T08:00:00Z",
@@ -1200,3 +1200,12 @@ def test_translation_whitespace_production_sse_never_success_cache(tmp_db, monke
     assert first["status"] == second["status"] == "ERROR"
     assert len(calls) == 2 and second["cached"] is False
     assert second["translated_text"] == "Synthetic headline"
+
+
+def test_unknown_codex_resolution_never_serves_cached_artifact(tmp_db):
+    runner = MagicMock(return_value="synthetic translation")
+    cfg = {"provider": "cli-codex", "model": "legacy-label"}
+    first = ai.translate_text("original", cfg=cfg, model_runner=runner, path=tmp_db)
+    second = ai.translate_text("original", cfg=cfg, model_runner=runner, path=tmp_db)
+    assert first["model"] == second["model"] == "unknown/default"
+    assert second["cached"] is False and runner.call_count == 2

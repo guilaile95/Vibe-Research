@@ -1,6 +1,6 @@
 # Current Stage — Recovery Coordinates
 
-Last reviewed: 2026-10-04
+Last reviewed: 2026-10-24
 
 This file is a recovery pointer, not Engineering Truth and not a second task database.
 Always resolve live GitHub state before acting; do not persist an exact stable SHA here.
@@ -33,8 +33,10 @@ the default is **FROZEN between slices**. A task list or historical Draft does n
 
 The October 2 documentation refresh had a documentation-only Draft boundary. Subsequent
 Owner-authorized cloud repairs and bounded research/UI improvements are recorded in the October 4
-snapshot. Current scope still stops before stable merge, deployment or desktop changes; recover
-the latest explicit instruction rather than extending either historical task automatically.
+snapshot. Those historical task boundaries do not define a new task's authorization. Recover
+the latest explicit user instruction; review permission alone never authorizes implementation,
+deployment or desktop changes. [Runtime identity and calendar maintenance](RUNTIME_IDENTITY_AND_CALENDAR.md)
+describes the separate, read-only deployment evidence checks.
 
 Resolve the live remote stable HEAD separately from local branch names. Local integrated source,
 remote Draft branches and the currently running services are different evidence surfaces.

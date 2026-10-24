@@ -461,6 +461,7 @@ function Invoke-VibeLauncher {
         }
 
         if (-not $NoBrowser -and -not $SmokeTest) {
+            Write-Host "启动成功不代表版本已更新；复用服务和前端开发模式的部署身份仍需独立核验。参阅 docs/RUNTIME_IDENTITY_AND_CALENDAR.md。" -ForegroundColor Yellow
             Start-Process $FrontendUrl | Out-Null
         }
 

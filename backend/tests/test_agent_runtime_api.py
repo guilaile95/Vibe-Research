@@ -15,6 +15,8 @@ import app as app_module
 @pytest.fixture(autouse=True)
 def loopback_transport_double(monkeypatch):
     """Existing API tests remain synthetic while exercising the Session wrapper."""
+    import ai_credential_store
+    monkeypatch.setattr(ai_credential_store, "dispatch_config", lambda cfg: cfg)
     from contextlib import contextmanager
     originals = {"GET": agent_runtime.requests.get, "POST": agent_runtime.requests.post}
 

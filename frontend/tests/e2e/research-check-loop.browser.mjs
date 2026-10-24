@@ -465,11 +465,11 @@ try {
       assert.equal(await noteDraft.inputValue(), '独立轻量草稿保持');
 
       await storageWrites.flush(page); phase = 'resume-explicit-note-save'; await storageWrites.setPhase(page, phase);
-      const researchBeforeNote = await readDatabase(page), noteBefore = await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes') || '[]'));
+      const researchBeforeNote = await readDatabase(page), noteBefore = await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")));
       await page.getByTestId('candidate-research-note').getByRole('button', { name: '保存暂定研究', exact: true }).click();
       await page.getByTestId('candidate-research-note').getByRole('button', { name: '已保存暂定研究', exact: true }).waitFor(); await frames();
       assert.deepEqual(await readDatabase(page), researchBeforeNote, 'note save does not write question/round/operation storage');
-      assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes') || '[]').length), noteBefore.length + 1);
+      assert.equal(await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")).length), noteBefore.length + 1);
       await storageWrites.flush(page); phase = 'resume-explicit-round-save'; await storageWrites.setPhase(page, phase);
       await noteDraft.fill('研究保存不得清除另一份脏笔记');
       await panel.getByLabel('本轮判断', { exact: true }).fill('显式核对保存，不双写笔记');
@@ -487,11 +487,11 @@ try {
       assert.deepEqual(afterRound.rounds.find(round => round.id === historical.id), historical);
       // Save the note explicitly, then inspect read-only recovery and recent browsing.
       await storageWrites.flush(page); phase = 'resume-explicit-second-note-save'; await storageWrites.setPhase(page, phase);
-      const noteCountBeforeSecond = await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes') || '[]').length);
+      const noteCountBeforeSecond = await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")).length);
       await page.getByTestId('candidate-research-note').getByRole('button', { name: '保存暂定研究', exact: true }).click();
       await page.getByTestId('candidate-research-note').getByRole('button', { name: '已保存暂定研究', exact: true }).waitFor(); await frames();
 
-      assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes') || '[]').length), noteCountBeforeSecond + 1);
+      assert.equal(await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")).length), noteCountBeforeSecond + 1);
       assert.deepEqual(await readDatabase(page), afterRound, 'second explicit note save remains note-only');
       await storageWrites.flush(page); phase = 'resume-recent-and-invalid-targets'; await storageWrites.setPhase(page, phase);
       await panel.getByLabel('打开原研究轮次', { exact: true }).selectOption(historical.id); await settleSelection(qa, historical.id);
@@ -537,6 +537,16 @@ try {
       await page.evaluate(() => window.__releaseContext()); await settleSelection(qa2, qa2.headRoundId);
       observations.push({ name: 'held-context-hash-after-release', href: page.url() });
       assert.equal(new URL(page.url()).hash, '#candidate-research-note', 'late question-only normalization keeps the latest hash');
+      // Normalizing a question-only URL starts a second readonly validation.
+      // A ready editor and updated address bar can precede that durable visit.
+      // Wait for the precise saved position, not just the earlier render.
+      await page.waitForFunction(({ question, round, hash }) => {
+        const href = JSON.parse(localStorage.getItem('vr-research-resume-v1') || '[]')[0]?.href;
+        if (!href) return false;
+        const saved = new URL(href, location.origin);
+        return saved.searchParams.get('question') === question
+          && saved.searchParams.get('round') === round && saved.hash === hash;
+      }, { question: qa2.id, round: qa2.headRoundId, hash: '#candidate-research-note' });
       const hashResume = await page.evaluate(() => JSON.parse(localStorage.getItem('vr-research-resume-v1'))[0].href);
       assert.equal(new URL(hashResume, baseURL).searchParams.get('round'), qa2.headRoundId);
       assert.equal(new URL(hashResume, baseURL).hash, '#candidate-research-note');

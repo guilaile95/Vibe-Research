@@ -700,6 +700,7 @@ def build_effective_events(
     trades: list[dict[str, Any]],
     *,
     ledger_start_ts: datetime | None = None,
+    current_at: datetime | None = None,
 ) -> dict[str, dict[str, Any]]:
     """read-only helper：应用 active corrections 后的 effective events map。
 
@@ -752,7 +753,45 @@ def build_effective_events(
     _apply_corrections(events_by_key, corrections)
     # CASH_* effective facts + 针对 CASH_* 的 correction payload 完整性（P0-S1B-C 读路径 fail closed）
     account_event_store.validate_effective_cash_events(events_by_key, corrections)
+    # Apply corrections before the time boundary so a correction cannot promote
+    # a future fact into current holdings/cash, and its target remains resolvable.
+    now = current_at or datetime.fromisoformat(_utc_now().replace("Z", "+00:00"))
+    for key, event in list(events_by_key.items()):
+        if key.startswith("trade:"):
+            try:
+                executed = datetime.fromisoformat(
+                    str(event.get("executed_at") or "").replace("Z", "+00:00")
+                )
+                if executed.tzinfo is None:
+                    raise ValueError("missing timezone")
+            except ValueError as exc:
+                raise PositionDerivationError("交易时间无法解析或缺少时区") from exc
+            if executed > now:
+                del events_by_key[key]
     return events_by_key
+
+
+def validate_trade_insert_on_connection(conn) -> None:
+    """Validate candidate facts against the same locked SQLite snapshot."""
+    if not account_event_store.table_exists_on_connection(conn, "account_events"):
+        return
+    events = [dict(row) for row in conn.execute(
+        "SELECT * FROM account_events WHERE voided_at IS NULL ORDER BY created_at, rowid"
+    )]
+    if not any(e["event_type"] == _EVENT_ACCOUNT_OPENING for e in events):
+        return
+    trades = [dict(row) for row in conn.execute(
+        "SELECT * FROM trade_records WHERE voided_at IS NULL"
+    )]
+    try:
+        # Prove all scheduled-to-become-current facts, including tolerated skew.
+        _derive_positions_from_facts(
+            events, trades, current_at=datetime.max.replace(tzinfo=timezone.utc)
+        )
+    except PositionDerivationError as exc:
+        raise trade_ledger_service.TradeReconciliationRequiredError(
+            "RECONCILIATION_REQUIRED：交易未写入，请先核对期初、时间与成交数量。" + str(exc)
+        ) from exc
 
 
 def derive_positions() -> dict[str, Any]:
@@ -761,7 +800,13 @@ def derive_positions() -> dict[str, Any]:
 
     events = account_event_store.list_events(db_path)
     trades = trade_ledger_store.list_records(db_path, include_voided=False, limit=None)
+    return _derive_positions_from_facts(events, trades)
 
+
+def _derive_positions_from_facts(
+    events: list[dict[str, Any]], trades: list[dict[str, Any]],
+    *, current_at: datetime | None = None,
+) -> dict[str, Any]:
     openings = [e for e in events if e["event_type"] == _EVENT_ACCOUNT_OPENING]
     if len(openings) > 1:
         raise PositionDerivationError("存在多个 ACCOUNT_OPENING 事件，账本不一致")
@@ -784,7 +829,7 @@ def derive_positions() -> dict[str, Any]:
     # events_by_key 构建 + active corrections 应用：与 ledger_cash_candidate 共用
     # build_effective_events helper（DRY），保证 Position / Cash 基于同一 effective facts。
     events_by_key = build_effective_events(
-        events, trades, ledger_start_ts=ledger_start_ts
+        events, trades, ledger_start_ts=ledger_start_ts, current_at=current_at
     )
 
     # Build chronological sequence: legacy openings (ledger boundary) FIRST, then trades.

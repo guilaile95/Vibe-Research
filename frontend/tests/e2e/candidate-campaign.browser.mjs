@@ -1,3 +1,4 @@
+import { selectCandidateRaceStrategy, assertEmptyCandidateRace } from './candidate-race-controls.fixture.mjs';
 import { storedCredential, routeCredentialStatus } from './credential-generation.fixture.mjs';
 import assert from "node:assert/strict";
 import { createReadStream, existsSync, readdirSync } from "node:fs";
@@ -1742,7 +1743,8 @@ try {
   await researchNote.getByLabel("本次要核对的问题").fill("后来的问题，不能覆盖旧回答来源");
   await researchNote.getByRole("button", { name: "围绕这个问题问 AI", exact: true }).click();
   await aiPanel.getByRole("button", { name: "存入沉淀", exact: true }).click();
-  const savedAi = await page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes"))[0]);
+  await aiPanel.getByRole("button", { name: "已存入沉淀", exact: true }).waitFor();
+  const savedAi = await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]"))[0]);
   assert.equal(savedAi.research.question, "合成问题：盈利是否有现金流支持？");
   assert.equal(savedAi.research.sourceLinks[0].url, "https://example.com/research-fixture", "answer retains its original selection after page inputs change");
   await aiPanel.getByRole("button", { name: "关闭", exact: true }).click();
@@ -1751,7 +1753,7 @@ try {
   await researchNote.getByLabel("下次核对", { exact: true }).fill("合成待办：核对下一期现金流");
   await researchNote.getByRole("button", { name: "保存暂定研究", exact: true }).click();
   await researchNote.getByRole("button", { name: "已保存暂定研究", exact: true }).waitFor();
-  const savedTentative = await page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes"))[0]);
+  const savedTentative = await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]"))[0]);
   await researchNote.getByRole("link", { name: "查看本股轻量笔记 →", exact: true }).click();
   await page.waitForURL((url) => url.pathname === "/notes" && url.searchParams.get("security_code") === "600519");
   await page.getByText(savedTentative.title, { exact: true }).click();
@@ -1806,7 +1808,7 @@ try {
   await page.evaluate(() => {
     window.__fixtureSetItem = Storage.prototype.setItem;
     Storage.prototype.setItem = function (key, value) {
-      if (key === "vr-notes") throw new DOMException("Synthetic quota failure", "QuotaExceededError");
+      if (key === "vr-notes.v2") throw new DOMException("Synthetic quota failure", "QuotaExceededError");
       return window.__fixtureSetItem.call(this, key, value);
     };
   });
@@ -1852,10 +1854,48 @@ try {
   assert.equal(await researchNote.getByRole("checkbox", { checked: true }).count(), 0);
   await researchNote.getByRole("button", { name: "围绕这个问题问 AI", exact: true }).click();
   assert.doesNotMatch(await aiPanel.innerText(), /DELAYED_A_ONLY|A-only pending question|合成 AI 回答/);
-  const researchAfterSwitch = await page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes")));
+  const researchAfterSwitch = await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")));
   assert.equal(researchAfterSwitch.length, 2);
   assert.ok(researchAfterSwitch.every((note) => note.research.securityCode === "600519"));
   assert.equal(JSON.stringify(state.writeRequests), formalWritesBeforeNotes, "lightweight research must never write formal state; chat is intercepted separately");
+  // P1-03: production React Router transitions while a real fetch is pending.
+  for (const outcome of ['success', 'failure', 'return-to-A']) {
+    let started, release;
+    const began = new Promise(resolve => { started = resolve; });
+    const held = new Promise(resolve => { release = resolve; });
+    const reads = [];
+    let completed = false;
+    const ownedCampaign = { campaign_id:'campaign_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', security_code:'600519', strategy:'SWING',status:'DRAFT',created_at:'2026-10-23T00:00:00Z' };
+    const raceRoute = async route => {
+      const request=route.request(), url=new URL(request.url());
+      if(url.pathname==='/api/campaigns'&&request.method()==='POST') {
+        started(); await held; completed=true;
+        return route.fulfill(outcome==='failure'?{status:503,json:{detail:'Late synthetic create failure'}}:{status:201,json:{data:ownedCampaign}});
+      }
+      if(url.pathname==='/api/campaigns'&&request.method()==='GET') {
+        const code=url.searchParams.get('security_code');reads.push(code);
+        return route.fulfill({json:{data:completed&&code==='600519'?[ownedCampaign]:[]}});
+      }
+      if(url.pathname.endsWith('/next-actions')) return route.fulfill({json:{data:{...ownedCampaign,next_actions:['RESEARCHING']}}});
+      return route.fallback();
+    };
+    await page.route('**/api/campaigns**',raceRoute);
+    await page.goto(`http://127.0.0.1:${port}/candidates/600519?return_to=${encodeURIComponent('/candidates/600520')}`,{waitUntil:'networkidle'});
+    const racingPanel=page.getByTestId('candidate-campaign-panel');
+    await selectCandidateRaceStrategy(racingPanel);
+    await racingPanel.getByTestId('create-candidate-campaign').click();await began;
+    await page.getByRole('link',{name:'返回来源',exact:true}).click();
+    await page.locator('[data-testid="candidate-workspace"][data-security-code="600520"]').waitFor();
+    await racingPanel.getByText('暂无候选投资计划',{exact:true}).waitFor();
+    if(outcome==='return-to-A') { await page.goBack();await page.locator('[data-testid="candidate-workspace"][data-security-code="600519"]').waitFor();await racingPanel.getByText('暂无候选投资计划',{exact:true}).waitFor(); }
+    const count=reads.length;
+    const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/campaigns'&&r.request().method()==='POST');
+    release();await (await response).finished();await page.waitForLoadState('networkidle');
+    assert.equal(reads.length,count,'late create receipt cannot refresh its old context');
+    await assertEmptyCandidateRace(racingPanel, outcome==='return-to-A'?'600519':'600520');
+    await page.unroute('**/api/campaigns**',raceRoute);
+  }
+  console.log('PASS Candidate mutation ownership: A→B, A→B→A and late errors via real SPA navigation');
   assert.deepEqual(pageErrors, []);
   console.log("candidate campaign browser vertical: PASS");
 } finally {

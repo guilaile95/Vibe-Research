@@ -11,10 +11,12 @@ import pytest
 import app as app_module
 import chat
 from test_chat_sse_stream import sse
+from model_stream_phase_fixtures import isolate_stream_phase
 from test_daily_review_lead_api import LLM, URL, events, isolated, post  # noqa: F401
 
 
 _REAL_HTTP_REQUEST = httpx.AsyncHTTPTransport.handle_async_request
+_REAL_CHECK_BASE_URL = chat._check_base_url
 
 
 def scope():
@@ -31,7 +33,7 @@ def test_loopback_closes_upstream_on_disconnect_or_done(monkeypatch, phase):
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", _REAL_HTTP_REQUEST)
     monkeypatch.setattr(chat, "_PUBLIC_MODE", False)
     real_client = httpx.AsyncClient
-    monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: real_client(trust_env=False, **kw))
+    monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: real_client(**{**kw, "trust_env": False}))
 
     async def exercise():
         request_received = asyncio.Event()
@@ -132,7 +134,7 @@ def test_async_transport_preserves_go_headers_and_no_tools(monkeypatch):
 
     real_client = httpx.AsyncClient
     monkeypatch.setattr(chat.httpx, "AsyncClient",
-                        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+                        lambda **kw: real_client(**{**kw, "transport": httpx.MockTransport(handler)}))
 
     async def exercise():
         return [event async for event in chat.stream_api_messages(cfg, [])]
@@ -151,10 +153,7 @@ def test_async_total_deadline_bounds_headers_body_and_trickling(monkeypatch, pha
     cancelled_reads = []
     active_reads = set()
     owner_task = None
-    clock = 0.0
-    if phase in ("before_first_read", "between_reads"):
-        # Advance only the model deadline, independently of the event-loop clock.
-        monkeypatch.setattr(chat, "time", SimpleNamespace(monotonic=lambda: clock))
+    entered = []
 
     async def read(awaitable):
         task = asyncio.current_task()
@@ -170,6 +169,9 @@ def test_async_total_deadline_bounds_headers_body_and_trickling(monkeypatch, pha
 
     class Body(httpx.AsyncByteStream):
         async def __aiter__(self):
+            entered.append("body")
+            if phase in ("body_pause", "trickling"):
+                clock.start()
             try:
                 while True:
                     yield sse({"choices": [{"delta": {"content": "partial"}}]})
@@ -184,32 +186,34 @@ def test_async_total_deadline_bounds_headers_body_and_trickling(monkeypatch, pha
             closed.append(True)
 
     async def handler(request):
-        nonlocal clock
+        entered.append("headers")
         if phase == "before_headers":
+            clock.start()
             try:
                 await read(asyncio.Event().wait())
             finally:
                 interrupted.append(True)
         if phase == "before_first_read":
-            clock += 1.0
+            clock.advance(1.0)
         return httpx.Response(200, stream=Body())
 
+    clock = isolate_stream_phase(monkeypatch, handler)
     # Prepare the mock client outside the short header/body deadline budget.
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: client)
 
     async def exercise():
-        nonlocal clock, owner_task
-        # Thread startup is not the header/body phase this test exercises.
-        await anyio.to_thread.run_sync(lambda: None)
+        nonlocal owner_task
+        # DNS preparation has independent blocking/cancellation coverage.
         owner_task = asyncio.current_task()
         result = []
         with pytest.raises(chat.ModelTransportError, match="超时"):
             async for event in chat.stream_api_messages(LLM, []):
                 result.append(event)
                 if phase == "between_reads":
-                    clock += 1.0
+                    clock.advance(1.0)
         assert all(event["type"] != "done" for event in result)
+        assert entered == (["headers"] if phase in ("before_headers", "before_first_read") else ["headers", "body"])
         assert not active_reads
         if phase in ("before_headers", "body_pause"):
             assert cancelled_reads == [True]
@@ -253,7 +257,7 @@ def test_async_transport_failure_remains_sanitized(monkeypatch, failure):
 
     real_client = httpx.AsyncClient
     monkeypatch.setattr(chat.httpx, "AsyncClient",
-                        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+                        lambda **kw: real_client(**{**kw, "transport": httpx.MockTransport(handler)}))
 
     async def exercise():
         with pytest.raises(chat.ModelTransportError) as caught:
@@ -283,7 +287,7 @@ def test_public_dns_preparation_does_not_block_cancellation(monkeypatch, stop):
     release = threading.Event()
     finished = threading.Event()
 
-    def resolve(*args):
+    def resolve(*args, **kwargs):
         try:
             started.set()
             assert release.wait(3)
@@ -292,6 +296,7 @@ def test_public_dns_preparation_does_not_block_cancellation(monkeypatch, stop):
             finished.set()
 
     monkeypatch.setattr(chat, "_PUBLIC_MODE", True)
+    monkeypatch.setattr(chat, "_check_base_url", _REAL_CHECK_BASE_URL)
     monkeypatch.setattr(chat.socket, "getaddrinfo", resolve)
     monkeypatch.setattr(chat.httpx, "AsyncClient",
                         lambda **kw: pytest.fail("cancelled preparation must not open a client"))
@@ -355,7 +360,7 @@ def test_real_async_sse_failure_is_safe_and_never_success(monkeypatch, tail):
 
     real_client = httpx.AsyncClient
     transport = httpx.MockTransport(lambda request: httpx.Response(200, stream=Body()))
-    monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: real_client(transport=transport, **kw))
+    monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: real_client(**{**kw, "transport": transport}))
     response = post()
     result = events(response)
     assert [event["type"] for event in result] == ["lead_context", "delta", "error"]
@@ -386,7 +391,7 @@ def test_async_body_read_and_awaitable_close_finish_on_cancellation(monkeypatch,
 
         real_client = httpx.AsyncClient
         transport = httpx.MockTransport(lambda req: httpx.Response(200, stream=Body()))
-        monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: real_client(transport=transport, **kw))
+        monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: real_client(**{**kw, "transport": transport}))
         body_sent = False
         sent = []
 

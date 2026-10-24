@@ -163,8 +163,8 @@ test("sector empty-state formatter fails closed for legacy, missing, partial and
 
 test("coverage UI wiring retains partial rows and existing stale-run guard with shared context warning", () => {
   const stock = readFileSync(new URL("../src/pages/StockData.tsx", import.meta.url), "utf8");
-  assert.match(stock, /resolveReportEvidence\(api\.reportsWithCoverage\(c\).*\.then\(ok\(setReportResult\)\)/);
-  assert.match(stock, /rid === runIdRef\.current\) set\(v\)/);
+  assert.match(stock, /resolveReportEvidence\(context\.read\("reportsWithCoverage", signal => api\.reportsWithCoverage\(c, signal\)\).*\.then\(ok\(setReportResult\)\)/);
+  assert.match(stock, /rid === runIdRef\.current && !context\.signal\.aborted\) set\(v\)/);
   assert.match(stock, /reportEvidenceStatusText\(reportResult\)/);
   assert.match(stock, /reportEvidenceContext\(reportResult\)/);
   assert.match(stock, /reports\.slice\(0, 12\)\.map/);

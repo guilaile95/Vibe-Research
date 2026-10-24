@@ -287,7 +287,7 @@ def test_read_only_overview_cannot_publish_partial_cache(monkeypatch):
     import market
     monkeypatch.setattr(market, "_CACHE", {})
     calls = []
-    monkeypatch.setattr(market, "_sentiment", lambda: calls.append("sentiment") or {"status": "normal", "zt": 4})
+    monkeypatch.setattr(market, "_sentiment", lambda: calls.append("sentiment") or {"status": "normal", "zt": 4, "date": market.observation_session()})
     monkeypatch.setattr(market, "_sectors", lambda: calls.append("sectors") or [{"name": "test"}])
     with guard.read_only(), pytest.raises(guard.Push2Blocked):
         market.get_overview()

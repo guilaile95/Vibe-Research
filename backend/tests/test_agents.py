@@ -61,9 +61,13 @@ def test_exec_tool_never_raises():
 
 
 def test_exec_tool_wraps_handler_exception(monkeypatch):
-    monkeypatch.setitem(tools._HANDLERS, "query_quote", lambda a: 1 / 0)
+    def fail(args):
+        raise RuntimeError("https://private.invalid/?token=fixture-secret")
+    monkeypatch.setitem(tools._HANDLERS, "query_quote", fail)
     out = tools.exec_tool("query_quote", {"codes": ["600519"]})
-    assert "error" in out and "query_quote" in out["error"]
+    # The public/model boundary must not echo handler names or exception text.
+    assert out == {"error": "数据获取失败，请稍后重试。"}
+    assert "fixture-secret" not in str(out)
 
 
 # ---- 辩论编排 ----

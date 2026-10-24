@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI
 
+import ai_credential_router
 import native_intel_filter as filter_engine
 import native_intel_router
 import native_intel_service as service
@@ -170,3 +171,4 @@ filter_engine.classify_items_batch = _mock_classify_items_batch
 
 app = FastAPI(title="Interest Filter Parity E2E harness")
 app.include_router(native_intel_router.router)
+app.include_router(ai_credential_router.router)

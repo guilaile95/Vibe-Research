@@ -900,7 +900,7 @@ def _ol1_actual_outcome(
         raise OutcomeValidationError(
             "PA1 结果的 selected_trade_ids 必须精确等于 Formal Attribution 执行交易集"
         )
-    if actual_performance.get("measurement_state") == "UNAVAILABLE":
+    if actual_performance.get("measurement_state") in {"UNAVAILABLE", "PARTIAL"}:
         return {
             "state": "EVALUATED", "pnl_state": "NOT_EVALUATED",
             "trade_count": len(executed_trade_ids), "trade_ids": list(executed_trade_ids),

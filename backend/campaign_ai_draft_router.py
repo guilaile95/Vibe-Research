@@ -21,6 +21,7 @@ _UNAVAILABLE = "Campaign AI Draft 暂不可用"
 
 
 class DraftLlmConfigIn(BaseModel):
+    revision: str | None = None
     model_config = ConfigDict(extra="forbid")
 
     provider: str = ""

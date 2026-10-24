@@ -51,6 +51,11 @@ async def create_trade(request: Request):
         raise HTTPException(status_code=400, detail="请求体必须是 JSON")
     try:
         record = await run_in_threadpool(svc.create_trade, data)
+    except svc.TradeReconciliationRequiredError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "RECONCILIATION_REQUIRED", "message": str(exc)},
+        )
     except svc.TradeValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except svc.AdviceNotFoundError:

@@ -23,7 +23,7 @@ async function run(browser, baseURL, width, scenario, output) {
     }
     window.__denyManualNoteWrite = scenario === "quota";
     Storage.prototype.setItem = function (key, value) {
-      if (key === "vr-notes" && window.__denyManualNoteWrite) throw new DOMException("Synthetic quota", "QuotaExceededError");
+      if (key === "vr-notes.v2" && window.__denyManualNoteWrite) throw new DOMException("Synthetic quota", "QuotaExceededError");
       return setItem.call(this, key, value);
     };
   }, { scenario, seed });
@@ -43,7 +43,7 @@ async function run(browser, baseURL, width, scenario, output) {
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
   const form = page.getByRole("form", { name: "新建研究记录", exact: true });
   const create = page.getByRole("button", { name: "新建研究记录", exact: true });
-  const noteState = () => page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes") || "[]"));
+  const noteState = () => page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")));
   const edit = async (title, content = "Synthetic user observation; needs verification") => {
     await create.click();
     await form.waitFor();
@@ -52,7 +52,7 @@ async function run(browser, baseURL, width, scenario, output) {
   };
   const saved = async (count, title) => {
     await page.waitForFunction(({ count, title }) => {
-      const notes = JSON.parse(localStorage.getItem("vr-notes") || "[]");
+      const notes = (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]"));
       const params = new URL(location.href).searchParams;
       return notes.length === count && notes[0]?.title === title && params.get("note") === notes[0].id &&
         !document.querySelector('form[aria-label="新建研究记录"]') &&

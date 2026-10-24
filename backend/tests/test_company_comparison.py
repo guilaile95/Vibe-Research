@@ -607,6 +607,11 @@ def test_real_symlink_store_when_platform_allows(pair, tmp_path):
 
 
 def install_runtime(monkeypatch, handler):
+    # Actual streaming, synthetic credential/DNS admission. Dedicated transport
+    # contract tests cover real CAS and resolver binding without network.
+    monkeypatch.setattr(chat, "_dispatch_config", lambda cfg: cfg)
+    from urllib.parse import urlsplit
+    monkeypatch.setattr(chat, "_check_base_url", lambda url: chat.model_transport.BoundEndpoint(urlsplit(url).hostname, urlsplit(url).port or 443, "8.8.8.8"))
     original = httpx.AsyncClient
     def client(*args, **kwargs):
         return original(*args, **{**kwargs, "transport": httpx.MockTransport(handler)})

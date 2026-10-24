@@ -595,19 +595,23 @@ class NativeIntelAgentTools:
         import ai_credential_store as cred_store
 
         scheduled = cred_store.status()
-        ai_provider = scheduled.get("provider") or "cli-codex"
-        ai_model = scheduled.get("model") or "gpt-5-codex"
+        ai_provider = scheduled.get("provider")
+        ai_model = "unknown/default" if ai_provider == "cli-codex" else scheduled.get("model")
 
         if ai_provider == "cli-codex":
-            ai_available = bool(codex_rt.get("available"))
+            ai_available = False  # Login proves authentication, not model connectivity.
             ai_installed = bool(codex_rt.get("installed"))
             ai_authenticated = bool(codex_rt.get("authenticated"))
-            ai_runtime_status = str(codex_rt.get("status") or "runtime_unavailable")
+            ai_runtime_status = "authenticated_unprobed" if ai_authenticated else str(codex_rt.get("status") or "runtime_unavailable")
         else:
-            ai_available = bool(scheduled.get("scheduled_available"))
-            ai_installed = True
-            ai_authenticated = ai_available
-            ai_runtime_status = "ready" if ai_available else "UNAVAILABLE_CREDENTIAL"
+            ai_available = False  # Credentials are not evidence of a successful model call.
+            ai_installed = bool(ai_provider)
+            ai_authenticated = None
+            ai_runtime_status = "configured_unprobed" if scheduled.get("configured") else "UNAVAILABLE_CREDENTIAL"
+
+        dispatch_available = bool(scheduled.get("configured"))
+        if ai_provider == "cli-codex":
+            dispatch_available = dispatch_available and bool(codex_rt.get("dispatch_available", codex_rt.get("available")))
 
         return {
             "success": True,
@@ -637,6 +641,10 @@ class NativeIntelAgentTools:
             },
             "ai": {
                 "provider": ai_provider,
+                "configured": bool(scheduled.get("configured")),
+                "dispatch_available": dispatch_available,
+                "modelConnectivity": "unknown",
+                "lastProbe": None,
                 "model": ai_model,
                 "available": ai_available,
                 "installed": ai_installed,

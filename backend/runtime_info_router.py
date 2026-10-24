@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, Response
 
 from runtime_diagnostics import build_report
+import trade_calendar
 
 _SOURCE_DIRECTORY = Path(__file__).resolve().parent.parent
 
@@ -72,6 +73,11 @@ def create_router(version: str) -> APIRouter:
     def runtime_diagnostics(response: Response):
         response.headers["Cache-Control"] = "no-store"
         return {"data": build_report(snapshot)}
+
+    @router.get("/calendar-status")
+    def calendar_status(response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        return {"data": trade_calendar.coverage_status()}
 
     @router.get("/runtime-diagnostics/export")
     def export_runtime_diagnostics():

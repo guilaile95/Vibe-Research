@@ -22,6 +22,7 @@ class SubjectIn(BaseModel):
 
 
 class ModelIn(BaseModel):
+    revision: str | None = None
     model_config = ConfigDict(extra="forbid", strict=True)
     provider: str = Field(default="", max_length=200)
     model: str = Field(min_length=1, max_length=200)

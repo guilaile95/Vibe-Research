@@ -433,7 +433,7 @@ def _research_identity_rows(rows, code):
     """Check identities actually supplied upstream, without inventing one."""
     for row in rows:
         if not isinstance(row, dict): raise ValueError("SOURCE_SHAPE_INVALID")
-        for key in ("code", "symbol", "股票代码", "SECURITY_CODE", "stock_code"):
+        for key in ("code", "symbol", "股票代码", "SECURITY_CODE", "SCODE", "stock_code"):
             if row.get(key) is not None and str(row[key]) != code:
                 raise ValueError("SOURCE_IDENTITY_CONFLICT")
 
@@ -1686,6 +1686,14 @@ def _map_board_row(d: dict) -> dict | None:
     }
 
 
+def _require_provider_success(payload: dict, status_key: str = "rc") -> None:
+    """Absence is unknown; an explicit failed/malformed status is never empty."""
+    if payload.get("success") is False or (
+        status_key in payload and (type(payload[status_key]) is not int or payload[status_key] != 0)
+    ):
+        raise RuntimeError("provider business status unavailable")
+
+
 def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: int = _BOARD_PAGE_SIZE) -> dict:
     """统一行业 / 概念 / 地域板块涨跌幅排名（东财 clist 分页）。
 
@@ -1710,8 +1718,11 @@ def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: i
     total: int | None = None
     host = _BOARD_CLIST_HOSTS[0]
     pn = 1
+    deadline = time.monotonic() + _A_SHARE_SNAPSHOT_BUDGET_SECONDS
+    seen_codes: set[str] = set()
 
-    while True:
+    while pn <= 500:
+        _snapshot_remaining(deadline)
         params = {
             "pn": str(pn),
             "pz": str(page_size),
@@ -1734,7 +1745,10 @@ def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: i
                     params=params,
                     headers=headers,
                     timeout=15,
+                    deadline=deadline,
                 )
+                if not 200 <= getattr(r, "status_code", 200) < 300:
+                    raise RuntimeError("board_ranking: HTTP error")
                 try:
                     payload = r.json()
                 except Exception as e:  # noqa: BLE001
@@ -1758,6 +1772,7 @@ def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: i
             raise RuntimeError(
                 f"board_ranking({board_type}) page {pn}: response is not a dict"
             )
+        _require_provider_success(payload)
         if "data" not in payload or payload["data"] is None:
             raise RuntimeError(
                 f"board_ranking({board_type}) page {pn}: missing data in response"
@@ -1768,14 +1783,22 @@ def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: i
                 f"board_ranking({board_type}) page {pn}: data is not a dict"
             )
 
+        raw_total = data.get("total")
+        if isinstance(raw_total, bool) or not (
+            isinstance(raw_total, int)
+            or isinstance(raw_total, str) and re.fullmatch(r"[0-9]+", raw_total)
+        ) or int(raw_total) < 0:
+            raise RuntimeError("board_ranking: invalid total")
+        page_total = int(raw_total)
         if total is None:
-            raw_total = data.get("total")
-            try:
-                total = int(raw_total) if raw_total is not None else 0
-            except (TypeError, ValueError) as e:
-                raise RuntimeError(
-                    f"board_ranking({board_type}): invalid total {raw_total!r}"
-                ) from e
+            total = page_total
+        elif page_total != total:
+            raise RuntimeError("board_ranking: total changed")
+        raw_diff = data.get("diff")
+        if isinstance(raw_diff, (list, dict)):
+            values = raw_diff.values() if isinstance(raw_diff, dict) else raw_diff
+            if any(not isinstance(item, dict) for item in values):
+                raise RuntimeError("board_ranking: invalid diff row")
 
         try:
             rows = _normalize_clist_diff(data.get("diff"))
@@ -1791,14 +1814,27 @@ def board_ranking(board_type: str = "industry", top_n: int = 20, *, page_size: i
         if not rows:
             break
 
+        for row in rows:
+            if not isinstance(row.get("f12"), str) or not isinstance(row.get("f14"), str):
+                raise RuntimeError("board_ranking: invalid board identity")
+            mapped = _map_board_row(row)
+            if mapped is None:
+                raise RuntimeError("board_ranking: invalid board identity")
+            if mapped["code"] in seen_codes:
+                raise RuntimeError("board_ranking: overlapping board")
+            seen_codes.add(mapped["code"])
         fetched += len(rows)
         raw_items.extend(rows)
 
-        if fetched >= total:
-            break
-        if len(rows) < page_size:
+        if fetched > total:
+            raise RuntimeError("board_ranking: row count exceeds total")
+        if fetched == total:
             break
         pn += 1
+
+    _snapshot_remaining(deadline)
+    if pn > 500 or fetched != total:
+        raise RuntimeError("board_ranking: incomplete data")
 
     # 映射 + 过滤 + 去重（同 code 保留第一条，稳定）
     seen: set[str] = set()
@@ -1846,7 +1882,7 @@ def eastmoney_datacenter(report_name: str, columns: str = "ALL", filter_str: str
             raise RuntimeError("eastmoney datacenter returned an error status")
         d = response.json()
         if strict:
-            if not isinstance(d, dict) or not isinstance(d.get("result"), dict):
+            if not isinstance(d, dict) or d.get("success") is False or not isinstance(d.get("result"), dict):
                 raise ValueError("eastmoney datacenter response missing result")
             data = d["result"].get("data")
             if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
@@ -1871,11 +1907,12 @@ def _capital_number(value) -> float | None:
         return None
 
 
-def margin_trading(code: str, page_size: int = 30) -> list[dict]:
+def margin_trading(code: str, page_size: int = 30, *, strict: bool = False) -> list[dict]:
     """融资融券明细（日级）：融资余额 / 融资买入 / 融券余额 / 两融合计。"""
     data = eastmoney_datacenter(
         "RPTA_WEB_RZRQ_GGMX", filter_str=f'(SCODE="{code}")',
-        page_size=page_size, sort_columns="DATE", sort_types="-1")
+        page_size=page_size, sort_columns="DATE", sort_types="-1", strict=strict)
+    if strict: _research_identity_rows(data, code)
     return [{
         "date": str(r.get("DATE", ""))[:10],
         "rzye": _capital_number(r.get("RZYE")), "rzmre": _capital_number(r.get("RZMRE")), "rzche": _capital_number(r.get("RZCHE")),
@@ -1884,11 +1921,12 @@ def margin_trading(code: str, page_size: int = 30) -> list[dict]:
     } for r in data]
 
 
-def block_trade(code: str, page_size: int = 20) -> list[dict]:
+def block_trade(code: str, page_size: int = 20, *, strict: bool = False) -> list[dict]:
     """大宗交易：成交价 / 折溢价率 / 量 / 买卖方营业部。"""
     data = eastmoney_datacenter(
         "RPT_DATA_BLOCKTRADE", filter_str=f'(SECURITY_CODE="{code}")',
-        page_size=page_size, sort_columns="TRADE_DATE", sort_types="-1")
+        page_size=page_size, sort_columns="TRADE_DATE", sort_types="-1", strict=strict)
+    if strict: _research_identity_rows(data, code)
     rows = []
     for r in data:
         close = r.get("CLOSE_PRICE") or 0
@@ -1903,11 +1941,12 @@ def block_trade(code: str, page_size: int = 20) -> list[dict]:
     return rows
 
 
-def holder_num_change(code: str, page_size: int = 10) -> list[dict]:
+def holder_num_change(code: str, page_size: int = 10, *, strict: bool = False) -> list[dict]:
     """股东户数变化（季度级）：户数 / 环比 / 户均持股。持续减少 = 筹码集中。"""
     data = eastmoney_datacenter(
         "RPT_HOLDERNUMLATEST", filter_str=f'(SECURITY_CODE="{code}")',
-        page_size=page_size, sort_columns="END_DATE", sort_types="-1")
+        page_size=page_size, sort_columns="END_DATE", sort_types="-1", strict=strict)
+    if strict: _research_identity_rows(data, code)
     return [{
         "date": str(r.get("END_DATE", ""))[:10],
         "holder_num": _capital_number(r.get("HOLDER_NUM")),
@@ -1925,6 +1964,7 @@ def dividend_history(code: str, page_size: int = 20, *, strict: bool = False) ->
     data = eastmoney_datacenter(
         "RPT_SHAREBONUS_DET", filter_str=f'(SECURITY_CODE="{code}")',
         page_size=page_size, sort_columns="EX_DIVIDEND_DATE", sort_types="-1", strict=strict)
+    if strict: _research_identity_rows(data, code)
     return [{
         "date": str(r.get("EX_DIVIDEND_DATE", ""))[:10],
         "bonus_rmb": r.get("PRETAX_BONUS_RMB"),
@@ -1935,7 +1975,7 @@ def dividend_history(code: str, page_size: int = 20, *, strict: bool = False) ->
     } for r in data]
 
 
-def stock_fund_flow_120d(code: str) -> list[dict]:
+def stock_fund_flow_120d(code: str, *, strict: bool = False) -> list[dict]:
     """个股资金流（日级，最近 120 交易日）：主力 / 小单 / 中单 / 大单 / 超大单净流入（元）。"""
     market_code = 1 if code.startswith("6") else 0
     params = {
@@ -1946,10 +1986,28 @@ def stock_fund_flow_120d(code: str) -> list[dict]:
     }
     headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/", "Origin": "https://quote.eastmoney.com"}
     try:
-        d = em_get("https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
-                   params=params, headers=headers, timeout=15).json()
+        response = em_get("https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
+                          params=params, headers=headers, timeout=15)
+        if strict and getattr(response, "status_code", 200) >= 400:
+            raise RuntimeError("fund flow source returned an error status")
+        d = response.json()
     except Exception:
+        if strict:
+            raise
         return []
+    if strict:
+        if not isinstance(d, dict) or not isinstance(d.get("data"), dict):
+            raise ValueError("fund flow response missing data")
+        _require_provider_success(d)
+        _research_identity_rows([d["data"]], code)
+        lines = d["data"].get("klines")
+        if not isinstance(lines, list) or any(not isinstance(line, str) for line in lines):
+            raise ValueError("fund flow response missing klines")
+        for line in lines:
+            day = line.split(",", 1)[0]
+            if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", day):
+                raise ValueError("fund flow row has invalid date")
+            datetime.strptime(day, "%Y-%m-%d")
     return _parse_fund_flow_rows(d)
 
 
@@ -1977,7 +2035,7 @@ def _parse_fund_flow_rows(payload: dict) -> list[dict]:
     return rows
 
 
-def dragon_tiger_board(code: str, trade_date: str | None = None, look_back: int = 30) -> dict:
+def dragon_tiger_board(code: str, trade_date: str | None = None, look_back: int = 30, *, strict: bool = False) -> dict:
     """龙虎榜：该股近期上榜记录 + 最近一次买卖席位 TOP5 + 机构专用席位净买。"""
     trade_date = trade_date or datetime.now().strftime("%Y-%m-%d")
     start = (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=look_back)).strftime("%Y-%m-%d")
@@ -1985,7 +2043,8 @@ def dragon_tiger_board(code: str, trade_date: str | None = None, look_back: int 
     data = eastmoney_datacenter(
         "RPT_DAILYBILLBOARD_DETAILSNEW",
         filter_str=f'(TRADE_DATE>=\'{start}\')(TRADE_DATE<=\'{trade_date}\')(SECURITY_CODE="{code}")',
-        page_size=50, sort_columns="TRADE_DATE", sort_types="-1")
+        page_size=50, sort_columns="TRADE_DATE", sort_types="-1", strict=strict)
+    if strict: _research_identity_rows(data, code)
     for r in data:
         records.append({
             "date": str(r.get("TRADE_DATE", ""))[:10],
@@ -2001,11 +2060,14 @@ def dragon_tiger_board(code: str, trade_date: str | None = None, look_back: int 
         buy_data = eastmoney_datacenter(
             "RPT_BILLBOARD_DAILYDETAILSBUY",
             filter_str=f'(TRADE_DATE=\'{latest}\')(SECURITY_CODE="{code}")',
-            page_size=10, sort_columns="BUY", sort_types="-1")
+            page_size=10, sort_columns="BUY", sort_types="-1", strict=strict)
         sell_data = eastmoney_datacenter(
             "RPT_BILLBOARD_DAILYDETAILSSELL",
             filter_str=f'(TRADE_DATE=\'{latest}\')(SECURITY_CODE="{code}")',
-            page_size=10, sort_columns="SELL", sort_types="-1")
+            page_size=10, sort_columns="SELL", sort_types="-1", strict=strict)
+        if strict:
+            _research_identity_rows(buy_data, code)
+            _research_identity_rows(sell_data, code)
         for r in buy_data[:5]:
             seats["buy"].append({"name": r.get("OPERATEDEPT_NAME", ""),
                                  "buy_amt": round((r.get("BUY") or 0) / 10000, 1),
@@ -2118,10 +2180,14 @@ def concept_blocks(code: str, *, strict: bool = False) -> dict:
               "spt": "3", "pi": "0", "pz": "200", "po": "1", "fields": "f12,f14,f3,f128"}
     headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
     try:
-        d = em_get("https://push2.eastmoney.com/api/qt/slist/get", params=params, headers=headers, timeout=15).json()
+        response = em_get("https://push2.eastmoney.com/api/qt/slist/get", params=params, headers=headers, timeout=15)
+        if strict and getattr(response, "status_code", 200) >= 400:
+            raise RuntimeError("concept blocks source returned an error status")
+        d = response.json()
         if strict:
             if not isinstance(d, dict) or not isinstance(d.get("data"), dict):
                 raise ValueError("concept_blocks response missing data object")
+            _require_provider_success(d)
             diff = d["data"].get("diff")
             if not isinstance(diff, (dict, list)):
                 raise ValueError("concept_blocks response missing diff collection")
@@ -2156,10 +2222,13 @@ def hot_concepts(code: str, *, strict: bool = False) -> list[dict]:
             "https://emappdata.eastmoney.com/stockrank/getHotStockRankList",
             json={"appId": "appId01", "globalId": "786e4c21-70dc-435a-93bb-38", "srcSecurityCode": prefix + code},
             headers={"User-Agent": UA}, timeout=10)
+        if strict and getattr(r, "status_code", 200) >= 400:
+            raise RuntimeError("hot concepts source returned an error status")
         payload = r.json()
         if strict:
             if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
                 raise ValueError("hot_concepts response missing data list")
+            _require_provider_success(payload, "code")
             data = payload["data"]
             if any(not isinstance(item, dict) for item in data):
                 raise ValueError("hot_concepts response contains malformed rows")

@@ -2,6 +2,7 @@ import http from "node:http";
 import { pathToFileURL } from "node:url";
 
 import { AgentRuntime, RuntimeError } from "./runtime.mjs";
+import { captureRuntimeIdentity } from "./identity.mjs";
 
 const HOST = "127.0.0.1";
 const DEFAULT_PORT = 8911;
@@ -50,7 +51,8 @@ function checkRequestBoundary(req) {
   }
 }
 
-export function createAgentServer(runtime = new AgentRuntime()) {
+export function createAgentServer(runtime = new AgentRuntime(), identity = captureRuntimeIdentity()) {
+  const startupIdentity = Promise.resolve(identity);
   return http.createServer(async (req, res) => {
     try {
       checkRequestBoundary(req);
@@ -59,8 +61,11 @@ export function createAgentServer(runtime = new AgentRuntime()) {
       if (req.method === "GET" && url.pathname === "/health") {
         return json(res, 200, { ok: true, service: "vibe-agent-runtime", runtime: "Codex Subscription" });
       }
+      if (req.method === "GET" && url.pathname === "/runtime-info") {
+        return json(res, 200, await startupIdentity);
+      }
       if (req.method === "GET" && url.pathname === "/status") {
-        return json(res, 200, runtime.status());
+        return json(res, 200, await runtime.status());
       }
       if (req.method === "POST" && url.pathname === "/login") {
         await readJson(req);

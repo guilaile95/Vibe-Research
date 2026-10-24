@@ -84,6 +84,15 @@ def build(output):
     with tempfile.TemporaryDirectory(prefix="vibe-linux-build-") as temporary:
         stage = Path(temporary) / "frontend"
         stage.mkdir()
+        source_identity = {"service": "vibe-research-frontend", "git_sha": None, "source_state": "unknown"}
+        try:
+            sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, timeout=2).strip()
+            status = subprocess.check_output(["git", "--no-optional-locks", "status", "--porcelain"], cwd=ROOT, text=True, timeout=2)
+            if isinstance(sha, str) and re.fullmatch(r"[a-f0-9]{40}", sha) and isinstance(status, str):
+                source_identity.update(git_sha=sha, source_state="modified" if status.strip() else "clean")
+        except (OSError, subprocess.SubprocessError):
+            pass
+        (Path(temporary) / ".vibe-build-source.json").write_text(json.dumps(source_identity), encoding="utf-8")
         for name in tracked:
             if not name.startswith("frontend/") or name.startswith("frontend/dist/"):
                 continue
@@ -105,7 +114,7 @@ def build(output):
                 sources[name] = path
         version = json.loads((ROOT / "frontend/package.json").read_text())["version"]
         revision = subprocess.check_output(["git", "rev-parse", "--short=12", "HEAD"], cwd=ROOT, text=True).strip()
-        manifest = {"version": version, "revision": revision,
+        manifest = {"version": version, "revision": revision, "source_identity": source_identity,
                     "files": {name: digest(path) for name, path in sorted(sources.items())}}
         fingerprint = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()[:12]
         release = f"{version}-{revision}-{fingerprint}"

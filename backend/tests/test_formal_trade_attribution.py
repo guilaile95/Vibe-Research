@@ -1,6 +1,8 @@
 """P0-TB1 正式决策 ↔ 手动交易归属核心测试：纯领域逻辑，无 I/O。"""
 from __future__ import annotations
 
+from decision_clock_fixtures import historical_decision_server_clock as _historical_decision_server_clock  # noqa: F401
+
 import dataclasses
 import re
 from datetime import datetime, timedelta

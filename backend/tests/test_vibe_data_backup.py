@@ -541,7 +541,7 @@ def test_postflight_active_refuses_staged_archive_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data = _minimal_data_root(tmp_path, monkeypatch)
-    (data / "settings.json").write_text("{}", encoding="utf-8")
+    (data / "portfolio.json").write_text("{}", encoding="utf-8")
     states = iter((backup.QUIESCENT, backup.ACTIVE))
     output = tmp_path / "postflight.zip"
     with pytest.raises(backup.BackupRefused, match=backup.BACKUP_REFUSED):
@@ -554,7 +554,7 @@ def test_source_change_during_snapshot_refuses_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data = _minimal_data_root(tmp_path, monkeypatch)
-    source = data / "settings.json"
+    source = data / "portfolio.json"
     source.write_text("{}", encoding="utf-8")
     real_create = local_snapshot.create_snapshot_from_files
 
@@ -624,7 +624,7 @@ def test_cli_snapshot_verify_restore_uses_injected_quiescence(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     data = _minimal_data_root(tmp_path, monkeypatch)
-    (data / "settings.json").write_text('{"theme":"dark"}', encoding="utf-8")
+    (data / "portfolio.json").write_text('{"theme":"dark"}', encoding="utf-8")
     archive = tmp_path / "cli.zip"
     target = tmp_path / "cli-restored"
 
@@ -645,7 +645,7 @@ def test_cli_snapshot_verify_restore_uses_injected_quiescence(
         == local_snapshot.EXIT_OK
     )
     assert json.loads(capsys.readouterr().out)["status"] == "OK"
-    assert json.loads((target / "data" / "settings.json").read_text())["theme"] == "dark"
+    assert json.loads((target / "data" / "portfolio.json").read_text())["theme"] == "dark"
 
 
 def test_restore_rejects_unsafe_bundle_empty_directory_prefix(
@@ -679,7 +679,7 @@ def test_restore_rejects_unsafe_bundle_empty_directory_prefix(
     "directory_prefixes",
     [
         ["data/Foo", "data/foo"],
-        ["data/settings.json"],
+        ["data/portfolio.json"],
     ],
 )
 def test_restore_rejects_windows_colliding_bundle_directories_before_write(
@@ -688,7 +688,7 @@ def test_restore_rejects_windows_colliding_bundle_directories_before_write(
     directory_prefixes: list[str],
 ) -> None:
     data = _minimal_data_root(tmp_path, monkeypatch)
-    (data / "settings.json").write_text("{}", encoding="utf-8")
+    (data / "portfolio.json").write_text("{}", encoding="utf-8")
     source = tmp_path / "source.zip"
     backup.create_bundle(source, quiescent_probe=lambda: True)
 
@@ -772,3 +772,125 @@ def test_bundle_rejects_sidecar_for_absent_file_asset_before_restore_writes(
     with pytest.raises(local_snapshot.RestoreRefused):
         backup.restore_bundle(forged, target)
     assert not target.exists()
+
+
+@pytest.mark.parametrize('runtime_name', ['agent-runtime', 'Agent-Runtime', 'codex-home', '.codex', 'sessions'])
+def test_authentication_runtime_never_exported(tmp_path, monkeypatch, runtime_name):
+    data = _minimal_data_root(tmp_path, monkeypatch)
+    private = data / runtime_name
+    private.mkdir()
+    (private / 'auth.json').write_text('{"access_token":"SYNTHETIC_CREDENTIAL_ONLY"}')
+    (private / 'history.jsonl').write_text('SYNTHETIC_SESSION_ONLY')
+    (data / 'unregistered.json').write_text('SYNTHETIC_UNKNOWN_ASSET')
+    (data / 'portfolio.json').write_text('{"holdings":[]}')
+    archive = tmp_path / 'safe.zip'
+    backup.create_bundle(archive, quiescent_probe=lambda: backup.QUIESCENT)
+    with zipfile.ZipFile(archive) as bundle:
+        contents = b''.join(bundle.read(name) for name in bundle.namelist())
+        assert b'SYNTHETIC_' not in contents
+        assert 'data/portfolio.json' in bundle.namelist()
+    assert (private / 'auth.json').exists()
+
+
+@pytest.mark.parametrize('evil_path', ['data/agent-runtime/codex-home/auth.json', 'data/Agent-Runtime/session.json', 'data/new-runtime/token.json', 'reports/Auth.json'])
+def test_verify_and_restore_reject_forged_credential_assets(tmp_path, monkeypatch, evil_path):
+    data = _minimal_data_root(tmp_path, monkeypatch)
+    (data / 'portfolio.json').write_text('{}')
+    original = tmp_path / 'safe.zip'
+    backup.create_bundle(original, quiescent_probe=lambda: backup.QUIESCENT)
+    forged = tmp_path / 'malicious.zip'
+    _forge_bundle_manifest(original, forged, lambda bundle: None,
+                           extra_members={evil_path: b'SYNTHETIC_SECRET'})
+    before = forged.read_bytes()
+    assert backup.verify_bundle(forged)['status'] == 'FAILED'
+    target = tmp_path / 'restore'
+    with pytest.raises(local_snapshot.RestoreRefused):
+        backup.restore_bundle(forged, target)
+    assert not target.exists()
+    assert forged.read_bytes() == before
+
+
+def test_old_bundle_has_explicit_non_destructive_refusal(tmp_path, monkeypatch):
+    data = _minimal_data_root(tmp_path, monkeypatch)
+    original = tmp_path / 'safe.zip'
+    backup.create_bundle(original, quiescent_probe=lambda: backup.QUIESCENT)
+    old = tmp_path / 'old.zip'
+    _forge_bundle_manifest(original, old, lambda bundle: bundle.update(schema_version=backup.LEGACY_BUNDLE_SCHEMA_VERSION))
+    before = old.read_bytes()
+    result = backup.verify_bundle(old)
+    assert result['status'] == 'FAILED' and '旧版数据包' in str(result)
+    assert old.read_bytes() == before
+
+
+def test_registered_orphan_sidecar_does_not_silently_disappear(tmp_path, monkeypatch):
+    data = _minimal_data_root(tmp_path, monkeypatch)
+    (data / 'trade_ledger.sqlite3-wal').write_bytes(b'synthetic-orphan')
+    with pytest.raises(backup.BundleError, match='orphan'):
+        backup.create_bundle(tmp_path / 'bad.zip', quiescent_probe=lambda: backup.QUIESCENT)
+    assert (data / 'trade_ledger.sqlite3-wal').read_bytes() == b'synthetic-orphan'
+
+
+@pytest.mark.parametrize('environment', ['VR_REPORTS_DIR', 'VR_FACT_LAKE_ROOT', 'VIBE_RESEARCH_RESEARCH_DATA_DIR'])
+def test_business_root_equal_to_data_root_refuses_before_publication(tmp_path, monkeypatch, environment):
+    data = _minimal_data_root(tmp_path, monkeypatch)
+    monkeypatch.setenv(environment, str(data / '..' / 'data'))
+    original = data / 'synthetic-report.md'
+    original.write_text('SYNTHETIC legitimate research')
+    (data / 'index.json').write_text('[]')
+    archive = tmp_path / 'ambiguous.zip'
+    with pytest.raises(backup.BundleError, match='数据根目录'):
+        backup.create_bundle(archive, quiescent_probe=lambda: backup.QUIESCENT)
+    assert not archive.exists()
+    assert original.read_text() == 'SYNTHETIC legitimate research'
+    assert (data / 'index.json').read_text() == '[]'
+
+
+def test_nested_configured_database_with_registered_basename_roundtrips(tmp_path, monkeypatch):
+    data = _minimal_data_root(tmp_path, monkeypatch)
+    database = data / 'nested' / 'trade_ledger.sqlite3'
+    _wal_sqlite_snapshot(database)
+    monkeypatch.setenv('VIBE_RESEARCH_TRADE_LEDGER_DB', str(database))
+    original = {suffix: Path(str(database) + suffix).read_bytes() for suffix in ('', '-wal', '-shm')}
+    archive = tmp_path / 'nested.zip'
+    backup.create_bundle(archive, quiescent_probe=lambda: backup.QUIESCENT)
+    assert backup.verify_bundle(archive)['status'] == 'OK'
+    target = tmp_path / 'restored'
+    result = backup.restore_bundle(archive, target)
+    asset = next(item for item in result['assets'] if item['name'] == 'VIBE_RESEARCH_TRADE_LEDGER_DB')
+    restored = target / asset['archive_prefix']
+    for suffix, content in original.items():
+        assert Path(str(restored) + suffix).read_bytes() == content
+        assert Path(str(database) + suffix).read_bytes() == content
+    assert _quick_check(restored) == 'ok'
+
+
+@pytest.mark.parametrize('asset_name', ['reports', 'fact_lake', 'research_data_plane'])
+def test_verify_rejects_business_asset_claiming_broad_data_partition(tmp_path, monkeypatch, asset_name):
+    _minimal_data_root(tmp_path, monkeypatch)
+    original, forged = tmp_path / 'original.zip', tmp_path / 'forged.zip'
+    backup.create_bundle(original, quiescent_probe=lambda: backup.QUIESCENT)
+    def claim_data(bundle):
+        asset = next(item for item in bundle['assets'] if item['name'] == asset_name)
+        asset.update(archive_prefix='data', status='PRESENT')
+    _forge_bundle_manifest(original, forged, claim_data)
+    assert backup.verify_bundle(forged)['status'] == 'FAILED'
+    with pytest.raises(local_snapshot.RestoreRefused):
+        backup.restore_bundle(forged, tmp_path / 'restored')
+    assert not (tmp_path / 'restored').exists()
+
+
+def test_nested_database_alias_cannot_reintroduce_runtime_assets(tmp_path, monkeypatch):
+    data = _minimal_data_root(tmp_path, monkeypatch)
+    runtime = data / 'agent-runtime'
+    runtime.mkdir()
+    database = runtime / 'trade_ledger.sqlite3'
+    _sqlite(database)
+    alias = data / 'nested'
+    try:
+        alias.symlink_to(runtime, target_is_directory=True)
+    except OSError:
+        pytest.skip('directory symlinks unavailable')
+    monkeypatch.setenv('VIBE_RESEARCH_TRADE_LEDGER_DB', str(alias / database.name))
+    with pytest.raises(backup.BundleError, match='认证或运行时'):
+        backup.create_bundle(tmp_path / 'bad.zip', quiescent_probe=lambda: backup.QUIESCENT)
+    assert database.exists()

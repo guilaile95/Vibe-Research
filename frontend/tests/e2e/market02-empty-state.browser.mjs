@@ -40,7 +40,7 @@ try {
     const context = await browser.newContext({ viewport: { width, height: 950 }, serviceWorkers: "block" });
     const errors = [], unexpected = [], holds = [], checks = [];
     let nextHold = null, missingMetrics = false;
-    const hold = fail => { const h = { fail, started: deferred(), release: deferred() }; holds.push(h); nextHold = h; return h; };
+    const hold = fail => { const h = { fail, started: deferred(), release: deferred(), finished: deferred() }; holds.push(h); nextHold = h; return h; };
     await context.routeWebSocket("**/*", socket => { unexpected.push(`WebSocket ${socket.url()}`); socket.close(); });
     await context.route("**/*", async route => {
       const request = route.request(), url = new URL(request.url());
@@ -52,7 +52,8 @@ try {
       if (url.pathname === "/api/global/stock") {
         const h = nextHold; nextHold = null;
         if (h) { h.started.resolve(); await h.release.promise; }
-        return route.fulfill(h?.fail ? { status: 503, json: { detail: "MARKET02_SYNTHETIC_FAILURE" } } : { json: globalStock(code, missingMetrics) });
+        try { return await route.fulfill(h?.fail ? { status: 503, json: { detail: "MARKET02_SYNTHETIC_FAILURE" } } : { json: globalStock(code, missingMetrics) }); }
+        finally { h?.finished.resolve(); }
       }
       if (url.pathname === "/api/valuation") return route.fulfill({ json: { code, name: `Synthetic ${code}`, price: 10, pe_ttm: 10, pb: 1, mcap_yi: 1, analyst_count: 0 } });
       return route.fulfill({ status: 503, json: { detail: "Synthetic optional source unavailable" } });
@@ -106,7 +107,19 @@ try {
       for (const fail of [false, true]) {
         await page.goto(`${base}/stock-data`); await initial();
         const stale = hold(fail); await submit("AAPL"); await bounded(stale.started.promise); await absent();
-        await page.goBack(); await initial(); await settle(stale); await initial();
+        // Leaving the active stock now cancels its transport. Observe the abort
+        // before releasing the held success/error instead of awaiting a response
+        // that must no longer reach the page.
+        const cancelled = page.waitForEvent("requestfailed", {
+          predicate: request => new URL(request.url()).pathname === "/api/global/stock",
+        });
+        await page.goBack(); await initial();
+        const cancelledRequest = await cancelled;
+        assert.match(cancelledRequest.failure()?.errorText || "", /abort|cancel/i);
+        stale.release.resolve();
+        await bounded(stale.finished.promise);
+        await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+        await initial();
         assert.equal(await page.getByRole("heading", { name: "Synthetic AAPL", exact: true }).count(), 0);
         assert.equal(await page.getByText("MARKET02_SYNTHETIC_FAILURE", { exact: true }).count(), 0);
         checks.push(`Back to empty invalidates stale ${fail ? "error" : "success"}`);

@@ -71,9 +71,12 @@ def offline(monkeypatch):
     def forbidden(*_args, **_kwargs):
         pytest.fail("unexpected external model or data tool request")
 
+    monkeypatch.setattr(chat, "_dispatch_config", lambda cfg: cfg)
+    import ai_credential_store
+    monkeypatch.setattr(ai_credential_store, "dispatch_config", lambda cfg: cfg)
     monkeypatch.setattr(chat, "_check_base_url", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(chat, "_TASK_STREAM_SLOTS", threading.BoundedSemaphore(4))
-    monkeypatch.setattr(chat.requests, "post", forbidden)
+    monkeypatch.setattr(chat.model_transport, "post", forbidden)
     monkeypatch.setattr(agent_runtime.requests.Session, "request", forbidden)
     monkeypatch.setattr(chat, "_exec_tool", forbidden)
     monkeypatch.setattr(debate.tools, "exec_tool", forbidden)
@@ -97,7 +100,7 @@ def test_api_dispatch_limits_are_per_task_and_payload_is_bounded(monkeypatch):
         posts.append((args, kwargs))
         return Response(frame({"content": "ok"}), DONE)
 
-    monkeypatch.setattr(chat.requests, "post", post)
+    monkeypatch.setattr(chat.model_transport, "post", post)
     first, second = budget(), budget()
     for task in (first, second):
         events = list(chat.stream_messages(cfg(task), []))
@@ -112,16 +115,16 @@ def test_api_dispatch_limits_are_per_task_and_payload_is_bounded(monkeypatch):
         assert 0 < kwargs["timeout"][1] <= 2
 
 
-def test_unbudgeted_default_request_is_unchanged(monkeypatch):
+def test_default_request_receives_unified_budget(monkeypatch):
     captured = {}
 
     def post(*_args, **kwargs):
         captured.update(kwargs)
         return Response(frame({"content": "ok"}), DONE)
 
-    monkeypatch.setattr(chat.requests, "post", post)
+    monkeypatch.setattr(chat.model_transport, "post", post)
     assert list(chat.stream_messages(CFG, []))[-1]["type"] == "done"
-    assert "max_tokens" not in captured["json"]
+    assert captured["json"]["max_tokens"] == 4000
     assert captured["timeout"] == (10, 120)
 
 
@@ -161,7 +164,7 @@ def test_held_transport_retains_admission_until_actual_exit(monkeypatch, phase):
             hold()
         response.close = close
     monkeypatch.setattr(chat, "_stream_request", prepare)
-    monkeypatch.setattr(chat.requests, "post", post)
+    monkeypatch.setattr(chat.model_transport, "post", post)
     events = []
     source = chat.stream_messages(cfg(budget(timeout=.25)), [])
     started = time.monotonic()
@@ -195,7 +198,7 @@ def test_output_overflow_never_forwards_fragment_or_executes_tool(monkeypatch, k
         }}],
     }
     response = Response(frame({"content": "ok"}), frame(overflow), DONE)
-    monkeypatch.setattr(chat.requests, "post", lambda *_a, **_k: response)
+    monkeypatch.setattr(chat.model_transport, "post", lambda *_a, **_k: response)
     task = budget(max_chars=5)
     events = []
     with pytest.raises(chat.ModelTaskBudgetError, match="输出"):
@@ -220,7 +223,7 @@ def test_tool_continuation_and_final_synthesis_share_dispatch_budget(monkeypatch
         posts.append(True)
         return tool_response()
 
-    monkeypatch.setattr(chat.requests, "post", post)
+    monkeypatch.setattr(chat.model_transport, "post", post)
     monkeypatch.setattr(chat, "_exec_tool", lambda *args: executions.append(args) or {"value": 1})
     task = budget()
     events = []
@@ -237,7 +240,7 @@ def test_cancel_after_tool_event_prevents_execution(monkeypatch):
     response = tool_response()
     executions = MagicMock(return_value={"value": 1})
     monkeypatch.setattr(chat, "_exec_tool", executions)
-    monkeypatch.setattr(chat.requests, "post", lambda *_a, **_k: response)
+    monkeypatch.setattr(chat.model_transport, "post", lambda *_a, **_k: response)
     stop = threading.Event()
     source = chat.stream_messages(cfg(budget(), _cancel_event=stop), [], use_tools=True)
     try:
@@ -420,7 +423,7 @@ def test_debate_model_budget_starts_after_dossier_and_is_shared(monkeypatch):
 
     monkeypatch.setattr(debate, "collect_dossier", dossier)
     monkeypatch.setattr(chat, "debate_task_budget", make_budget)
-    monkeypatch.setattr(chat.requests, "post", post)
+    monkeypatch.setattr(chat.model_transport, "post", post)
     events = list(debate.run_debate_stream(CFG, "600000"))
     assert len(tasks) == 1
     assert tasks[0].calls == len(posts) == 2
@@ -440,7 +443,7 @@ def test_debate_rechecks_after_stage_done_including_final_referee(monkeypatch, b
         posts.append(True)
         return Response(frame({"content": "answer"}), DONE)
 
-    monkeypatch.setattr(chat.requests, "post", post)
+    monkeypatch.setattr(chat.model_transport, "post", post)
     source = debate.run_debate_stream({**CFG, "_cancel_event": stop}, "600000")
     for event in source:
         if event["type"] == "stage_done" and event["stage"] == boundary:
@@ -472,7 +475,7 @@ def test_daily_review_failure_never_saves_complete_result(monkeypatch, failure):
     task = budget(max_chars=4)
     monkeypatch.setattr(chat, "daily_review_task_budget", lambda: task)
     if failure == "output":
-        monkeypatch.setattr(chat.requests, "post", lambda *_a, **_k: Response(
+        monkeypatch.setattr(chat.model_transport, "post", lambda *_a, **_k: Response(
             frame({"content": "ok"}), frame({"content": "overflow"}), DONE,
         ))
     else:

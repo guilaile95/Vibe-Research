@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { createTemporalClock, CREATION_TIME, OBSERVATION_TIME } from "./temporal.fixture.mjs";
 import { seedActiveCampaign } from "./campaign-active-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -371,6 +372,8 @@ from datetime import datetime, timedelta
 import formal_trade_attribution as fta
 import formal_trade_attribution_store as ats
 import trade_attribution_runtime as tar
+from temporal_clock import install
+install()
 import trade_ledger_service as tls
 from fact_lake_store import initialize_fact_lake, payload_sha256
 from trade_calendar import completed_trade_date_at
@@ -395,7 +398,8 @@ assert committed_at <= executed_at < evaluation_at
 executed_at_text = executed_at.isoformat(timespec='seconds').replace('+00:00', 'Z')
 unplanned_at_text = (executed_at + timedelta(seconds=1)).isoformat(timespec='seconds').replace('+00:00', 'Z')
 unallocated_at_text = (executed_at + timedelta(seconds=2)).isoformat(timespec='seconds').replace('+00:00', 'Z')
-created_at_text = (executed_at + timedelta(seconds=3)).isoformat(timespec='microseconds').replace('+00:00', 'Z')
+created_at_text = tar._now()
+assert executed_at <= datetime.fromisoformat(created_at_text.replace('Z', '+00:00')) < evaluation_at
 start_trade_date = completed_trade_date_at(first['committed_at'])
 end_trade_date = completed_trade_date_at(evaluation_as_of)
 assert start_trade_date and end_trade_date and end_trade_date > start_trade_date
@@ -478,6 +482,8 @@ function createOutcomeHistoryFillers(env, python, template, count = 50) {
   const script = `
 import json
 import os
+from temporal_clock import advance, install
+install()
 import frozen_decision_service as frozen
 
 template = json.loads(os.environ['RQ1_FILLER_TEMPLATE'])
@@ -488,9 +494,12 @@ service_fields = {
     'snapshot_json',
 }
 payload = {key: value for key, value in template.items() if key not in service_fields}
-payload['review_by'] = '2099-09-09T10:00:00Z'
+payload['review_by'] = '2026-09-09T10:00:00Z'
 payload['source_refs'] = ['rq1:e2e-history-filler']
-created = [frozen.freeze_decision(payload)['decision_id'] for _ in range(count)]
+created = []
+for _ in range(count):
+    advance()
+    created.append(frozen.freeze_decision(payload)['decision_id'])
 print(json.dumps(created))
 `;
   const result = spawnSync(python.cmd, [...python.args, "-c", script], {
@@ -513,6 +522,8 @@ function createHistoricalActionFixtures(env, python, template, specs) {
   const script = `
 import json
 import os
+from temporal_clock import advance, install
+install()
 import frozen_decision_service as frozen
 
 template = json.loads(os.environ['REV2_ACTION_TEMPLATE'])
@@ -541,6 +552,7 @@ for spec in specs:
         'blocked_actions': [value for value in all_actions if value not in allowed_by_action[action]],
     }
     payload['source_refs'] = [f"rev2:e2e-historical-nba:{action}"]
+    advance()
     created.append(frozen.freeze_decision(payload)['decision_id'])
 print(json.dumps(created))
 `;
@@ -585,8 +597,10 @@ async function run() {
     const backend = `http://127.0.0.1:${backendPort}`;
     const frontend = `http://127.0.0.1:${frontendPort}`;
     const py = pythonConfig();
+    const clock = createTemporalClock(tempDataDir);
     const env = {
       ...process.env,
+      ...clock.env,
       VR_ALLOW_ORIGINS: frontend,
       VR_DATA_DIR: tempDataDir,
       VR_REPORTS_DIR: tempDataDir,
@@ -619,7 +633,8 @@ async function run() {
     const executablePath = chromiumPath();
     if (executablePath) launchOptions.executablePath = executablePath;
     browser = await chromium.launch(launchOptions);
-    const page = await browser.newPage();
+    const page = await browser.newPage({ timezoneId: "UTC" });
+    await page.clock.setFixedTime(new Date(CREATION_TIME));
     const consoleErrors = [];
     const exactOutcomeRequests = [];
     let outcomeListGate = null;
@@ -672,7 +687,7 @@ async function run() {
       firstCampaign.campaign_id,
       true,
       tempDataDir,
-      "2026-08-01T10:00",
+      "2026-08-29T10:00",
     );
     const normalSessionCase = deriveCompletedSessionEvaluationAsOf(
       pythonScriptConfig(),
@@ -684,6 +699,7 @@ async function run() {
     );
     assert.ok(normalSessionCase.end_trade_date > normalSessionCase.start_trade_date, JSON.stringify(normalSessionCase));
     assert.ok(weekendHolidayCase.end_trade_date > weekendHolidayCase.start_trade_date, JSON.stringify(weekendHolidayCase));
+    await page.clock.setFixedTime(new Date(clock.advance()));
     const secondRun = await freezeThroughBrowser(
       page,
       backend,
@@ -691,8 +707,10 @@ async function run() {
       secondCampaign.campaign_id,
       false,
       tempDataDir,
-      "2026-08-02T10:00",
+      "2026-08-30T10:00",
     );
+    clock.set("2026-08-28T09:00:00.000000Z");
+    await page.clock.setFixedTime(new Date("2026-08-28T09:00:00Z"));
     const historyFillerIds = createOutcomeHistoryFillers(
       env,
       pythonScriptConfig(),
@@ -703,11 +721,12 @@ async function run() {
       pythonScriptConfig(),
       firstRun.committed.committed,
       [
-        { next_best_action: "WAIT", review_by: "2099-09-11T10:00:00Z", strategy: "SWING" },
-        { next_best_action: "HOLD", review_by: "2099-09-12T10:00:00Z", strategy: "MEDIUM" },
-        { next_best_action: "EXIT", review_by: "2099-09-13T10:00:00Z", strategy: "SWING" },
+        { next_best_action: "WAIT", review_by: "2026-09-11T10:00:00Z", strategy: "SWING" },
+        { next_best_action: "HOLD", review_by: "2026-09-12T10:00:00Z", strategy: "MEDIUM" },
+        { next_best_action: "EXIT", review_by: "2026-09-13T10:00:00Z", strategy: "SWING" },
       ],
     );
+    await page.clock.setFixedTime(new Date(clock.advance()));
     const thirdRun = await freezeThroughBrowser(
       page,
       backend,
@@ -715,15 +734,21 @@ async function run() {
       thirdCampaign.campaign_id,
       false,
       tempDataDir,
-      "2099-09-10T10:00",
+      "2026-09-10T10:00",
     );
     const runtimeEvaluation = deriveCompletedSessionEvaluationAsOf(
       pythonScriptConfig(),
       firstRun.committed.committed.committed_at,
     );
     const evaluationAsOf = runtimeEvaluation.evaluation_as_of;
+    assert.ok(Date.parse(evaluationAsOf) > Date.parse(secondRun.committed.committed.review_by));
+    assert.ok(Date.parse(evaluationAsOf) < Date.parse(OBSERVATION_TIME));
     env.OL1_CF_EVALUATION_AS_OF = evaluationAsOf;
+    // Record execution/attribution before evaluation, then advance observation.
+    // created_at is part of OL1 visibility, not just executed_at.
     const fixtures = prepareTradeAndFactLake(env, pythonScriptConfig(), firstRun.committed.committed, secondRun.committed.committed);
+    clock.set(OBSERVATION_TIME);
+    await page.clock.setFixedTime(new Date(OBSERVATION_TIME));
     await waitHttp(`${backend}/api/health`);
     assert.ok(firstRun.committed.committed.source_refs, JSON.stringify(firstRun.committed));
     const firstBefore = await jsonRequest(

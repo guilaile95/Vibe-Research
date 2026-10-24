@@ -400,6 +400,8 @@ _ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"} | _parse_trusted_hosts(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start existing schedulers and a lifespan-scoped Native Intel MCP transport."""
+    import public_data_budget
+    public_data_budget.startup()
     async with native_intel_mcp.running_mcp():
         pf.start_scheduler(1800)
         # NATIVE-INTEL1：本地资讯数据层建库 / 回收中断 run / 缺数据时首抓 / 启动定时抓取
@@ -410,7 +412,10 @@ async def lifespan(app: FastAPI):
                 "Native Intel startup recovery unavailable: %s", type(exc).__name__
             )
         native_intel_service.start_scheduler()
-        yield
+        try:
+            yield
+        finally:
+            public_data_budget.shutdown()
 
 
 __version__ = read_version()
@@ -692,6 +697,7 @@ def health():
 
 
 class LLMConfig(BaseModel):
+    revision: str | None = None
     provider: str = ""       # cli-codex = Codex Subscription；其余 = API Compatible
     baseURL: str = ""        # 订阅接入时留空
     apiKey: str = ""         # 订阅接入时留空
@@ -711,7 +717,7 @@ def _require_llm_ready(llm: LLMConfig) -> bool:
     provider = (llm.provider or "").strip()
     if provider == "cli-codex":
         runtime_status = agent_runtime.status()
-        if not runtime_status["available"]:
+        if not runtime_status.get("dispatch_available", runtime_status["available"]):
             if runtime_status["status"] == "probe_failed":
                 raise HTTPException(503, "Codex 登录状态检测未完成，请重试；现有登录不会被清除")
             if runtime_status.get("auth_kind") == "api_key":
@@ -843,6 +849,7 @@ def chat(req: ChatReq):
                 question, history = _agent_runtime_turn(req.messages)
                 events = agent_runtime.stream_chat(
                     session=req.session,
+                    config=cfg,
                     message=question,
                     context=context,
                     history=history,
@@ -2056,7 +2063,7 @@ async def test_ai_connection(req: AIConnectionTestRequest):
     _require_llm_ready(req.llm)
     _validate_probe_base_url(req.llm.baseURL)
     disconnect_event = threading.Event()
-    cfg = {**req.llm.model_dump(), "_cancel_event": disconnect_event, "_session": uuid.uuid4().hex}
+    cfg = {**req.llm.model_dump(), "_draft_connection_probe": chat_layer._DRAFT_CONNECTION_PROBE, "_cancel_event": disconnect_event, "_session": uuid.uuid4().hex}
 
     async def gen():
         deadline = time.monotonic() + chat_layer.CONNECTION_TEST_LIMITS.timeout
@@ -2098,8 +2105,8 @@ async def test_ai_connection(req: AIConnectionTestRequest):
                 except Exception as exc:
                     # Only fixed, locally generated transport classifications escape.
                     text = str(exc) if isinstance(exc, chat_layer.ModelTransportError) else ""
-                    error_code = {"模型响应超时": "PROBE_TIMEOUT", "模型接口 HTTP 401": "PROBE_UPSTREAM_AUTH",
-                                  "模型接口 HTTP 403": "PROBE_UPSTREAM_AUTH", "模型接口 HTTP 429": "PROBE_RATE_LIMIT"}.get(text, "PROBE_INVALID_RESPONSE")
+                    error_code = ("PROBE_TIMEOUT" if isinstance(exc, chat_layer.ModelTaskBudgetError) and time.monotonic() >= deadline else {"模型响应超时": "PROBE_TIMEOUT", "模型接口 HTTP 401": "PROBE_UPSTREAM_AUTH",
+                                  "模型接口 HTTP 403": "PROBE_UPSTREAM_AUTH", "模型接口 HTTP 429": "PROBE_RATE_LIMIT"}.get(text, "PROBE_INVALID_RESPONSE"))
                     break
                 finally:
                     if source is not None:
@@ -2855,7 +2862,7 @@ def margin(code: str = Query(...)):
     """融资融券明细（东财，日级）。缓存 30 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("margin", code, 1800, lambda: astock.margin_trading(code))}
+        return {"data": _cached("margin", code, 1800, lambda: astock.margin_trading(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "融资融券异常，请稍后重试。") from e
 
@@ -2865,7 +2872,7 @@ def block_trade(code: str = Query(...)):
     """大宗交易（东财）。缓存 30 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("block", code, 1800, lambda: astock.block_trade(code))}
+        return {"data": _cached("block", code, 1800, lambda: astock.block_trade(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "大宗交易异常，请稍后重试。") from e
 
@@ -2875,7 +2882,7 @@ def holders(code: str = Query(...)):
     """股东户数变化（东财，季度级）。缓存 30 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("holders", code, 1800, lambda: astock.holder_num_change(code))}
+        return {"data": _cached("holders", code, 1800, lambda: astock.holder_num_change(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "股东户数异常，请稍后重试。") from e
 
@@ -2885,7 +2892,7 @@ def dividend(code: str = Query(...)):
     """分红送转历史（东财）。缓存 30 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("dividend", code, 1800, lambda: astock.dividend_history(code))}
+        return {"data": _cached("dividend", code, 1800, lambda: astock.dividend_history(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "分红送转异常，请稍后重试。") from e
 
@@ -2896,7 +2903,7 @@ def fund_flow(code: str = Query(...)):
     注：push2his 对部分大陆住宅 IP 有间歇风控，可能返回空（非代码问题）。"""
     code = _validate(code)
     try:
-        return {"data": _cached("fundflow", code, 900, lambda: astock.stock_fund_flow_120d(code))}
+        return {"data": _cached("fundflow", code, 900, lambda: astock.stock_fund_flow_120d(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "资金流异常，请稍后重试。") from e
 
@@ -2906,7 +2913,7 @@ def dragon_tiger(code: str = Query(...)):
     """龙虎榜：该股近期上榜记录 + 买卖席位 + 机构净买（东财）。缓存 30 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("dt", code, 1800, lambda: astock.dragon_tiger_board(code))}
+        return {"data": _cached("dt", code, 1800, lambda: astock.dragon_tiger_board(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "龙虎榜异常，请稍后重试。") from e
 
@@ -2916,7 +2923,7 @@ def lockup(code: str = Query(...)):
     """限售解禁日历：历史解禁 + 未来 90 天待解禁（东财）。缓存 30 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("lockup", code, 1800, lambda: astock.lockup_expiry(code))}
+        return {"data": _cached("lockup", code, 1800, lambda: astock.lockup_expiry(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "解禁日历异常，请稍后重试。") from e
 
@@ -2926,7 +2933,7 @@ def blocks(code: str = Query(...)):
     """个股所属板块/概念归属（东财 slist）。缓存 30 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("blocks", code, 1800, lambda: astock.concept_blocks(code))}
+        return {"data": _cached("blocks", code, 1800, lambda: astock.concept_blocks(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "板块归属异常，请稍后重试。") from e
 
@@ -2936,7 +2943,7 @@ def hot_concepts(code: str = Query(...)):
     """个股当下被市场归到哪些概念在炒（东财热门概念命中）。缓存 15 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("hotcon", code, 900, lambda: astock.hot_concepts(code))}
+        return {"data": _cached("hotcon", code, 900, lambda: astock.hot_concepts(code, strict=True))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, "热门概念异常，请稍后重试。") from e
 
@@ -3183,10 +3190,11 @@ def sector_research_import(sector_key: str, body: SectorReportImportIn):
         raise HTTPException(400, "PDF 链接不在允许域名或非 HTTPS")
     try:
         blob = _download_pdf(pdf_url)
-    except mr.ReportError as e:
-        raise HTTPException(400, str(e)) from e
+    except mr.ReportError:
+        from safe_outputs import public_error
+        raise HTTPException(400, public_error("pdf")) from None
     except Exception as e:  # noqa: BL001
-        raise HTTPException(502, "PDF 下载失败，请稍后重试。") from e
+        raise HTTPException(502, "PDF 下载失败，请稍后重试。") from None
     if not blob:
         raise HTTPException(502, "PDF 内容为空")
 
@@ -3277,7 +3285,8 @@ def _download_pdf(url: str, max_bytes: int = 25 * 1024 * 1024) -> bytes:
         try:
             resp = session.get(current, timeout=60, stream=True, allow_redirects=False)
         except requests.RequestException as e:
-            raise mr.ReportError(f"PDF 下载网络错误：{e}") from e
+            from safe_outputs import public_error
+            raise mr.ReportError(public_error("pdf")) from None
         if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
             loc = resp.headers.get("Location")
             if not loc:
@@ -3292,7 +3301,8 @@ def _download_pdf(url: str, max_bytes: int = 25 * 1024 * 1024) -> bytes:
     try:
         resp.raise_for_status()
     except requests.HTTPError as e:
-        raise mr.ReportError(f"PDF 下载 HTTP 错误：{e}") from e
+        from safe_outputs import public_error
+        raise mr.ReportError(public_error("pdf")) from None
 
     # 最终 URL 再校验一次
     final_url = getattr(resp, "url", None) or current
@@ -3303,7 +3313,7 @@ def _download_pdf(url: str, max_bytes: int = 25 * 1024 * 1024) -> bytes:
     if ctype and ctype not in ("application/pdf", "application/octet-stream", "binary/octet-stream"):
         # 不唯依赖 Content-Type，但明确 HTML/JS 直接拒绝
         if "html" in ctype or "javascript" in ctype or "json" in ctype or "text/" in ctype:
-            raise mr.ReportError(f"响应 Content-Type 非 PDF：{ctype}")
+            raise mr.ReportError("响应 Content-Type 非 PDF")
 
     buf = bytearray()
     for chunk in resp.iter_content(chunk_size=1 << 16):

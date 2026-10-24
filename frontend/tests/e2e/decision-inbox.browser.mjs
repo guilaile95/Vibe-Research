@@ -25,6 +25,7 @@
  * 被证实的性质（身份唯一、状态以后端为准、草稿不进入 current）都没有放宽。
  */
 import { chromium } from "playwright";
+import { createTemporalClock, CREATION_TIME } from "./temporal.fixture.mjs";
 import { spawn, spawnSync, execSync } from "node:child_process";
 import {
   mkdtempSync,
@@ -252,7 +253,7 @@ function freezeDecisionForCampaign(env, { campaignId, securityCode, strategy, th
     downgrade_conditions: [],
     invalidation_conditions: [],
     strategy_horizon: "2w",
-    review_by: "2099-01-01T00:00:00Z",
+    review_by: "2026-09-10T00:00:00Z",
     key_assumptions: [],
     event_invalidation_conditions: [],
     risk_policy_version: "inbox-e2e-risk",
@@ -269,7 +270,7 @@ function freezeDecisionForCampaign(env, { campaignId, securityCode, strategy, th
     user_confirmed: true,
   };
   const script =
-    "import json, os; import frozen_decision_service as s; print(json.dumps(s.freeze_decision(json.loads(os.environ['INBOX_E2E_DECISION_PAYLOAD']))))";
+    "import json, os; from temporal_clock import install; install(); import frozen_decision_service as s; print(json.dumps(s.freeze_decision(json.loads(os.environ['INBOX_E2E_DECISION_PAYLOAD']))))";
   const py = getPythonConfig();
   const args = py.cmd === "py" ? ["-3", "-c", script] : ["-c", script];
   const result = spawnSync(py.cmd, args, {
@@ -296,8 +297,10 @@ async function runE2E() {
     const frontendPort = await getFreePort();
 
     const py = getPythonConfig();
+    const clock = createTemporalClock(tempDataDir);
     const env = {
       ...process.env,
+      ...clock.env,
       VR_ALLOW_ORIGINS: `http://127.0.0.1:${frontendPort}`,
       VR_DATA_DIR: tempDataDir,
       VR_REPORTS_DIR: tempDataDir,
@@ -307,6 +310,7 @@ async function runE2E() {
       VIBE_RESEARCH_CAMPAIGN_DB: path.join(tempDataDir, "campaigns.sqlite3"),
       VIBE_RESEARCH_FROZEN_DECISION_DB: path.join(tempDataDir, "frozen_decisions.sqlite3"),
       PYTHONUNBUFFERED: "1",
+      PYTHONPATH: [__dirname, backendDir, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
     };
 
     console.log(`[E2E] seeding position reality bootstrap...`);
@@ -322,7 +326,7 @@ async function runE2E() {
     console.log(`[E2E] starting FastAPI backend on port ${backendPort}...`);
     backendProc = spawn(
       py.cmd,
-      [...py.extraArgs, "app:app", "--host", "127.0.0.1", "--port", String(backendPort)],
+      [...py.extraArgs, "temporal_backend_harness:app", "--host", "127.0.0.1", "--port", String(backendPort)],
       { cwd: backendDir, env, stdio: ["ignore", "pipe", "pipe"] },
     );
     backendProc.stdout.on("data", (chunk) => process.stdout.write(`[backend] ${chunk}`));
@@ -337,8 +341,9 @@ async function runE2E() {
       executablePath: findChromium(),
       headless: true,
     });
-    const context = await browser.newContext();
+    const context = await browser.newContext({ timezoneId: "UTC" });
     const page = await context.newPage();
+    await page.clock.setFixedTime(new Date(CREATION_TIME));
     const forbiddenMutationRequests = [];
     page.on("request", (request) => {
       if (request.method() !== "POST") return;

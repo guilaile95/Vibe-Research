@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { createTemporalClock, CREATION_TIME } from "./temporal.fixture.mjs";
 import { saveHarnessCredential } from "./real-credential-mirror.fixture.mjs";
 import { seedActiveCampaign } from "./campaign-active-fixture.mjs";
 
@@ -209,8 +210,10 @@ async function run() {
     const frontend = `http://127.0.0.1:${frontendPort}`;
     const mockLlm = `http://127.0.0.1:${mockPort}/v1`;
     const py = pythonConfig();
+    const clock = createTemporalClock(tempDataDir);
     const env = {
       ...process.env,
+      ...clock.env,
       VR_ALLOW_ORIGINS: frontend,
       VR_DATA_DIR: tempDataDir,
       VR_REPORTS_DIR: tempDataDir,
@@ -221,8 +224,9 @@ async function run() {
       VIBE_RESEARCH_FROZEN_DECISION_DB: join(tempDataDir, "frozen_decisions.sqlite3"),
       VIBE_RESEARCH_DECISION_CHALLENGE_DB: join(tempDataDir, "decision_challenges.sqlite3"),
       PYTHONUNBUFFERED: "1",
+      PYTHONPATH: [__dirname, backendDir, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
     };
-    backendProc = spawn(py.cmd, [...py.args, "app:app", "--host", "127.0.0.1", "--port", String(backendPort)], {
+    backendProc = spawn(py.cmd, [...py.args, "temporal_backend_harness:app", "--host", "127.0.0.1", "--port", String(backendPort)], {
       cwd: backendDir,
       env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -262,6 +266,7 @@ async function run() {
       localStorage.setItem("vr-llm", JSON.stringify(value));
     }, credential);
     const page = await context.newPage();
+    await page.clock.setFixedTime(new Date(CREATION_TIME));
     const consoleErrors = [];
     const pageErrors = [];
     const failedRequests = [];

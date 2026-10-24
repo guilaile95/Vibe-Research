@@ -1,4 +1,4 @@
-import { credentialStatus } from './credential-generation.fixture.mjs';
+import { credentialStatus, storedCredential } from './credential-generation.fixture.mjs';
 /** Registered API goldens only. Every comparison read/write needs an explicit UI expectation. */
 import { readFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
@@ -39,7 +39,7 @@ export function createComparisonFixture(origin) {
       // A truncated transport replays only the actual run_started receipt. It is not a new success contract.
       const events = delivery === 'truncated' ? g.events.slice(0, -1) : delivery === 'failed' ? comparisonHistoryGolden.failed_events : comparisonFailures.events[delivery] ?? g.events;
       if (!['complete', 'truncated', 'failed', ...Object.keys(comparisonFailures.events)].includes(delivery) || (delivery === 'failed' && scenario !== 'complete')) throw Error('Unknown delivery fault');
-      expect('POST', generationPath, { kind: 'stream', body: events.map(e => JSON.stringify(e)).join('\n') + '\n' }, g.request);
+      expect('POST', generationPath, { kind: 'stream', body: events.map(e => JSON.stringify(e)).join('\n') + '\n' }, { ...g.request, llm: storedCredential(g.request.llm) });
     },
     expectEvidence(index = 0, scenario = 'complete') {
       const bundle = comparisonGoldens[scenario].bundles[index];

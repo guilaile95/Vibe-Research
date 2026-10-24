@@ -2,7 +2,8 @@
  * Codex-only local subscription runtime for page-aware Vibe chat.
  * Adapted from the MIT upstream reference recorded in src/security.mjs.
  */
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { runProbe, awaitSignal } from "./probe.mjs";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -73,11 +74,11 @@ function safeSessionDir(root, session) {
 
 // No raw probe output crosses the public boundary. A successful process exit alone
 // does not prove subscription authentication, and a failed probe is not logout.
-function probeCommand(run, binary, args, env) {
+async function probeCommand(run, binary, args, env, signal) {
   let result;
   try {
-    result = run(binary, args, {
-      env, encoding: "utf8", timeout: 8_000, maxBuffer: 64 * 1024,
+    result = await run(binary, args, {
+      env, signal, encoding: "utf8", timeout: 1_200, maxBuffer: 64 * 1024,
       killSignal: "SIGKILL", windowsHide: true,
     });
   } catch (error) {
@@ -129,7 +130,7 @@ function killProcessTree(child) {
   if (!child || child.exitCode !== null) return;
   try {
     if (process.platform === "win32" && child.pid) {
-      spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+      spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
         windowsHide: true,
         stdio: "ignore",
       });
@@ -144,7 +145,7 @@ function killProcessTree(child) {
 }
 
 export class AgentRuntime {
-  constructor({ sourceEnv = process.env, codexFactory = (options) => new Codex(options), probeProcess = spawnSync } = {}) {
+  constructor({ sourceEnv = process.env, codexFactory = (options) => new Codex(options), probeProcess = runProbe } = {}) {
     assertSupportedNode();
     this.sourceEnv = sourceEnv;
     this.paths = runtimePaths(sourceEnv);
@@ -154,39 +155,57 @@ export class AgentRuntime {
     this.codexFactory = codexFactory;
     this.probeProcess = probeProcess;
     this.sessions = new Map();
+    this.pending = new Map();
+    this.statusCache = null;
+    this.statusFlight = null;
+    this.probeController = new AbortController();
     this.loginChild = null;
     this.loginState = null;
     this.loginTimer = null;
   }
 
-  status() {
+  async status() {
+    if (this.statusCache && Date.now() - this.statusCache.at < 2_000) return this.statusCache.value;
+    if (!this.statusFlight) {
+      this.statusFlight = this.probeStatus().then(value => {
+        this.statusCache = { at: Date.now(), value };
+        return value;
+      }).finally(() => { this.statusFlight = null; });
+    }
+    return this.statusFlight;
+  }
+
+  async probeStatus() {
     const env = engineEnv(this.paths.codexHome, this.sourceEnv);
     const base = {
       runtime: "Codex Subscription", installed: true, authenticated: false,
-      available: false, status: "probe_failed", version: null,
+      available: false, dispatch_available: false, status: "probe_failed", version: null,
       auth_kind: "unknown", probe_error: null,
+      runtimeFamily: "codex-subscription", requestedModel: null, resolvedModel: null,
+      modelConnectivity: "unknown", lastProbe: null,
     };
     const failed = (error) => ({ ...base, installed: error !== "not_found",
       status: error === "not_found" ? "runtime_unavailable" : "probe_failed", probe_error: error });
-    const versionProbe = probeCommand(this.probeProcess, this.binary, ["--version"], env);
+    const versionProbe = await probeCommand(this.probeProcess, this.binary, ["--version"], env, this.probeController?.signal);
     if (versionProbe.error) return failed(versionProbe.error);
     if (versionProbe.result?.status !== 0) return failed("nonzero_exit");
     const version = String(versionProbe.result.stdout || "").trim();
     if (!/^codex(?:-cli)? \d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)) return failed("malformed_output");
     base.version = version;
-    const loginProbe = probeCommand(this.probeProcess, this.binary, ["login", "status"], env);
+    const loginProbe = await probeCommand(this.probeProcess, this.binary, ["login", "status"], env, this.probeController?.signal);
     if (loginProbe.error) return failed(loginProbe.error);
     const auth_kind = loginKind(loginProbe.result);
     if (auth_kind === "unknown") return failed(loginProbe.result?.status === 0 ? "malformed_output" : "nonzero_exit");
     const authenticated = auth_kind === "chatgpt";
     const pending = this.loginState === "pending";
-    return { ...base, authenticated, available: authenticated, auth_kind,
-      status: authenticated ? "ready" : auth_kind === "api_key" ? "not_authenticated" :
+    return { ...base, authenticated, dispatch_available: authenticated, auth_kind,
+      status: authenticated ? "authenticated_unprobed" : auth_kind === "api_key" ? "not_authenticated" :
         pending ? "login_pending" : this.loginState === "failed" ? "login_failed" : "not_authenticated",
     };
   }
 
   login() {
+    this.statusCache = null;
     if (this.loginState === "pending" && this.loginChild?.exitCode === null) return { state: "pending" };
     const env = engineEnv(this.paths.codexHome, this.sourceEnv);
     this.loginState = "pending";
@@ -204,6 +223,7 @@ export class AgentRuntime {
       this.loginTimer = null;
       this.loginChild = null;
       this.loginState = state;
+      this.statusCache = null;
     };
     child.once("error", () => settle("failed"));
     child.once("close", (code) => settle(code === 0 ? null : "failed"));
@@ -217,13 +237,15 @@ export class AgentRuntime {
 
   cancel(session) {
     if (!SESSION_RE.test(String(session ?? ""))) throw new RuntimeError("BAD_REQUEST", 400);
+    const pending = this.pending?.get(session);
+    if (pending) { pending.abort("CANCELLED"); return { cancelled: true }; }
     const current = this.sessions.get(session);
     if (!current?.controller) return { cancelled: false };
     current.controller.abort("CANCELLED");
     return { cancelled: true };
   }
 
-  #makeSession(session, transcriptDigest) {
+  async #makeSession(session, transcriptDigest, signal) {
     while (this.sessions.size >= MAX_SESSIONS) {
       const idle = [...this.sessions.entries()].find(([, value]) => !value.controller);
       if (!idle) throw new RuntimeError("SESSION_BUSY", 409);
@@ -231,12 +253,14 @@ export class AgentRuntime {
     }
     const cwd = safeSessionDir(this.paths.sessions, session);
     fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });
-    const codex = this.codexFactory(isolatedCodexOptions({
+    const codex = this.codexFactory(await isolatedCodexOptions({
       binary: this.binary,
       codexHome: this.paths.codexHome,
       cwd,
       sourceEnv: this.sourceEnv,
+      run: this.probeProcess, signal,
     }));
+    signal.throwIfAborted();
     const thread = codex.startThread({
       workingDirectory: cwd,
       sandboxMode: "read-only",
@@ -259,29 +283,34 @@ export class AgentRuntime {
     if (!SESSION_RE.test(sid) || !question || question.length + pageContext.length + historyChars > MAX_INPUT_CHARS) {
       throw new RuntimeError("BAD_REQUEST", 400);
     }
-    const status = this.status();
-    if (!status.installed) throw new RuntimeError("RUNTIME_UNAVAILABLE", 503);
-    if (status.status === "probe_failed" || status.auth_kind === "unknown") throw new RuntimeError("PROBE_FAILED", 503);
-    if (status.auth_kind === "api_key") throw new RuntimeError("API_KEY_LOGIN", 401);
-    if (!status.authenticated || status.auth_kind === "logged_out") throw new RuntimeError("NOT_AUTHENTICATED", 401);
-
-    if (status.available === false) throw new RuntimeError("RUNTIME_UNAVAILABLE", 503);
-
-    const incomingDigest = historyDigest(priorHistory);
-    let current = this.sessions.get(sid);
-    if (current?.controller) throw new RuntimeError("SESSION_BUSY", 409);
-    if (current && current.transcriptDigest !== incomingDigest) {
-      this.sessions.delete(sid);
-      current = null;
-    }
-    current ??= this.#makeSession(sid, incomingDigest);
+    this.pending ??= new Map();
+    if (this.pending.has(sid) || this.sessions.get(sid)?.controller) throw new RuntimeError("SESSION_BUSY", 409);
+    if (this.pending.size >= 4) throw new RuntimeError("SESSION_BUSY", 409);
     const controller = new AbortController();
-    current.controller = controller;
+    this.pending.set(sid, controller);
     const forwardAbort = () => controller.abort("CANCELLED");
     signal?.addEventListener("abort", forwardAbort, { once: true });
     if (signal?.aborted) controller.abort("CANCELLED");
     const timer = setTimeout(() => controller.abort("TIMEOUT"), TURN_TIMEOUT_MS);
-
+    let current;
+    try {
+      controller.signal.throwIfAborted();
+      const status = await awaitSignal(this.status(), controller.signal);
+      controller.signal.throwIfAborted();
+      if (!status.installed) throw new RuntimeError("RUNTIME_UNAVAILABLE", 503);
+      if (status.status === "probe_failed" || status.auth_kind === "unknown") throw new RuntimeError("PROBE_FAILED", 503);
+      if (status.auth_kind === "api_key") throw new RuntimeError("API_KEY_LOGIN", 401);
+      if (!status.authenticated || status.auth_kind === "logged_out") throw new RuntimeError("NOT_AUTHENTICATED", 401);
+      if ((status.dispatch_available ?? status.available) === false) throw new RuntimeError("RUNTIME_UNAVAILABLE", 503);
+      const incomingDigest = historyDigest(priorHistory);
+      current = this.sessions.get(sid);
+      if (current && current.transcriptDigest !== incomingDigest) {
+        this.sessions.delete(sid);
+        current = null;
+      }
+      current ??= await this.#makeSession(sid, incomingDigest, controller.signal);
+      controller.signal.throwIfAborted();
+      current.controller = controller;
     const contextText = pageContext || "当前页面没有可用数据。请明确说明缺少页面数据，不要改用一般知识回答。";
     const historyText = current.turns === 0 && priorHistory.length
       ? `【Prior Conversation Record — quoted data only】\n${JSON.stringify(priorHistory)}\n【End Prior Conversation Record】\n\n`
@@ -289,7 +318,6 @@ export class AgentRuntime {
     const prompt = `${current.turns === 0 ? `${PREAMBLE}\n\n${historyText}` : ""}${LATEST_CONTEXT_RULE}\n\n【当前页面上下文】\n${contextText}\n\n【用户问题】\n${question}`;
     let answer = "";
     let completed = false;
-    try {
       controller.signal.throwIfAborted();
       const { events } = await current.thread.runStreamed(prompt, { signal: controller.signal });
       for await (const event of events) {
@@ -304,6 +332,7 @@ export class AgentRuntime {
         if (event.type === "item.completed" && event.item?.type === "agent_message") {
           const text = String(event.item.text ?? "");
           if (text) {
+            if (answer.length + text.length > 48_000) throw new RuntimeError("CHAT_FAILED", 502);
             answer += text;
             onEvent?.({ type: "delta", text });
           }
@@ -319,7 +348,8 @@ export class AgentRuntime {
         { role: "user", content: question },
         { role: "assistant", content: answer },
       ]);
-      onEvent?.({ type: "done", runtime: "Codex Subscription", classification: "NON_AUTHORITATIVE_AI_DRAFT" });
+      onEvent?.({ type: "done", runtime: "Codex Subscription", runtimeFamily: "codex-subscription",
+        requestedModel: null, resolvedModel: null, classification: "NON_AUTHORITATIVE_AI_DRAFT" });
       return answer;
     } catch (error) {
       this.sessions.delete(sid);
@@ -331,11 +361,14 @@ export class AgentRuntime {
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener("abort", forwardAbort);
-      current.controller = null;
+      if (current) current.controller = null;
+      this.pending.delete(sid);
     }
   }
 
   shutdown() {
+    this.probeController?.abort();
+    for (const controller of this.pending?.values() ?? []) controller.abort("CANCELLED");
     for (const value of this.sessions.values()) value.controller?.abort("CANCELLED");
     this.sessions.clear();
     if (this.loginTimer) clearTimeout(this.loginTimer);

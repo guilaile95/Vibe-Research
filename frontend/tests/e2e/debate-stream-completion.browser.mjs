@@ -70,7 +70,7 @@ const start = async (code = "600519", rounds = "1") => {
   await page.locator("select").selectOption(rounds);
   await page.getByRole("button", { name: "开始辩论", exact: true }).click();
 };
-const notes = () => page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes") || "[]"));
+const notes = () => page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")));
 const check = async (name, fn) => {
   try {
     await fn();

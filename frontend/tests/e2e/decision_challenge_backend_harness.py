@@ -9,6 +9,10 @@ import threading
 from collections.abc import Mapping
 from typing import Any
 
+from temporal_clock import install
+
+install()
+
 import campaign_critical_data_runtime
 
 
