@@ -1,0 +1,83 @@
+name: Measured performance
+
+# Paired synthetic benchmarks are separate from correctness CI and only run when
+# their scoped implementation/harness changes. They do not contact market sources.
+on:
+  push:
+    branches: [feature/research-system-v01]
+    paths:
+      - "frontend/vite.config.ts"
+      - "frontend/src/lib/researchWorkflow.ts"
+      - "frontend/src/lib/researchWorkflowStore.ts"
+      - "frontend/tests/performance/**"
+      - ".github/workflows/performance.yml"
+  pull_request:
+    paths:
+      - "frontend/vite.config.ts"
+      - "frontend/src/lib/researchWorkflow.ts"
+      - "frontend/src/lib/researchWorkflowStore.ts"
+      - "frontend/tests/performance/**"
+      - ".github/workflows/performance.yml"
+
+concurrency:
+  group: performance-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  measured-performance:
+    name: Paired production-build performance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@v7
+        with:
+          path: candidate
+
+      - name: Check out immutable performance baseline
+        uses: actions/checkout@v7
+        with:
+          ref: c16ade49174a26597de05244ac9f70d2855c590a
+          path: performance-baseline
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: candidate/frontend/package-lock.json
+
+      - name: Install identical locked frontend dependencies
+        run: |
+          cmp candidate/frontend/package-lock.json performance-baseline/frontend/package-lock.json
+          npm --prefix candidate/frontend ci
+          ln -s ../../candidate/frontend/node_modules performance-baseline/frontend/node_modules
+
+      - name: Build both production versions on the same runner
+        run: |
+          npm --prefix performance-baseline/frontend run build
+          npm --prefix candidate/frontend run build
+
+      - name: Install Chromium
+        working-directory: candidate/frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Measure paired isolated browser workloads
+        run: >-
+          node candidate/frontend/tests/performance/frontend.browser.mjs
+          --baseline-dist performance-baseline/frontend/dist
+          --candidate-dist candidate/frontend/dist
+          --output performance-evidence
+
+      - name: Preserve raw performance samples and identity
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: paired-performance-evidence
+          path: performance-evidence
+          if-no-files-found: error
+          retention-days: 14
+
