@@ -295,12 +295,25 @@ try {
   await sleep(300);
   assert.ok(await page.locator("text=AI算力与液冷渗透率提速").count() > 0);
 
-  // Click generate again to verify CACHE_HIT badge
-  await generateBtn.click();
-  await sleep(1000);
+  // Authentication does not resolve the CLI model identity. Unknown/default
+  // executions intentionally cannot reuse an artifact cache.
+  assert.equal(analysisJson.cached, false);
+  assert.equal(analysisJson.model, "unknown/default");
+  const repeatAnalysis = async () => {
+    const response = page.waitForResponse(r => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/native-intel/ai/analysis");
+    await generateBtn.click();
+    const completed = await response;
+    assert.equal(completed.status(), 200);
+    const payload = await completed.json();
+    await generateBtn.click({ trial: true });
+    return payload;
+  };
+  const cliRepeat = await repeatAnalysis();
+  assert.equal(cliRepeat.cached, false);
+  assert.equal(cliRepeat.model, "unknown/default");
   const cachedBadge = page.locator('[data-testid="wave5-ai-cached-badge"]');
-  await cachedBadge.waitFor({ state: "visible", timeout: 5000 });
-  console.log("PASS: Scenario 3 - AI Deep Analysis 6 tabs, watermark, and CACHE_HIT verified");
+  assert.equal(await cachedBadge.count(), 0);
+  console.log("PASS: Scenario 3 - AI Deep Analysis 6 tabs, watermark, and honest CLI no-cache verified");
 
   // =========================================================================
   // Scenario 4: Single Item AI Translation with Global API Compatible Configuration
@@ -315,6 +328,19 @@ try {
   });
   assert.notEqual(apiCredential.revision, cliCredential.revision);
   await page.evaluate(credential => localStorage.setItem("vr-llm", JSON.stringify(credential)), apiCredential);
+
+  // A concrete saved API identity keeps positive cache-hit coverage, without
+  // pretending that the CLI default is a verified model.
+  const apiFirst = await repeatAnalysis();
+  assert.equal(apiFirst.cached, false);
+  assert.equal(apiFirst.model, apiCredential.model);
+  assert.deepEqual(capturedAnalysisReqBody.llm, apiCredential);
+  const apiRepeat = await repeatAnalysis();
+  assert.equal(apiRepeat.cached, true);
+  assert.equal(apiRepeat.artifact_id, apiFirst.artifact_id);
+  await cachedBadge.waitFor({ state: "visible", timeout: 5000 });
+  console.log("PASS: Concrete API model identity reuses its matching artifact cache");
+
 
   // Item 1 has title: "Data center liquid cooling demand rises"
   const item1Title = page.getByTestId("display-region-hotlist").getByText("Data center liquid cooling demand rises", { exact: true });

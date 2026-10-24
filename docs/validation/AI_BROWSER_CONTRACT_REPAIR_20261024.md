@@ -7,6 +7,7 @@ Scope: PR #417, CI run 40091721958. Test-only repairs; production guards unchang
 - Data-health job 120865596037: final-families asserted a model envelope without the server-dispatch revision.
 - Intel job 120865596149: GH/HF deep-read and Wave 5 explicitly asserted revision absence; segmented review and campaign consent rejected the current exact generation-bearing envelope.
 - The same strict-envelope mismatch affected extended-public research in smoke job 120865596053.
+- Wave 5 now proves CLI unknown/default executions remain uncached and separately proves a saved concrete API identity returns its matching cached artifact.
 - Interest Filter installed an unsaved browser-only model and exposed no credential-status router. Its AI save was correctly stopped by generation preflight. The harness now saves a synthetic credential through the production CAS router in its temporary data directory and mirrors the returned revision.
 - Native Intel expected the former full-failure wording. It now checks the precise error plus separate success/pending/failure counts. The late-tab fixture waits for both held route handlers rather than a response event that production cancellation may prevent.
 - Settings recovery expected “connected” from login status. It now distinguishes authenticated/unprobed from legacy ready and checks the login control against authentication, not model availability. Calendar coverage assertions remain intact.
