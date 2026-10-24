@@ -1,8 +1,9 @@
 """Offline cross-domain regressions for P1-02, P1-05 and P2-01."""
 from datetime import datetime, timezone
-import socket
 
 import pytest
+
+from offline_network_fixtures import block_external_connections
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -30,10 +31,7 @@ def isolated(tmp_path, monkeypatch):
         ("VIBE_RESEARCH_TRADE_ORIGIN_DB", "origins.sqlite"),
     ]:
         monkeypatch.setenv(variable, str(tmp_path / filename))
-    def blocked(*args, **kwargs):
-        raise AssertionError("Network prohibited in account authority regressions")
-    monkeypatch.setattr(socket.socket, "connect", blocked)
-    monkeypatch.setattr(socket, "create_connection", blocked)
+    block_external_connections(monkeypatch)
     monkeypatch.setattr(trades, "_execution_now", lambda: datetime(2026, 10, 23, tzinfo=timezone.utc))
     monkeypatch.setattr(position, "_utc_now", lambda: "2026-10-23T00:00:00+00:00")
 
