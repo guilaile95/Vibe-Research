@@ -1442,6 +1442,14 @@ jobs:
           tests/test_research_quality_diagnostics.py
           tests/test_valuation_digestion_contract.py
           tests/test_filing_evidence.py
+          tests/test_account_authority_remediation.py
+          tests/test_offline_network_fixtures.py
+          tests/test_ai_execution_contracts.py
+          tests/test_ai_transport_matrix.py
+          tests/test_ai_connection_test.py
+          tests/test_daily_review_lead_stream.py
+          tests/test_e2e_temporal_clock.py
+          tests/test_interest_filter_browser_credential.py
 
       - name: Validate read-only runtime identity contracts
         run: python -m unittest discover -s tools -p test_verify_runtime_identity.py
