@@ -87,11 +87,11 @@ async function runScenario(browser, baseURL, backend, width, scenario, evidenceD
       if (!url.pathname.startsWith("/api/")) return route.continue();
       requests.push(`${request.method()} ${url.pathname}${url.search}`);
       if (scenario === "debate" && request.method() === "POST" && url.pathname === "/api/debate") {
-        const body = request.postDataJSON(); assert.deepEqual(body.llm, syntheticLlm); assert.equal(body.code, "600519");
+        const body = request.postDataJSON(); assert.deepEqual(body.llm, syntheticStoredLlm); assert.equal(body.code, "600519");
         return route.fulfill({ contentType: "application/x-ndjson", body: encode(debateEvents(body.rounds, debateMode)) });
       }
       if (scenario === "notes-mobile" && request.method() === "POST" && url.pathname === "/api/reflect") {
-        const body = request.postDataJSON(); assert.deepEqual(body.llm, syntheticLlm);
+        const body = request.postDataJSON(); assert.deepEqual(body.llm, syntheticStoredLlm);
         return route.fulfill({ contentType: "application/x-ndjson", body: encode([{ type: "delta", text: "SYNTHETIC_MOBILE_AUDIT" }, ...(reflectionComplete ? [{ type: "done", content: "SYNTHETIC_MOBILE_AUDIT", truncated: true }] : [])]) });
       }
       if (realRouteAllowed(request.method(), url.pathname, scenario)) {

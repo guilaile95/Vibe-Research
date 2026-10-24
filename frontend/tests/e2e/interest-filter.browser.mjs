@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { saveHarnessCredential } from "./real-credential-mirror.fixture.mjs";
 
 const root = path.resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const backendDir = join(root, "backend");
@@ -120,6 +121,7 @@ try {
         ...process.env,
         PYTHONPATH: `${backendDir}${path.delimiter}${join(root, "frontend", "tests", "e2e")}`,
         VIBE_NATIVE_INTEL_DB: dbPath,
+        VR_DATA_DIR: tempDir,
         PYTHONUNBUFFERED: "1",
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -131,15 +133,10 @@ try {
   browser = await launchBrowser();
 
   const page = await browser.newPage();
-  await page.addInitScript(() => {
-    localStorage.setItem(
-      "vr-llm",
-      JSON.stringify({
-        provider: "cli-codex",
-        model: "gpt-5-codex",
-      }),
-    );
+  const credential = await saveHarnessCredential(`http://127.0.0.1:${backendPort}`, {
+    provider: "cli-codex", model: "gpt-5-codex",
   });
+  await page.addInitScript(value => localStorage.setItem("vr-llm", JSON.stringify(value)), credential);
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   page.on("console", (msg) => console.log("PAGE LOG:", msg.type(), msg.text()));

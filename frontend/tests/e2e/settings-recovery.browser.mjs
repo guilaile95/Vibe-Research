@@ -144,9 +144,9 @@ async function runtimeScenario(browser, baseURL, width, evidenceDir) {
     { name: 'outer-timeout', payload: { ...common, installed: false, version: null, status: 'probe_failed', auth_kind: 'unknown', probe_error: 'timeout' }, label: '登录状态检测未完成，请重试（现有登录不会被清除）' },
     { name: 'malformed', payload: { ...common, status: 'probe_failed', auth_kind: 'unknown', probe_error: 'malformed_output' }, label: '登录状态检测未完成，请重试（现有登录不会被清除）' },
     { name: 'api-key', payload: { ...common, status: 'not_authenticated', auth_kind: 'api_key', probe_error: null }, label: '当前为 API key 登录，订阅接入需要 ChatGPT 登录' },
-    { name: 'chatgpt', payload: { ...common, authenticated: true, available: true, status: 'ready', auth_kind: 'chatgpt', probe_error: null }, label: '已连接' },
+    { name: 'chatgpt', payload: { ...common, authenticated: true, available: false, dispatch_available: true, modelConnectivity: 'unknown', lastProbe: null, status: 'authenticated_unprobed', auth_kind: 'chatgpt', probe_error: null }, label: '已登录 · 模型连通性未验证' },
     { name: 'logged-out', payload: { ...common, status: 'not_authenticated', auth_kind: 'logged_out', probe_error: null }, label: '未连接' },
-    { name: 'legacy-ready', payload: { ...common, authenticated: true, available: true, status: 'ready' }, label: '已连接' },
+    { name: 'legacy-ready', payload: { ...common, authenticated: true, available: true, status: 'ready' }, label: '已登录 · 模型连通性未验证' },
     { name: 'legacy-logged-out', payload: { ...common, status: 'not_authenticated' }, label: '未连接' },
   ];
   let context, page, active = states[0], statusReads = 0;
@@ -199,7 +199,7 @@ async function runtimeScenario(browser, baseURL, width, evidenceDir) {
       assert.equal(statusReads, before + 1, 'one explicit action must produce exactly one status read');
       if (state.payload.status === 'probe_failed') assert.doesNotMatch(text, /未连接|未登录|Runtime 未启动|已连接/);
       if (state.name === 'api-key') assert.doesNotMatch(text, /已连接/);
-      assert.equal(await page.getByRole('button', { name: '连接 Codex', exact: true }).count(), state.payload.available ? 0 : 1);
+      assert.equal(await page.getByRole('button', { name: '连接 Codex', exact: true }).count(), state.payload.authenticated ? 0 : 1);
       assert.ok(requests.every(key => key.startsWith('GET ')), 'status display cannot trigger login, model calls, or writes');
       await shot(state.name);
       observations.push({ name: state.name, label: text, status: state.payload.status, authKind: state.payload.auth_kind ?? 'legacy-absent', probeError: state.payload.probe_error ?? null, statusReads });

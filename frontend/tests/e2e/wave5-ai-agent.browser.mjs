@@ -258,7 +258,7 @@ try {
   assert.ok(capturedAnalysisReqBody !== null, "Analysis request body must be captured");
   assert.equal(capturedAnalysisReqBody.llm?.provider, "cli-codex");
   assert.equal(capturedAnalysisReqBody.llm?.model, "gpt-5-codex");
-  assert.equal("revision" in capturedAnalysisReqBody.llm, false);
+  assert.deepEqual(capturedAnalysisReqBody.llm, cliCredential);
 
   // Wait for 6 section tabs to be visible
   const tabs = [
@@ -353,7 +353,7 @@ try {
   assert.equal(capturedTranslateReqBody.llm?.baseURL, "https://api.deepseek.com/v1");
   assert.equal(capturedTranslateReqBody.llm?.model, "deepseek-chat");
   assert.equal(capturedTranslateReqBody.llm?.apiKey, "sk-test-deepseek-12345");
-  assert.equal("revision" in capturedTranslateReqBody.llm, false);
+  assert.deepEqual(capturedTranslateReqBody.llm, apiCredential);
 
   // Verify original text is still intact and visible!
   assert.ok((await page.locator("text=Data center liquid cooling demand rises").count()) > 0);

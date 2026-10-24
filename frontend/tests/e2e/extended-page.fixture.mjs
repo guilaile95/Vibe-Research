@@ -31,7 +31,7 @@ export function createExtendedPageFixture(origin){
   if(u.pathname.startsWith('/api/company-research/')){
    const expected=expectedPosts[0];if(method!=='POST'||u.search||!expected||u.pathname!=='/api/company-research/'+expected.action)return deny('unplanned research request');
    const g=researchGolden[expected.market],bundle=g.bundle;
-   const wanted=expected.action==='capture'?{...g.subject,confirm_public_fetch:true,as_of:g.as_of}:{...g.subject,bundle_id:bundle.bundle_id,expected_bundle_sha256:bundle.bundle_sha256,confirm_model_calls:true,llm:syntheticLlm};
+   const wanted=expected.action==='capture'?{...g.subject,confirm_public_fetch:true,as_of:g.as_of}:{...g.subject,bundle_id:bundle.bundle_id,expected_bundle_sha256:bundle.bundle_sha256,confirm_model_calls:true,llm:syntheticStoredLlm};
    if(!isDeepStrictEqual(body,wanted))return deny('research body identity mismatch');
    expectedPosts.shift();return expected.action==='capture'?json(bundle):{kind:'stream',body:g.events.map(e=>JSON.stringify(e)).join('\n')+'\n'};
   }
