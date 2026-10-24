@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { createTemporalClock, CREATION_TIME } from "./temporal.fixture.mjs";
 import { seedActiveCampaign } from "./campaign-active-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -307,8 +308,10 @@ async function run() {
     const backend = `http://127.0.0.1:${backendPort}`;
     const frontend = `http://127.0.0.1:${frontendPort}`;
     const py = pythonConfig();
+    const clock = createTemporalClock(tempDataDir);
     const env = {
       ...process.env,
+      ...clock.env,
       VR_DATA_DIR: tempDataDir,
       VR_REPORTS_DIR: tempDataDir,
       VIBE_RESEARCH_TRADE_LEDGER_DB: join(tempDataDir, "trade_ledger.sqlite3"),
@@ -346,7 +349,8 @@ async function run() {
     } catch {
       browser = await chromium.launch({ headless: true, channel: "chrome" });
     }
-    const page = await browser.newPage();
+    const page = await browser.newPage({ timezoneId: "UTC" });
+    await page.clock.setFixedTime(new Date(CREATION_TIME));
     await page.route("https://fonts.googleapis.com/**", (route) => route.fulfill({ contentType: "text/css", body: "" }));
     const consoleErrors = [];
     const failedRequests = [];
@@ -749,6 +753,8 @@ async function run() {
         await page.unroute(probeRoute);
       }
     }
+    clock.set("2026-08-29T08:00:00.000000Z");
+    await page.clock.setFixedTime(new Date("2026-08-29T08:00:00Z"));
     const apiWriteMarker = apiWriteRequests.length;
     // 1) 通过正常界面创建此前不存在的新证据（evidence 创建 ≠ 研究变化已确认）。
     await page.goto(`${frontend}/evidence/new?subject_type=stock&subject_id=600519&return_to=${encodeURIComponent(`/thesis/${thesisId}`)}`, { waitUntil: "domcontentloaded" });
@@ -833,7 +839,7 @@ async function run() {
     await page.getByTestId("research-brief").screenshot({ path: join(shotDir, "post-freeze-delta-brief.png") });
     if (readbackVariant === "valid") {
       // R6 path one ends at a new explicitly committed decision, not merely ADDED.
-      await page.getByLabel("下次必须重新检查的时间").fill("2099-01-01T10:00");
+      await page.getByLabel("下次必须重新检查的时间").fill("2026-09-10T10:00");
       await page.getByLabel("这个判断成立依赖什么").fill("渠道更新 v2 后重新评估");
       await page.getByLabel("出现什么情况说明判断错了").fill("动销继续恶化");
       await page.getByLabel("对这只股票的判断").selectOption("SUPPORT");

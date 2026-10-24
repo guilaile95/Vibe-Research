@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { createTemporalClock, CREATION_TIME } from "./temporal.fixture.mjs";
 import { seedActiveCampaign } from "./campaign-active-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -199,8 +200,10 @@ async function run() {
     const backend = `http://127.0.0.1:${backendPort}`;
     const frontend = `http://127.0.0.1:${frontendPort}`;
     const py = pythonConfig();
+    const clock = createTemporalClock(tempDataDir);
     const env = {
       ...process.env,
+      ...clock.env,
       VR_ALLOW_ORIGINS: frontend,
       VR_DATA_DIR: tempDataDir,
       VR_REPORTS_DIR: tempDataDir,
@@ -234,7 +237,8 @@ async function run() {
     const executablePath = chromiumPath();
     if (executablePath) launchOptions.executablePath = executablePath;
     browser = await chromium.launch(launchOptions);
-    const page = await browser.newPage();
+    const page = await browser.newPage({ timezoneId: "UTC" });
+    await page.clock.setFixedTime(new Date(CREATION_TIME));
     const failedRequests = [];
     const apiTrace = [];
     let challengeReadFailureStatus = null;
