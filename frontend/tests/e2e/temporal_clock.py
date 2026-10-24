@@ -4,7 +4,7 @@ The file is private to one temporary E2E data directory. Both the HTTP process
 and fixture subprocesses read it so advancing to review time never changes a
 frozen decision's identity or bypasses temporal input validation.
 """
-from datetime import datetime, timezone
+from datetime import datetime
 import importlib
 import os
 from pathlib import Path
@@ -21,6 +21,11 @@ def now():
     return datetime.fromisoformat(utc_now_iso().replace("Z", "+00:00"))
 
 
+def utc_now_offset_iso():
+    """Evidence/Thesis and ledger ports persist +00:00, not the Decision Z form."""
+    return now().isoformat(timespec="microseconds")
+
+
 def install(setattr_fn=setattr):
     if not os.environ.get("E2E_CLOCK_FILE"):
         return
@@ -30,26 +35,31 @@ def install(setattr_fn=setattr):
         "decision_commit_runtime": "utc_now_iso",
         "frozen_decision_service": "_utc_now_iso",
         "campaign_ai_draft_service": "utc_now_iso",
-        "evidence_thesis_service": "_utc_now_iso",
-        "evidence_thesis_store": "_utc_now_iso",
-        "decision_trace_store": "_utc_now",
-        "account_reality_service": "_utc_now",
-        "position_reality_service": "_utc_now",
-        "trade_ledger_store": "_utc_now",
         "trade_attribution_runtime": "_now",
         "formal_decision_outcome_runtime": "_now",
         "decision_inbox_runtime_assembler": "_utc_now_iso",
     }
     for module, field in clocks.items():
         setattr_fn(importlib.import_module(module), field, utc_now_iso)
+    offset_clocks = {
+        "evidence_thesis_service": "_utc_now_iso",
+        "evidence_thesis_store": "_utc_now_iso",
+        "decision_trace_store": "_utc_now",
+        "account_reality_service": "_utc_now",
+        "position_reality_service": "_utc_now",
+        "trade_ledger_store": "_utc_now",
+    }
+    for module, field in offset_clocks.items():
+        setattr_fn(importlib.import_module(module), field, utc_now_offset_iso)
     setattr_fn(importlib.import_module("trade_ledger_service"), "_execution_now", now)
-    # Campaign timestamps use datetime directly rather than a clock port.
-    class CampaignDateTime(datetime):
+    # Campaign and Trade created_at timestamps use datetime directly.
+    class FixtureDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
             instant = now()
             return instant.astimezone(tz) if tz else instant.replace(tzinfo=None)
-    setattr_fn(importlib.import_module("campaign_service"), "datetime", CampaignDateTime)
+    for module in ("campaign_service", "trade_ledger_service"):
+        setattr_fn(importlib.import_module(module), "datetime", FixtureDateTime)
     # Also handle imports made before install (unit tests and seed helpers).
     from dataclasses import replace
     challenge = importlib.import_module("decision_challenge_runtime")

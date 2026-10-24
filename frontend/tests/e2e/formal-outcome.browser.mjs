@@ -398,7 +398,8 @@ assert committed_at <= executed_at < evaluation_at
 executed_at_text = executed_at.isoformat(timespec='seconds').replace('+00:00', 'Z')
 unplanned_at_text = (executed_at + timedelta(seconds=1)).isoformat(timespec='seconds').replace('+00:00', 'Z')
 unallocated_at_text = (executed_at + timedelta(seconds=2)).isoformat(timespec='seconds').replace('+00:00', 'Z')
-created_at_text = (executed_at + timedelta(seconds=3)).isoformat(timespec='microseconds').replace('+00:00', 'Z')
+created_at_text = tar._now()
+assert executed_at <= datetime.fromisoformat(created_at_text.replace('Z', '+00:00')) < evaluation_at
 start_trade_date = completed_trade_date_at(first['committed_at'])
 end_trade_date = completed_trade_date_at(evaluation_as_of)
 assert start_trade_date and end_trade_date and end_trade_date > start_trade_date
@@ -736,10 +737,12 @@ async function run() {
     const evaluationAsOf = runtimeEvaluation.evaluation_as_of;
     assert.ok(Date.parse(evaluationAsOf) > Date.parse(secondRun.committed.committed.review_by));
     assert.ok(Date.parse(evaluationAsOf) < Date.parse(OBSERVATION_TIME));
+    env.OL1_CF_EVALUATION_AS_OF = evaluationAsOf;
+    // Record execution/attribution before evaluation, then advance observation.
+    // created_at is part of OL1 visibility, not just executed_at.
+    const fixtures = prepareTradeAndFactLake(env, pythonScriptConfig(), firstRun.committed.committed, secondRun.committed.committed);
     clock.set(OBSERVATION_TIME);
     await page.clock.setFixedTime(new Date(OBSERVATION_TIME));
-    env.OL1_CF_EVALUATION_AS_OF = evaluationAsOf;
-    const fixtures = prepareTradeAndFactLake(env, pythonScriptConfig(), firstRun.committed.committed, secondRun.committed.committed);
     await waitHttp(`${backend}/api/health`);
     assert.ok(firstRun.committed.committed.source_refs, JSON.stringify(firstRun.committed));
     const firstBefore = await jsonRequest(
