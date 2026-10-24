@@ -77,18 +77,19 @@ export function ResearchAnalytics() {
     } catch { if (generation.current === id) setError("计算未完成：检查输入合同、日期、币种、费用、完整覆盖及有限数值，再重试"); }
     finally { if (generation.current === id) setBusy(false); }
   }
-  function saveResearchResult() {
+  async function saveResearchResult() {
     if (!report || !reportBasis) return;
     const key = `${reportBasis.mode}:${report.input_fingerprint}`;
     if (savedReports.current.has(key)) return;
+    const saveGeneration = generation.current;
     savedReports.current.add(key);
     try {
       const note = researchAnalyticsNote(report, reportBasis.mode, reportBasis.synthetic);
-      addNote(note.kind, note.title, note.content);
-      setNoteStatus("已保存本次结果到当前浏览器研究记录；未发送模型或上传");
+      await addNote(note.kind, note.title, note.content);
+      if (generation.current === saveGeneration) setNoteStatus("已保存本次结果到当前浏览器研究记录；未发送模型或上传");
     } catch (e) {
       savedReports.current.delete(key);
-      setNoteStatus(e instanceof Error ? e.message : "本地记录保存失败，可重试");
+      if (generation.current === saveGeneration) setNoteStatus(e instanceof Error ? e.message : "本地记录保存失败，可重试");
     }
   }
   async function readRdp() {

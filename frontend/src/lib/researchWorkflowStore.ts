@@ -238,13 +238,13 @@ export function createResearchWorkflowStore(options: ResearchStoreOptions = {}) 
           try {
             // A corrupt store is an error, never an invitation to overwrite it with an empty array.
             validateSnapshot(snapshot);
-            const before = new Map(stores.map(storeName => [storeName, new Map(snapshot[storeName].map(entry => [entry.id, canonicalJson(entry)]))]));
+            const before = mode === 'readwrite' ? new Map(stores.map(storeName => [storeName, new Map(snapshot[storeName].map(entry => [entry.id, canonicalJson(entry)]))])) : null;
             result = work(snapshot);
             if (mode === 'readwrite') {
               validateSnapshot(snapshot);
               if (utf8Bytes(canonicalJson(snapshot)) > budgetBytes) throw new ResearchWorkflowError('BUDGET', `研究库超过 ${budgetBytes} 字节预算；本次整笔未保存，未截断研究链或删除旧轮次`);
               for (const storeName of stores) for (const entry of snapshot[storeName]) {
-                const prior = before.get(storeName)!.get(entry.id);
+                const prior = before!.get(storeName)!.get(entry.id);
                 if (prior !== canonicalJson(entry)) {
                   const store = tx.objectStore(storeName);
                   if (prior === undefined) store.add(entry); else store.put(entry);
@@ -311,6 +311,16 @@ export function createResearchWorkflowStore(options: ResearchStoreOptions = {}) 
         state.questions[state.questions.indexOf(current)] = next;
         return next;
       }, writeOptions);
+    },
+    /** One validated transaction for the initial question and legacy sidebar. */
+    async readWorkspace(securityCode: string, raw: string | null): Promise<{ questions: ResearchQuestion[]; legacyNotes: LegacyResearchNote[]; legacySource: LegacySourceState }> {
+      // Hash outside the transaction, not after cloning the full store.
+      const sourceHash = raw === null ? null : await researchContentHash(raw);
+      return transact('readonly', state => ({
+        questions: state.questions.filter(question => question.securityCode === securityCode).sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id)),
+        legacyNotes: state.legacySources.flatMap(source => source.notes),
+        legacySource: { sourceHash, imported: sourceHash !== null && state.legacySources.some(source => source.id === sourceHash), changed: state.legacySources.length > 0 && !state.legacySources.some(source => source.id === sourceHash) },
+      }));
     },
     async listQuestions(securityCode?: string): Promise<ResearchQuestion[]> {
       return transact('readonly', state => state.questions.filter(question => securityCode === undefined || question.securityCode === securityCode).sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id)));

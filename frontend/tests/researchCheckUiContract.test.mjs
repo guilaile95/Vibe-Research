@@ -19,7 +19,7 @@ test('check panel never invokes a model, changes formal state, fetches arbitrary
   assert.match(panel, /api\.readReportPages/); assert.match(panel, /api\.searchMyReportText/);
   assert.match(panel, /initialRound: round/); assert.match(panel, /expectedRevision: active\.revision/); assert.match(panel, /expectedHeadRoundId: active\.headRoundId/);
   assert.match(panel, /<fieldset disabled=\{busy \|\| loading \|\| navigationPending \|\| resumeState !== "ready"\}/); assert.match(panel, /草稿未清空/); assert.match(panel, /if \(busy \|\| navigationPending \|\| resumeState !== "ready" \|\| reading \|\| searching\) return/); assert.match(panel, /generation !== requestGeneration\.current/); assert.match(panel, /先前提交的研究轮次已保存/);
-  assert.match(panel, /listLegacyNotes/); assert.match(panel, /checkLegacySource/); assert.match(panel, /确认复制/); assert.match(panel, /coverage: "partial"/);
+  assert.match(panel, /store\.readWorkspace/); assert.match(panel, /workspace\.legacySource/); assert.match(panel, /确认复制/); assert.match(panel, /coverage: "partial"/);
   assert.match(panel, /file\.size > RESEARCH_DEFAULT_BUDGET_BYTES \* 4/);
 });
 test('one production-dist browser fixture owns full T0→reopen→T1→original sequence, failure and manual stage semantics', () => {

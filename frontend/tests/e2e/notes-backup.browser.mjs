@@ -147,7 +147,7 @@ try {
   assert.equal(await page.getByText("备份恢复验证", { exact: true }).count(), 1);
 
   const corruptedRaw = ' \n{"broken":"原始研究记录\n';
-  await page.evaluate((value) => localStorage.setItem("vr-notes", value), corruptedRaw);
+  await page.evaluate((value) => { localStorage.removeItem("vr-notes.v2"); localStorage.setItem("vr-notes", value); }, corruptedRaw);
   await page.reload({ waitUntil: "networkidle" });
   await page.getByRole("alert").getByText("本地研究记录格式无效，原始数据已保留", { exact: true }).waitFor();
   assert.equal(await page.getByText(/还没有记录/).count(), 0, "损坏数据不能伪装成空记录");
@@ -190,7 +190,7 @@ try {
   await page.evaluate(() => {
     window.__notesOriginalSetItem = Storage.prototype.setItem;
     Storage.prototype.setItem = function (key, value) {
-      if (key === "vr-notes") throw new DOMException("Synthetic quota failure", "QuotaExceededError");
+      if (key === "vr-notes.v2") throw new DOMException("Synthetic quota failure", "QuotaExceededError");
       return window.__notesOriginalSetItem.call(this, key, value);
     };
   });
@@ -220,7 +220,7 @@ try {
   await input.setInputFiles({ name: "merge.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(mergePayload)) });
   await page.getByRole("status").getByText("已导入 1 条研究记录，另有 1 条重复或超出上限。", { exact: true }).waitFor();
   const finalStorage = await page.evaluate(() => ({
-    notes: JSON.parse(localStorage.getItem("vr-notes")),
+    notes: (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")),
     llm: localStorage.getItem("vr-llm"),
     key: localStorage.getItem("vr-access-key"),
     chat: localStorage.getItem("vr-askai-chat:test"),
@@ -243,13 +243,13 @@ try {
   await page.getByRole("alert").filter({hasText:"反思未完整结束"}).waitFor();
   await page.getByText("SYNTHETIC_AUDIT", {exact:true}).waitFor();
   assert.equal(await page.getByRole("button", {name:"把审计结果存为新记录", exact:true}).count(), 0);
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes")).length), 2);
+  assert.equal(await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")).length), 2);
   completeReflection = true;
   await page.getByRole("button", {name:"反思审计", exact:true}).click();
   await page.getByRole("button", {name:"把审计结果存为新记录", exact:true}).click();
   await page.getByRole("button", {name:"已存为新记录", exact:true}).waitFor();
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes")).length), 3);
-  assert.match(await page.evaluate(() => JSON.parse(localStorage.getItem("vr-notes")).find(n=>n.kind==="反思审计").content), /未覆盖全文/);
+  assert.equal(await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")).length), 3);
+  assert.match(await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")).find(n=>n.kind==="反思审计").content), /未覆盖全文/);
 
   // The report archive shares the same research-persistence surface. Use only
   // intercepted synthetic API responses, never a real upload destination.

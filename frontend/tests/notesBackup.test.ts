@@ -1,3 +1,4 @@
+import "./helpers/notes-locks.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -113,7 +114,7 @@ test("corrupted notes expose exact raw data without treating read denial as corr
   assert.equal(loadNotesState().corruptedRaw, null);
 });
 
-test("validated recovery replaces only corrupted notes and returns to a healthy state", () => {
+test("validated recovery replaces only corrupted notes and returns to a healthy state", async () => {
   const raw = " \n{broken 中文";
   storage.set("vr-notes", raw);
   storage.set("vr-llm", "SYNTHETIC_CONFIG");
@@ -122,24 +123,24 @@ test("validated recovery replaces only corrupted notes and returns to a healthy 
   const restored = [note("restored", 100)];
   const backup = createNotesBackupJson(restored);
 
-  assert.throws(() => importNotesBackupJson(backup), /格式无效/);
+  (await assert.rejects(async () => (await importNotesBackupJson(backup)), /格式无效/));
   assert.equal(storage.get("vr-notes"), raw, "ordinary import must never silently replace corruption");
-  assert.deepEqual(replaceCorruptedNotesFromBackupJson(backup, raw), restored);
+  assert.deepEqual((await replaceCorruptedNotesFromBackupJson(backup, raw)), restored);
   assert.deepEqual(loadNotesState(), { notes: restored, error: "", corruptedRaw: null });
   assert.equal(storage.get("vr-llm"), "SYNTHETIC_CONFIG");
   assert.equal(storage.get("vr-access-key"), "SYNTHETIC_KEY");
   assert.equal(storage.get("vr-askai-chat:test"), "SYNTHETIC_CHAT");
 
-  const result = importNotesBackupJson(createNotesBackupJson([
+  const result = (await importNotesBackupJson(createNotesBackupJson([
     note("restored", 200, "must not overwrite"), note("added", 300),
-  ]));
+  ])));
   assert.equal(result.added, 1);
   assert.equal(result.skipped, 1);
   assert.equal(result.notes.find((item) => item.id === "restored")?.content, "restored");
   assert.deepEqual(loadNotesState().notes, result.notes);
 });
 
-test("invalid, duplicate, or oversized recovery backups preserve the original bytes", () => {
+test("invalid, duplicate, or oversized recovery backups preserve the original bytes", async () => {
   const raw = " \n{broken 中文";
   storage.set("vr-notes", raw);
   const valid = JSON.parse(createNotesBackupJson([note("restore", 10)]));
@@ -151,12 +152,12 @@ test("invalid, duplicate, or oversized recovery backups preserve the original by
     JSON.stringify({ ...valid, notes: Array.from({ length: NOTES_LIMIT + 1 }, (_, i) => note(`${i}`, i)) }),
   ];
   for (const backup of invalidBackups) {
-    assert.throws(() => replaceCorruptedNotesFromBackupJson(backup, raw));
+    (await assert.rejects(async () => (await replaceCorruptedNotesFromBackupJson(backup, raw))));
     assert.equal(storage.get("vr-notes"), raw);
   }
 });
 
-test("quota failure preserves corrupted data for a successful retry without remove-first writes", () => {
+test("quota failure preserves corrupted data for a successful retry without remove-first writes", async () => {
   const raw = " \n{broken 中文";
   storage.set("vr-notes", raw);
   const backup = createNotesBackupJson([note("restore", 10)]);
@@ -167,47 +168,48 @@ test("quota failure preserves corrupted data for a successful retry without remo
       removeItem() { assert.fail("recovery must never remove the original before writing"); },
     }, configurable: true,
   });
-  assert.throws(() => replaceCorruptedNotesFromBackupJson(backup, raw), /无法保存/);
+  (await assert.rejects(async () => (await replaceCorruptedNotesFromBackupJson(backup, raw)), /无法保存/));
   assert.equal(storage.get("vr-notes"), raw);
   assert.equal(loadNotesState().corruptedRaw, raw);
   Object.defineProperty(globalThis, "localStorage", { value: workingStorage, configurable: true });
-  replaceCorruptedNotesFromBackupJson(backup, raw);
+  (await replaceCorruptedNotesFromBackupJson(backup, raw));
   assert.equal(loadNotesState().error, "");
 });
 
-test("recovery rejects stale snapshots, healthy data, and unreadable storage without writing", () => {
+test("recovery rejects stale snapshots, healthy data, and unreadable storage without writing", async () => {
   const backup = createNotesBackupJson([note("restore", 10)]);
   for (const raw of ["new corruption", JSON.stringify([note("new", 20)]), "[]"]) {
     storage.set("vr-notes", raw);
-    assert.throws(() => replaceCorruptedNotesFromBackupJson(backup, "old corruption"), /状态已变化或无法读取/);
+    (await assert.rejects(async () => (await replaceCorruptedNotesFromBackupJson(backup, "old corruption")), /状态已变化或无法读取|无法读取本地存储/));
     assert.equal(storage.get("vr-notes"), raw);
   }
   // Even an exact expected value cannot enable replacement of healthy records.
-  assert.throws(() => replaceCorruptedNotesFromBackupJson(backup, "[]"), /状态已变化或无法读取/);
+  (await assert.rejects(async () => (await replaceCorruptedNotesFromBackupJson(backup, "[]")), /状态已变化或无法读取|无法读取本地存储/));
   storage.set("vr-notes", "old corruption");
   Object.defineProperty(globalThis, "localStorage", {
     value: { ...workingStorage, getItem() { throw new Error("denied"); } }, configurable: true,
   });
-  assert.throws(() => replaceCorruptedNotesFromBackupJson(backup, "old corruption"), /状态已变化或无法读取/);
+  (await assert.rejects(async () => (await replaceCorruptedNotesFromBackupJson(backup, "old corruption")), /状态已变化或无法读取|无法读取本地存储/));
   assert.equal(storage.get("vr-notes"), "old corruption");
 });
 
-test("an empty validated backup can explicitly recover to an empty healthy collection", () => {
+test("an empty validated backup can explicitly recover to an empty healthy collection", async () => {
   storage.set("vr-notes", "");
-  assert.deepEqual(replaceCorruptedNotesFromBackupJson(createNotesBackupJson([]), ""), []);
+  assert.deepEqual((await replaceCorruptedNotesFromBackupJson(createNotesBackupJson([]), "")), []);
   assert.deepEqual(loadNotesState(), { notes: [], error: "", corruptedRaw: null });
-  assert.equal(storage.get("vr-notes"), "[]");
+  assert.equal(storage.get("vr-notes"), "", "recovery preserves legacy raw bytes");
+  assert.deepEqual(JSON.parse(storage.get("vr-notes.v2")!).notes, []);
 });
 
 
-test("saving at capacity preserves every existing note and remains retryable after explicit cleanup", () => {
+test("saving at capacity preserves every existing note and remains retryable after explicit cleanup", async () => {
   const current = Array.from({ length: NOTES_LIMIT }, (_, index) => note(`existing-${index}`, index));
   const raw = JSON.stringify(current);
   storage.set("vr-notes", raw);
-  assert.throws(() => addNote("暂定研究", "New", "Must not evict"), /先在研究记录页导出备份/);
+  (await assert.rejects(async () => (await addNote("暂定研究", "New", "Must not evict")), /先在研究记录页导出备份/));
   assert.equal(storage.get("vr-notes"), raw);
-  deleteNote(current[0].id);
-  assert.equal(addNote("暂定研究", "New", "Explicitly freed room").length, NOTES_LIMIT);
+  (await deleteNote(current[0].id));
+  assert.equal((await addNote("暂定研究", "New", "Explicitly freed room")).length, NOTES_LIMIT);
   assert.ok(loadNotesState().notes.some((entry) => entry.id === current[199].id));
 });
 

@@ -20,7 +20,7 @@ export async function installResearchWriteAudit(context, phase) {
       const original = Storage.prototype[method];
       Storage.prototype[method] = function(...args) {
         const key = args[0];
-        if (this === localStorage && (method === 'clear' || ['vr-notes', 'vr-research-resume-v1'].includes(key))) record({ kind: method === 'clear' ? 'all-local-storage' : key === 'vr-notes' ? 'note' : 'navigation-preference', key: key ?? null, method });
+        if (this === localStorage && (method === 'clear' || ['vr-notes', 'vr-notes.v2', 'vr-research-resume-v1'].includes(key))) record({ kind: method === 'clear' ? 'all-local-storage' : ['vr-notes', 'vr-notes.v2'].includes(key) ? 'note' : 'navigation-preference', key: key ?? null, method });
         return original.apply(this, args);
       };
     }

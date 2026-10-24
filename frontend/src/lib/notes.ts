@@ -1,7 +1,7 @@
 // 研究记录（沉淀）—— 把 AI 复盘 / 今日要点 / 问 AI 的结果存本地，形成个人投研记录。
 // 只存本地 localStorage，不上传、不进仓库。对应投研框架第 7 层「沉淀」。
 
-import { storageGetChecked, storageSetChecked, storageRemoveChecked } from "./storage.ts";
+import { storageGetChecked, storageSetChecked } from "./storage.ts";
 import { parseNoteResearchMetadata, type NoteResearchMetadata } from "./researchNote.ts";
 
 import { parseNoteGeneration, type NoteGeneration } from "./noteGeneration.ts";
@@ -36,6 +36,43 @@ export const NOTES_CHANGED_EVENT = "vr-notes-changed";
 export const NOTES_GENERATION_BACKUP_SCHEMA_VERSION = "vibe-notes.backup.v2";
 
 const KEY = "vr-notes";
+export const NOTES_STORAGE_KEY = "vr-notes.v2";
+export const NOTES_WRITE_LOCK = "vibe-research.notes.v2";
+const STORAGE_SCHEMA = "vibe-notes.storage.v2";
+class LegacyNotesConflict extends Error {}
+
+// New versions never write the legacy key: a non-cooperating old tab cannot
+// overwrite acknowledged v2 saves. Its subsequent writes block us conservatively.
+function storedState(): { raw: string | null; legacyRaw: string | null } {
+  const legacyRaw = storageGetChecked(KEY);
+  const raw = storageGetChecked(NOTES_STORAGE_KEY);
+  if (raw === null) return { raw: legacyRaw, legacyRaw };
+  let envelope: unknown;
+  try { envelope = JSON.parse(raw); } catch { throw new Error("新版研究记录格式无效，原始数据已保留"); }
+  if (!isRecord(envelope) || envelope.schema !== STORAGE_SCHEMA || !(envelope.legacyRaw === null || typeof envelope.legacyRaw === "string") || !Array.isArray(envelope.notes)) {
+    throw new Error("新版研究记录格式无效，原始数据已保留");
+  }
+  if (envelope.legacyRaw !== legacyRaw) throw new LegacyNotesConflict("旧版本页面修改了旧笔记。新版与旧版原始数据均已保留；请关闭旧版本页面，分别备份并核对后再处理，未合并或覆盖。请勿清除浏览器数据。");
+  return { raw: JSON.stringify(envelope.notes), legacyRaw };
+}
+
+/** No unlocked fallback. Every add/delete/import/recovery/clear shares this lock. */
+let writeLegacyRaw: string | null = null;
+async function mutateNotes<T>(work: () => T): Promise<T> {
+  const locks = globalThis.navigator?.locks;
+  if (!locks?.request) throw new Error("当前浏览器不支持安全的多页面笔记保存（Web Locks）；未写入。请使用支持此功能的安全上下文浏览器，并关闭旧版本页面。");
+  return locks.request(NOTES_WRITE_LOCK, { mode: "exclusive" }, () => {
+    writeLegacyRaw = storageGetChecked(KEY);
+    return work();
+  });
+}
+
+/** Raw preservation archive, deliberately not accepted as an ordinary notes backup. */
+export function notesRecoveryArchive(): string {
+  return JSON.stringify({ schema: "vibe-notes.recovery-archive.v1", legacyRaw: storageGetChecked(KEY), currentRaw: storageGetChecked(NOTES_STORAGE_KEY) }, null, 2);
+}
+
+export function notesSourceRaw(): string | null { return storedState().raw; }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -68,15 +105,19 @@ function parseStoredNotes(raw: string | null): Note[] {
 }
 
 function readNotes(): Note[] {
-  return parseStoredNotes(storageGetChecked(KEY));
+  return parseStoredNotes(notesSourceRaw());
 }
 
 export function loadNotesState(): NotesState {
   let raw: string | null;
   try {
-    raw = storageGetChecked(KEY);
+    raw = notesSourceRaw();
   } catch (error) {
-    return { notes: [], error: error instanceof Error ? error.message : "无法读取研究记录", corruptedRaw: null };
+    let corruptedRaw: string | null = null;
+    if (!(error instanceof LegacyNotesConflict)) {
+      try { const candidate = storageGetChecked(NOTES_STORAGE_KEY); if (candidate !== null && error instanceof Error && error.message.includes("格式无效")) corruptedRaw = candidate; } catch { /* unreadable is not corruption */ }
+    }
+    return { notes: [], error: error instanceof Error ? error.message : "无法读取研究记录", corruptedRaw };
   }
   try {
     return { notes: parseStoredNotes(raw), error: "", corruptedRaw: null };
@@ -90,7 +131,12 @@ export function loadNotes(): Note[] {
 }
 
 function persist(notes: Note[]): void {
-  storageSetChecked(KEY, JSON.stringify(notes));
+  // Re-read while holding the lock. Recovery may replace corrupt v2 bytes only
+  // after its explicit expected-raw check; legacy bytes remain untouched.
+  const legacyRaw = writeLegacyRaw;
+  if (storageGetChecked(KEY) !== legacyRaw) throw new LegacyNotesConflict("旧版本笔记已变化；未覆盖，请关闭旧页面并保留两份数据。");
+  storageSetChecked(NOTES_STORAGE_KEY, JSON.stringify({ schema: STORAGE_SCHEMA, legacyRaw, notes }));
+  if (storageGetChecked(KEY) !== legacyRaw) throw new LegacyNotesConflict("旧版本页面同时修改了笔记；两份原始数据已保留，请分别备份核对。此次保存状态不确定，未显示保存成功。");
   if (typeof window !== "undefined") window.dispatchEvent(new Event(NOTES_CHANGED_EVENT));
 }
 
@@ -171,55 +217,65 @@ export function mergeNotesFromBackup(
   };
 }
 
-export function importNotesBackupJson(raw: string): NotesImportResult {
-  const imported = parseNotesBackupJson(raw);
-  const result = mergeNotesFromBackup(readNotes(), imported);
-  persist(result.notes);
-  return result;
+export async function importNotesBackupJson(raw: string): Promise<NotesImportResult> {
+  return mutateNotes(() => {
+    const imported = parseNotesBackupJson(raw);
+    const result = mergeNotesFromBackup(readNotes(), imported);
+    persist(result.notes);
+    return result;
+  });
 }
 
 // Recovery is deliberately separate from merge import. The caller confirms replacement
 // after validating the backup; stale views must never replace newer or healthy storage.
-export function replaceCorruptedNotesFromBackupJson(raw: string, expectedCorruptedRaw: string): Note[] {
-  const imported = parseNotesBackupJson(raw);
-  const current = loadNotesState();
-  if (current.corruptedRaw === null || current.corruptedRaw !== expectedCorruptedRaw) {
-    throw new Error("本地研究记录状态已变化或无法读取，请刷新后重试；未替换任何数据");
-  }
-  // A single setItem is atomic on quota failure. Never remove the original first.
-  persist(imported);
-  return imported;
+export async function replaceCorruptedNotesFromBackupJson(raw: string, expectedCorruptedRaw: string): Promise<Note[]> {
+  return mutateNotes(() => {
+    const imported = parseNotesBackupJson(raw);
+    const current = loadNotesState();
+    if (current.corruptedRaw === null || current.corruptedRaw !== expectedCorruptedRaw) {
+      throw new Error("本地研究记录状态已变化或无法读取，请刷新后重试；未替换任何数据");
+    }
+    // A single setItem is atomic on quota failure. Never remove the original first.
+    persist(imported);
+    return imported;
+  });
 }
 
 // 新记录置顶。返回更新后的完整列表。
-export function addNote(kind: string, title: string, content: string, research?: NoteResearchMetadata, generation?: NoteGeneration): Note[] {
-  const note: Note = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    kind,
-    title,
-    content,
-    ts: Date.now(),
-    ...(research === undefined ? {} : { research: parseNoteResearchMetadata(research) }),
-    ...(generation === undefined ? {} : { generation: parseNoteGeneration(generation) }),
-  };
-  const current = readNotes();
-  if (current.length >= NOTES_LIMIT) {
-    throw new Error(`研究记录已达到 ${NOTES_LIMIT} 条上限；请先在研究记录页导出备份，再手动清理不需要的记录。已有记录未被删除。`);
-  }
-  const next = [note, ...current];
-  persist(next);
-  return next;
+export async function addNote(kind: string, title: string, content: string, research?: NoteResearchMetadata, generation?: NoteGeneration): Promise<Note[]> {
+  return mutateNotes(() => {
+    const note: Note = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      kind,
+      title,
+      content,
+      ts: Date.now(),
+      ...(research === undefined ? {} : { research: parseNoteResearchMetadata(research) }),
+      ...(generation === undefined ? {} : { generation: parseNoteGeneration(generation) }),
+    };
+    const current = readNotes();
+    if (current.length >= NOTES_LIMIT) {
+      throw new Error(`研究记录已达到 ${NOTES_LIMIT} 条上限；请先在研究记录页导出备份，再手动清理不需要的记录。已有记录未被删除。`);
+    }
+    const next = [note, ...current];
+    persist(next);
+    return next;
+  });
 }
 
-export function deleteNote(id: string): Note[] {
-  const next = readNotes().filter((note) => note.id !== id);
-  persist(next);
-  return next;
+export async function deleteNote(id: string): Promise<Note[]> {
+  return mutateNotes(() => {
+    const next = readNotes().filter((note) => note.id !== id);
+    persist(next);
+    return next;
+  });
 }
 
-export function clearNotes() {
-  storageRemoveChecked(KEY);
-  if (typeof window !== "undefined") window.dispatchEvent(new Event(NOTES_CHANGED_EVENT));
+export async function clearNotes(): Promise<void> {
+  return mutateNotes(() => {
+    readNotes(); // Do not erase corruption or revive a conflicting legacy collection.
+    persist([]); // Keep the v2 marker so legacy notes cannot reappear after clearing.
+  });
 }
 
 /** Browser-local, read-only search; never sends query or content to a server/model. */

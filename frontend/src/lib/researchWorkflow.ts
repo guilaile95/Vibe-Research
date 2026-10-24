@@ -37,7 +37,7 @@ export interface ResearchMaterial {
   capturedAt: number;
   readRange: { pages: number[]; totalPages: number | null; truncated: boolean; ocr: boolean; description: string };
   availability: 'full' | 'partial' | 'link_only' | 'unavailable';
-  /** Full source read receipt when available. It is provenance, not independent verification. */
+  /** Versioned source receipt or page-specific receipt with request coverage. Not independent verification. */
   provenance?: Record<string, JsonValue>;
 }
 export interface ResearchCalculationInput {

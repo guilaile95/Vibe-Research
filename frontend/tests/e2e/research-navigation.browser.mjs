@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { checkRequestLifecycle } from './request-lifecycle.fixture.mjs';
 import { readReply } from './ai-settings-storage.fixture.mjs';
 import { researchEvidenceManifest } from './research-evidence-manifest.fixture.mjs';
 import { installResearchWriteAudit } from './research-write-audit.fixture.mjs';
@@ -153,11 +154,13 @@ try {
       await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
       assert.equal(new URL(await page.getByTestId('stock-data-candidate-entry').getAttribute('href'), baseURL).pathname, '/candidates/600520');
       assert.equal(await page.getByText('旧股晚到', { exact: true }).count(), 0);
+      phase = 'request-lifecycle';
+      const requestLifecycle = await checkRequestLifecycle(page, { baseURL, width, output });
       assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.equal(writes.length, 1);
       await storageWrites.flush(page);
       assert.deepEqual(storageWrites.filter(event => event.kind !== 'navigation-preference'), [], 'navigation never writes research questions or notes');
       assert.deepEqual(writes.filter(event => event.phase !== 'create-evidence'), [], 'navigation phase has zero formal writes');
-      results.push({ width, status: 'PASS', checkoutSha: buildManifest.checkoutSha, checkoutTree: buildManifest.checkoutTree, checks: storageWrites.phases, reads, writes, storageWrites });
+      results.push({ width, status: 'PASS', checkoutSha: buildManifest.checkoutSha, checkoutTree: buildManifest.checkoutTree, checks: storageWrites.phases, requestLifecycle, reads, writes, storageWrites });
     } catch (error) {
       const dom = await page.evaluate(() => ({
         url: location.href,

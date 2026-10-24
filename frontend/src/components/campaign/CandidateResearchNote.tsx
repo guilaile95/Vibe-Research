@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -50,14 +50,18 @@ export function CandidateResearchNote({ code, records, evidenceStatus, returnTo,
   };
   const identity = JSON.stringify([metadata, tentativeView, contraryEvidence, nextQuestion]);
   const latest = notesState.notes.filter((note) => note.research?.securityCode === code).slice(0, 3);
-  const save = () => {
+  const savingRef = useRef(false);
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    if (savingRef.current) return;
     setError("");
     if (!tentativeView.trim() && !nextQuestion.trim()) {
       setError("写下一句暂定看法或下次要核对的问题，再保存。");
       return;
     }
+    savingRef.current = true; setSaving(true);
     try {
-      addNote("暂定研究", `${code} · ${question.trim().slice(0, 40) || "暂定看法"}`, [
+      await addNote("暂定研究", `${code} · ${question.trim().slice(0, 40) || "暂定看法"}`, [
         question.trim() && `研究问题：${question.trim()}`,
         tentativeView.trim() && `暂定看法（用户记录，尚未核验）：${tentativeView.trim()}`,
         contraryEvidence.trim() && `反证 / 不确定处：${contraryEvidence.trim()}`,
@@ -69,6 +73,7 @@ export function CandidateResearchNote({ code, records, evidenceStatus, returnTo,
       setSavedIdentity(identity);
       setSavedTextIdentity(textIdentity);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "保存研究记录失败"); }
+    finally { savingRef.current = false; setSaving(false); }
   };
   return (
     <GlassCard id="candidate-research-note" tabIndex={-1} className="scroll-mt-6 space-y-4" data-testid="candidate-research-note">
@@ -104,7 +109,7 @@ export function CandidateResearchNote({ code, records, evidenceStatus, returnTo,
         ] as const).map(([label, value, setValue, placeholder]) => <label key={label} className="block text-xs">{label}<textarea value={value} onChange={(event) => setValue(event.target.value)} placeholder={placeholder} rows={3} className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-sm" /></label>)}
       </div>
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" onClick={save} disabled={savedIdentity === identity} className="rounded border border-primary/40 px-3 py-2 text-xs text-primary disabled:opacity-60">{savedIdentity === identity ? "已保存暂定研究" : "保存暂定研究"}</button>
+        <button type="button" onClick={save} disabled={saving || savedIdentity === identity} className="rounded border border-primary/40 px-3 py-2 text-xs text-primary disabled:opacity-60">{savedIdentity === identity ? "已保存暂定研究" : "保存暂定研究"}</button>
         <Link to={`/notes?security_code=${code}`} className="text-xs text-primary hover:underline">查看本股轻量笔记 →</Link>
       </div>
       {(error || notesState.error) && <p role="alert" className="text-xs text-warning">{error || notesState.error}</p>}

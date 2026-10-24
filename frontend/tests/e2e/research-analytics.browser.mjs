@@ -127,15 +127,16 @@ try {
     await page.getByTestId('research-analytics-result').waitFor();
     const saveNote = page.getByRole('button', { name: '保存当前结果到本地研究记录', exact: true });
     const beforeLocal = audit.requests.length;
-    await page.evaluate(() => { window.__notesSet = Storage.prototype.setItem; Storage.prototype.setItem = function(key, value) { if (key === 'vr-notes') throw new DOMException('SYNTHETIC_QUOTA', 'QuotaExceededError'); return window.__notesSet.call(this, key, value); }; });
+    await page.evaluate(() => { window.__notesSet = Storage.prototype.setItem; Storage.prototype.setItem = function(key, value) { if (key === 'vr-notes.v2') throw new DOMException('SYNTHETIC_QUOTA', 'QuotaExceededError'); return window.__notesSet.call(this, key, value); }; });
     await saveNote.click();
     await page.getByRole('status').waitFor();
     assert.equal(await saveNote.isEnabled(), true);
     assert.equal(await page.evaluate(() => localStorage.getItem('vr-notes')), null);
+    assert.equal(await page.evaluate(() => localStorage.getItem('vr-notes.v2')), null);
     await page.evaluate(() => { Storage.prototype.setItem = window.__notesSet; delete window.__notesSet; });
     await saveNote.evaluate(el => { el.click(); el.click(); });
     await page.getByText('已保存本次结果到当前浏览器研究记录；未发送模型或上传', { exact: true }).waitFor();
-    const savedNotes = await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes')));
+    const savedNotes = await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")));
     assert.equal(savedNotes.length, 1); assert.equal(savedNotes[0].kind, '回测研究');
     assert.match(savedNotes[0].content, /未保存原始输入/);
     assert.equal(await saveNote.isDisabled(), true);
@@ -146,7 +147,7 @@ try {
     await page.getByRole('button', { name: '清除类型和文字筛选', exact: true }).click();
     await page.getByLabel('研究记录类型', { exact: true }).selectOption('回测研究');
     await search.fill('输入指纹');await page.getByText(/当前显示 1 \/ 1 条已保存记录/).waitFor();
-    assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes'))), savedNotes);
+    assert.deepEqual(await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]"))), savedNotes);
     assert.equal(audit.requests.length, beforeLocal, 'local note save/search sends no API or model request');
     // Reload mounts the analytics page and its read-only experiment archive child.
     // Await that specific read before checking the complete request delta.
@@ -157,7 +158,7 @@ try {
     await archiveResponse.finished();
     await page.getByRole('button', { name: '验收：研究记录页面', exact: true }).click();
     await page.getByText(/当前显示 1 \/ 1 条已保存记录/).waitFor();
-    assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes'))), savedNotes);
+    assert.deepEqual(await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]"))), savedNotes);
     assert.deepEqual(audit.requests.slice(beforeLocal), ['GET /api/research-experiments'], 'reload permits exactly the archive read; local notes send no API/model writes or other requests');
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 2));
     await page.screenshot({ path: join(output, `saved-note-search-${width}.png`), fullPage: true });

@@ -465,11 +465,11 @@ try {
       assert.equal(await noteDraft.inputValue(), '独立轻量草稿保持');
 
       await storageWrites.flush(page); phase = 'resume-explicit-note-save'; await storageWrites.setPhase(page, phase);
-      const researchBeforeNote = await readDatabase(page), noteBefore = await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes') || '[]'));
+      const researchBeforeNote = await readDatabase(page), noteBefore = await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")));
       await page.getByTestId('candidate-research-note').getByRole('button', { name: '保存暂定研究', exact: true }).click();
       await page.getByTestId('candidate-research-note').getByRole('button', { name: '已保存暂定研究', exact: true }).waitFor(); await frames();
       assert.deepEqual(await readDatabase(page), researchBeforeNote, 'note save does not write question/round/operation storage');
-      assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes') || '[]').length), noteBefore.length + 1);
+      assert.equal(await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")).length), noteBefore.length + 1);
       await storageWrites.flush(page); phase = 'resume-explicit-round-save'; await storageWrites.setPhase(page, phase);
       await noteDraft.fill('研究保存不得清除另一份脏笔记');
       await panel.getByLabel('本轮判断', { exact: true }).fill('显式核对保存，不双写笔记');
@@ -487,11 +487,11 @@ try {
       assert.deepEqual(afterRound.rounds.find(round => round.id === historical.id), historical);
       // Save the note explicitly, then inspect read-only recovery and recent browsing.
       await storageWrites.flush(page); phase = 'resume-explicit-second-note-save'; await storageWrites.setPhase(page, phase);
-      const noteCountBeforeSecond = await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes') || '[]').length);
+      const noteCountBeforeSecond = await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")).length);
       await page.getByTestId('candidate-research-note').getByRole('button', { name: '保存暂定研究', exact: true }).click();
       await page.getByTestId('candidate-research-note').getByRole('button', { name: '已保存暂定研究', exact: true }).waitFor(); await frames();
 
-      assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('vr-notes') || '[]').length), noteCountBeforeSecond + 1);
+      assert.equal(await page.evaluate(() => (JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]")).length), noteCountBeforeSecond + 1);
       assert.deepEqual(await readDatabase(page), afterRound, 'second explicit note save remains note-only');
       await storageWrites.flush(page); phase = 'resume-recent-and-invalid-targets'; await storageWrites.setPhase(page, phase);
       await panel.getByLabel('打开原研究轮次', { exact: true }).selectOption(historical.id); await settleSelection(qa, historical.id);

@@ -1,3 +1,4 @@
+import "./helpers/notes-locks.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { manualResearchNotePayload, type ManualResearchNoteDraft } from "../src/lib/manualResearchNote.ts";
@@ -30,7 +31,7 @@ test("optional source association uses the existing security metadata policy", (
   assert.throws(() => manualResearchNotePayload(draft({ securityCode: "000001", sourceTitle: "x" })), /一起填写/);
   assert.throws(() => manualResearchNotePayload(draft({ securityCode: "000001", sourceTitle: "x".repeat(201), sourceUrl: "https://example.test" })), /最多/);
 });
-test("manual notes persist via the existing checked storage and backup contract", () => {
+test("manual notes persist via the existing checked storage and backup contract", async () => {
   const storage = new Map<string, string>();
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
     getItem: (key: string) => storage.get(key) ?? null,
@@ -38,11 +39,11 @@ test("manual notes persist via the existing checked storage and backup contract"
   } });
   try {
     const payload = manualResearchNotePayload(draft({ securityCode: "000001", sourceTitle: "Source", sourceUrl: "/evidence/123" }));
-    const notes = addNote(payload.kind, payload.title, payload.content, payload.research);
+    const notes = (await addNote(payload.kind, payload.title, payload.content, payload.research));
     assert.deepEqual(parseNotesBackupJson(createNotesBackupJson(notes)), notes);
-    assert.deepEqual([...storage.keys()], ["vr-notes"]);
+    assert.deepEqual([...storage.keys()], ["vr-notes.v2"]);
     storage.set("vr-notes", "corrupt-original");
-    assert.throws(() => addNote(payload.kind, payload.title, payload.content, payload.research), /原始数据已保留/);
+    (await assert.rejects(async () => (await addNote(payload.kind, payload.title, payload.content, payload.research)), /原始数据均已保留/));
     assert.equal(storage.get("vr-notes"), "corrupt-original");
   } finally { delete (globalThis as { localStorage?: unknown }).localStorage; }
 });
