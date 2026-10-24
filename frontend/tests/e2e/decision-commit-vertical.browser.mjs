@@ -866,7 +866,20 @@ async function run() {
       assert.ok(successfulCommitBody, "successful commit request must be observable");
       const beforeTerminal = await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/decision-proposal/committed`);
 
+      // This is a new pending proposal, not an exact retry of the prior freeze.
+      // A fixed as_of with unchanged input deliberately identifies the old replay.
+      const pendingPhase = clock.advance();
+      await page.clock.setFixedTime(new Date(pendingPhase));
+      const pendingPreviewResponse = page.waitForResponse((response) => (
+        response.request().method() === "POST"
+        && response.url().endsWith(`/api/campaigns/${campaign.campaign_id}/decision-proposal/preview`)
+      ));
       await page.getByRole("button", { name: "预览决策草案" }).click();
+      const pendingPreview = await pendingPreviewResponse;
+      assert.equal(pendingPreview.status(), 200, await pendingPreview.text());
+      const pendingProposal = (await pendingPreview.json()).data;
+      assert.notEqual(pendingProposal.proposal_fingerprint, successfulCommitBody.expected_proposal_fingerprint, "terminal race must exercise a new proposal rather than an allowed exact replay");
+      assert.equal(Date.parse(pendingProposal.proposal.as_of), Date.parse(pendingPhase));
       await page.locator('[data-proposal-status="UNCOMMITTED"]').waitFor();
       await jsonRequest(backend, `/api/campaigns/${campaign.campaign_id}/transitions`, "POST", {
         expected_status: "ACTIVE",
@@ -875,11 +888,11 @@ async function run() {
       const terminalCommitResponse = page.waitForResponse((response) => (
         response.request().method() === "POST"
         && response.url().endsWith(`/api/campaigns/${campaign.campaign_id}/decision-proposal/commit`)
-        && response.status() === 409
       ));
       await page.getByRole("checkbox", { name: /我已检查股票判断、操作倾向、组合限制/ }).check();
       await page.getByRole("button", { name: "确认并冻结正式决策" }).click();
-      await terminalCommitResponse;
+      const terminalResponse = await terminalCommitResponse;
+      assert.equal(terminalResponse.status(), 409, `[terminal admission] phase=${pendingPhase} url=${page.url()} body=${await terminalResponse.text()}`);
       const terminalReadonly = page.getByTestId("terminal-campaign-decision-readonly");
       await terminalReadonly.waitFor();
       assert.equal(await terminalReadonly.getAttribute("data-campaign-status"), "CLOSED");
