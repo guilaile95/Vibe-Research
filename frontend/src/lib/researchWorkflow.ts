@@ -1,4 +1,5 @@
 /** Browser-local research snapshots. Never Evidence, Campaign, Thesis or Decision authority. */
+import { parseLocalReportOcrReceipt, validateReportPageOcrResponse } from './localReportOcr.ts';
 import { parseDiscoveryResearchOrigin, type DiscoveryResearchOrigin } from './discoveryResearchOrigin.ts';
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type ResearchQuestionStatus = 'watching' | 'resolved' | 'paused' | 'archived';
@@ -179,6 +180,70 @@ export function validateResearchQuestion(value: unknown): ResearchQuestion {
   if (question.updatedAt < question.createdAt || question.origin.capturedAt > question.createdAt) fail('问题时间顺序无效');
   return question;
 }
+/** Structural consistency only: the original receipt digest is not an authenticity proof. */
+function validatePageProvenance(material: ResearchMaterial): void {
+  const provenance = material.provenance;
+  if (!provenance || provenance.page_receipt === undefined) return; // Historical generic provenance.
+  const receipt = record(provenance.page_receipt), report = record(provenance.report), assignment = record(provenance.security_assignment);
+  const hash = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  if (material.sourceKind !== 'report_pages' || !hash(material.sourceHash) || report.file_sha256 !== material.sourceHash
+    || assignment.code !== material.securityCode || assignment.basis !== 'USER_CONFIRMED_FROM_ORIGINAL_PAGE' || assignment.automatically_verified !== false) fail('原页来源或证券归属不一致');
+  const reportId = str(report.id, '报告身份');
+  let reportUrl: string | null = null;
+  if (typeof report.source_url === 'string' && report.source_url) {
+    try { const url = new URL(report.source_url); if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) reportUrl = url.href; } catch { /* Unsafe original URL is preserved only as provenance. */ }
+  }
+  if (material.sourceUrl !== reportUrl || typeof report.title !== 'string') fail('报告链接或标题无效');
+  let request: Record<string, unknown>, item: Record<string, unknown>;
+  if (receipt.schema_version !== undefined || receipt.request !== undefined || receipt.item !== undefined || receipt.original_receipt_sha256 !== undefined) {
+    keys(receipt, ['schema_version', 'original_receipt_sha256', 'request', 'item']);
+    if (receipt.schema_version !== 'report-page-projection.v2' || !hash(receipt.original_receipt_sha256)) fail('原页投影版本或摘要无效');
+    request = record(receipt.request); item = record(receipt.item);
+    keys(request, ['report_id', 'file_sha256', 'scope', 'full_report_read', 'requested', 'returned_chars', 'complete_requested_text', 'coverage', 'extraction']);
+  } else {
+    // Original full receipts remain readable without rewriting their representation.
+    request = receipt;
+    const requested = request.requested;
+    if (!Array.isArray(requested) || !requested.length) fail('原页请求范围无效');
+    validateReportPageOcrResponse(receipt, reportId, material.sourceHash!, Number(requested[0]), Number(requested[requested.length - 1]));
+    const found = (receipt.items as unknown[]).find(value => material.id === `report:${reportId}:page:${record(value).page}`);
+    item = record(found);
+  }
+  if (request.report_id !== reportId || request.file_sha256 !== material.sourceHash || request.scope !== 'INDEXED_PAGE_TEXT_ONLY' || request.full_report_read !== false
+    || typeof request.complete_requested_text !== 'boolean' || !Array.isArray(request.requested) || !request.requested.length || request.requested.length > 200
+    || request.requested.some((page, index, pages) => !Number.isInteger(page) || Number(page) < 1 || Number(page) > 1000000 || (index > 0 && page !== Number(pages[index - 1]) + 1))
+    || !Number.isInteger(request.returned_chars) || Number(request.returned_chars) < 0 || Number(request.returned_chars) > 12000) fail('原页请求来源或范围无效');
+  const requested = request.requested as unknown[];
+  const statuses = ['readable', 'omitted', 'invalid', 'unreadable', 'error'];
+  const coverage = record(request.coverage);
+  keys(coverage, statuses);
+  const covered: number[] = [];
+  for (const status of statuses) {
+    const pages = coverage[status];
+    if (!Array.isArray(pages) || pages.some((page, index) => !requested.includes(page) || (index > 0 && Number(page) <= Number(pages[index - 1])))) fail('原页覆盖无效');
+    covered.push(...pages as number[]);
+  }
+  if (covered.length !== request.requested.length || new Set(covered).size !== covered.length) fail('原页覆盖不完整或重复');
+  keys(item, ['page', 'status', 'reason', 'text', 'returned_chars', 'indexed_chars', 'truncated']);
+  if (!Number.isInteger(item.page) || !statuses.includes(String(item.status)) || !(coverage[String(item.status)] as unknown[]).includes(item.page)
+    || typeof item.reason !== 'string' || !/^[A-Z_]+$/.test(item.reason)
+    || (item.text !== undefined && (typeof item.text !== 'string' || item.text.length > 12000))
+    || (item.truncated !== undefined && typeof item.truncated !== 'boolean')
+    || [item.returned_chars, item.indexed_chars].some(value => value !== undefined && (!Number.isInteger(value) || Number(value) < 0))) fail('原页内容字段无效');
+  if (material.title !== `${report.title} · 第 ${item.page} 页`) fail('报告标题与材料不一致');
+  const readable = item.status === 'readable', content = readable ? item.text || '' : '';
+  if (material.id !== `report:${reportId}:page:${item.page}` || material.content !== content
+    || canonicalJson(material.readRange.pages) !== canonicalJson(readable ? [item.page] : [])
+    || material.readRange.truncated !== (item.truncated === true) || material.readRange.ocr !== Boolean(request.extraction)
+    || material.availability !== (readable && String(content).trim() ? 'partial' : 'unavailable')) fail('原页投影与材料正文或读取状态不一致');
+  if (request.complete_requested_text && (covered.length !== (coverage.readable as unknown[]).length || item.truncated === true)) fail('原页完整读取声明不一致');
+  if (request.extraction !== undefined && request.extraction !== null) {
+    const extraction = record(request.extraction);
+    if (!['eng', 'chi_sim+eng'].includes(String(extraction.language))) fail('OCR 页语言无效');
+    parseLocalReportOcrReceipt({ schema_version: 'local_ocr_report_receipt.v1', report_id: reportId, file_sha256: material.sourceHash,
+      status: 'SEARCHABLE', indexed_at: '2000-01-01T00:00:00Z', extraction }, reportId, material.sourceHash!, String(extraction.language));
+  }
+}
 export function validateResearchMaterial(value: unknown): ResearchMaterial {
   const v = record(value);
   keys(v, ['id', 'version', 'securityCode', 'title', 'content', 'sourceUrl', 'sourceKind', 'sourceHash', 'publishedAt', 'capturedAt', 'readRange', 'availability', 'provenance']);
@@ -201,6 +266,7 @@ export function validateResearchMaterial(value: unknown): ResearchMaterial {
   if (result.sourceKind === 'report_pages' && result.content && pages.length === 0) fail('原页正文缺少页码');
   if (result.availability === 'full' && (result.readRange.truncated || (result.sourceKind === 'report_pages' && (totalPages === null || pages.length !== totalPages)))) fail('读取不完整，不能声称全文已读取');
   if (v.provenance !== undefined) result.provenance = JSON.parse(canonicalJson(record(v.provenance))) as Record<string, JsonValue>;
+  validatePageProvenance(result);
   return result;
 }
 export function validateResearchRound(value: unknown): ResearchRound {
