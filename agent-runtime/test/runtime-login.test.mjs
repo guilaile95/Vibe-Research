@@ -23,8 +23,8 @@ function fixture(login = CHATGPT, version = VERSION) {
   return { runtime, calls };
 }
 const cases = [
-  ['ChatGPT stderr', CHATGPT, 'chatgpt', 'ready', null],
-  ['ChatGPT stdout', { status: 0, stdout: 'Logged in using ChatGPT\r\n' }, 'chatgpt', 'ready', null],
+  ['ChatGPT stderr', CHATGPT, 'chatgpt', 'authenticated_unprobed', null],
+  ['ChatGPT stdout', { status: 0, stdout: 'Logged in using ChatGPT\r\n' }, 'chatgpt', 'authenticated_unprobed', null],
   ['API key', { status: 0, stderr: 'Logged in using an API key - PRIVATE_SENTINEL' }, 'api_key', 'not_authenticated', null],
   ['logout', { status: 1, stderr: 'Not logged in' }, 'logged_out', 'not_authenticated', null],
   ['empty exit zero', { status: 0 }, 'unknown', 'probe_failed', 'malformed_output'],
@@ -43,16 +43,17 @@ const cases = [
 ];
 for (const [name, processResult, kind, state, error] of cases) test(`login classification: ${name}`, async () => {
   const { runtime, calls } = fixture(processResult);
-  const status = runtime.status();
+  const status = await runtime.status();
   assert.equal(status.auth_kind, kind);
   assert.equal(status.status, state);
   assert.equal(status.probe_error, error);
-  assert.equal(status.available, kind === 'chatgpt');
+  assert.equal(status.available, false);
+  assert.equal(status.dispatch_available, kind === 'chatgpt');
   assert.equal(status.authenticated, kind === 'chatgpt');
   assert.doesNotMatch(JSON.stringify(status), /PRIVATE_SENTINEL/);
   assert.equal(calls.length, 2);
   for (const call of calls) {
-    assert.equal(call.options.timeout, 8000);
+    assert.equal(call.options.timeout, 1200);
     assert.equal(call.options.killSignal, 'SIGKILL');
     assert.equal(call.options.maxBuffer, 64 * 1024);
     assert.equal(call.options.env.CODEX_HOME, '/synthetic/codex-home');
@@ -73,9 +74,9 @@ for (const [name, version, error] of [
   ['empty', { status: 0 }, 'malformed_output'],
   ['raw output', { status: 0, stdout: 'PRIVATE_SENTINEL' }, 'malformed_output'],
   ['nonzero', { status: 1, stdout: VERSION.stdout }, 'nonzero_exit'],
-]) test(`version probe: ${name}`, () => {
+]) test(`version probe: ${name}`, async () => {
   const { runtime, calls } = fixture(CHATGPT, version);
-  const result = runtime.status();
+  const result = await runtime.status();
   assert.equal(result.probe_error, error);
   assert.equal(result.auth_kind, 'unknown');
   assert.equal(result.installed, error !== 'not_found');
@@ -83,12 +84,13 @@ for (const [name, version, error] of [
   assert.equal(calls.length, 1);
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE_SENTINEL/);
 });
-for (const state of ['pending', 'failed']) test(`login lifecycle remains ${state} only for explicit logout`, () => {
+for (const state of ['pending', 'failed']) test(`login lifecycle remains ${state} only for explicit logout`, async () => {
   const { runtime } = fixture({ status: 1, stderr: 'Not logged in' });
   runtime.loginState = state;
-  assert.equal(runtime.status().status, `login_${state}`);
+  assert.equal((await runtime.status()).status, `login_${state}`);
+  runtime.statusCache = null;
   runtime.probeProcess = (_binary, args) => args[0] === '--version' ? VERSION : { error: { code: 'ETIMEDOUT' } };
-  assert.equal(runtime.status().status, 'probe_failed');
+  assert.equal((await runtime.status()).status, 'probe_failed');
   assert.equal(runtime.loginState, state);
 });
 

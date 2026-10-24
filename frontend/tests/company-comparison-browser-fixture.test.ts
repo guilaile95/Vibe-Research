@@ -102,7 +102,8 @@ for (const badOrigin of ['https://fixture.example', 'http://localhost:8911', 'ht
 for (const mutation of ['subject', 'hash', 'cutoff', 'budget', 'provider', 'key', 'extra']) test('generation payload rejects changed ' + mutation, () => {
   const f = createComparisonFixture(origin), g = comparisonGoldens.complete; f.expectGeneration();
   for (const b of g.bundles) assert.equal(f.handle(origin + `/api/company-research/bundles/${b.bundle_id}`).kind, 'json');
-  const body = structuredClone(g.request);
+  const savedRequest = { ...g.request, llm: { ...g.request.llm, revision: '1' } };
+  const body = structuredClone(savedRequest);
   if (mutation === 'subject') body.subjects[0].symbol = 'MSFT';
   if (mutation === 'hash') body.subjects[0].expected_bundle_sha256 = '0'.repeat(64);
   if (mutation === 'cutoff') body.as_of = '2026-09-29';
@@ -111,7 +112,7 @@ for (const mutation of ['subject', 'hash', 'cutoff', 'budget', 'provider', 'key'
   if (mutation === 'key') body.llm.apiKey = 'unexpected';
   if (mutation === 'extra') body.retry = true;
   assert.equal(f.handle(origin + generationPath, 'POST', body).kind, 'deny'); assert.equal(f.expected.length, 1);
-  assert.equal(f.handle(origin + generationPath, 'POST', g.request).kind, 'stream'); assert.deepEqual(f.expected, []);
+  assert.equal(f.handle(origin + generationPath, 'POST', savedRequest).kind, 'stream'); assert.deepEqual(f.expected, []);
   assert.equal(f.handle(origin + generationPath, 'POST', g.request).kind, 'deny', 'a confirmed budget cannot authorize retry');
 });
 test('generation cannot skip selected frozen bundle identity/version readback', () => {

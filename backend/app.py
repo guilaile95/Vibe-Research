@@ -692,6 +692,7 @@ def health():
 
 
 class LLMConfig(BaseModel):
+    revision: str | None = None
     provider: str = ""       # cli-codex = Codex Subscription；其余 = API Compatible
     baseURL: str = ""        # 订阅接入时留空
     apiKey: str = ""         # 订阅接入时留空
@@ -711,7 +712,7 @@ def _require_llm_ready(llm: LLMConfig) -> bool:
     provider = (llm.provider or "").strip()
     if provider == "cli-codex":
         runtime_status = agent_runtime.status()
-        if not runtime_status["available"]:
+        if not runtime_status.get("dispatch_available", runtime_status["available"]):
             if runtime_status["status"] == "probe_failed":
                 raise HTTPException(503, "Codex 登录状态检测未完成，请重试；现有登录不会被清除")
             if runtime_status.get("auth_kind") == "api_key":
@@ -843,6 +844,7 @@ def chat(req: ChatReq):
                 question, history = _agent_runtime_turn(req.messages)
                 events = agent_runtime.stream_chat(
                     session=req.session,
+                    config=cfg,
                     message=question,
                     context=context,
                     history=history,
@@ -2056,7 +2058,7 @@ async def test_ai_connection(req: AIConnectionTestRequest):
     _require_llm_ready(req.llm)
     _validate_probe_base_url(req.llm.baseURL)
     disconnect_event = threading.Event()
-    cfg = {**req.llm.model_dump(), "_cancel_event": disconnect_event, "_session": uuid.uuid4().hex}
+    cfg = {**req.llm.model_dump(), "_draft_connection_probe": chat_layer._DRAFT_CONNECTION_PROBE, "_cancel_event": disconnect_event, "_session": uuid.uuid4().hex}
 
     async def gen():
         deadline = time.monotonic() + chat_layer.CONNECTION_TEST_LIMITS.timeout
@@ -2098,8 +2100,8 @@ async def test_ai_connection(req: AIConnectionTestRequest):
                 except Exception as exc:
                     # Only fixed, locally generated transport classifications escape.
                     text = str(exc) if isinstance(exc, chat_layer.ModelTransportError) else ""
-                    error_code = {"模型响应超时": "PROBE_TIMEOUT", "模型接口 HTTP 401": "PROBE_UPSTREAM_AUTH",
-                                  "模型接口 HTTP 403": "PROBE_UPSTREAM_AUTH", "模型接口 HTTP 429": "PROBE_RATE_LIMIT"}.get(text, "PROBE_INVALID_RESPONSE")
+                    error_code = ("PROBE_TIMEOUT" if isinstance(exc, chat_layer.ModelTaskBudgetError) and time.monotonic() >= deadline else {"模型响应超时": "PROBE_TIMEOUT", "模型接口 HTTP 401": "PROBE_UPSTREAM_AUTH",
+                                  "模型接口 HTTP 403": "PROBE_UPSTREAM_AUTH", "模型接口 HTTP 429": "PROBE_RATE_LIMIT"}.get(text, "PROBE_INVALID_RESPONSE"))
                     break
                 finally:
                     if source is not None:

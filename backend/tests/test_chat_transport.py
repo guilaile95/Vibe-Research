@@ -14,6 +14,15 @@ CFG = {"provider": "openai-compatible", "baseURL": "https://opencode.ai/zen/go/v
 DONE = b'data: [DONE]\n\n'
 
 
+@pytest.fixture(autouse=True)
+def isolated_transport_contract(monkeypatch):
+    # Credential/DNS admission has its own real-state tests. These tests isolate
+    # streaming lifetime and patch the final transport, never a live provider.
+    monkeypatch.setattr(chat, "_dispatch_config", lambda cfg: cfg)
+    monkeypatch.setattr(chat, "_check_base_url", lambda *_: None)
+    monkeypatch.setattr(chat, "_TASK_STREAM_SLOTS", threading.BoundedSemaphore(4))
+
+
 def frame(delta):
     return ('data: ' + json.dumps({'choices': [{'delta': delta}]}, ensure_ascii=False) + '\n\n').encode()
 
@@ -48,7 +57,7 @@ def test_invalid_or_empty_stream_never_completes(payload, use_tools):
                 events.append(event)
     assert not any(event['type'] == 'done' for event in events)
     assert 'PRIVATE' not in str(error.value)
-    assert response.closed.is_set()
+    assert response.closed.wait(2)
 
 
 def test_usage_utf8_and_generator_close():
@@ -58,13 +67,13 @@ def test_usage_utf8_and_generator_close():
         events = list(chat.stream_messages(CFG, []))
     assert events[0] == {'type': 'delta', 'text': '中文🙂'}
     assert events[-1]['type'] == 'done'
-    assert response.closed.is_set()
+    assert response.closed.wait(2)
     response = Response(frame({'content': 'first'}), DONE)
     with patch.object(chat, '_call_llm_stream', return_value=response):
         stream = chat.stream_messages(CFG, [])
         next(stream)
         stream.close()
-    assert response.closed.is_set()
+    assert response.closed.wait(2)
 
 
 def test_pre_cancel_never_requests():
@@ -94,18 +103,18 @@ def test_blocked_reader_closed_on_cancel_or_deadline(monkeypatch, deadline):
         assert next(stream)['text'] == 'first'
         with pytest.raises(chat.ModelTransportError, match='超时' if deadline else '停止'):
             next(stream)
-    assert response.closed.is_set()
+    assert response.closed.wait(2)
 
 
 def test_http_and_transport_errors_sanitized():
     response = Response()
     response.status_code = 401
-    with patch.object(chat.requests, 'post', return_value=response):
+    with patch.object(chat.model_transport, 'post', return_value=response):
         with pytest.raises(chat.ModelTransportError, match='HTTP 401') as error:
             chat._call_llm_stream(CFG, [], False)
     assert 'PRIVATE' not in str(error.value)
-    assert response.closed.is_set()
-    with patch.object(chat.requests, 'post', side_effect=requests.ConnectionError('PRIVATE URL / KEY')):
+    assert response.closed.wait(2)
+    with patch.object(chat.model_transport, 'post', side_effect=requests.ConnectionError('PRIVATE URL / KEY')):
         with pytest.raises(chat.ModelTransportError) as error:
             chat._call_llm_stream(CFG, [], False)
     assert 'PRIVATE' not in str(error.value)
@@ -113,7 +122,7 @@ def test_http_and_transport_errors_sanitized():
 
 def test_go_headers_scoped_and_stable():
     cfg = {**CFG, '_session': 'same-conversation'}
-    with patch.object(chat.requests, 'post', return_value=Response()) as request:
+    with patch.object(chat.model_transport, 'post', return_value=Response()) as request:
         chat._call_llm_stream(cfg, [], False).close()
     assert request.call_args.args[0] == 'https://opencode.ai/zen/go/v1/chat/completions'
     assert request.call_args.kwargs['timeout'] == (10, 120)
@@ -154,7 +163,7 @@ def test_route_disconnect_closes_blocking_response():
                 await asyncio.sleep(.001)
             return {'type': 'http.disconnect'}
         await asyncio.wait_for(route({'type': 'http', 'asgi': {'version': '3.0'}}, receive, send), 3)
-        assert response.closed.is_set()
+        assert response.closed.wait(2)
         assert all(b'late' not in msg.get('body', b'') for msg in sent)
     with patch.object(chat, '_call_llm_stream', return_value=response):
         asyncio.run(run())
@@ -184,7 +193,7 @@ def test_stream_watchers_terminate_on_all_exits(monkeypatch, ending):
     for value in threads:
         value.join(1)
         assert not value.is_alive()
-    assert response.closed.is_set()
+    assert response.closed.wait(2)
 
 
 def test_cancellation_between_tool_event_and_execution_skips_tool():
@@ -211,7 +220,7 @@ def test_pr353_abnormal_finish_contract_survives_done_marker(reason, use_tools):
             for event in chat.stream_messages(CFG, [], use_tools=use_tools):
                 events.append(event)
     assert not any(event['type'] == 'done' for event in events)
-    assert response.closed.is_set()
+    assert response.closed.wait(2)
 
 
 @pytest.mark.parametrize('reason', [None, 'stop', 'tool_calls', 'function_call'])

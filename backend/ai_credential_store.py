@@ -26,19 +26,8 @@ UNAVAILABLE_CREDENTIAL = "UNAVAILABLE_CREDENTIAL"
 _LOCK = threading.Lock()
 _LOGGER = logging.getLogger("ai_credential")
 
-_API_PROVIDERS = frozenset(
-    {
-        "deepseek",
-        "silicon",
-        "openai",
-        "minimax",
-        "openrouter",
-        "groq",
-        "together",
-        "mimo",
-        "openai-compatible",
-    }
-)
+from ai_providers import API_PROVIDERS as _API_PROVIDERS
+
 
 
 class CredentialStoreError(ValueError):
@@ -240,8 +229,8 @@ def load() -> dict[str, Any] | None:
     """Return the full record including apiKey. Scheduled AI only."""
     with _LOCK:
         try:
-            _, record, _ = _state()
-            return record
+            revision, record, _ = _state()
+            return {**record, "revision": str(revision)} if record else None
         except CredentialStoreError:
             return None
 
@@ -250,7 +239,7 @@ def scheduled_config() -> tuple[dict[str, Any] | None, str | None]:
     record = load()
     if record is None:
         return None, UNAVAILABLE_CREDENTIAL
-    return {key: record[key] for key in ("provider", "model", "baseURL", "apiKey")}, None
+    return {key: record[key] for key in ("provider", "model", "baseURL", "apiKey", "revision")}, None
 
 
 def status() -> dict[str, Any]:
@@ -261,3 +250,20 @@ def status() -> dict[str, Any]:
             result = _status(None, None)
             result["error"] = "CREDENTIAL_STATE_UNAVAILABLE"
             return result
+
+
+def dispatch_config(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Linearize admission against save/clear in the single backend writer.
+
+    Already admitted calls may finish. Every later model dispatch (including a
+    repair/tool round) revalidates, so clearing does not revive captured keys.
+    Missing revision is intentionally fail-closed for old clients.
+    """
+    expected = _revision(candidate.get("revision"))
+    with _LOCK:
+        revision, record, _ = _state()
+        if record is None or revision != expected:
+            raise CredentialConflict("CREDENTIAL_REVISION_CONFLICT")
+        if any(candidate.get(key, "") != record[key] for key in ("provider", "model", "baseURL", "apiKey")):
+            raise CredentialConflict("CREDENTIAL_REVISION_CONFLICT")
+        return {**candidate, **record, "revision": str(revision)}

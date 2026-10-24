@@ -19,7 +19,7 @@ test('saved browser fixture obeys actual generation guard and preserves strict w
   await checkCredentialGeneration('/debate', { llm: stored });
   await assert.rejects(checkCredentialGeneration('/debate', { llm: syntheticLlm }), /AI 配置已变化/);
   await assert.rejects(checkCredentialGeneration('/debate', { llm: { ...stored, revision: '2' } }), /AI 配置已变化/);
-  assert.deepEqual(modelRequestWireBody({ llm: stored }), { llm: syntheticLlm });
+  assert.deepEqual(modelRequestWireBody({ llm: stored }), { llm: stored });
   assert.deepEqual(syntheticStoredLlm, stored);
   assert.equal('apiKey' in credentialStatus(researchLlm), false);
 });

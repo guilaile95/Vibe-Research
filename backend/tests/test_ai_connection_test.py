@@ -14,7 +14,7 @@ import app as app_module
 import chat
 
 URL = "/api/ai/connection-test"
-LLM = {"provider": "api-compatible", "model": "synthetic-model",
+LLM = {"provider": "openai-compatible", "model": "synthetic-model",
        "baseURL": "https://example.test/v1", "apiKey": "synthetic-key"}
 DONE = {"type": "done", "trace": [], "rounds": 1}
 def probe_error(code="PROBE_INVALID_RESPONSE"):
@@ -31,6 +31,13 @@ def sse(text="Connected", **choice):
 def isolated(monkeypatch, tmp_path):
     monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(chat, "_PUBLIC_MODE", False)
+    import ipaddress
+    def synthetic_dns(host, port, **kwargs):
+        try: ipaddress.ip_address(host); address = host
+        except ValueError: address = "8.8.8.8"
+        return [(0, 0, 0, "", (address, port))]
+    monkeypatch.setattr(chat.socket, "getaddrinfo", synthetic_dns)
+    monkeypatch.setattr(chat.model_transport.requests.utils, "get_environ_proxies", lambda *_: {})
     blocked = MagicMock(side_effect=AssertionError("private/state/runtime access forbidden"))
     for module, name in [(app_module.daily_review, "get_daily_review_for_display"),
                          (app_module.daily_review, "generate_daily_review"),
@@ -83,7 +90,7 @@ def transport(monkeypatch, chunks, *, status=200, headers=None, keepalive=False)
 
     real_client = httpx.AsyncClient
     monkeypatch.setattr(chat.httpx, "AsyncClient",
-                        lambda **kw: real_client(transport=httpx.MockTransport(handle), **kw))
+                        lambda **kw: real_client(**{**kw, "transport": httpx.MockTransport(handle)}))
     return seen, closed
 
 
@@ -193,11 +200,11 @@ def test_deadline_and_cleanup_are_bounded(monkeypatch, phase):
         return httpx.Response(200, stream=Body())
 
     real_client = httpx.AsyncClient
-    monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handle), **kw))
+    monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: real_client(**{**kw, "transport": httpx.MockTransport(handle)}))
 
     async def exercise():
         async def run():
-            return [event async for event in chat.stream_api_messages(LLM, chat.CONNECTION_TEST_MESSAGES, limits=limits)]
+            return [event async for event in chat.stream_api_messages({**LLM, "_draft_connection_probe": chat._DRAFT_CONNECTION_PROBE}, chat.CONNECTION_TEST_MESSAGES, limits=limits)]
         if phase == "close":
             assert (await asyncio.wait_for(run(), 1))[-1] == DONE
         else:
@@ -209,7 +216,7 @@ def test_deadline_and_cleanup_are_bounded(monkeypatch, phase):
 def test_dns_deadline_never_opens_client_after_worker_finishes(monkeypatch):
     started, release, finished = threading.Event(), threading.Event(), threading.Event()
 
-    def resolve(*args):
+    def resolve(*args, **kwargs):
         started.set()
         try:
             release.wait(2)
@@ -258,7 +265,7 @@ def test_asgi_disconnect_cancels_pending_transport_and_closes(monkeypatch, phase
 
         real_client = httpx.AsyncClient
         monkeypatch.setattr(chat.httpx, "AsyncClient",
-                            lambda **kw: real_client(transport=httpx.MockTransport(handle), **kw))
+                            lambda **kw: real_client(**{**kw, "transport": httpx.MockTransport(handle)}))
         sent, body_sent = [], False
 
         async def receive():
@@ -301,7 +308,7 @@ def test_network_failure_is_fixed_safe_error(monkeypatch, failure):
 
     real_client = httpx.AsyncClient
     monkeypatch.setattr(chat.httpx, "AsyncClient",
-                        lambda **kw: real_client(transport=httpx.MockTransport(handle), **kw))
+                        lambda **kw: real_client(**{**kw, "transport": httpx.MockTransport(handle)}))
     assert events(post()) == [probe_error("PROBE_TIMEOUT") if failure is httpx.ReadTimeout else ERROR]
     assert len(attempts) == 1
 

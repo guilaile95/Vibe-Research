@@ -356,8 +356,9 @@ def get_provider_identity(cfg: dict[str, Any] | None) -> str:
     if not cfg or not cfg.get("provider"):
         return "unknown"
     prov = str(cfg["provider"]).strip()
-    model = str(cfg.get("model") or "default").strip()
-    return f"{prov}:{model}"
+    model = "unknown/default" if prov == "cli-codex" else str(cfg.get("model") or "default").strip()
+    from ai_providers import config_cache_identity
+    return f"{prov}:{model}:{config_cache_identity(cfg)}"
 
 
 def _invoke_llm_text(
@@ -380,11 +381,13 @@ def _invoke_llm_text(
         raise ValueError("AI_CONFIG_REQUIRED: 尚未提供有效 AI 配置，请先在前端配置模型接入")
 
     provider = str(cfg["provider"]).strip()
-    if provider not in ("cli-codex", "openai-compatible"):
+    from ai_providers import provider_kind
+    kind = provider_kind(provider)
+    if kind not in ("api", "codex"):
         raise ValueError(f"UNSUPPORTED_AI_PROVIDER: 不受支持的 AI Provider '{provider}'")
 
     effective_cfg = dict(cfg)
-    if provider == "openai-compatible":
+    if kind == "api":
         if not effective_cfg.get("baseURL") or not effective_cfg.get("apiKey") or not effective_cfg.get("model"):
             raise ValueError("AI_CONFIG_INCOMPLETE: API Compatible 模式需要完整的 baseURL、apiKey 和 model 配置")
     elif provider == "cli-codex":
@@ -582,6 +585,8 @@ def classify_items_batch(
     """
     if not items or not tags:
         return [], [], []
+    cfg = {**(cfg or {}), "_task_budget": (cfg or {}).get("_task_budget") or chat.ModelTaskBudget(
+        timeout=180, max_calls=8, max_tokens=4000, max_chars=48000)}
 
     tag_by_id = {int(t["id"]): str(t["tag"]) for t in tags if "id" in t and "tag" in t}
     tags_prompt = "\n".join(

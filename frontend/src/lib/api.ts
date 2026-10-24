@@ -265,18 +265,14 @@ export async function downloadReport(id: string, name: string): Promise<void> {
 // captured a config before another tab cleared it. Explicit draft connection
 // probes are deliberately exempt: they do not save or consume stored authority.
 export function modelRequestWireBody(body: unknown): unknown {
-  if (!body || typeof body !== "object" || !("llm" in body)) return body;
-  const llm = (body as { llm?: unknown }).llm;
-  if (!llm || typeof llm !== "object" || Array.isArray(llm)) return body;
-  // Client-only concurrency metadata must not weaken strict backend ModelIn
-  // schemas. Preserve all other fields so unknown fields still fail closed.
-  const { revision: _revision, ...model } = llm as Record<string, unknown>;
-  return { ...body, llm: model };
+  // Revision is a server dispatch precondition, not client-only metadata.
+  return body;
 }
 
 export async function checkCredentialGeneration(path: string, body: unknown, signal?: AbortSignal) {
-  if (path === "/ai/connection-test" || !body || typeof body !== "object" || !("llm" in body)) return;
-  const llm = (body as { llm?: unknown }).llm;
+  if (path === "/ai/connection-test" || !body || typeof body !== "object") return;
+  const envelope = body as { llm?: unknown; ai_config?: unknown };
+  const llm = envelope.llm ?? envelope.ai_config;
   if (!llm || typeof llm !== "object") return;
   const candidate = llm as { revision?: string; provider?: string; model?: string; baseURL?: string; apiKey?: string };
   const status = await request<{ revision: string | null; configured: boolean }>(

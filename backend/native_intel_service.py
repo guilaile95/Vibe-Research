@@ -2067,15 +2067,15 @@ def classify_items(
         }
 
     # Wave 3：在 AI 分类候选收集时剔除已过期的 RSS 条目，旧事实保留于库中但不浪费 AI 配额
-    cfg = store.get_native_intel_config(target)
+    freshness_cfg = store.get_native_intel_config(target)
     fresh_items = []
     for item in items:
         st = str(item.get("source_type") or "rss")
         if st == "rss":
             res = freshness.evaluate_item_freshness(
                 item,
-                global_enabled=bool(cfg.get("rss_freshness_enabled")),
-                global_max_age_days=int(cfg.get("rss_global_max_age_days", 1)),
+                global_enabled=bool(freshness_cfg.get("rss_freshness_enabled")),
+                global_max_age_days=int(freshness_cfg.get("rss_global_max_age_days", 1)),
                 source_max_age_days=item.get("source_max_age_days") if item.get("source_max_age_days") is not None else item.get("max_age_days"),
             )
             if not res.eligible:
@@ -2085,6 +2085,12 @@ def classify_items(
 
     candidate_ids = [int(i["item_id"]) for i in items]
     analyses = store.get_item_analyses(profile_id, fp, candidate_ids, db_path=target)
+    provider_id = filter_engine.get_provider_identity(cfg)
+    analyses = {item_id: record for item_id, record in analyses.items()
+                if provider_id != "unknown" and not provider_id.startswith("cli-codex:")
+                and record.get("provider_identity") == provider_id}
+    # Old provider/model/endpoint/revision and unknown Codex results are history,
+    # never a verified cache identity for the current dispatch configuration.
 
     # 仅当 analysis_state 为 ERROR 或未在 analyses 中时，才需要发送给 AI
     pending_items = [

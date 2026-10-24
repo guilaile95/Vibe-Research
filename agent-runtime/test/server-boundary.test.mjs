@@ -12,7 +12,7 @@ async function request({ path = "/login", method = "POST", headers = {}, body = 
     cancel() { calls.push("cancel"); return { cancelled: true }; },
     async chat(input) { calls.push("chat"); input.onEvent({ type: "done" }); },
   };
-  const server = createAgentServer(runtime);
+  const server = createAgentServer(runtime, { service: "vibe-agent-runtime", git_sha: "a".repeat(40), source_state: "clean", identity_scope: "STARTUP_SOURCE_SNAPSHOT" });
   const req = Readable.from([Buffer.from(body)]);
   Object.assign(req, { url: path, method, socket: { localPort: port }, headers: {
     host: `127.0.0.1:${port}`, "content-type": "application/json", ...headers,
@@ -69,4 +69,15 @@ test("oversized JSON is rejected before runtime effects", async () => {
   const result = await request({ body: JSON.stringify({ message: "x".repeat(1_000_001) }) });
   assert.equal(result.status, 413);
   assert.deepEqual(result.calls, []);
+});
+
+
+test("runtime identity is read-only and retains backend request boundary", async () => {
+  const good = await request({ path: "/runtime-info", method: "GET" });
+  assert.equal(good.status, 200);
+  assert.equal(JSON.parse(good.output).git_sha, "a".repeat(40));
+  assert.deepEqual(good.calls, []);
+  const denied = await request({ path: "/runtime-info", method: "GET", headers: { origin: "null" } });
+  assert.equal(denied.status, 403);
+  assert.deepEqual(denied.calls, []);
 });
