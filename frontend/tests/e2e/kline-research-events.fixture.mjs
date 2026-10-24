@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+const announcementContext = JSON.parse(readFileSync(new URL("./kline-announcement-context.golden.json", import.meta.url), "utf8"));
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
@@ -6,12 +8,21 @@ const dates = ["2026-07-17", "2026-07-20", "2026-07-21", "2026-07-22", "2026-07-
 const evidence = (code, id, date) => ({ id, subject_type: "stock", subject_id: code, evidence_type: "report", claim: "Synthetic evidence only", source_title: `合成证据 ${id}`, source_date: date, source_url: null, accessed_at: "2026-07-24", created_at: "2026-07-24", updated_at: "2026-07-24", classification: "fact", confidence: "high", deleted: 0, deleted_at: null });
 const calendarEvent = (code, id, date) => ({ event_id: id, security_code: code, security_name: null, campaign_ids: ["campaign_alpha", "campaign_beta"], event_type: "ANNOUNCEMENT", event_date: date, date_semantics: date ? "DATE_ONLY" : "UNKNOWN", state: "OBSERVED", title: `合成事件 ${id}`, details: {}, source: "synthetic fixture", source_record_identity: id, fetched_at: "2026-07-24", limitations: [] });
 
+// Actual backend-generated local context: no user-declared groups for this report.
+// This is a legitimate empty grouping, not an unavailable provider response.
+export function klineAuxiliaryReply(pathname, method = "GET") {
+  if (method !== "GET" || pathname !== "/api/announcement-groups/context/000001-exact") return null;
+  return { status: 200, contentType: "application/json", body: JSON.stringify({ data: announcementContext }) };
+}
+
 export async function runKlineResearchEvents({ page, mock, baseUrl, openTab, expandKline, fillCode, clickQuery, waitForStockHeader }) {
   const calls = []; const writes = [];
   let hold = false; let release; let held; let calendarUnavailable = false; let chartPhase = false;
   const routeHandler = async (route) => {
     const request = route.request(); const url = new URL(request.url()); const code = url.searchParams.get("security_code") || url.searchParams.get("subject_id") || url.searchParams.get("code") || "000001";
     if (request.method() !== "GET") writes.push({ path: url.pathname, method: request.method() });
+    const auxiliary = klineAuxiliaryReply(url.pathname, request.method());
+    if (auxiliary) { calls.push({ kind: "auxiliary-context", path: url.pathname, status: auxiliary.status }); return route.fulfill(auxiliary); }
     const send = (data) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data }) });
     if (url.pathname === "/api/kline") return send(dates.map((date, i) => ({ date, open: 10 + i, high: 11 + i, low: 9 + i, close: 10.5 + i, volume: 1000, amount: 10000 })));
     if (url.pathname === "/api/research-events") {
@@ -28,6 +39,7 @@ export async function runKlineResearchEvents({ page, mock, baseUrl, openTab, exp
       return send({ items: [evidence(code, `${code}-exact`, "2026-07-20"), evidence(code, `${code}-old`, "2026-07-01"), evidence("foreign", "must-not-leak", "2026-07-20")], total: 103, limit: 100, offset: 0 });
     }
     if (/\/api\/evidence\/[^/]+\/temporal-authority$/.test(url.pathname)) return send({ temporal_state: "UNPROVEN", temporal_basis: "NONE", effective_at: null, authority_refs: [], reason_codes: [], ec1_evaluation: "NOT_EVALUATED", observed_time_is_not_effective_time: true });
+    if (url.pathname === "/api/evidence/000001-exact") return send(announcementContext.current_members[0]);
     if (/\/api\/evidence\/[^/]+$/.test(url.pathname)) return send(evidence("000001", decodeURIComponent(url.pathname.split("/").at(-1)), "2026-07-20"));
     return route.fallback();
   };
@@ -78,6 +90,14 @@ export async function runKlineResearchEvents({ page, mock, baseUrl, openTab, exp
       }
       await evidenceRow.getByRole("link").focus(); await page.keyboard.press("Enter");
       await page.waitForURL("**/evidence/000001-exact");
+      // Wait for the optional request to settle before accepting the heading.
+      // Otherwise a fast title can hide a later auxiliary-card render exception.
+      const grouping = page.getByRole("region", { name: "公告中心用户关联", exact: true });
+      await grouping.getByText(/持股变动卡：尚未实现/).waitFor();
+      assert.equal(await grouping.getByRole("alert").count(), 0);
+      assert.equal(await grouping.locator("details").count(), 0, "the report has no declared groups or creation form");
+      // This fixture is a report, not an announcement/filing: no filing card is mounted.
+      assert.equal(await page.getByRole("region", { name: "原始文档证据与章节比较", exact: true }).count(), 0);
       await page.getByText("合成证据 000001-exact", { exact: true }).waitFor();
     }
     // A held old-stock reply must not survive hide/show or a real query switch.
@@ -114,6 +134,7 @@ export async function runKlineResearchEvents({ page, mock, baseUrl, openTab, exp
     assert.ok(chartCalls.length >= 5, "all explicit chart loads/retries were observed");
     assert.ok(chartCalls.every((call) => call.from === dates[0] && call.to === dates.at(-1)), JSON.stringify(chartCalls));
     assert.ok(calls.filter((call) => call.kind === "evidence").every((call) => call.limit === "100" && call.offset === "0"));
+    assert.equal(calls.filter(call => call.kind === "auxiliary-context").length, 2, "each viewport observes its explicit local grouping context");
     assert.deepEqual(writes, [], "all event linkage flows are read-only");
     console.log("PASS synthetic K-line research: 1440/390, keyboard ID navigation, gaps, bounded reads, cancellation and no writes");
   } finally {

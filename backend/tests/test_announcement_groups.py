@@ -146,3 +146,17 @@ def test_missing_or_changed_existing_member_is_explicit_conflict(setup, change):
     ctx = groups.context(anchor['id'], path)
     assert [c['evidence_id'] for c in ctx['member_conflicts']] == [report['id']]
     assert len(ctx['groups'][0]['members']) == 2  # Never silently prune history.
+
+
+def test_kline_browser_empty_group_fixture_matches_real_service(tmp_path, monkeypatch):
+    """Prevent a successful-but-malformed generic {} fixture from masking crashes."""
+    import json
+    from pathlib import Path
+    golden = json.loads((Path(__file__).parents[2] / 'frontend/tests/e2e/kline-announcement-context.golden.json').read_text(encoding='utf-8'))
+    monkeypatch.setattr(store, 'new_id', lambda: '000001-exact')
+    monkeypatch.setattr(svc, '_utc_now_iso', lambda: '2026-07-24T00:00:00Z')
+    db = tmp_path / 'synthetic-evidence.db'
+    record = svc.create_evidence(db, dict(subject_type='stock', subject_id='000001', evidence_type='report',
+        claim='Synthetic evidence only', source_title='合成证据 000001-exact', source_date='2026-07-20',
+        source_url=None, accessed_at='2026-07-24T00:00:00Z', classification='fact', confidence='high'))
+    assert groups.context(record['id'], db) == golden

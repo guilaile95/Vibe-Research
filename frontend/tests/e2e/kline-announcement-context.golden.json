@@ -1,0 +1,52 @@
+{
+  "groups": [],
+  "history": [],
+  "candidates": [
+    {
+      "edit_token": "evidence-edit.v1:0995d8dc53ddcf20f3fa8a163e3bfb0d897bded0908a946d38db4868a4120e93",
+      "id": "000001-exact",
+      "subject_type": "stock",
+      "subject_id": "000001",
+      "evidence_type": "report",
+      "claim": "Synthetic evidence only",
+      "source_title": "合成证据 000001-exact",
+      "source_url": null,
+      "source_date": "2026-07-20",
+      "accessed_at": "2026-07-24T00:00:00.000000+00:00",
+      "classification": "fact",
+      "confidence": "high",
+      "created_at": "2026-07-24T00:00:00Z",
+      "updated_at": "2026-07-24T00:00:00Z",
+      "deleted": 0,
+      "deleted_at": null
+    }
+  ],
+  "has_more": false,
+  "current_members": [
+    {
+      "edit_token": "evidence-edit.v1:0995d8dc53ddcf20f3fa8a163e3bfb0d897bded0908a946d38db4868a4120e93",
+      "id": "000001-exact",
+      "subject_type": "stock",
+      "subject_id": "000001",
+      "evidence_type": "report",
+      "claim": "Synthetic evidence only",
+      "source_title": "合成证据 000001-exact",
+      "source_url": null,
+      "source_date": "2026-07-20",
+      "accessed_at": "2026-07-24T00:00:00.000000+00:00",
+      "classification": "fact",
+      "confidence": "high",
+      "created_at": "2026-07-24T00:00:00Z",
+      "updated_at": "2026-07-24T00:00:00Z",
+      "deleted": 0,
+      "deleted_at": null
+    }
+  ],
+  "member_conflicts": [],
+  "relationship_basis": "USER_DECLARED_UNVERIFIED",
+  "automatic_grouping": "UNAVAILABLE_NO_VERIFIED_DOCUMENT_ID",
+  "ownership_change": {
+    "status": "NOT_IMPLEMENTED_PREREQUISITE_MISSING",
+    "blocker": "No verified SEC 13D/13G/Form 4 or equivalent structured ownership filing adapter, accession identity, amendment lineage, issuer/owner identity, or transaction semantics is available. User-supplied text is not a verified ownership source."
+  }
+}
