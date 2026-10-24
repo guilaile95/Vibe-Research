@@ -482,7 +482,7 @@ function createOutcomeHistoryFillers(env, python, template, count = 50) {
   const script = `
 import json
 import os
-from temporal_clock import install
+from temporal_clock import advance, install
 install()
 import frozen_decision_service as frozen
 
@@ -496,7 +496,10 @@ service_fields = {
 payload = {key: value for key, value in template.items() if key not in service_fields}
 payload['review_by'] = '2026-09-09T10:00:00Z'
 payload['source_refs'] = ['rq1:e2e-history-filler']
-created = [frozen.freeze_decision(payload)['decision_id'] for _ in range(count)]
+created = []
+for _ in range(count):
+    advance()
+    created.append(frozen.freeze_decision(payload)['decision_id'])
 print(json.dumps(created))
 `;
   const result = spawnSync(python.cmd, [...python.args, "-c", script], {
@@ -519,7 +522,7 @@ function createHistoricalActionFixtures(env, python, template, specs) {
   const script = `
 import json
 import os
-from temporal_clock import install
+from temporal_clock import advance, install
 install()
 import frozen_decision_service as frozen
 
@@ -549,6 +552,7 @@ for spec in specs:
         'blocked_actions': [value for value in all_actions if value not in allowed_by_action[action]],
     }
     payload['source_refs'] = [f"rev2:e2e-historical-nba:{action}"]
+    advance()
     created.append(frozen.freeze_decision(payload)['decision_id'])
 print(json.dumps(created))
 `;
@@ -695,6 +699,7 @@ async function run() {
     );
     assert.ok(normalSessionCase.end_trade_date > normalSessionCase.start_trade_date, JSON.stringify(normalSessionCase));
     assert.ok(weekendHolidayCase.end_trade_date > weekendHolidayCase.start_trade_date, JSON.stringify(weekendHolidayCase));
+    await page.clock.setFixedTime(new Date(clock.advance()));
     const secondRun = await freezeThroughBrowser(
       page,
       backend,
@@ -721,6 +726,7 @@ async function run() {
         { next_best_action: "EXIT", review_by: "2026-09-13T10:00:00Z", strategy: "SWING" },
       ],
     );
+    await page.clock.setFixedTime(new Date(clock.advance()));
     const thirdRun = await freezeThroughBrowser(
       page,
       backend,

@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const fixtureDir = dirname(fileURLToPath(import.meta.url));
 
 const ACTIVE_SEED = `
 import os, sys, uuid
@@ -7,6 +11,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.getcwd())
 import campaign_store
 if os.environ.get("E2E_CLOCK_FILE"):
+    sys.path.insert(0, os.environ["E2E_FIXTURE_DIR"])
     from temporal_clock import utc_now_iso
 else:
     utc_now_iso = lambda: datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
@@ -34,7 +39,7 @@ export function seedActiveCampaign(backendDir, env, campaignId) {
   ];
   const result = spawnSync(python, args, {
     cwd: backendDir,
-    env: { ...env, E2E_CAMPAIGN_ID: campaignId },
+    env: { ...env, E2E_CAMPAIGN_ID: campaignId, E2E_FIXTURE_DIR: fixtureDir },
     encoding: "utf8",
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);

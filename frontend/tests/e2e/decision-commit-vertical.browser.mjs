@@ -788,6 +788,8 @@ async function run() {
     const updatedEvidence = Object.fromEntries(["evidence_type", "claim", "source_title", "source_url", "source_date", "accessed_at", "classification", "confidence"].map((key) => [key, evidenceBefore[key]]));
     updatedEvidence.expected_edit_token = evidenceBefore.edit_token;
     updatedEvidence.source_title = "渠道复核周记 v2";
+    // The stale-review guard compares updated_at, so this is a later mutation.
+    await page.clock.setFixedTime(new Date(clock.advance()));
     await jsonRequest(backend, `/api/evidence/${newOptionValue}`, "PUT", updatedEvidence);
     const rejected = page.waitForResponse((response) => response.url().endsWith(`/thesis/${thesisId}/deltas`) && response.request().method() === "POST" && response.status() === 409);
     await page.getByTestId("confirm-thesis-delta").click();
@@ -802,6 +804,7 @@ async function run() {
     await page.getByLabel("变更原因").fill("冻结后渠道复核走弱，重新核对 v2 后确认削弱");
     assert.equal(await acknowledgment.isChecked(), false, "draft edits must invalidate acknowledgment");
     await acknowledgment.check();
+    await page.clock.setFixedTime(new Date(clock.advance()));
     failDeltaReadback = true;
     await page.getByTestId("confirm-thesis-delta").click();
     await page.getByTestId("delta-write-status").waitFor({ timeout: 10000 });
@@ -825,6 +828,7 @@ async function run() {
       "the only business writes must be evidence creation and the explicit delta confirmation",
     );
     await deltaPanel.screenshot({ path: join(shotDir, "delta-readback-recovered.png") });
+    await page.clock.setFixedTime(new Date(clock.advance()));
     // 3) 决策复核页：摘要接住新 delta（当前状态削弱），连续性识别 ADDED，冻结原文未改写。
     await page.goto(`${frontend}/campaigns/${campaign.campaign_id}/decision-proposal`, { waitUntil: "domcontentloaded" });
     await page.locator('[data-horizon-source="CURRENT_THESIS"]').waitFor({ timeout: 30000 });

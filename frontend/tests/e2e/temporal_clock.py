@@ -4,7 +4,7 @@ The file is private to one temporary E2E data directory. Both the HTTP process
 and fixture subprocesses read it so advancing to review time never changes a
 frozen decision's identity or bypasses temporal input validation.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 import importlib
 import os
 from pathlib import Path
@@ -19,6 +19,18 @@ def utc_now_iso():
 
 def now():
     return datetime.fromisoformat(utc_now_iso().replace("Z", "+00:00"))
+
+
+def advance(seconds=1):
+    """Advance an explicit fixture mutation; never depend on elapsed wall time."""
+    if seconds <= 0:
+        raise ValueError("E2E clock must advance")
+    instant = (now() + timedelta(seconds=seconds)).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    path = Path(os.environ["E2E_CLOCK_FILE"])
+    pending = path.with_name(path.name + ".next")
+    pending.write_text(instant, encoding="utf-8")
+    pending.replace(path)
+    return instant
 
 
 def utc_now_offset_iso():
