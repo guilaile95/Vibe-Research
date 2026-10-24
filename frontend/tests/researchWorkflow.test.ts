@@ -104,3 +104,17 @@ test('same source version may retain different per-read coverage receipts withou
   validateResearchChains([question({ headRoundId: 'r2', revision: 2, updatedAt: 3 })], [round(), newer]);
   assert.notDeepEqual(newer.materials[0].provenance, round().materials[0].provenance);
 });
+
+test('chain validation returns the same normalized records without changing input or invalid-value errors', () => {
+  const q = question(), r = round(), before = canonicalJson({q,r});
+  const validated = validateResearchChains([q], [r]);
+  assert.deepEqual(validated.questions, [validateResearchQuestion(q)]);
+  assert.deepEqual(validated.rounds, [validateResearchRound(r)]);
+  assert.notEqual(validated.questions[0], q);
+  assert.notEqual(validated.rounds[0], r);
+  assert.equal(canonicalJson({q,r}), before);
+  for (const value of [null, undefined, 1, false, 'not-a-record', []]) {
+    assert.throws(() => validateResearchChains([value as any], [r]), (e: any) => e.code === 'VALIDATION');
+    assert.throws(() => validateResearchChains([q], [value as any]), (e: any) => e.code === 'VALIDATION');
+  }
+});

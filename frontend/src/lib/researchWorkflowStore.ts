@@ -78,9 +78,9 @@ function questionRounds(state: Snapshot, question: ResearchQuestion): ResearchRo
 function validateSnapshot(value: unknown): Snapshot {
   const v = record(value);
   if (Object.keys(v).some(key => !stores.includes(key as StoreName)) || stores.some(key => !Array.isArray(v[key]))) return validation('研究库备份集合不完整');
-  const questions = (v.questions as unknown[]).map(validateResearchQuestion);
-  const rounds = (v.rounds as unknown[]).map(validateResearchRound);
-  validateResearchChains(questions, rounds);
+  // Chain validation also validates every record, material and size budget. Reuse its
+  // normalized values instead of performing the identical full validation twice.
+  const { questions, rounds } = validateResearchChains(v.questions as ResearchQuestion[], v.rounds as ResearchRound[]);
   for (const round of rounds) if (round.calculation?.comparable) {
     let replayed;
     try { replayed = replayResearchCalculation(round.securityCode, round.calculation, round.materials); } catch { return validation('计算快照无法按所存输入重算'); }
