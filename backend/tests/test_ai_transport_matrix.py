@@ -1,11 +1,14 @@
 """No-network protocol matrix: TCP pinning and both TLS identities."""
-import io, asyncio, socket
+import io, asyncio
 from types import SimpleNamespace
 from unittest.mock import patch
 import model_transport as t
 import httpcore, httpx, urllib3.connection
 
-def test_protocol_matrix():
+from offline_network_fixtures import block_external_connections
+
+def test_protocol_matrix(monkeypatch):
+    block_external_connections(monkeypatch)
     for host,address in [('model.invalid','8.8.8.8'),('::1','::1')]:
      for scheme in ['http','https']:
       for proxy_scheme in [None,'http','https']:
@@ -22,7 +25,7 @@ def test_protocol_matrix():
        def tls(*a,**k):
         names.append(k['server_hostname']);assert k['cert_reqs'] in ('CERT_REQUIRED',2)
         return SimpleNamespace(socket=k.get('sock') or a[0],is_verified=True)
-       with patch.object(t,'create_connection',conn), patch.object(urllib3.connection,'_ssl_wrap_socket_and_match_hostname',tls),patch.object(socket.socket,'connect',side_effect=AssertionError('network forbidden')):
+       with patch.object(t,'create_connection',conn), patch.object(urllib3.connection,'_ssl_wrap_socket_and_match_hostname',tls):
         r=t.post(url,endpoint=ep,json={},timeout=1,allow_redirects=False);assert r.json()=={};r.close()
        assert connects==[(proxy.address,8080) if proxy else (address,ep.port)],(host,scheme,proxy_scheme,connects)
        expected=([proxy.host] if proxy_scheme=='https' else [])+([host] if scheme=='https' else [])
@@ -48,7 +51,7 @@ def test_protocol_matrix():
         wire,headers=t.proxy_request(url,{},ep)
         async with httpx.AsyncClient(transport=t.async_transport(ep),trust_env=False) as client:
          r=await client.post(wire,headers=headers,json={});assert r.json()=={}
-       with patch.object(httpcore.AnyIOBackend,'connect_tcp',connect),patch.object(socket.socket,'connect',side_effect=AssertionError('network forbidden')):
+       with patch.object(httpcore.AnyIOBackend,'connect_tcp',connect):
         asyncio.run(run())
        assert connects==[(proxy.address,8080) if proxy else (address,ep.port)],(host,scheme,proxy_scheme,connects)
        expected=([proxy.host] if proxy_scheme=='https' else [])+([host] if scheme=='https' else [])

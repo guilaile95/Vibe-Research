@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 def utc_now_iso():
-    instant = datetime.fromisoformat(Path(os.environ["E2E_CLOCK_FILE"]).read_text().strip().replace("Z", "+00:00"))
+    instant = datetime.fromisoformat(Path(os.environ["E2E_CLOCK_FILE"]).read_text(encoding="utf-8").strip().replace("Z", "+00:00"))
     if instant.tzinfo is None or instant.utcoffset().total_seconds() != 0:
         raise ValueError("E2E clock must be UTC")
     return instant.isoformat(timespec="microseconds").replace("+00:00", "Z")

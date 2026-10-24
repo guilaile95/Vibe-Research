@@ -3,6 +3,7 @@ import asyncio
 from dataclasses import replace
 import json
 import threading
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import anyio
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 
 import app as app_module
 import chat
+from model_stream_phase_fixtures import isolate_stream_phase
 
 URL = "/api/ai/connection-test"
 LLM = {"provider": "openai-compatible", "model": "synthetic-model",
@@ -184,23 +186,36 @@ def test_deadline_and_cleanup_are_bounded(monkeypatch, phase):
     limits = replace(chat.CONNECTION_TEST_LIMITS, timeout=0.05, cleanup_grace=0.01)
     monkeypatch.setattr(chat, "CONNECTION_TEST_LIMITS", limits)
 
+    entered, cancelled = [], []
+
+    async def wait_in_phase(name):
+        entered.append(name)
+        if name != "close":
+            clock.start()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.append(name)
+            raise
+
     class Body(httpx.AsyncByteStream):
         async def __aiter__(self):
             if phase == "body":
-                await asyncio.Event().wait()
+                await wait_in_phase("body")
             yield sse() + b"data: [DONE]\n\n"
 
         async def aclose(self):
             if phase == "close":
-                await asyncio.Event().wait()
+                await wait_in_phase("close")
 
     async def handle(request):
         if phase == "headers":
-            await asyncio.Event().wait()
+            await wait_in_phase("headers")
         return httpx.Response(200, stream=Body())
 
-    real_client = httpx.AsyncClient
-    monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: real_client(**{**kw, "transport": httpx.MockTransport(handle)}))
+    clock = isolate_stream_phase(monkeypatch, handle)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: client)
 
     async def exercise():
         async def run():
@@ -208,9 +223,28 @@ def test_deadline_and_cleanup_are_bounded(monkeypatch, phase):
         if phase == "close":
             assert (await asyncio.wait_for(run(), 1))[-1] == DONE
         else:
-            with pytest.raises(chat.ModelTransportError):
+            with pytest.raises(chat.ModelTransportError, match="超时"):
                 await asyncio.wait_for(run(), 1)
+        assert entered == [phase]
+        assert cancelled == [phase]
+        assert client.is_closed
     asyncio.run(exercise())
+
+
+def test_expired_task_budget_is_a_safe_route_timeout_not_http_500(monkeypatch):
+    clock = 0.0
+    monkeypatch.setattr(app_module, "time", SimpleNamespace(monotonic=lambda: clock))
+
+    async def expired(*args, **kwargs):
+        nonlocal clock
+        clock = chat.CONNECTION_TEST_LIMITS.timeout
+        raise chat.ModelTaskBudgetError("private deadline detail must not escape")
+        yield  # Keep the same async-generator protocol as the real source.
+
+    monkeypatch.setattr(chat, "stream_api_messages", expired)
+    response = post()
+    assert response.status_code == 200
+    assert events(response) == [probe_error("PROBE_TIMEOUT")]
 
 
 def test_dns_deadline_never_opens_client_after_worker_finishes(monkeypatch):
