@@ -26,8 +26,9 @@ idle and unchanged request count over two animation frames, not full market
 coverage or proof that future asynchronous work cannot start. Requests measure resource entries (excluding the top-level document).
 The report includes raw samples, P50/P95, JS heap, cumulative task duration,
 long tasks, response bytes, unavailable sources, production build identities and
-static bundle census. Task duration is cumulative per document, not a per-flow CPU
-delta. Wall-clock timings have no flaky speed gate; correctness assertions do.
+static bundle census. `cumulativeTaskDurationSeconds` is cumulative CDP time,
+not a per-flow CPU delta. `medianSubresourceTransferredBytes` excludes HTML;
+the document transfer bytes remain in each row’s navigation timing record. Wall-clock timings have no flaky speed gate; correctness assertions do.
 
 The native store scenarios have 25 × 1,000-character, 250 × 50,000-character,
 and 1,000 × 1,000-character materials. Both variants retain all 8 getAll reads and

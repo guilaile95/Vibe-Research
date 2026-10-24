@@ -86,7 +86,7 @@ try{
    const start=performance.now();await action();await ready();const firstUsefulMs=performance.now()-start;await settle(page);const uiSettledMs=performance.now()-start;
    const details=await page.evaluate(({before,name})=>{const nav=name.includes('reload')||name.includes('cold')||name.includes('document');const resources=performance.getEntriesByType('resource').slice(nav?0:before.resourceCount);const tasks=(window.__perf?.longTasks||[]).slice(nav?0:before.longCount);return {requests:resources.map(r=>({path:new URL(r.name).pathname+new URL(r.name).search,transferBytes:r.transferSize,decodedBytes:r.decodedBodySize,durationMs:r.duration})),longTaskCount:tasks.length,longTaskMs:tasks.reduce((s,t)=>s+t.duration,0),navigationType:performance.getEntriesByType('navigation')[0]?.type,paints:performance.getEntriesByType('paint').map(e=>({name:e.name,startTime:e.startTime})),navigation:performance.getEntriesByType('navigation')[0]?.toJSON()};},{before,name});
    const metrics=Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(m=>[m.name,m.value]));
-   if(trial>=0)rows.push({label:server.label,trial,name,firstUsefulMs,uiSettledMs,...details,jsHeapUsedBytes:metrics.JSHeapUsedSize,taskDurationSeconds:metrics.TaskDuration});
+   if(trial>=0)rows.push({label:server.label,trial,name,firstUsefulMs,uiSettledMs,...details,jsHeapUsedBytes:metrics.JSHeapUsedSize,cumulativeTaskDurationSeconds:metrics.TaskDuration});
    if(trial===0&&['daily-cold','stock-document','pcb-content-route'].includes(name))await page.screenshot({path:join(output,`${server.label}-${name}.png`)});
   };
   await measure('daily-cold',()=>page.goto('/daily-review'),()=>page.getByText('合成基准指数',{exact:true}).waitFor());
@@ -126,7 +126,7 @@ try{
  }
 
  assert.deepEqual(writes,[]);assert.deepEqual(external,[]);
- const summary=[];for(const label of ['baseline','candidate'])for(const name of [...new Set(rows.map(r=>r.name))]){const group=rows.filter(r=>r.label===label&&r.name===name);summary.push({label,name,samples:group.length,firstUsefulP50Ms:quantile(group.map(r=>r.firstUsefulMs),.5),firstUsefulP95Ms:quantile(group.map(r=>r.firstUsefulMs),.95),uiSettledP50Ms:quantile(group.map(r=>r.uiSettledMs),.5),uiSettledP95Ms:quantile(group.map(r=>r.uiSettledMs),.95),medianTransferredBytes:quantile(group.map(r=>r.requests.reduce((s,q)=>s+q.transferBytes,0)),.5),medianRequests:quantile(group.map(r=>r.requests.length),.5)});}
+ const summary=[];for(const label of ['baseline','candidate'])for(const name of [...new Set(rows.map(r=>r.name))]){const group=rows.filter(r=>r.label===label&&r.name===name);summary.push({label,name,samples:group.length,firstUsefulP50Ms:quantile(group.map(r=>r.firstUsefulMs),.5),firstUsefulP95Ms:quantile(group.map(r=>r.firstUsefulMs),.95),uiSettledP50Ms:quantile(group.map(r=>r.uiSettledMs),.5),uiSettledP95Ms:quantile(group.map(r=>r.uiSettledMs),.95),medianSubresourceTransferredBytes:quantile(group.map(r=>r.requests.reduce((s,q)=>s+q.transferBytes,0)),.5),medianRequests:quantile(group.map(r=>r.requests.length),.5)});}
  const buildIdentities=Object.fromEntries(servers.map(s=>[s.label,JSON.parse(readFileSync(join(s.root,'vibe-build.json'),'utf8'))]));
  const builds=Object.fromEntries(servers.map(s=>[s.label,measureBuild(s.root)]));
  assert.equal(builds.baseline.eagerPcbBody,true,'Baseline must reproduce eager content');assert.equal(builds.candidate.eagerPcbBody,false,'Candidate must defer unrelated full sector bodies');
