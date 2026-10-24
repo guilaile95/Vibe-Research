@@ -1,3 +1,4 @@
+import "./helpers/notes-locks.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
@@ -46,25 +47,25 @@ test("note metadata retains the same candidate return context and rejects unsafe
   assert.deepEqual(candidateResearchSourceLinks([evidence("no-url", { source_url: null })]), [{ title: "合成财报摘录", url: "/evidence/no-url" }]);
 });
 
-test("research note metadata survives save/reload and backup alongside legacy notes without formal writes", () => {
+test("research note metadata survives save/reload and backup alongside legacy notes without formal writes", async () => {
   const values = new Map<string, string>();
   const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
     getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key),
   } });
   try {
-    const legacy = addNote("问AI", "旧记录", "旧正文")[0];
+    const legacy = (await addNote("问AI", "旧记录", "旧正文"))[0];
     const metadata = { securityCode: "600519", returnTo: "/candidates/600519#candidate-research-note", question: "为什么", nextQuestion: "核对财报", tentativeView: "暂定" };
-    const saved = addNote("暂定研究", "600519 暂定", "未核验正文", metadata)[0];
+    const saved = (await addNote("暂定研究", "600519 暂定", "未核验正文", metadata))[0];
     assert.deepEqual(loadNotesState().notes[0].research, metadata);
     assert.equal(loadNotesState().notes[1].research, undefined);
     const raw = createNotesBackupJson(loadNotesState().notes);
     assert.deepEqual(parseNotesBackupJson(raw), [saved, legacy]);
-    values.set("vr-notes", "[]");
-    assert.equal(importNotesBackupJson(raw).added, 2);
+    values.clear(); // Restore into a clean browser, not a conflicting old-version writer.
+    assert.equal((await importNotesBackupJson(raw)).added, 2);
     assert.deepEqual(loadNotesState().notes.find((note) => note.id === saved.id)?.research, metadata);
-    assert.deepEqual([...values.keys()], ["vr-notes"]);
-    assert.throws(() => addNote("问AI", "invalid", "must not write", { securityCode: "invalid" }));
+    assert.deepEqual([...values.keys()], ["vr-notes.v2"]);
+    (await assert.rejects(async () => (await addNote("问AI", "invalid", "must not write", { securityCode: "invalid" }))));
     assert.equal(loadNotesState().notes.length, 2);
   } finally {
     if (previous) Object.defineProperty(globalThis, "localStorage", previous); else Reflect.deleteProperty(globalThis, "localStorage");

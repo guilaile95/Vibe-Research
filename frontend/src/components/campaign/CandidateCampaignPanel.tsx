@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Loader2, PlusCircle, RefreshCw } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError, type CampaignNextActions, type CampaignRecord, type CampaignStrategy } from "@/lib/api";
@@ -32,8 +32,13 @@ export function CandidateCampaignPanel({
   const [error, setError] = useState("");
   const [nextActionWarning, setNextActionWarning] = useState("");
   const loadGeneration = useRef(0);
+  const owner = useMemo(() => ({ code }), [code]);
+  const committedOwner = useRef<typeof owner | null>(null);
+  const contextEpoch = useRef(0);
+  const mutationOwner = useRef<typeof owner | null>(null);
 
   const load = useCallback(async () => {
+    if (committedOwner.current !== owner) return;
     const generation = ++loadGeneration.current;
     if (!/^\d{6}$/.test(code)) return;
     setLoading(true);
@@ -41,7 +46,7 @@ export function CandidateCampaignPanel({
     setNextActionWarning("");
     try {
       const records = await api.listCampaigns({ security_code: code });
-      if (generation !== loadGeneration.current) return;
+      if (committedOwner.current !== owner || generation !== loadGeneration.current) return;
       const candidates = selectCandidateCampaigns(records, code);
       setCampaigns(candidates);
 
@@ -54,7 +59,7 @@ export function CandidateCampaignPanel({
           }
         }),
       );
-      if (generation !== loadGeneration.current) return;
+      if (committedOwner.current !== owner || generation !== loadGeneration.current) return;
       const actions: Record<string, CampaignNextActions | null> = {};
       for (const [campaignId, value] of results) actions[campaignId] = value;
       setNextActions(actions);
@@ -62,39 +67,51 @@ export function CandidateCampaignPanel({
         setNextActionWarning("部分投资计划的下一步读取失败；系统没有猜测可执行操作，请刷新后重试。");
       }
     } catch (err: unknown) {
-      if (generation !== loadGeneration.current) return;
+      if (committedOwner.current !== owner || generation !== loadGeneration.current) return;
       setCampaigns([]);
       setNextActions({});
       setError(err instanceof ApiError ? err.message : "候选投资计划读取失败");
     } finally {
-      if (generation === loadGeneration.current) setLoading(false);
+      if (committedOwner.current === owner && generation === loadGeneration.current) setLoading(false);
     }
-  }, [code]);
+  }, [code, owner]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    contextEpoch.current++;
+    committedOwner.current = owner;
+    mutationOwner.current = null;
+    setCreating(false);
+    setCampaigns([]);
+    setNextActions({});
     setSelectedStrategy(null);
     void load();
     return () => {
+      contextEpoch.current++;
+      committedOwner.current = null;
       loadGeneration.current += 1;
     };
-  }, [load]);
+  }, [load, owner]);
 
   const createCandidate = async () => {
-    if (!selectedStrategy || creating) return;
+    if (!selectedStrategy || creating || mutationOwner.current === owner || committedOwner.current !== owner) return;
+    mutationOwner.current = owner;
+    const epoch = contextEpoch.current;
+    const current = () => committedOwner.current === owner && contextEpoch.current === epoch;
     setCreating(true);
     setError("");
     try {
       const created = await api.createCampaign(code, selectedStrategy);
-      if (created.status !== "DRAFT") {
+      if (!current()) return;
+      if (created.security_code !== code || created.status !== "DRAFT") {
         setError(`创建结果为 ${created.status}，不是预期的草稿状态；已停止继续操作。`);
         return;
       }
       setSelectedStrategy(null);
       await load();
     } catch (err: unknown) {
-      setError(errorMessage(err));
+      if (current()) setError(errorMessage(err));
     } finally {
-      setCreating(false);
+      if (current()) { mutationOwner.current = null; setCreating(false); }
     }
   };
 
@@ -139,7 +156,7 @@ export function CandidateCampaignPanel({
 
       {!loading && campaigns.length > 0 && (
         <div className="mt-4 space-y-3">
-          {campaigns.map((campaign) => (
+          {campaigns.filter(campaign => campaign.security_code === code).map((campaign) => (
             <div key={campaign.campaign_id} className="space-y-3">
               <CampaignLifecycleCard
                 campaignId={campaign.campaign_id}

@@ -1,3 +1,4 @@
+import "./helpers/notes-locks.ts";
 /** Node storage replay, not browser/OS restart evidence. Python invokes each
  * phase in a fresh process with the same serialized localStorage bytes. */
 import assert from 'node:assert/strict';
@@ -12,7 +13,7 @@ import dns from 'node:dns';
 import { syncBuiltinESMExports } from 'node:module';
 import { addNote, loadNotesState } from '../src/lib/notes.ts';
 
-test('saved research notes replay in a fresh process with an explicit synthetic clock', { skip: !process.env.VR_SAVED_REPLAY_FILE }, () => {
+test('saved research notes replay in a fresh process with an explicit synthetic clock', { skip: !process.env.VR_SAVED_REPLAY_FILE }, async () => {
   const path = process.env.VR_SAVED_REPLAY_FILE!;
   const phase = process.env.VR_SAVED_REPLAY_PHASE!;
   const clock = process.env.VR_SAVED_JOURNEY_CLOCK!;
@@ -44,7 +45,7 @@ test('saved research notes replay in a fresh process with an explicit synthetic 
   try {
     if (phase === 'capture') {
       const record = JSON.parse(readFileSync(process.env.VR_SAVED_REPLAY_RECORD!, 'utf8'));
-      addNote('Company research', 'Synthetic restart research', JSON.stringify(record));
+      (await addNote('Company research', 'Synthetic restart research', JSON.stringify(record)));
       assert.equal(writes, 1);
       writeFileSync(path, JSON.stringify(values));
     }

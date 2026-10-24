@@ -85,3 +85,26 @@ test("existing evidence snapshot retains exact excerpt, not invented original fi
   await assert.rejects(() => evidenceMaterial(record, "000001"));
   assert.equal((await contentDigest("x")).length, 64); assert.equal(safeSourceUrl("javascript:alert(1)"), null); assert.equal(safeSourceUrl("https://user:password@example.com"), null);
 });
+
+test('v2 page receipts fit 200 requested pages with 12000 source characters and preserve exact own-page provenance', async () => {
+  const report: MyReport = { id: 'bounded-pages', name: 'synthetic.pdf', size: 1, industry: 'synthetic', ext: '.pdf', ts: 1, file_sha256: 'a'.repeat(64), page_count: 200 };
+  for (const count of [8, 50, 200]) {
+    const requested = Array.from({length:count},(_,i)=>i+1);
+    const response: ReportPageReadResult = {report_id:report.id,file_sha256:report.file_sha256!,scope:'INDEXED_PAGE_TEXT_ONLY',full_report_read:false,requested,returned_chars:12000,complete_requested_text:count===8,
+      coverage:{readable:requested.slice(0,8),omitted:requested.slice(8),invalid:[],unreadable:[],error:[]},items:requested.map(page=>page<=8?{page,status:'readable',reason:'AVAILABLE',text:'中'.repeat(1500),returned_chars:1500,indexed_chars:1500,truncated:false}:{page,status:'omitted',reason:'PAGE_BUDGET'})};
+    const materials=await reportPageMaterials(report,response,'300672',1,count);
+    const saved=validateResearchRound({id:'r',questionId:'q',securityCode:'300672',parentRoundId:null,createdAt:Date.now(),materials,calculation:null,judgement:'limited review',limitations:'partial only',nextMaterial:'next',reviewedMaterialKeys:[],ignoredMaterialKeys:[],coverage:'partial'});
+    assert.ok(Buffer.byteLength(JSON.stringify(saved))<2*1024*1024);
+    for(const [i,material] of materials.entries()) {
+      const receipt=material.provenance!.page_receipt as Record<string,unknown>;
+      assert.equal(receipt.schema_version,'report-page-projection.v2');
+      assert.deepEqual(receipt.item,response.items[i]);
+      const {items:_,...header}=response;assert.deepEqual(receipt.request,header);
+      assert.equal(receipt.original_receipt_sha256,await contentDigest(JSON.stringify(response)));
+      assert.equal('items' in receipt,false);
+    }
+    const old=structuredClone(saved);old.materials[0].provenance!.page_receipt=JSON.parse(JSON.stringify(response));
+    assert.deepEqual(validateResearchRound(old),old,'legacy full receipts remain readable, not rewritten');
+    console.log(JSON.stringify({requestedPages:count,sourceChars:12000,storedRoundBytes:Buffer.byteLength(JSON.stringify(saved))}));
+  }
+});

@@ -28,6 +28,7 @@ import {
   deleteNote,
   importNotesBackupJson,
   loadNotesState,
+  notesRecoveryArchive,
   parseNotesBackupJson,
   replaceCorruptedNotesFromBackupJson,
   type Note,
@@ -67,7 +68,7 @@ export function Notes() {
   const { notes, corruptedRaw } = notesState;
   useEffect(() => {
     const refresh = () => setNotesState(loadNotesState());
-    const onStorage = (event: StorageEvent) => { if (event.key === "vr-notes" || event.key === null) refresh(); };
+    const onStorage = (event: StorageEvent) => { if (event.key === "vr-notes" || event.key === "vr-notes.v2" || event.key === null) refresh(); };
     window.addEventListener(NOTES_CHANGED_EVENT, refresh);
     window.addEventListener("storage", onStorage);
     return () => { window.removeEventListener(NOTES_CHANGED_EVENT, refresh); window.removeEventListener("storage", onStorage); };
@@ -94,16 +95,18 @@ export function Notes() {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const importRequestRef = useRef(0);
   const importBusyRef = useRef(false);
+  const reflectionEpoch = useRef(0), reflectionSaving = useRef<number | null>(null);
 
   useEffect(() => () => {
     const controller = abortRef.current;
     abortRef.current = null;
     controller?.abort();
     importRequestRef.current += 1;
+    reflectionEpoch.current++;
   }, []);
 
-  function setNotes(next: Note[]) {
-    setNotesState({ notes: next, error: "", corruptedRaw: null });
+  function setNotes(_next: Note[]) {
+    setNotesState(loadNotesState());
   }
 
   function reportBackupError(error: unknown, fallback: string) {
@@ -112,6 +115,7 @@ export function Notes() {
   }
 
   async function runReflect(n: Note) {
+    reflectionEpoch.current++; reflectionSaving.current = null;
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -137,21 +141,21 @@ export function Notes() {
     }
   }
 
-  function saveReflection(n: Note) {
-    if (!reflectComplete || reflecting || reflectErr || reflectId !== n.id) return;
+  async function saveReflection(n: Note) {
+    if (!reflectComplete || reflecting || reflectErr || reflectSaved || reflectId !== n.id || reflectionSaving.current !== null) return;
+    const epoch = reflectionEpoch.current; reflectionSaving.current = epoch;
     setBackupStatus("");
     try {
-      setNotes(addNote("反思审计", `反思 · ${n.title}`, reflectTruncated ? `原文较长，本次仅审计截取部分，未覆盖全文。\n\n${reflectText}` : reflectText, n.research ? {
+      setNotes(await addNote("反思审计", `反思 · ${n.title}`, reflectTruncated ? `原文较长，本次仅审计截取部分，未覆盖全文。\n\n${reflectText}` : reflectText, n.research ? {
         securityCode: n.research.securityCode,
         question: n.research.question,
         sourceLinks: n.research.sourceLinks,
         returnTo: n.research.returnTo,
       } : undefined));
-      setReflectSaved(true);
-      setBackupError("");
+      if (epoch === reflectionEpoch.current) { setReflectSaved(true); setBackupError(""); }
     } catch (error) {
-      reportBackupError(error, "研究记录保存失败");
-    }
+      if (epoch === reflectionEpoch.current) reportBackupError(error, "研究记录保存失败");
+    } finally { if (reflectionSaving.current === epoch) reflectionSaving.current = null; }
   }
 
   function downloadBackup() {
@@ -198,12 +202,12 @@ export function Notes() {
           setBackupStatus("已取消替换，原始研究记录保持不变。");
           return;
         }
-        setNotes(replaceCorruptedNotesFromBackupJson(raw, corruptedRaw));
+        setNotes(await replaceCorruptedNotesFromBackupJson(raw, corruptedRaw));
         setOpenId(null);
         setBackupStatus(`已从备份恢复 ${imported.length} 条研究记录，损坏数据已替换。`);
         return;
       }
-      const result = importNotesBackupJson(raw);
+      const result = await importNotesBackupJson(raw);
       setNotes(result.notes);
       setBackupStatus(
         result.added > 0
@@ -261,9 +265,9 @@ export function Notes() {
               <button
                 type="button"
                 disabled={importing}
-                onClick={() => { if (confirm("清空所有研究记录？")) {
+                onClick={async () => { if (confirm("清空所有研究记录？")) {
                   setBackupStatus("");
-                  try { clearNotes(); setNotes([]); setBackupError(""); }
+                  try { await clearNotes(); setNotes([]); setBackupError(""); }
                   catch (error) { reportBackupError(error, "清空失败"); }
                 } }}
                 className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:text-destructive"
@@ -279,13 +283,17 @@ export function Notes() {
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
         <div>
           <p className="font-medium text-foreground">研究记录只保存在当前浏览器中。</p>
-          <p>含生成依据的备份使用 v2；旧版不能导入。回退旧版前请完整导出并保留备份，旧版在同一浏览器修改记录可能丢失新增依据字段。</p>
+          <p>含生成依据的备份使用 v2；旧版不能导入。回退旧版前请完整导出并保留备份，新版保存使用独立存储并保留旧版原始数据。请关闭旧版标签页；旧页再次写入会使新版停止保存并提示冲突，不会自动合并。</p>
           <p>清理浏览器数据、切换浏览器 Profile 或更换设备前，请先导出备份。备份文件只包含研究记录，不包含模型密钥、访问密钥或 AI 对话。</p>
         </div>
       </div>
       {notesState.error && (
         <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm" role="alert">
           <p className="font-medium text-destructive">{notesState.error}</p>
+          <button type="button" className="mt-2 rounded border px-3 py-1.5 text-xs" onClick={() => {
+            try { downloadNotesFile(notesRecoveryArchive(), "vibe-notes-preserved-versions", "json"); setBackupStatus("已下载新旧两份原始数据留存；此文件用于人工核对，不会自动合并或直接导入。"); }
+            catch (error) { reportBackupError(error, "原始数据无法读取"); }
+          }}>下载新旧原始数据留存</button>
           {corruptedRaw !== null && (
             <>
               <p className="mt-2 text-xs leading-5 text-muted-foreground">记录无法读取，但原始数据仍保留。请先下载原始数据留存，再选择有效的研究记录 JSON 备份。备份校验通过并确认后才会替换损坏数据；取消或导入失败不会清空原始数据。</p>
@@ -357,9 +365,9 @@ export function Notes() {
                     <span className="flex-1 truncate text-sm font-medium">{n.title}</span>
                     <span className="shrink-0 font-mono text-[11px] text-muted-foreground/60">{fmt(n.ts)}</span>
                   </button>
-                  <button onClick={() => {
+                  <button onClick={async () => {
                     setBackupStatus("");
-                    try { setNotes(deleteNote(n.id)); setBackupError(""); }
+                    try { setNotes(await deleteNote(n.id)); setBackupError(""); }
                     catch (error) { reportBackupError(error, "删除失败"); }
                   }} className="shrink-0 text-muted-foreground/60 hover:text-destructive" title="删除">
                     <Trash2 className="h-3.5 w-3.5" />

@@ -28,13 +28,13 @@ export async function runNoteGeneration(browser, frontend) {
     await review.getByText('新原文不变',{exact:true}).waitFor();
     await review.getByRole('button',{name:'存入沉淀',exact:true}).click();
     await review.getByRole('button',{name:'已存入沉淀',exact:true}).waitFor();
-    const saved=await page.evaluate(()=>JSON.parse(localStorage.getItem('vr-notes'))[0]);
+    const saved=await page.evaluate(()=>(JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]"))[0]);
     assert.deepEqual(saved.generation,generation);assert.equal(saved.research,undefined);assert.equal(saved.content,'新原文不变');
     await page.close();page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
     await page.goto(`${frontend}/notes`);await page.getByRole('button',{name:/每日复盘 2026-10-08/}).click();
     await page.getByTestId('note-generation').waitFor();
     const notes=[{id:'old',kind:'问AI',title:'旧单股',content:'旧原文',ts:1,research:{securityCode:'600000'}},saved];
-    await page.evaluate(notes=>localStorage.setItem('vr-notes',JSON.stringify(notes)),notes);await page.reload();
+    await page.evaluate(notes=>{localStorage.removeItem('vr-notes.v2');localStorage.setItem('vr-notes',JSON.stringify(notes));},notes);await page.reload();
     await page.getByRole('button',{name:/每日复盘 2026-10-08/}).click();
     await page.getByTestId('note-generation').locator('summary').click();
     await page.getByText(/原结果可能已被替换或删除/).waitFor();
@@ -44,10 +44,10 @@ export async function runNoteGeneration(browser, frontend) {
     if(process.env.NOTE_GENERATION_EVIDENCE_DIR){mkdirSync(process.env.NOTE_GENERATION_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:join(process.env.NOTE_GENERATION_EVIDENCE_DIR,`note-generation-${width}.png`)});}
     const downloading=page.waitForEvent('download');await page.getByRole('button',{name:'导出备份',exact:true}).click();
     const path=await (await downloading).path();const backup=JSON.parse(readFileSync(path,'utf8'));assert.equal(backup.schema_version,'vibe-notes.backup.v2');assert.deepEqual(backup.notes,notes);
-    await page.evaluate(()=>localStorage.removeItem('vr-notes'));await page.reload();
+    await page.evaluate(()=>{localStorage.removeItem('vr-notes.v2');localStorage.removeItem('vr-notes');});await page.reload();
     await page.getByTestId('notes-backup-input').setInputFiles(path);
     await page.getByRole('status').getByText('已导入 2 条研究记录。',{exact:true}).waitFor();
-    assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('vr-notes'))),[notes[1],notes[0]]);
+    assert.deepEqual(await page.evaluate(()=>(JSON.parse(localStorage.getItem("vr-notes.v2") || "null")?.notes ?? JSON.parse(localStorage.getItem("vr-notes") || "[]"))),[notes[1],notes[0]]);
     await page.getByRole('button',{name:/旧单股/}).click();await page.getByText(/历史记录未保存此信息/).waitFor();
     assert.deepEqual(errors,[]);assert.deepEqual(writes,[]);assert.deepEqual(external,[]);
     console.log('note generation synthetic browser audit',JSON.stringify({width,writes,external,unavailable}));

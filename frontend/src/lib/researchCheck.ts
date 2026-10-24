@@ -43,13 +43,19 @@ export async function evidenceMaterial(record: EvidenceRecord, securityCode: str
 }
 export async function reportPageMaterials(report: MyReport, result: ReportPageReadResult, securityCode: string, start: number, end: number): Promise<ResearchMaterial[]> {
   validateReportPageOcrResponse(result, report.id, report.file_sha256 || "", start, end);
-  const description = JSON.stringify({ scope: result.scope, full_report_read: false, requested: result.requested, coverage: result.coverage, complete_requested_text: result.complete_requested_text, extraction: result.extraction ?? null });
+  // Versioned page projection: retain request coverage and this exact page, not
+  // every other page's body N times. Existing v1 provenance stays byte-for-byte
+  // readable; no stored round or backup is migrated.
+  const { items: _items, ...requestReceipt } = result;
+  const receiptHash = await contentDigest(JSON.stringify(result));
+  const description = JSON.stringify({ scope: result.scope, full_report_read: false, requested_count: result.requested.length,
+    coverage_counts: Object.fromEntries(Object.entries(result.coverage).map(([status, pages]) => [status, pages.length])), complete_requested_text: result.complete_requested_text });
   return Promise.all(result.items.map(async item => ({
     id: `report:${report.id}:page:${item.page}`, version: await contentDigest(JSON.stringify([result.file_sha256, item, result.extraction ?? null])),
     securityCode, title: `${report.title || report.name} · 第 ${item.page} 页`, content: item.status === "readable" ? item.text || "" : "",
     sourceUrl: safeSourceUrl(report.source_url), sourceKind: "report_pages" as const, sourceHash: result.file_sha256,
     publishedAt: report.publish_date || null, capturedAt: Date.now(),
-    provenance: JSON.parse(JSON.stringify({ report: { id: report.id, title: report.title || report.name, source_url: report.source_url || null, file_sha256: result.file_sha256, imported_at: report.imported_at || null }, page_receipt: result, security_assignment: { code: securityCode, basis: "USER_CONFIRMED_FROM_ORIGINAL_PAGE", automatically_verified: false } })),
+    provenance: JSON.parse(JSON.stringify({ report: { id: report.id, title: report.title || report.name, source_url: report.source_url || null, file_sha256: result.file_sha256, imported_at: report.imported_at || null }, page_receipt: { schema_version: "report-page-projection.v2", original_receipt_sha256: receiptHash, request: requestReceipt, item }, security_assignment: { code: securityCode, basis: "USER_CONFIRMED_FROM_ORIGINAL_PAGE", automatically_verified: false } })),
     availability: item.status === "readable" && item.text?.trim() ? "partial" as const : "unavailable" as const,
     readRange: { pages: item.status === "readable" ? [item.page] : [], totalPages: report.page_count ?? null, truncated: item.truncated === true, ocr: Boolean(result.extraction), description: `${item.status} / ${item.reason}；本次实际返回 ${item.returned_chars ?? 0}/${item.indexed_chars ?? 0} 字符。${description}` },
   })));

@@ -1,3 +1,4 @@
+import { useUnsavedChanges } from "@/components/ui/UnsavedChangesDialog";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import {
@@ -259,6 +260,13 @@ export function ThesisDetail() {
   // 修改立场
   const [stanceEdit, setStanceEdit] = useState<StanceForm | null>(null);
   const [stanceErr, setStanceErr] = useState<string | null>(null);
+  const editBaseline = useRef("");
+  const { dialog: unsavedDialog } = useUnsavedChanges(
+    (editing && JSON.stringify(form) !== editBaseline.current)
+      || (showLinkPanel && Boolean(linkForm.evidence_id || linkForm.change_summary || linkForm.stance !== "support"))
+      || stanceEdit !== null,
+    busy || lifecycleBusy,
+  );
 
   // 版本历史
   const [revisions, setRevisions] = useState<ThesisRevisionListItem[]>([]);
@@ -546,7 +554,9 @@ export function ThesisDetail() {
       setEditErr("当前 Thesis 与真实 Campaign 不一致，已禁止修改 Campaign-scoped Formal 草稿。");
       return;
     }
-    setForm(toEditForm(aggregate.thesis, campaignStrategy));
+    const initialForm = toEditForm(aggregate.thesis, campaignStrategy);
+    editBaseline.current = JSON.stringify(initialForm);
+    setForm(initialForm);
     setEditErr(null);
     setConflict(null);
     setEditing(true);
@@ -890,6 +900,7 @@ export function ThesisDetail() {
 
   return (
     <div>
+      {unsavedDialog}
       <Link to={returnTo} className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
         <ArrowLeft className="h-4 w-4" /> {campaignContext ? "返回决策待办" : "投资逻辑"}
       </Link>
@@ -912,7 +923,7 @@ export function ThesisDetail() {
           <RefreshCw className="mt-0.5 h-4 w-4 shrink-0" />
           <div className="flex-1">
             <p>{conflict}</p>
-            <p className="mt-1 text-xs text-destructive/80">你的输入未丢失。请重新加载后再保存。</p>
+            <p className="mt-1 text-xs text-destructive/80">草稿仅在当前页面保留。刷新或离开前请复制备份；重新加载不会自动合并草稿。</p>
           </div>
           <button
             onClick={() => { setConflict(null); void load(); }}
