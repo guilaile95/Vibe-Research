@@ -518,7 +518,7 @@ export interface Valuation {
   pe_ttm: number | null; pb: number | null;
   eps_26e: number | null; eps_27e: number | null; pe_26e: number | null;
   cagr_pct: number | null; peg: number | null; digest_years: number | null;
-  analyst_count: number | null; forecast_note?: string;
+  analyst_count: number | null; forecast_note?: string; forecast_status?: "EXPIRED";
   quote_source?: string | null;
   quote_data_time?: string | null;
   quote_trade_date?: string | null;

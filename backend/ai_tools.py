@@ -99,7 +99,7 @@ TOOLS: list[dict] = [
     _t("query_quote", "查 A 股实时行情：现价/涨跌/PE/PB/市值/换手/涨跌停。可批量。",
        {"codes": {"type": "array", "items": {"type": "string"}, "description": "6 位代码列表，如 ['600519','000858']"}},
        ["codes"]),
-    _t("query_valuation", "查单只个股的完整估值：行情 + 机构一致预期 EPS + 前向 PE / PEG / PE 消化年数。",
+    _t("query_valuation", "查单只个股的完整估值：行情 + 明确年度的机构一致预期 EPS + 2026E PE / PEG / PE 消化年数。2026→2027 预测窗口过期时派生指标为空；必须保留 forecast_note，不得用旧 EPS 重建当前前向估值。",
        _CODE, ["code"]),
     _t("query_valuation_percentile",
        "查个股 PE-TTM / PB 的历史估值分位：当前值 + 近五年 20/50/80 分位带 + 当前所处百分位。判断估值贵贱先用这个。",
