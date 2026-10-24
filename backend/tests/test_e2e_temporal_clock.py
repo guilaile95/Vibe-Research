@@ -27,12 +27,15 @@ def test_all_boundary_clocks_follow_explicit_phases(clock):
     import formal_decision_outcome_runtime as outcome
     import frozen_decision_service as frozen
     import trade_ledger_service as trades
+    import importlib
     module, file = clock
     for instant in ("2026-08-28T08:00:00.000000Z", "2026-09-02T08:00:00.000000Z"):
         file.write_text(instant)
         assert module.utc_now_iso() == commit.utc_now_iso() == frozen._utc_now_iso() == instant
         assert challenge.PRODUCTION_PORTS.clock() == outcome._now() == instant
         assert trades._execution_now() == datetime.fromisoformat(instant.replace("Z", "+00:00"))
+        for name, field in (("evidence_thesis_service", "_utc_now_iso"), ("evidence_thesis_store", "_utc_now_iso"), ("decision_trace_store", "_utc_now"), ("account_reality_service", "_utc_now"), ("position_reality_service", "_utc_now"), ("trade_ledger_store", "_utc_now")):
+            assert getattr(importlib.import_module(name), field)() == instant.replace("Z", "+00:00")
 
 
 def test_expiry_blocks_new_decisions_but_keeps_exact_historical_replay(clock, tmp_path):
@@ -98,3 +101,147 @@ def test_missing_or_invalid_clock_fails_closed(clock, monkeypatch):
     file.unlink()
     with pytest.raises(FileNotFoundError):
         module.install(monkeypatch.setattr)
+
+
+@pytest.fixture
+def api(clock, tmp_path, monkeypatch):
+    """Real routes and stores; external Critical Data providers stay offline."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from dataclasses import replace
+    import importlib
+    import campaign_critical_data_runtime as critical
+    import os
+    from validation_environment import configure_pytest_environment
+
+    isolated = dict(os.environ)
+    configure_pytest_environment(tmp_path / "api", isolated)
+    for key, value in isolated.items():
+        if os.environ.get(key) != value:
+            monkeypatch.setenv(key, value)
+    ports = critical.PRODUCTION_PORTS
+    ports = replace(
+        ports,
+        market_sector_evaluator=lambda _lake, definition: critical._not_evaluated_result(critical.market_sector_adapter.DEPENDENCY_ID, definition["as_of"]),
+        disclosures_evaluator=lambda _lake, definition: critical._not_evaluated_result(critical.disclosures_adapter.DEPENDENCY_ID, definition["as_of"]),
+        financials_evaluator=lambda _lake, definition: critical._not_evaluated_result(critical.financials_adapter.DEPENDENCY_ID, definition["as_of"]),
+    )
+    project = critical.project_campaign_critical_data
+    monkeypatch.setattr(critical, "project_campaign_critical_data", lambda *args, **kw: project(*args, **{**kw, "ports": ports}))
+    app = FastAPI()
+    for module in ("campaign_router", "evidence_thesis_router", "position_reality_router", "decision_commit_router", "trade_ledger_router", "trade_attribution_router", "formal_decision_outcome_router"):
+        app.include_router(importlib.import_module(module).router)
+    return TestClient(app)
+
+
+def request_data(api, method, path, payload=None, status=200):
+    response = api.request(method, path, **({"json": payload} if payload is not None else {}))
+    assert response.status_code == status, f"{method} {path}: {response.text}"
+    return response.json()["data"]
+
+
+def test_real_api_thesis_formalization_preview_freeze_readback(clock, api):
+    import campaign_store
+    import uuid
+    import evidence_thesis_store
+    module, file = clock
+    request_data(api, "POST", "/api/position/bootstrap-commit", {
+        "ledger_start_at": "2026-08-01", "opening_cash": 1000000, "positions": [], "note": "synthetic clock regression",
+    })
+    campaign = request_data(api, "POST", "/api/campaigns", {"security_code": "600519", "strategy": "SWING"}, 201)
+    evidence = request_data(api, "POST", "/api/evidence", {
+        "subject_type": "stock", "subject_id": "600519", "evidence_type": "news",
+        "claim": "synthetic supporting claim", "source_title": "synthetic source", "source_url": "https://example.test/source",
+        "source_date": "2026-08-01", "accessed_at": "2026-08-01T00:00:00.000Z", "classification": "fact", "confidence": "high",
+    })
+    created = request_data(api, "POST", "/api/thesis", {
+        "subject_type": "stock", "subject_id": "600519", "title": "clock regression", "summary": "synthetic",
+        "core_claims": ["one", "two", "three"], "catalysts": [], "risks": [], "invalidation_conditions": [], "change_summary": "fixture",
+    })
+    thesis_id = created["thesis"]["id"]
+    begun = request_data(api, "POST", f"/api/thesis/{thesis_id}/begin-formalization", {})
+    updated = request_data(api, "PUT", f"/api/thesis/{thesis_id}", {
+        "title": "clock regression", "summary": "synthetic", "status": "active", "core_claims": ["one", "two", "three"],
+        "catalysts": [], "risks": [], "invalidation_conditions": [], "strategy": "SWING",
+        "expected_horizon": {"unit": "TRADING_DAY", "min": 10, "max": 30, "anchor": "FREEZE_AT"},
+        "free_notes": None, "expected_revision": begun["thesis"]["current_revision"], "change_summary": "formal fixture",
+    })
+    request_data(api, "POST", f"/api/thesis/{thesis_id}/evidence", {"evidence_id": evidence["id"], "stance": "support", "expected_revision": updated["thesis"]["current_revision"]})
+    current = request_data(api, "GET", f"/api/thesis/{thesis_id}")
+    confirmed = request_data(api, "POST", f"/api/thesis/{thesis_id}/confirm", {"expected_revision": current["thesis"]["current_revision"]})
+    frozen = request_data(api, "POST", f"/api/thesis/{thesis_id}/freeze", {"expected_revision": confirmed["thesis"]["current_revision"]})
+    assert frozen["thesis"]["formal_state"] == "frozen"
+    assert evidence_thesis_store._is_canonical_utc_timestamp(frozen["thesis"]["frozen_at"])
+    assert not evidence_thesis_store._is_canonical_utc_timestamp(frozen["thesis"]["frozen_at"].replace("+00:00", "Z"))
+    campaign_id = campaign["campaign_id"]
+    request_data(api, "POST", f"/api/campaigns/{campaign_id}/thesis-binding", {"thesis_id": thesis_id}, 201)
+    for old, new in (("DRAFT", "RESEARCHING"), ("RESEARCHING", "PRE-ENTRY")):
+        request_data(api, "POST", f"/api/campaigns/{campaign_id}/transitions", {"expected_status": old, "to_status": new})
+    # Same explicit historical ACTIVE seed used by the browser fixtures.
+    campaign_store.transition_campaign(campaign_id=campaign_id, expected_status="PRE-ENTRY", to_status="ACTIVE", transition_id=f"campaign_transition_{uuid.uuid4().hex}", transitioned_at=module.utc_now_iso())
+    draft = {
+        "asset_view": {"view": "ASSET", "stance": "WAIT"}, "trade_view": {"view": "TRADE", "stance": "WAIT"},
+        "portfolio_view": {"view": "PORTFOLIO", "constraint": "unknown"}, "review_by": "2026-08-30T10:00:00.000000Z",
+        "key_assumptions": ["synthetic"], "event_invalidation_conditions": ["synthetic"], "strategy_horizon": "2w",
+    }
+    base = f"/api/campaigns/{campaign_id}/decision-proposal"
+    preview = request_data(api, "POST", f"{base}/preview", draft)
+    commit_payload = {
+        **draft, "as_of": preview["proposal"]["as_of"], "expected_proposal_fingerprint": preview["proposal_fingerprint"], "user_confirmed": True,
+    }
+    committed = request_data(api, "POST", f"{base}/commit", commit_payload)
+    decision = committed["committed"]
+    assert decision["committed_at"] == module.utc_now_iso()
+    file.write_text("2026-09-02T08:00:00Z")
+    readback = request_data(api, "GET", f"{base}/committed/{decision['decision_id']}")
+    assert readback["committed"] == decision
+    replay = request_data(api, "POST", f"{base}/commit", commit_payload)
+    assert replay["idempotent"] is True
+    assert replay["committed"] == decision
+    response = api.post(f"{base}/preview", json=draft)
+    assert response.status_code == 422
+
+
+def test_real_api_trade_reconciliation_and_attribution(clock, api):
+    import frozen_decision_service as frozen
+    module, file = clock
+    request_data(api, "POST", "/api/position/bootstrap-commit", {"ledger_start_at": "2026-08-01", "opening_cash": 1000000, "positions": []})
+    campaign = request_data(api, "POST", "/api/campaigns", {"security_code": "600519", "strategy": "SWING"}, 201)
+    decision = frozen.freeze_decision(valid_payload(campaign_id=campaign["campaign_id"], review_by="2026-09-10T00:00:00Z"))
+    file.write_text("2026-09-02T08:00:00Z")
+    trade = request_data(api, "POST", "/api/trades", {
+        "code": "600519", "name": "synthetic", "operation": "buy", "execution_status": "full",
+        "actual_price": 100, "actual_quantity": 1, "executed_at": "2026-08-29T01:00:00Z", "fee": 0, "other_cost": 0,
+    })
+    base = f"/api/trades/{trade['trade_id']}"
+    readback = request_data(api, "GET", base)
+    assert datetime.fromisoformat(readback["created_at"]) == module.now()
+    reconciliation = request_data(api, "GET", f"{base}/reconciliation")
+    assert reconciliation["allocation_state"] == "UNALLOCATED", reconciliation
+    candidates = request_data(api, "GET", f"{base}/attribution-candidates")
+    assert decision["decision_id"] in str(candidates)
+    request_data(api, "POST", f"{base}/attribution", {"decision_id": decision["decision_id"]})
+    reconciled = request_data(api, "GET", f"{base}/reconciliation")
+    assert reconciled["allocation_state"] == "ALLOCATED", reconciled
+    assert reconciled["decision_id"] == decision["decision_id"]
+
+
+def test_real_api_outcome_preserves_pre_evaluation_trade_visibility(clock, api):
+    import frozen_decision_service as frozen
+    module, file = clock
+    request_data(api, "POST", "/api/position/bootstrap-commit", {"ledger_start_at": "2026-08-01", "opening_cash": 1000000, "positions": []})
+    campaign = request_data(api, "POST", "/api/campaigns", {"security_code": "600519", "strategy": "SWING"}, 201)
+    decision = frozen.freeze_decision(valid_payload(campaign_id=campaign["campaign_id"], review_by="2026-08-30T10:00:00Z"))
+    file.write_text("2026-08-28T09:00:00Z")
+    trade_data = {"code": "600519", "name": "synthetic", "operation": "buy", "execution_status": "full", "actual_price": 100, "actual_quantity": 1, "executed_at": "2026-08-28T08:00:01Z", "fee": 0, "other_cost": 0}
+    trade = request_data(api, "POST", "/api/trades", trade_data)
+    request_data(api, "POST", f"/api/trades/{trade['trade_id']}/attribution", {"decision_id": decision["decision_id"]})
+    file.write_text("2026-09-02T08:00:00Z")
+    path = f"/api/formal-decisions/{decision['decision_id']}/outcome?evaluation_as_of=2026-08-31T08:00:00Z"
+    before = request_data(api, "GET", path)
+    assert before["actual_capital_outcome"]["trade_ids"] == [trade["trade_id"]]
+    later = request_data(api, "POST", "/api/trades", {**trade_data, "executed_at": "2026-09-01T01:00:00Z"})
+    request_data(api, "POST", f"/api/trades/{later['trade_id']}/attribution", {"decision_id": decision["decision_id"]})
+    after = request_data(api, "GET", path)
+    assert after["actual_capital_outcome"] == before["actual_capital_outcome"]
+    assert after["decision_snapshot_hash"] == before["decision_snapshot_hash"]
