@@ -89,6 +89,10 @@ def test_sync_generator_close_releases_response(monkeypatch, use_tools):
     source = chat.stream_messages({}, [], use_tools=use_tools)
     assert next(source)["type"] == "delta"
     source.close()
+    import time
+    deadline = time.monotonic() + 2
+    while not response.closed and time.monotonic() < deadline:
+        time.sleep(0.01)
     assert response.closed
 
 
@@ -109,7 +113,9 @@ def test_sync_http_failure_closes_response(monkeypatch):
     response = Response()
     response.status_code = 500
     response.text = "upstream failure"
-    monkeypatch.setattr(chat.requests, "post", lambda *args, **kw: response)
+    monkeypatch.setattr(chat, "_dispatch_config", lambda cfg: cfg)
+    monkeypatch.setattr(chat, "_check_base_url", lambda *_: None)
+    monkeypatch.setattr(chat.model_transport, "post", lambda *args, **kw: response)
     with pytest.raises(RuntimeError, match="HTTP 500"):
         chat._call_llm_stream({"baseURL": "https://example.test", "model": "test", "apiKey": "test"}, [], False)
     assert response.closed

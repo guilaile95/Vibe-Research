@@ -15,6 +15,7 @@ from test_daily_review_lead_api import LLM, URL, events, isolated, post  # noqa:
 
 
 _REAL_HTTP_REQUEST = httpx.AsyncHTTPTransport.handle_async_request
+_REAL_CHECK_BASE_URL = chat._check_base_url
 
 
 def scope():
@@ -31,7 +32,7 @@ def test_loopback_closes_upstream_on_disconnect_or_done(monkeypatch, phase):
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", _REAL_HTTP_REQUEST)
     monkeypatch.setattr(chat, "_PUBLIC_MODE", False)
     real_client = httpx.AsyncClient
-    monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: real_client(trust_env=False, **kw))
+    monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: real_client(**{**kw, "trust_env": False}))
 
     async def exercise():
         request_received = asyncio.Event()
@@ -132,7 +133,7 @@ def test_async_transport_preserves_go_headers_and_no_tools(monkeypatch):
 
     real_client = httpx.AsyncClient
     monkeypatch.setattr(chat.httpx, "AsyncClient",
-                        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+                        lambda **kw: real_client(**{**kw, "transport": httpx.MockTransport(handler)}))
 
     async def exercise():
         return [event async for event in chat.stream_api_messages(cfg, [])]
@@ -253,7 +254,7 @@ def test_async_transport_failure_remains_sanitized(monkeypatch, failure):
 
     real_client = httpx.AsyncClient
     monkeypatch.setattr(chat.httpx, "AsyncClient",
-                        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+                        lambda **kw: real_client(**{**kw, "transport": httpx.MockTransport(handler)}))
 
     async def exercise():
         with pytest.raises(chat.ModelTransportError) as caught:
@@ -283,7 +284,7 @@ def test_public_dns_preparation_does_not_block_cancellation(monkeypatch, stop):
     release = threading.Event()
     finished = threading.Event()
 
-    def resolve(*args):
+    def resolve(*args, **kwargs):
         try:
             started.set()
             assert release.wait(3)
@@ -292,6 +293,7 @@ def test_public_dns_preparation_does_not_block_cancellation(monkeypatch, stop):
             finished.set()
 
     monkeypatch.setattr(chat, "_PUBLIC_MODE", True)
+    monkeypatch.setattr(chat, "_check_base_url", _REAL_CHECK_BASE_URL)
     monkeypatch.setattr(chat.socket, "getaddrinfo", resolve)
     monkeypatch.setattr(chat.httpx, "AsyncClient",
                         lambda **kw: pytest.fail("cancelled preparation must not open a client"))
@@ -355,7 +357,7 @@ def test_real_async_sse_failure_is_safe_and_never_success(monkeypatch, tail):
 
     real_client = httpx.AsyncClient
     transport = httpx.MockTransport(lambda request: httpx.Response(200, stream=Body()))
-    monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: real_client(transport=transport, **kw))
+    monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: real_client(**{**kw, "transport": transport}))
     response = post()
     result = events(response)
     assert [event["type"] for event in result] == ["lead_context", "delta", "error"]
@@ -386,7 +388,7 @@ def test_async_body_read_and_awaitable_close_finish_on_cancellation(monkeypatch,
 
         real_client = httpx.AsyncClient
         transport = httpx.MockTransport(lambda req: httpx.Response(200, stream=Body()))
-        monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: real_client(transport=transport, **kw))
+        monkeypatch.setattr(chat.httpx, "AsyncClient", lambda **kw: real_client(**{**kw, "transport": transport}))
         body_sent = False
         sent = []
 

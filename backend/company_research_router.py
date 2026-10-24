@@ -18,6 +18,7 @@ class CaptureIn(SubjectIn):
     as_of: str | None = Field(default=None, pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 
 class ModelIn(BaseModel):
+    revision: str | None = None
     model_config = ConfigDict(extra="forbid")
     provider: str = ""
     model: str = Field(min_length=1, max_length=200)

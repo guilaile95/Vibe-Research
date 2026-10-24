@@ -79,7 +79,7 @@ test("portfolioAdvice body only user_request + llm", async t => {
     assert.deepEqual(Object.keys(body).sort(), ["llm", "user_request"]);
     assert.equal(body.user_request, null);
     assert.equal(body.llm.provider, "cli-codex");
-    assert.equal(Object.hasOwn(body.llm, "revision"), false);
+    assert.equal(Object.hasOwn(body.llm, "revision"), true);
     assert.equal(body.holdings, undefined);
     assert.equal(body.context, undefined);
     assert.equal(body.messages, undefined);

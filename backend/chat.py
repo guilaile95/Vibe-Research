@@ -25,6 +25,9 @@ import httpx
 import requests
 
 import agent_runtime
+import ai_credential_store
+import model_transport
+from ai_providers import provider_kind, execution_identity
 import daily_review
 import daily_review_ai_prompt
 import daily_review_context
@@ -69,10 +72,11 @@ class ModelTaskBudget:
     API tokens are a per-request provider parameter, not an observed bill. CLI
     counts runtime invocations and local output only, not hosted model calls.
     """
-    def __init__(self, *, timeout: float, max_calls: int, max_tokens: int, max_chars: int):
+    def __init__(self, *, timeout: float, max_calls: int, max_tokens: int, max_chars: int, max_tools: int = 20):
         self.deadline = time.monotonic() + timeout
         self.max_calls, self.max_tokens, self.max_chars = max_calls, max_tokens, max_chars
-        self.calls = self.output_chars = 0
+        self.calls = self.output_chars = self.tools = 0
+        self.max_tools = max_tools
         self._failure = None
         self._lock = threading.Lock()
 
@@ -93,6 +97,14 @@ class ModelTaskBudget:
                 self._failure = "模型调用次数已达任务上限，任务已停止"
                 raise ModelTaskBudgetError(self._failure)
             self.calls += 1
+
+    def reserve_tool(self):
+        with self._lock:
+            self._check_locked()
+            if self.tools >= self.max_tools:
+                self._failure = "模型工具调用次数已达任务上限，任务已停止"
+                raise ModelTaskBudgetError(self._failure)
+            self.tools += 1
 
     def consume(self, text):
         with self._lock:
@@ -319,18 +331,7 @@ def _tool_has_limitations(value):
     return isinstance(value, list) and any(_tool_has_limitations(item) for item in value)
 
 
-def _safe_tool_data(value):
-    """Keep factual payloads, but never let provider exception bodies reach the model."""
-    if isinstance(value, dict):
-        return {
-            key: (_TOOL_ERROR if item else item)
-            if key in {"error", "err", "errors", "fetch_error"}
-            else _safe_tool_data(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_safe_tool_data(item) for item in value]
-    return value
+from safe_outputs import safe_tool_data as _safe_tool_data
 
 
 def _compact_tool_data(value, item_limit, text_limit):
@@ -462,26 +463,26 @@ def _ip_blocked(host: str) -> bool:
     return False
 
 
-def _check_base_url(url: str) -> None:
-    """挡住把用户自带 baseURL 指向云元数据 / 内网的 SSRF。
-    本地单用户（未设 VR_API_KEY）放行 127.0.0.1 等本机地址（方便接本机 Ollama / 网关），只挡 169.254 元数据；
-    公网部署（设了 VR_API_KEY）额外禁内网，并解析域名核对，防 DNS 指向内网。"""
-    p = urlparse(url or "")
-    if p.scheme not in ("http", "https"):
-        raise RuntimeError("Base URL 必须以 http:// 或 https:// 开头")
-    host = p.hostname or ""
-    if not host:
-        raise RuntimeError("Base URL 缺少主机名")
-    if _ip_blocked(host):
-        raise RuntimeError("Base URL 指向了不允许的地址（云元数据 / 内网）")
-    if _PUBLIC_MODE:  # 公网姿态：域名也解析核对，防 DNS rebinding 指向内网
-        try:
-            infos = socket.getaddrinfo(host, None)
-        except socket.gaierror as e:
-            raise RuntimeError("Base URL 域名无法解析") from e
-        for info in infos:
-            if _ip_blocked(info[4][0]):
-                raise RuntimeError("Base URL 解析到了不允许的内网地址")
+def _check_base_url(url: str):
+    try:
+        return model_transport.bind_endpoint(url, public_mode=_PUBLIC_MODE)
+    except model_transport.EndpointError as exc:
+        raise ModelTransportError(str(exc)) from None
+
+
+_DRAFT_CONNECTION_PROBE = object()
+
+
+def _dispatch_config(cfg):
+    provider_kind(cfg.get("provider", ""))
+    # Only the explicit, bounded draft connection-test route may use unsaved
+    # settings. This internal flag is never accepted by request schemas.
+    if cfg.get("_draft_connection_probe") is _DRAFT_CONNECTION_PROBE:
+        return cfg
+    try:
+        return ai_credential_store.dispatch_config(cfg)
+    except ai_credential_store.CredentialStoreError:
+        raise ModelTransportError("AI 配置已变化或尚未同步，请重新保存") from None
 
 
 def _reject_model_redirect(response, *args, **kwargs):
@@ -499,7 +500,8 @@ def _reject_model_redirect(response, *args, **kwargs):
 
 
 def _call_llm(cfg: dict, messages: list, use_tools: bool) -> dict:
-    _check_base_url(cfg.get("baseURL", ""))
+    cfg = _dispatch_config(cfg)
+    endpoint = _check_base_url(cfg.get("baseURL", ""))
     base = cfg["baseURL"].rstrip("/")
     if not base.endswith(("/v1", "/v3", "/api/v3", "/v4")):
         # 多数 OpenAI 兼容端点需要 /v1；已带版本段则不动。
@@ -508,8 +510,12 @@ def _call_llm(cfg: dict, messages: list, use_tools: bool) -> dict:
     if use_tools:
         payload["tools"] = TOOLS
         payload["tool_choice"] = "auto"
-    r = requests.post(
-        f"{base}/chat/completions",
+    _dispatch_config(cfg)
+    budget = cfg.get("_task_budget") or ModelTaskBudget(timeout=90, max_calls=1, max_tokens=4000, max_chars=48000)
+    budget.reserve_dispatch()
+    payload["max_tokens"] = budget.max_tokens
+    r = model_transport.post(
+        f"{base}/chat/completions", endpoint=endpoint,
         headers=_request_headers(cfg),
         json=payload,
         timeout=90,
@@ -532,37 +538,13 @@ def run_chat(cfg: dict, user_messages: list, context: str = "") -> dict:
     user_messages: [{role, content}, ...]
     返回: {content, trace:[{tool,args}], rounds}
     """
-    messages = [{"role": "system", "content": SYSTEM_PROMPT.format(context=context or "（无）")}]
-    messages.extend(user_messages)
-    trace: list[dict] = []
-
-    for rnd in range(1, MAX_ROUNDS + 1):
-        data = _call_llm(cfg, messages, use_tools=True)
-        choice = data["choices"][0]["message"]
-        messages.append(choice)
-        tool_calls = choice.get("tool_calls") or []
-        if not tool_calls:
-            return {"content": choice.get("content") or "", "trace": trace, "rounds": rnd}
-
-        for tc in tool_calls:
-            fn = tc["function"]
-            name = fn["name"]
-            try:
-                args = json.loads(fn.get("arguments") or "{}")
-            except json.JSONDecodeError:
-                args = {}
-            result = _exec_tool(name, args)
-            content, status, truncated = _serialize_tool_result(result)
-            trace.append({"tool": name, "args": args, "status": status, "truncated": truncated})
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.get("id", ""),
-                "content": content,
-            })
-
-    # 超过最大轮数，最后再要一次不带工具的收尾回答
-    data = _call_llm(cfg, messages, use_tools=False)
-    return {"content": data["choices"][0]["message"].get("content") or "", "trace": trace, "rounds": MAX_ROUNDS}
+    content, trace, rounds = [], [], 0
+    for event in run_chat_stream(cfg, user_messages, context):
+        if event.get("type") == "delta":
+            content.append(event.get("text") or "")
+        elif event.get("type") == "done":
+            trace, rounds = event.get("trace", []), event.get("rounds", 0)
+    return {"content": "".join(content), "trace": trace, "rounds": rounds}
 
 
 # ---------------------------------------------------------------------------
@@ -578,16 +560,17 @@ def _resolve_base(cfg: dict) -> str:
 
 def _stream_request(cfg: dict, messages: list, use_tools: bool) -> dict:
     """Share URL, payload and provider headers across both streaming transports."""
-    _check_base_url(cfg.get("baseURL", ""))
+    endpoint = _check_base_url(cfg.get("baseURL", ""))
     payload = {"model": cfg["model"], "messages": messages, "temperature": 0.3, "stream": True}
     if use_tools:
         payload["tools"] = TOOLS
         payload["tool_choice"] = "auto"
     return {"url": f"{_resolve_base(cfg)}/chat/completions",
-            "headers": _request_headers(cfg), "json": payload}
+            "headers": _request_headers(cfg), "json": payload, "endpoint": endpoint}
 
 
 def _call_llm_stream(cfg: dict, messages: list, use_tools: bool):
+    cfg = _dispatch_config(cfg)
     request = _stream_request(cfg, messages, use_tools)
     _check_active(cfg)
     budget = cfg.get("_task_budget")
@@ -599,7 +582,8 @@ def _call_llm_stream(cfg: dict, messages: list, use_tools: bool):
         request_timeout = (min(_CONNECT_TIMEOUT, remaining), min(_READ_TIMEOUT, remaining))
     _check_active(cfg)
     try:
-        r = requests.post(
+        _dispatch_config(cfg)  # Recheck after DNS preparation, immediately before dispatch.
+        r = model_transport.post(
             request.pop("url"), **request,
             timeout=request_timeout, stream=True,
             allow_redirects=False,
@@ -740,7 +724,11 @@ async def stream_api_messages(cfg: dict, messages: list, *, limits: ApiStreamLim
     shared turn deadline, without leaving a cancel scope open across yields:
     the response may be closed from the ASGI cleanup task after send() fails.
     """
-    cfg = {**cfg, "_deadline": time.monotonic() + (limits.timeout if limits else _TURN_TIMEOUT),
+    budget = cfg.get("_task_budget") or ModelTaskBudget(
+        timeout=limits.timeout if limits else min(180, _TURN_TIMEOUT), max_calls=1,
+        max_tokens=limits.max_tokens if limits else 4000,
+        max_chars=limits.text_chars if limits else 48000)
+    cfg = {**cfg, "_task_budget": budget, "_deadline": budget.deadline,
            "_session": cfg.get("_session") or uuid.uuid4().hex}
     _check_active(cfg)
     client = None
@@ -748,19 +736,59 @@ async def stream_api_messages(cfg: dict, messages: list, *, limits: ApiStreamLim
     answered = False
     text_chars = 0
     received_line = False
+    slots = _TASK_STREAM_SLOTS
+    admitted = slots.acquire(blocking=False)
+    if not admitted:
+        raise ModelTransportError("模型任务仍在运行或清理，请稍后重试")
+    preparation = {"running": False, "consumer_done": False, "released": False}
+    preparation_lock = threading.Lock()
+    def release_admission():
+        with preparation_lock:
+            if preparation["consumer_done"] and not preparation["running"] and not preparation["released"]:
+                preparation["released"] = True
+                slots.release()
+    prepared = {}
+    preparation_done = threading.Event()
+    def prepare():
+        try:
+            prepared["request"] = _stream_request(cfg, messages, False)
+        except BaseException as exc:
+            prepared["error"] = exc
+        finally:
+            with preparation_lock:
+                preparation["running"] = False
+            preparation_done.set()
+            release_admission()
     try:
+        _dispatch_config(cfg)
         # Public-mode endpoint validation resolves DNS synchronously. It must not
         # block ASGI disconnect handling, and cancelled preparation must never
         # proceed to open a model connection when the worker eventually returns.
         with anyio.fail_after(cfg["_deadline"] - time.monotonic()):
-            request = await anyio.to_thread.run_sync(
-                _stream_request, cfg, messages, False, abandon_on_cancel=True,
-            )
+            with preparation_lock:
+                preparation["running"] = True
+            try:
+                threading.Thread(target=prepare, daemon=True, name="vibe-model-dns").start()
+            except BaseException:
+                with preparation_lock:
+                    preparation["running"] = False
+                raise
+            while not preparation_done.is_set():
+                await anyio.sleep(0.01)
+            if "error" in prepared:
+                raise prepared["error"]
+            request = prepared["request"]
         _check_active(cfg)
         if limits:
             request["json"]["max_tokens"] = limits.max_tokens
             request["headers"]["Accept-Encoding"] = "identity"
-        client = httpx.AsyncClient(timeout=httpx.Timeout(_READ_TIMEOUT, connect=_CONNECT_TIMEOUT))
+        _dispatch_config(cfg)
+        budget.reserve_dispatch()
+        request["json"]["max_tokens"] = budget.max_tokens
+        endpoint = request.pop("endpoint")
+        request["url"], request["headers"] = model_transport.proxy_request(request["url"], request["headers"], endpoint)
+        client = httpx.AsyncClient(timeout=httpx.Timeout(_READ_TIMEOUT, connect=_CONNECT_TIMEOUT),
+                                   transport=model_transport.async_transport(endpoint), trust_env=False)
         with anyio.fail_after(cfg["_deadline"] - time.monotonic()):
             response = await client.send(client.build_request("POST", **request), stream=True)
         _check_active(cfg)
@@ -782,6 +810,7 @@ async def stream_api_messages(cfg: dict, messages: list, *, limits: ApiStreamLim
             if done:
                 break
             if delta is not None and delta.get("content"):
+                budget.consume(delta["content"])
                 text_chars += len(delta["content"])
                 if limits and text_chars > limits.text_chars:
                     raise ModelTransportError("模型响应超出测试限制")
@@ -804,9 +833,14 @@ async def stream_api_messages(cfg: dict, messages: list, *, limits: ApiStreamLim
                     with anyio.move_on_after(limits.cleanup_grace if limits else float("inf")):
                         await response.aclose()
             finally:
-                if client is not None:
-                    with anyio.move_on_after(limits.cleanup_grace if limits else float("inf")):
-                        await client.aclose()
+                try:
+                    if client is not None:
+                        with anyio.move_on_after(limits.cleanup_grace if limits else float("inf")):
+                            await client.aclose()
+                finally:
+                    with preparation_lock:
+                        preparation["consumer_done"] = True
+                    release_admission()
     _check_active(cfg)
     yield {"type": "done", "trace": [], "rounds": 1}
 
@@ -840,10 +874,9 @@ def prepare_daily_review_messages(
 
 
 def stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
-    if cfg.get("_task_budget") is not None:
-        yield from _bounded_task_events(cfg, messages, use_tools)
-    else:
-        yield from _stream_messages(cfg, messages, use_tools=use_tools)
+    cfg = {**cfg, "_task_budget": cfg.get("_task_budget") or ModelTaskBudget(
+        timeout=min(180, _TURN_TIMEOUT), max_calls=MAX_ROUNDS + 1 if use_tools else 2, max_tokens=4000, max_chars=48000)}
+    yield from _bounded_task_events(cfg, messages, use_tools)
 
 
 def _stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
@@ -871,6 +904,7 @@ def _stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
         message = "\n\n".join(instructions) or "请完成当前 Vibe AI 任务。"
         message += "\n\n请仅基于当前任务输入完成本轮，不执行任何正式写入。"
         context = "\n\n".join(context_parts) or "（无任务输入）"
+        _dispatch_config(cfg)
         if budget is not None:
             budget.reserve_dispatch()
         events = agent_runtime.stream_chat(
@@ -878,6 +912,7 @@ def _stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
             message=message,
             context=context,
             history=[],
+            config=cfg,
             cancel_event=cfg.get("_cancel_event") or threading.Event(),
             **({"owned_cleanup": True} if budget is not None else {}),
         )
@@ -972,6 +1007,8 @@ def _stream_messages(cfg: dict, messages: list, *, use_tools: bool = False):
             call_id = f"tool-{rnd}-{i}"
             yield {"type": "tool", "call_id": call_id, "tool": a["name"], "args": args}
             _check_active(cfg)
+            if budget is not None:
+                budget.reserve_tool()
             result = _exec_tool(a["name"], args)
             content, status, truncated = _serialize_tool_result(result)
             _check_active(cfg)

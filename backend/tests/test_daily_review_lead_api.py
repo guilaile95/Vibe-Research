@@ -14,7 +14,7 @@ import chat as chat_layer
 from test_daily_review_lead import display_payload
 
 URL = "/api/daily-review/lead-analysis"
-LLM = {"provider": "api-compatible", "model": "test-model",
+LLM = {"provider": "openai-compatible", "model": "test-model",
        "baseURL": "https://example.test/v1", "apiKey": "test-key"}
 client = TestClient(app_module.app)
 
@@ -22,6 +22,15 @@ client = TestClient(app_module.app)
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch, tmp_path):
     monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
+    # This suite isolates route/stream lifetime; strict admission has dedicated
+    # real credential-store tests. No external DNS or model is contacted.
+    monkeypatch.setattr(chat_layer, "_dispatch_config", lambda cfg: cfg)
+    from urllib.parse import urlsplit
+    def bound(url):
+        parsed = urlsplit(url)
+        return chat_layer.model_transport.BoundEndpoint(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80), "127.0.0.1", parsed.scheme)
+    monkeypatch.setattr(chat_layer, "_check_base_url", bound)
+    monkeypatch.setattr(chat_layer.model_transport.requests.utils, "get_environ_proxies", lambda *_: {})
     monkeypatch.setattr(requests.sessions.Session, "request", MagicMock(side_effect=AssertionError("network forbidden")))
     display = MagicMock(return_value=display_payload())
     monkeypatch.setattr(app_module.daily_review, "get_daily_review_for_display", display)
@@ -203,10 +212,10 @@ def test_done_is_yielded_only_after_iterator_exhaustion(monkeypatch):
     asyncio.run(exercise())
 
 
-@pytest.mark.parametrize("provider", ["api-compatible", "cli-codex"])
+@pytest.mark.parametrize("provider", ["openai-compatible", "cli-codex"])
 def test_real_stream_messages_routes_api_and_codex_without_tools(monkeypatch, isolated, provider):
     calls = []
-    if provider == "api-compatible":
+    if provider == "openai-compatible":
         def api(request):
             payload = json.loads(request.content)
             assert "tools" not in payload and "tool_choice" not in payload
@@ -220,7 +229,7 @@ def test_real_stream_messages_routes_api_and_codex_without_tools(monkeypatch, is
                 'data: [DONE]\n\n').encode())
         real_client = httpx.AsyncClient
         monkeypatch.setattr(chat_layer.httpx, "AsyncClient",
-                            lambda **kw: real_client(transport=httpx.MockTransport(api), **kw))
+                            lambda **kw: real_client(**{**kw, "transport": httpx.MockTransport(api)}))
     else:
         def codex(**kwargs):
             calls.append(kwargs)
