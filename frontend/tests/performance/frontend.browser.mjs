@@ -13,6 +13,7 @@ import ts from 'typescript';
 import { ancillaryReply, ANCILLARY_CLOCK } from '../e2e/final-families.fixture.mjs';
 import { researchFixture } from './research-fixture.mjs';
 import { measureBuild } from './build-assets.mjs';
+import { installDateOnlyClock, observeBrowser, assertNativeTelemetry } from './browser-observation.mjs';
 const args = Object.fromEntries(process.argv.slice(2).reduce((pairs,arg,i,all)=>arg.startsWith('--')?[...pairs,[arg.slice(2),all[i+1]]]:pairs,[]));
 assert.ok(args['baseline-dist'] && args['candidate-dist'] && args.output, 'Pass --baseline-dist --candidate-dist --output');
 const output=resolve(args.output);mkdirSync(output,{recursive:true});
@@ -63,11 +64,6 @@ async function serverFor(label,dist) {
  });
  await new Promise(r=>server.listen(0,'127.0.0.1',r));return {label,root,server,origin:`http://127.0.0.1:${server.address().port}`};
 }
-function observe(){
- window.__perf={pending:0,started:0,longTasks:[]};
- try{new PerformanceObserver(list=>window.__perf.longTasks.push(...list.getEntries().map(e=>({startTime:e.startTime,duration:e.duration})))).observe({type:'longtask',buffered:true});}catch{}
- const fetch=window.fetch.bind(window);window.fetch=async(...args)=>{window.__perf.pending++;window.__perf.started++;try{const response=await fetch(...args);for(const method of ['json','text','arrayBuffer','blob']){const read=response[method].bind(response);response[method]=async(...values)=>{window.__perf.pending++;try{return await read(...values);}finally{window.__perf.pending--;}};}return response;}finally{window.__perf.pending--;}};
-}
 async function settle(page){for(let attempt=0;attempt<30;attempt++){await page.waitForFunction(()=>window.__perf?.pending===0);const started=await page.evaluate(()=>window.__perf.started);await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));if(await page.evaluate(started=>window.__perf.pending===0&&window.__perf.started===started,started))return;}throw Error('UI did not settle within bounded frame checks');}
 function quantile(values,p){return [...values].sort((a,b)=>a-b)[Math.ceil(values.length*p)-1];}
 const servers=await Promise.all([serverFor('baseline',args['baseline-dist']),serverFor('candidate',args['candidate-dist'])]);let browser;
@@ -76,26 +72,26 @@ try{
  for(let trial=-warmup;trial<samples;trial++)for(const server of trial%2===0?servers:[...servers].reverse()){
   sequence.push({label:server.label,trial});
   const context=await browser.newContext({baseURL:server.origin,viewport:{width:1440,height:960},serviceWorkers:'block'});
-  await context.addInitScript(observe);const page=await context.newPage();page.setDefaultTimeout(15000);
-  // Freeze Date, not performance clocks, to keep calendar-dependent requests identical.
-  await page.clock.setFixedTime(new Date(ANCILLARY_CLOCK));
+  await context.addInitScript(installDateOnlyClock,Date.parse(ANCILLARY_CLOCK));
+  await context.addInitScript(observeBrowser);const page=await context.newPage();page.setDefaultTimeout(15000);
   const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('request',req=>{if(new URL(req.url()).origin!==server.origin)external.push(req.url());});
   const cdp=await context.newCDPSession(page);await cdp.send('Performance.enable');
-  const measure=async(name,action,ready)=>{
+  const measure=async(name,markerKey,action,ready)=>{
    const before=await page.evaluate(()=>({start:performance.now(),resourceCount:performance.getEntriesByType('resource').length,longCount:window.__perf?.longTasks.length||0})).catch(()=>({start:0,resourceCount:0,longCount:0}));
-   const start=performance.now();await action();await ready();const firstUsefulMs=performance.now()-start;await settle(page);const uiSettledMs=performance.now()-start;
-   const details=await page.evaluate(({before,name})=>{const nav=name.includes('reload')||name.includes('cold')||name.includes('document');const resources=performance.getEntriesByType('resource').slice(nav?0:before.resourceCount);const tasks=(window.__perf?.longTasks||[]).slice(nav?0:before.longCount);return {requests:resources.map(r=>({path:new URL(r.name).pathname+new URL(r.name).search,transferBytes:r.transferSize,decodedBytes:r.decodedBodySize,durationMs:r.duration})),longTaskCount:tasks.length,longTaskMs:tasks.reduce((s,t)=>s+t.duration,0),navigationType:performance.getEntriesByType('navigation')[0]?.type,paints:performance.getEntriesByType('paint').map(e=>({name:e.name,startTime:e.startTime})),navigation:performance.getEntriesByType('navigation')[0]?.toJSON()};},{before,name});
+   const start=performance.now();await action();await ready();const driverObservedFirstUsefulMs=performance.now()-start;await settle(page);await page.waitForFunction(key=>Number.isFinite(window.__perf.markers[key]?.uiSettledAt),markerKey);const driverObservedUiSettledMs=performance.now()-start;
+   const details=await page.evaluate(({before,name,markerKey})=>{const nav=name.includes('reload')||name.includes('cold')||name.includes('document');const resources=performance.getEntriesByType('resource').slice(nav?0:before.resourceCount);const tasks=(window.__perf?.longTasks||[]).slice(nav?0:before.longCount);const marker=window.__perf.markers[markerKey],offset=nav?0:before.start;return {timeOrigin:performance.timeOrigin,markerOffsetMs:offset,firstUsefulMs:marker.at-offset,uiSettledMs:marker.uiSettledAt-offset,fetchStarted:window.__perf.started,requests:resources.map(r=>({path:new URL(r.name).pathname+new URL(r.name).search,transferBytes:r.transferSize,decodedBytes:r.decodedBodySize,durationMs:r.duration})),longTaskCount:tasks.length,longTaskMs:tasks.reduce((s,t)=>s+t.duration,0),navigationType:performance.getEntriesByType('navigation')[0]?.type,paints:performance.getEntriesByType('paint').map(e=>({name:e.name,startTime:e.startTime})),navigation:performance.getEntriesByType('navigation')[0]?.toJSON()};},{before,name,markerKey});
    const metrics=Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(m=>[m.name,m.value]));
-   if(trial>=0)rows.push({label:server.label,trial,name,firstUsefulMs,uiSettledMs,...details,jsHeapUsedBytes:metrics.JSHeapUsedSize,cumulativeTaskDurationSeconds:metrics.TaskDuration});
+   assertNativeTelemetry({name,...details});
+   if(trial>=0)rows.push({label:server.label,trial,name,driverObservedFirstUsefulMs,driverObservedUiSettledMs,...details,jsHeapUsedBytes:metrics.JSHeapUsedSize,cumulativeTaskDurationSeconds:metrics.TaskDuration});
    if(trial===0&&['daily-cold','stock-document','pcb-content-route'].includes(name))await page.screenshot({path:join(output,`${server.label}-${name}.png`)});
   };
-  await measure('daily-cold',()=>page.goto('/daily-review'),()=>page.getByText('合成基准指数',{exact:true}).waitFor());
-  await measure('daily-warm-reload',()=>page.reload(),()=>page.getByText('合成基准指数',{exact:true}).waitFor());
-  await measure('stock-document',()=>page.goto('/stock-data?code=600001'),()=>page.getByRole('heading',{name:'合成证券 600001',exact:true}).waitFor());
-  await measure('stock-events-tab',()=>page.getByTestId('stock-data-tab-events').click(),()=>page.getByText('合成主资讯 600001',{exact:true}).waitFor());
-  await measure('stock-switch-security',async()=>{await page.getByPlaceholder(/A 股 6 位代码/).fill('600002');await page.getByPlaceholder(/A 股 6 位代码/).press('Enter');},()=>page.getByRole('heading',{name:'合成证券 600002',exact:true}).waitFor());
-  await measure('sector-document',()=>page.goto('/sectors'),()=>page.getByRole('heading',{name:'板块中心',exact:true}).waitFor());
-  await measure('pcb-content-route',()=>page.locator('a[href="/sectors/pcb/overview"]').first().click(),()=>page.getByText(/^AI 服务器用 PCB 可理解为 AI 机柜内的电气互连骨架/).waitFor());
+  await measure('daily-cold','daily',()=>page.goto('/daily-review'),()=>page.getByText('合成基准指数',{exact:true}).waitFor());
+  await measure('daily-warm-reload','daily',()=>page.reload(),()=>page.getByText('合成基准指数',{exact:true}).waitFor());
+  await measure('stock-document','stock-600001',()=>page.goto('/stock-data?code=600001'),()=>page.getByRole('heading',{name:'合成证券 600001',exact:true}).waitFor());
+  await measure('stock-events-tab','news-600001',()=>page.getByTestId('stock-data-tab-events').click(),()=>page.getByText('合成主资讯 600001',{exact:true}).waitFor());
+  await measure('stock-switch-security','stock-600002',async()=>{await page.getByPlaceholder(/A 股 6 位代码/).fill('600002');await page.getByPlaceholder(/A 股 6 位代码/).press('Enter');},()=>page.getByRole('heading',{name:'合成证券 600002',exact:true}).waitFor());
+  await measure('sector-document','sectors',()=>page.goto('/sectors'),()=>page.getByRole('heading',{name:'板块中心',exact:true}).waitFor());
+  await measure('pcb-content-route','pcb',()=>page.locator('a[href="/sectors/pcb/overview"]').first().click(),()=>page.getByText(/^AI 服务器用 PCB 可理解为 AI 机柜内的电气互连骨架/).waitFor());
   assert.deepEqual(errors,[],`${server.label} page errors`);await context.close();
  }
  // Native IndexedDB measurement: seed raw synthetic records outside measured region, then run real store validation.
@@ -130,6 +126,6 @@ try{
  const buildIdentities=Object.fromEntries(servers.map(s=>[s.label,JSON.parse(readFileSync(join(s.root,'vibe-build.json'),'utf8'))]));
  const builds=Object.fromEntries(servers.map(s=>[s.label,measureBuild(s.root)]));
  assert.equal(builds.baseline.eagerPcbBody,true,'Baseline must reproduce eager content');assert.equal(builds.candidate.eagerPcbBody,false,'Candidate must defer unrelated full sector bodies');
- const report={buildIdentities,builds,sequence,schema:'frontend-performance.v1',node:process.version,browser:browser.version(),samples,warmup,scope:'Production assets over uncompressed loopback; 20 ms synthetic API wait; cold browser context, warm reload, OS cache not reset; external fonts removed; no live provider/model/user data; UI-settled proxy = ready marker + fetch/body-read idle and unchanged request count across two animation frames; not full market-data completion',rows,summary,storage,unavailableSources:[...new Set(sourceErrors.map(r=>r.path))],writes,external};
+ const report={buildIdentities,builds,sequence,schema:'frontend-performance.v1',node:process.version,browser:browser.version(),samples,warmup,timingAuthority:'Native performance.now + MutationObserver visible-geometry DOM-ready proxies (not paint or interactivity); document offsets from navigation origin, SPA offsets from pre-action page timestamp; driver-observed polling durations retained separately; Date-only wall clock override',scope:'Production assets over uncompressed loopback; 20 ms synthetic API wait; cold browser context, warm reload, OS cache not reset; external fonts removed; no live provider/model/user data; UI-settled proxy = ready marker + fetch/body-read idle and unchanged request count across two animation frames; not full market-data completion',rows,summary,storage,unavailableSources:[...new Set(sourceErrors.map(r=>r.path))],writes,external};
  writeFileSync(join(output,'results.json'),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify({summary,storage},null,2));
 }catch(error){writeFileSync(join(output,'failure.json'),JSON.stringify({message:error.message,stack:error.stack,rows,sourceErrors,writes,external},null,2));throw error;}finally{await browser?.close();await Promise.all(servers.map(s=>new Promise(r=>s.server.close(r))));}

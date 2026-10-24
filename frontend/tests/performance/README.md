@@ -19,11 +19,19 @@ CPU/network settings apply. Font stylesheet links are removed identically and
 external requests or non-GET API calls fail acceptance. Synthetic API replies use
 a fixed 20 ms wait. Unknown sources return explicit 503, not fabricated success.
 
-The ready markers require a rendered synthetic index, named security, actual news
+The ready markers require a synthetic index, named security, actual news
 body, and complete checked-in PCB research paragraph. All sources need not be
 available: this is deliberately a partial-market fixture. `uiSettledMs` is a UI-settle proxy: the marker plus current fetch/body-read
 idle and unchanged request count over two animation frames, not full market
 coverage or proof that future asynchronous work cannot start. Requests measure resource entries (excluding the top-level document).
+First useful times are native performance.now timestamps recorded by a MutationObserver
+when an exact marker has visible nonzero geometry. They are DOM-ready proxies, not
+paint/interactivity claims. Native FCP is recorded separately. Document timings
+start at navigation origin; SPA timings start at the pre-action page timestamp.
+Driver-observed action/locator waits are retained separately and are not used as
+content-ready times. Only Date is frozen; native timers, performance APIs and RAF
+are preserved. Missing resource/navigation/FCP telemetry fails the benchmark.
+
 The report includes raw samples, P50/P95, JS heap, cumulative task duration,
 long tasks, response bytes, unavailable sources, production build identities and
 static bundle census. `cumulativeTaskDurationSeconds` is cumulative CDP time,
