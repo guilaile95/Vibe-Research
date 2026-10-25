@@ -277,3 +277,117 @@ def test_campaign_and_frozen_database_alias_fails_closed_before_reservation(tmp_
         runtime.preview_decision_proposal(CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF)
     assert campaign_service.get_campaign(CAMPAIGN_ID) == before
     assert campaign_service.list_campaign_transitions(CAMPAIGN_ID) == []
+
+
+def _concurrent_decision_child(campaign_path, frozen_path, preview, ready, gate, result_path):
+    import json
+    import os
+    from pathlib import Path
+    os.environ['VIBE_RESEARCH_CAMPAIGN_DB'] = campaign_path
+    frozen_decision_service._resolve_db_path = lambda _path: Path(frozen_path)
+    frozen_decision_service._utc_now_iso = lambda: AS_OF
+    runtime.utc_now_iso = lambda: AS_OF
+    ports, _ = _ports(_thesis())
+    def gated_write(payload, **kwargs):
+        Path(ready).write_text('ready', encoding='utf-8')
+        deadline = __import__('time').monotonic() + 5
+        while not Path(gate).exists():
+            if __import__('time').monotonic() >= deadline:
+                raise RuntimeError('test gate timeout')
+            __import__('time').sleep(.005)
+        return runtime._production_freeze_writer_with_pre_write_validation(payload, **kwargs)
+    ports = replace(ports, campaign_reader=campaign_service.get_campaign,
+                    frozen_reader=frozen_decision_service.list_decisions,
+                    decision_reader=frozen_decision_service.get_decision,
+                    freeze_writer_with_pre_write_validation=gated_write)
+    try:
+        value = _commit(ports, preview)
+        result = {'status': 'ok', 'id': value['committed']['decision_id']}
+    except runtime.ProposalStaleError:
+        result = {'status': 'retry'}
+    except BaseException as error:
+        result = {'status': 'error', 'type': type(error).__name__}
+    Path(result_path).write_text(json.dumps(result), encoding='utf-8')
+
+
+def test_two_processes_same_proposal_append_once_and_loser_can_exact_replay(tmp_path, monkeypatch):
+    import json
+    import multiprocessing
+    import time
+    ports = _real_campaign_ports(tmp_path, monkeypatch)
+    preview = runtime.preview_decision_proposal(CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF)
+    gate = tmp_path / 'go'
+    children = []
+    for index in range(2):
+        children.append(multiprocessing.get_context('spawn').Process(
+            target=_concurrent_decision_child,
+            args=(str(tmp_path / 'campaigns.sqlite3'), str(tmp_path / 'frozen.sqlite3'),
+                  preview, str(tmp_path / f'ready-{index}'), str(gate), str(tmp_path / f'result-{index}')),
+        ))
+    try:
+        for child in children:
+            child.start()
+        deadline = time.monotonic() + 5
+        while not all((tmp_path / f'ready-{i}').exists() for i in range(2)):
+            assert time.monotonic() < deadline
+            time.sleep(.01)
+        gate.write_text('go', encoding='utf-8')
+        for child in children:
+            child.join(5)
+            assert not child.is_alive() and child.exitcode == 0
+        results = [json.loads((tmp_path / f'result-{i}').read_text(encoding='utf-8')) for i in range(2)]
+        assert sorted(result['status'] for result in results) == ['ok', 'retry']
+        decisions = frozen_decision_service.list_decisions()
+        assert len(decisions) == 1
+        replay = _commit(ports, preview)
+        assert replay['idempotent'] is True
+        assert replay['committed'] == decisions[0]
+    finally:
+        gate.write_text('go', encoding='utf-8')
+        for child in children:
+            if child.is_alive():
+                child.kill()
+                child.join(2)
+            child.close()
+
+
+def test_postcommit_readback_failure_preserves_one_row_and_exact_replay(tmp_path, monkeypatch):
+    ports = _real_campaign_ports(tmp_path, monkeypatch)
+    preview = runtime.preview_decision_proposal(CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF)
+    original = frozen_decision_store._row_to_snapshot
+    monkeypatch.setattr(frozen_decision_store, '_row_to_snapshot',
+                        lambda *_args: (_ for _ in ()).throw(RuntimeError('after-commit fixture fault')))
+    with pytest.raises(RuntimeError, match='after-commit fixture fault'):
+        _commit(ports, preview)
+    monkeypatch.setattr(frozen_decision_store, '_row_to_snapshot', original)
+    records = frozen_decision_service.list_decisions()
+    assert len(records) == 1
+    campaign_service.transition_campaign(CAMPAIGN_ID, 'ACTIVE', 'CLOSED')
+    replay = _commit(ports, preview)
+    assert replay['idempotent'] is True
+    assert replay['committed'] == records[0]
+    assert len(frozen_decision_service.list_decisions()) == 1
+
+
+def test_busy_after_schema_check_is_mapped_and_releases_connection(tmp_path, monkeypatch):
+    import sqlite3
+    ports = _real_campaign_ports(tmp_path, monkeypatch)
+    preview = runtime.preview_decision_proposal(CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF)
+    connect = sqlite3.connect
+    blocker = connect(str(tmp_path / 'campaigns.sqlite3'), isolation_level=None)
+    original_open = campaign_store._open_write_connection
+    def block_after_schema_check():
+        connection = original_open()
+        connection.execute('PRAGMA busy_timeout = 30')
+        blocker.execute('BEGIN IMMEDIATE')
+        return connection
+    monkeypatch.setattr(campaign_store, '_open_write_connection', block_after_schema_check)
+    try:
+        with pytest.raises(runtime.DecisionCommitRuntimeError, match='could not be reserved'):
+            _commit(ports, preview)
+    finally:
+        blocker.rollback()
+        blocker.close()
+    assert frozen_decision_service.list_decisions() == []
+    monkeypatch.setattr(campaign_store, '_open_write_connection', original_open)
+    assert _commit(ports, preview)['idempotent'] is False

@@ -836,7 +836,6 @@ def list_campaigns(
     return [_record_from_row(row) for row in rows]
 
 
-
 @contextmanager
 def hold_campaign_state(campaign_id: str) -> Iterator[dict]:
     """Hold SQLite writer admission while another ledger records this state.
@@ -850,10 +849,13 @@ def hold_campaign_state(campaign_id: str) -> Iterator[dict]:
     cid = _validated_campaign_id(campaign_id)
     conn = _open_write_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
-            f"SELECT {_SELECT_COLUMNS} FROM campaigns WHERE campaign_id = ?", (cid,)
-        ).fetchone()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                f"SELECT {_SELECT_COLUMNS} FROM campaigns WHERE campaign_id = ?", (cid,)
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise CampaignStoreError("Campaign 状态暂时无法锁定") from exc
         if row is None:
             raise CampaignNotFoundError(f"campaign {cid} not found")
         yield _record_from_row(row)

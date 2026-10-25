@@ -701,6 +701,21 @@ def _production_freeze_writer_with_pre_write_validation(
     try:
         with campaign_store.hold_campaign_state(payload["campaign_id"]) as campaign:
             _require_campaign_accepts_new_decision(campaign)
+            markers = [ref for ref in payload.get("source_refs", [])
+                       if isinstance(ref, str) and re.fullmatch(
+                           re.escape(PROPOSAL_SOURCE_PREFIX) + r"[0-9a-f]{64}", ref)]
+            if len(markers) != 1:
+                raise FrozenDecisionIntegrityError("Frozen Decision proposal marker is invalid")
+            # Another backend process may have read the same empty ledger before
+            # this reservation. Do not append a second immutable proposal row.
+            current = frozen_decision_service.list_decisions(
+                campaign_id=campaign["campaign_id"], limit=10000, offset=0,
+            )
+            _index, existing = _find_unique_proposal_marker(current, markers[0])
+            if existing is not None:
+                raise ProposalStaleError(
+                    "proposal already committed concurrently; retry the exact request"
+                )
             return frozen_decision_service._freeze_decision(
                 payload,
                 pre_write_validator=pre_write_validator,

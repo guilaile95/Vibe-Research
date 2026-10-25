@@ -18,7 +18,12 @@ other Thesis/evidence/account authority races are not proved or fixed here.
 The production writer holds a Campaign SQLite `BEGIN IMMEDIATE` reservation
 from the final Campaign check until the actual Frozen store call returns after
 commit. A transition that wins first causes rejection; a Decision that wins
-first completes before the transition. The Campaign reservation does not write
+first completes before the transition. A final proposal-marker read under the same reservation prevents two processes
+which both observed an empty ledger from appending duplicate proposal records.
+The loser receives the existing stale/retry error; retrying its exact request
+returns the sole immutable row idempotently.
+
+The Campaign reservation does not write
 Campaign records and is always rolled back/released. This is not two-database
 atomic commit, data migration, or distributed transaction machinery.
 
@@ -44,7 +49,9 @@ or model pipeline. Database aliases remain unsupported and fail schema checks.
 - Separate spawned process unable to bypass the reservation.
 - Unrelated Campaign writer resumes after release, with no lost transition.
 - Busy timeout fails closed without a Frozen row (shortened SQLite timeout in test).
-- Downstream failure and a real SQLite INSERT abort leave no new records.
+- Pre-commit downstream failure and a real SQLite INSERT abort leave no new records.
+- Post-commit readback failure preserves the committed row; exact retry recovers it.
+- Two spawned backend processes racing the same proposal append exactly one row.
 - Existing immutable replay after Campaign close does not acquire new write admission.
 - Aliased incompatible database schemas reject without mutations.
 
