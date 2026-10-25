@@ -1,4 +1,5 @@
 """Offline checks for the opt-in live probe; never contact a provider."""
+import http.client
 import json
 import importlib.util
 import os
@@ -45,7 +46,37 @@ class ProbeDiagnosticsTests(unittest.TestCase):
         error = requests.ConnectionError('SECRET', dns)
         error.__cause__ = dns
         dns.__context__ = error
-        self.assertEqual(probe._error_types(error), ['ConnectionError', 'gaierror'])
+        self.assertEqual(probe._error_details(error)['error_chain_types'], ['ConnectionError', 'gaierror'])
+
+    def test_exception_categories_are_safe_observations_not_root_causes(self):
+        cases = [
+            (socket.gaierror(-2, 'SECRET-DNS'), 'dns', [-2]),
+            (requests.exceptions.ProxyError('SECRET-PROXY'), 'proxy', []),
+            (requests.exceptions.SSLError('SECRET-TLS'), 'tls', []),
+            (http.client.RemoteDisconnected('SECRET-REMOTE'), 'remote_disconnect', []),
+            (PermissionError(13, 'SECRET-PATH'), 'permission', [13]),
+            (requests.ConnectionError('SECRET-UNKNOWN'), 'unknown', []),
+        ]
+        for cause, category, errnos in cases:
+            with self.subTest(category=category):
+                wrapper = requests.ConnectionError('SECRET-URL')
+                wrapper.__cause__ = cause
+                details = probe._error_details(wrapper)
+                self.assertEqual(details['error_categories'], [category])
+                self.assertEqual(details['error_chain_errnos'], errnos)
+                self.assertNotIn('SECRET', json.dumps(details))
+
+    def test_exception_diagnostics_bound_cycles_depth_and_errno(self):
+        root = current = requests.ConnectionError('PRIVATE')
+        for _ in range(40):
+            cause = OSError(10**100, 'PRIVATE')
+            current.__cause__ = cause
+            current = cause
+        current.__cause__ = root
+        details = probe._error_details(root)
+        self.assertEqual(details['error_chain_errnos'], [])
+        self.assertEqual(details['error_categories'], ['unknown'])
+        self.assertNotIn('PRIVATE', json.dumps(details))
 
     def test_counts_keep_page_size_total_and_unique_coverage_separate(self):
         diagnostics = probe._PageDiagnostics()
@@ -103,7 +134,7 @@ class ProbeDiagnosticsTests(unittest.TestCase):
 
     def test_network_failure_event_keeps_page_but_never_exception_text(self):
         def fail(*args, **kwargs):
-            raise requests.ConnectionError('DO-NOT-LOG https://name:password@example.invalid/')
+            raise requests.ConnectionError('DO-NOT-LOG https://name:password@example.invalid/') from socket.gaierror(-2, 'PRIVATE-DNS')
         def child(*args):
             try:
                 requests.Session().send(request(13))
@@ -114,6 +145,9 @@ class ProbeDiagnosticsTests(unittest.TestCase):
         self.assertEqual(ended['page'], 13)
         self.assertEqual(ended['requested_page_size'], 500)
         self.assertEqual(ended['error_type'], 'ConnectionError')
+        self.assertEqual(ended['error_categories'], ['dns'])
+        self.assertEqual(ended['error_chain_errnos'], [-2])
+        self.assertNotIn('PRIVATE-DNS', json.dumps(events))
         self.assertNotIn('DO-NOT-LOG', json.dumps(events))
         self.assertNotIn('password', json.dumps(events))
 

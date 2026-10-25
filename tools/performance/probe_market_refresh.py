@@ -38,14 +38,14 @@ def _request_identity(request):
     return result
 
 
-def _error_types(exc):
-    """Bounded cause types only: distinguish DNS/TLS/proxy from generic failure."""
+def _error_details(exc):
+    """Bounded type/errno observations; never messages or asserted root causes."""
     allowed = {'ConnectionError', 'ConnectTimeout', 'ReadTimeout', 'Timeout',
                'SSLError', 'ProxyError', 'MaxRetryError', 'NewConnectionError',
                'NameResolutionError', 'gaierror', 'ConnectionRefusedError',
                'ConnectionResetError', 'TimeoutError', 'PermissionError',
                'RemoteDisconnected', 'ProtocolError', 'ChunkedEncodingError'}
-    pending, visited, names = [exc], set(), []
+    pending, visited, names, errnos = [exc], set(), [], []
     while pending and len(visited) < 16:
         current = pending.pop(0)
         if not isinstance(current, BaseException) or id(current) in visited:
@@ -54,9 +54,26 @@ def _error_types(exc):
         name = type(current).__name__
         if name in allowed and name not in names:
             names.append(name)
+        number = getattr(current, 'errno', None) if isinstance(current, OSError) else None
+        if type(number) is int and -65535 <= number <= 65535 and number not in errnos:
+            errnos.append(number)
         pending.extend([current.__cause__, current.__context__, getattr(current, 'reason', None)])
         pending.extend(value for value in current.args[:8] if isinstance(value, BaseException))
-    return names
+    categories = []
+    for category, types in (
+        ('dns', {'NameResolutionError', 'gaierror'}),
+        ('proxy', {'ProxyError'}),
+        ('tls', {'SSLError'}),
+        ('remote_disconnect', {'RemoteDisconnected', 'ConnectionResetError'}),
+        ('permission', {'PermissionError'}),
+        ('timeout', {'ConnectTimeout', 'ReadTimeout', 'Timeout', 'TimeoutError'}),
+        ('connection_refused', {'ConnectionRefusedError'}),
+    ):
+        if types.intersection(names):
+            categories.append(category)
+    # Categories describe observed exception types, never a proven root cause.
+    return {'error_chain_types': names, 'error_chain_errnos': errnos,
+            'error_categories': categories or ['unknown']}
 
 
 class _PageDiagnostics:
@@ -158,7 +175,7 @@ def _measured_child(path, operation, code):
             response = original_send(session, request, **kwargs)
         except BaseException as exc:
             record('request_ended', **identity, wall_s=time.monotonic()-wall,
-                   error_type=type(exc).__name__, error_chain_types=_error_types(exc))
+                   error_type=type(exc).__name__, **_error_details(exc))
             raise
         network_wall = time.monotonic()-wall
         diagnostic_started = time.monotonic()

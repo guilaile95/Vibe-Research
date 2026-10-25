@@ -72,6 +72,10 @@ to evade a cooldown or repeatedly launch it after an access failure.
 
 The v2 events retain only hostnames, allowlisted endpoint identity, numeric
 page/size/total/row/unique-identity counts, HTTP status and exception types.
+Failure diagnostics contain at most 16 exception nodes, allowlisted type names,
+bounded integer errno values and fixed observation categories (unknown stays
+unknown), never exception text. Categories are not proven root causes and are
+not retroactively added to older probe evidence.
 They never retain query strings, credentials, stock identifiers or payloads.
 Repeated responses count toward raw observations but do not inflate observed
 unique identities. Counts are diagnostic evidence, **not certified coverage**:
