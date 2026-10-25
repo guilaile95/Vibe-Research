@@ -149,6 +149,30 @@ def verify(root):
         path = safe_path(root, name)
         if not allowed_name(name) or digest(path) != expected:
             raise RuntimeError(f"Package integrity failed: {name}")
+    # A matching subset is not enough: stale/unpacked source beside that subset
+    # can still be imported or served. Installed dependencies and user data are
+    # deliberately outside these package-owned trees. Python may generate its
+    # normal bytecode caches; this is source-file consistency, not attestation of
+    # dependencies, bytecode, the manifest publisher, or already-running code.
+    for owned in ("backend", "agent-runtime/src", "frontend/dist"):
+        directory = safe_path(root, owned)
+        if not directory.exists():
+            continue
+        for current, directories, files in os.walk(directory, followlinks=False):
+            for entry in directories + files:
+                path = Path(current) / entry
+                name = path.relative_to(root).as_posix()
+                safe_path(root, name)  # Reject links, including directory links.
+                source_file = (owned == "frontend/dist"
+                               or (owned == "backend" and path.suffix.lower() in {".py", ".pyw", ".pyc", ".pyo", ".so", ".pyd"})
+                               or (owned == "agent-runtime/src" and path.suffix.lower() in {".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".json", ".node", ".wasm"}))
+                if path.is_file() and source_file and name not in manifest["files"]:
+                    relative = path.relative_to(root / "backend") if owned == "backend" else None
+                    if (relative is not None and relative.parent.name == "__pycache__"
+                            and path.suffix == ".pyc"
+                            and (path.parent.parent / (path.name.split(".", 1)[0] + ".py")).relative_to(root).as_posix() in manifest["files"]):
+                        continue
+                    raise RuntimeError(f"Unmanifested package file: {name}")
     return manifest
 
 

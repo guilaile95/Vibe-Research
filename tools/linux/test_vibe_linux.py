@@ -63,6 +63,46 @@ class LinuxPackageTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 linux.verify(root)
 
+    def test_integrity_rejects_unmanifested_package_source_and_assets(self):
+        for name in ("backend/stale.py", "backend/stale/__init__.py",
+                     "backend/stale.pyc", "backend/__pycache__/stale.py",
+                     "backend/__pycache__/stale.cpython-311.pyc", "backend/stale.abi3.so",
+                     "backend/stale.pyd", "agent-runtime/src/stale.mjs",
+                     "agent-runtime/src/stale.node", "agent-runtime/src/stale.json", "agent-runtime/src/stale.ts",
+                     "frontend/dist/stale.js"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                self.package(root)
+                extra = root / name
+                extra.parent.mkdir(parents=True, exist_ok=True)
+                extra.write_text("synthetic stale input")
+                with self.assertRaisesRegex(RuntimeError, "Unmanifested package file"):
+                    linux.verify(root)
+
+    def test_integrity_allows_generated_cache_and_separate_dependencies(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            expected = self.package(root)
+            for name in ("backend/__pycache__/app.cpython-311.pyc",
+                         "agent-runtime/node_modules/fixture/index.js", ".installed",
+                         "backend/logs/operation.log", "backend/data/local.sqlite3",
+                         ".venv/lib/fixture.py"):
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"synthetic generated input")
+            self.assertEqual(linux.verify(root), expected)
+
+    def test_integrity_rejects_unmanifested_source_directory_link(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "package"
+            root.mkdir()
+            self.package(root)
+            external = Path(temp) / "outside"
+            external.mkdir()
+            (root / "backend/extra").symlink_to(external, target_is_directory=True)
+            with self.assertRaisesRegex(RuntimeError, "Refusing symlink"):
+                linux.verify(root)
+
     def test_integrity_rejects_traversal(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
