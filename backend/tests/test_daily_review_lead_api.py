@@ -224,9 +224,9 @@ def test_real_stream_messages_routes_api_and_codex_without_tools(monkeypatch, is
             assert str(request.url) == "https://example.test/v1/chat/completions"
             assert request.headers["authorization"] == "Bearer test-key"
             calls.append(payload)
-            return httpx.Response(200, content=(
+            return httpx.Response(200, stream=httpx.ByteStream((
                 'data: {"choices":[{"delta":{"content":"API结果"}}]}\n\n'
-                'data: [DONE]\n\n').encode())
+                'data: [DONE]\n\n').encode()))
         real_client = httpx.AsyncClient
         monkeypatch.setattr(chat_layer.httpx, "AsyncClient",
                             lambda **kw: real_client(**{**kw, "transport": httpx.MockTransport(api)}))
