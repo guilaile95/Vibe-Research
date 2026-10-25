@@ -24,6 +24,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import account_reality_service
 import campaign_service
+import campaign_store
 import campaign_ai_draft_service as ai_draft_service
 import campaign_critical_data_runtime as critical_data_runtime
 import campaign_critical_data_projection as critical_data_projection
@@ -695,10 +696,17 @@ def _production_freeze_writer_with_pre_write_validation(
     payload: Mapping[str, Any], *,
     pre_write_validator: Callable[[Mapping[str, Any], str], None] | None = None,
 ) -> Mapping[str, Any]:
-    return frozen_decision_service._freeze_decision(
-        payload,
-        pre_write_validator=pre_write_validator,
-    )
+    # Keep the final Campaign check true until the separate Frozen ledger
+    # commits. A process-local lock alone cannot order another backend writer.
+    try:
+        with campaign_store.hold_campaign_state(payload["campaign_id"]) as campaign:
+            _require_campaign_accepts_new_decision(campaign)
+            return frozen_decision_service._freeze_decision(
+                payload,
+                pre_write_validator=pre_write_validator,
+            )
+    except campaign_store.CampaignStoreError as exc:
+        raise DecisionCommitRuntimeError("Campaign state could not be reserved") from exc
 
 
 @dataclass(frozen=True)
