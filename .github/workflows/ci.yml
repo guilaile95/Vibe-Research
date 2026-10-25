@@ -176,6 +176,23 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      - name: Run bounded daily research workflow soak
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 8
+        env:
+          DAILY_RESEARCH_SOAK_OUTPUT_DIR: ${{ runner.temp }}/daily-research-soak-evidence
+        run: npm run test:e2e:daily-research-soak
+
+      - name: Preserve bounded daily research soak evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: daily-research-soak-evidence
+          path: ${{ runner.temp }}/daily-research-soak-evidence
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Run stock-data panel smoke E2E
         if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
         working-directory: frontend

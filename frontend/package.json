@@ -70,7 +70,8 @@
     "test:e2e:research-navigation": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/research-navigation.browser.mjs",
     "test:e2e:product-failure-states": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/product-failure-states.browser.mjs",
     "test:e2e:research-workflow-storage": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/research-workflow-storage.browser.mjs",
-    "test:e2e:research-check-loop": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/research-check-loop.browser.mjs"
+    "test:e2e:research-check-loop": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/research-check-loop.browser.mjs",
+    "test:e2e:daily-research-soak": "node --import ./tests/e2e/runtime-env.mjs tests/e2e/daily-research-soak.browser.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.0",
