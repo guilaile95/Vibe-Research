@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-import codecs
 import hashlib
 import time
 import ipaddress
@@ -566,7 +565,7 @@ def _stream_request(cfg: dict, messages: list, use_tools: bool) -> dict:
         payload["tools"] = TOOLS
         payload["tool_choice"] = "auto"
     return {"url": f"{_resolve_base(cfg)}/chat/completions",
-            "headers": _request_headers(cfg), "json": payload, "endpoint": endpoint}
+            "headers": {**_request_headers(cfg), "Accept-Encoding": "identity"}, "json": payload, "endpoint": endpoint}
 
 
 def _call_llm_stream(cfg: dict, messages: list, use_tools: bool):
@@ -640,26 +639,60 @@ def _parse_sse_line(raw: bytes | str, *, use_tools: bool = True) -> tuple[bool, 
     return False, delta
 
 
-def _iter_sse_deltas(resp, *, use_tools: bool = True):
-    """解析上游 SSE 流，逐个 yield choices[0].delta。
+class _SSELineBuffer:
+    """Bound provider bytes before decoding/parsing, even without newlines.
 
-    按字节缓冲、只解码「完整行」——`\\n` 是 ASCII(0x0A)不会落在多字节 UTF-8 字符内部，
-    故按 `\\n` 切分再解码，避免 iter_lines(decode_unicode=True) 在网络分块处切断中文导致乱码。
+    Limits apply to all wire content, including ignored comments and metadata,
+    rather than only answer text. The transport owns and closes the response.
     """
-    buf = b""
-    for chunk in resp.iter_content(chunk_size=None):
-        if not chunk:
-            continue
-        buf += chunk
-        while b"\n" in buf:
-            raw, buf = buf.split(b"\n", 1)
+    def __init__(self, limits):
+        self.limits = limits
+        self.total = 0
+        self.pending = bytearray()
+
+    def feed(self, raw):
+        self.total += len(raw)
+        if self.total > self.limits.body_bytes:
+            raise ModelTransportError("模型响应超出流量限制")
+        # Slice before replacing/splitting: an oversized supplied chunk must not
+        # create another unbounded copy or a list containing all of its lines.
+        for offset in range(0, len(raw), 4096):
+            pieces = raw[offset:offset + 4096].replace(b"\r", b"\n").split(b"\n")
+            for index, part in enumerate(pieces):
+                if len(self.pending) + len(part) > self.limits.line_bytes:
+                    raise ModelTransportError("模型响应超出流量限制")
+                self.pending.extend(part)
+                if index < len(pieces) - 1:
+                    yield self.finish()
+
+    def finish(self):
+        try:
+            line = self.pending.decode("utf-8", errors="strict")
+        except UnicodeError as exc:
+            raise ModelTransportError("模型响应格式无效") from exc
+        self.pending.clear()
+        return line
+
+
+def _require_identity_encoding(response):
+    encoding = getattr(response, "headers", {}).get("content-encoding", "identity").strip().lower()
+    if encoding not in ("", "identity"):
+        raise ModelTransportError("模型响应格式无效")
+
+
+def _iter_sse_deltas(resp, *, use_tools: bool = True):
+    """Parse bounded SSE lines; UTF-8 can span arbitrary network chunks."""
+    _require_identity_encoding(resp)
+    buffer = _SSELineBuffer(MODEL_STREAM_LIMITS)
+    for chunk in model_transport.iter_identity_stream(resp):
+        for raw in buffer.feed(chunk):
             done, delta = _parse_sse_line(raw, use_tools=use_tools)
             if done:
                 return
             if delta is not None:
                 yield delta
-    if buf.strip():
-        done, delta = _parse_sse_line(buf, use_tools=use_tools)
+    if buffer.pending:
+        done, delta = _parse_sse_line(buffer.finish(), use_tools=use_tools)
         if done:
             return
         if delta is not None:
@@ -669,7 +702,7 @@ def _iter_sse_deltas(resp, *, use_tools: bool = True):
 
 @dataclass(frozen=True)
 class ApiStreamLimits:
-    """Server-owned probe budget; never populated from client configuration."""
+    """Server-owned stream budget; never populated from client configuration."""
     timeout: float = 15
     max_tokens: int = 32
     body_bytes: int = 64 * 1024
@@ -678,43 +711,22 @@ class ApiStreamLimits:
     cleanup_grace: float = 0.5
 
 
+# Per upstream response, not a bill or whole-process RSS bound. A 1 MiB line
+# accommodates escaped answer/tool JSON; 8 MiB also bounds ignored heartbeats.
+MODEL_STREAM_LIMITS = ApiStreamLimits(timeout=180, max_tokens=4000,
+    body_bytes=8 * 1024 * 1024, line_bytes=1024 * 1024, text_chars=48000)
 CONNECTION_TEST_LIMITS = ApiStreamLimits()
 CONNECTION_TEST_MESSAGES = [{"role": "user", "content": "Reply briefly to confirm this connection works."}]
 
 
 async def _bounded_sse_lines(response, limits):
-    # Identity encoding avoids decompression bombs. Bound bytes before UTF-8
-    # decoding, including streams that never send a newline.
-    encoding = response.headers.get("content-encoding", "identity").strip().lower()
-    if encoding not in ("", "identity"):
-        raise ModelTransportError("模型响应格式无效")
-    decoder = codecs.getincrementaldecoder("utf-8")("strict")
-    total = 0
-    line_size = 0
-    pending = ""
-    try:
-        async for raw in response.aiter_raw():
-            total += len(raw)
-            if total > limits.body_bytes:
-                raise ModelTransportError("模型响应超出测试限制")
-            for offset in range(0, len(raw), 4096):
-                pieces = raw[offset:offset + 4096].replace(b"\r", b"\n").split(b"\n")
-                for index, part in enumerate(pieces):
-                    line_size += len(part)
-                    if line_size > limits.line_bytes:
-                        raise ModelTransportError("模型响应超出测试限制")
-                    pending += decoder.decode(part)
-                    if index < len(pieces) - 1:
-                        pending += decoder.decode(b"", final=True)
-                        yield pending
-                        decoder.reset()
-                        pending = ""
-                        line_size = 0
-        pending += decoder.decode(b"", final=True)
-        if pending:
-            yield pending
-    except UnicodeError as exc:
-        raise ModelTransportError("模型响应格式无效") from exc
+    _require_identity_encoding(response)
+    buffer = _SSELineBuffer(limits)
+    async for raw in response.aiter_raw():
+        for line in buffer.feed(raw):
+            yield line
+    if buffer.pending:
+        yield buffer.finish()
 
 
 async def stream_api_messages(cfg: dict, messages: list, *, limits: ApiStreamLimits | None = None):
@@ -794,7 +806,7 @@ async def stream_api_messages(cfg: dict, messages: list, *, limits: ApiStreamLim
         _check_active(cfg)
         if response.status_code != 200:
             raise ModelTransportError(f"模型接口 HTTP {response.status_code}")
-        lines = (_bounded_sse_lines(response, limits) if limits else response.aiter_lines()).__aiter__()
+        lines = _bounded_sse_lines(response, limits or MODEL_STREAM_LIMITS).__aiter__()
         while True:
             _check_active(cfg)
             try:

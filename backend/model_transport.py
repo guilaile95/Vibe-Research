@@ -20,10 +20,31 @@ from urllib3.connection import HTTPConnection, HTTPSConnection
 from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 from urllib3.exceptions import NewConnectionError
 from urllib3.util.connection import create_connection
+from urllib3.response import HTTPResponse
 
 
 class EndpointError(ValueError):
     pass
+
+
+def iter_identity_stream(response, chunk_size=4096):
+    """Bound each read without waiting to fill a chunk before exposing a token.
+
+    Requests.iter_content(amt) can wait for amt bytes on a non-chunked SSE
+    response. The pinned urllib3 read1 API returns currently available bytes;
+    identity encoding is checked by the caller before this iterator is opened.
+    """
+    raw = getattr(response, "raw", None)
+    if isinstance(raw, HTTPResponse):
+        try:
+            while chunk := raw.read1(chunk_size, decode_content=False):
+                yield chunk
+        except Exception as exc:
+            # Preserve the Requests boundary and never expose raw transport text.
+            raise requests.ConnectionError("Model stream interrupted") from exc
+    else:
+        # Custom in-memory response adapters still receive a bounded read size.
+        yield from response.iter_content(chunk_size=chunk_size)
 
 
 @dataclass(frozen=True)
