@@ -273,7 +273,7 @@ def test_campaign_and_frozen_database_alias_fails_closed_before_reservation(tmp_
     before = campaign_service.get_campaign(CAMPAIGN_ID)
     monkeypatch.setattr(frozen_decision_service, '_resolve_db_path',
                         lambda _path: tmp_path / 'campaigns.sqlite3')
-    with pytest.raises(frozen_decision_store.FrozenDecisionCorruptedError):
+    with pytest.raises(frozen_decision_store.FrozenDecisionSchemaVersionError):
         runtime.preview_decision_proposal(CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF)
     assert campaign_service.get_campaign(CAMPAIGN_ID) == before
     assert campaign_service.list_campaign_transitions(CAMPAIGN_ID) == []
