@@ -10,10 +10,103 @@ from concurrent.futures import TimeoutError as FutureTimeout
 import json
 import os
 from pathlib import Path
+import platform
 import sys
 import tempfile
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
+
+
+def _count(value):
+    """Only emit bounded count evidence, never arbitrary provider strings."""
+    if type(value) is int and 0 <= value <= 1_000_000:
+        return value
+    if isinstance(value, str) and value.isascii() and value.isdigit() and len(value) <= 7:
+        number = int(value)
+        return number if number <= 1_000_000 else None
+    return None
+
+
+def _request_identity(request):
+    parsed = urlsplit(request.url)
+    result = {'host': parsed.hostname}
+    if parsed.hostname in ('push2.eastmoney.com', 'push2delay.eastmoney.com') and parsed.path == '/api/qt/clist/get':
+        query = parse_qs(parsed.query)
+        result.update(endpoint='eastmoney_clist',
+                      page=_count(query.get('pn', [None])[0]),
+                      requested_page_size=_count(query.get('pz', [None])[0]))
+    return result
+
+
+def _error_types(exc):
+    """Bounded cause types only: distinguish DNS/TLS/proxy from generic failure."""
+    allowed = {'ConnectionError', 'ConnectTimeout', 'ReadTimeout', 'Timeout',
+               'SSLError', 'ProxyError', 'MaxRetryError', 'NewConnectionError',
+               'NameResolutionError', 'gaierror', 'ConnectionRefusedError',
+               'ConnectionResetError', 'TimeoutError', 'PermissionError',
+               'RemoteDisconnected', 'ProtocolError', 'ChunkedEncodingError'}
+    pending, visited, names = [exc], set(), []
+    while pending and len(visited) < 16:
+        current = pending.pop(0)
+        if not isinstance(current, BaseException) or id(current) in visited:
+            continue
+        visited.add(id(current))
+        name = type(current).__name__
+        if name in allowed and name not in names:
+            names.append(name)
+        pending.extend([current.__cause__, current.__context__, getattr(current, 'reason', None)])
+        pending.extend(value for value in current.args[:8] if isinstance(value, BaseException))
+    return names
+
+
+class _PageDiagnostics:
+    """Opt-in counts only; observed responses are not certified market coverage.
+
+    Retried pages may overlap. Distinct identities are tracked in memory only,
+    never written to events. No parser/exception changes reach production.
+    """
+    def __init__(self):
+        self.seen = set()
+
+    def observe(self, response, identity):
+        if identity.get('endpoint') != 'eastmoney_clist':
+            return {}
+        if len(response.content) > 4 * 1024 * 1024:
+            return {'page_diagnostic': 'size_limit'}
+        try:
+            payload = response.json()
+        except Exception:
+            return {'page_diagnostic': 'invalid_json'}
+        data = payload.get('data') if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            return {'page_diagnostic': 'missing_data'}
+        diff = data.get('diff')
+        if isinstance(diff, dict):
+            rows = list(diff.values())
+        elif isinstance(diff, list):
+            rows = diff
+        else:
+            return {'page_diagnostic': 'invalid_rows', 'provider_total': _count(data.get('total'))}
+        if len(rows) > 10_000:
+            return {'page_diagnostic': 'row_limit'}
+        identities = set()
+        invalid = 0
+        for row in rows:
+            code = row.get('f12') if isinstance(row, dict) else None
+            market = row.get('f13') if isinstance(row, dict) else None
+            if not (isinstance(code, str) and code.isascii() and code.isdigit() and len(code) == 6
+                    and (type(market) is int or isinstance(market, str) and market.isascii() and market.isdigit())):
+                invalid += 1
+                continue
+            identities.add((str(market), code))
+        overlap = len(identities & self.seen)
+        if len(self.seen) + len(identities) > 100_000:
+            return {'page_diagnostic': 'identity_limit'}
+        self.seen.update(identities)
+        return {'page_diagnostic': 'observed', 'provider_total': _count(data.get('total')),
+                'raw_rows': len(rows), 'page_unique_identities': len(identities),
+                'invalid_identity_rows': invalid, 'previously_observed_identities': overlap,
+                'cumulative_observed_unique_identities': len(self.seen)}
 
 
 def _measured_child(path, operation, code):
@@ -56,16 +149,27 @@ def _measured_child(path, operation, code):
                         (market, 'get_market_breadth'), (market, '_emotion'), (market, '_sectors')]:
         stage(owner, name)
     original_send = requests.sessions.Session.send
+    page_diagnostics = _PageDiagnostics()
     def send(session, request, **kwargs):
         wall = time.monotonic()
-        host = urlsplit(request.url).hostname
-        record('request_started', host=host)
+        identity = _request_identity(request)
+        record('request_started', **identity)
         try:
             response = original_send(session, request, **kwargs)
         except BaseException as exc:
-            record('request_ended', host=host, wall_s=time.monotonic()-wall, error_type=type(exc).__name__)
+            record('request_ended', **identity, wall_s=time.monotonic()-wall,
+                   error_type=type(exc).__name__, error_chain_types=_error_types(exc))
             raise
-        record('request_ended', host=host, wall_s=time.monotonic()-wall, http_status=response.status_code)
+        network_wall = time.monotonic()-wall
+        diagnostic_started = time.monotonic()
+        try:
+            counts = page_diagnostics.observe(response, identity)
+        except Exception:
+            # Diagnostic failure must not turn a successful provider call into
+            # a production failure or expose its raw response/error.
+            counts = {'page_diagnostic': 'diagnostic_error'}
+        record('request_ended', **identity, wall_s=network_wall, http_status=response.status_code,
+               diagnostic_wall_s=time.monotonic()-diagnostic_started, **counts)
         return response
     requests.sessions.Session.send = send
     public_data_budget._child(path, operation, code)
@@ -93,7 +197,8 @@ def main():
         budget._child = _measured_child
         budget.startup()
         started = time.monotonic()
-        output = {'schema':'one-live-market-probe.v1','scope':'isolated cloud executor, not user machine',
+        output = {'schema':'one-live-market-probe.v2','scope':'isolated validation, not the running user application',
+                  'platform':platform.system(), 'python':platform.python_version(),
                   'input':'live public no credentials', 'response_budget_s':budget.TIMEOUT,
                   'worker_budget_s':budget.OVERVIEW_TIMEOUT}
         try:
