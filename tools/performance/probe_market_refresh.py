@@ -93,12 +93,12 @@ class _PageDiagnostics:
         invalid = 0
         for row in rows:
             code = row.get('f12') if isinstance(row, dict) else None
-            market = row.get('f13') if isinstance(row, dict) else None
+            market = _count(row.get('f13')) if isinstance(row, dict) else None
             if not (isinstance(code, str) and code.isascii() and code.isdigit() and len(code) == 6
-                    and (type(market) is int or isinstance(market, str) and market.isascii() and market.isdigit())):
+                    and market is not None):
                 invalid += 1
                 continue
-            identities.add((str(market), code))
+            identities.add((market, code))
         overlap = len(identities & self.seen)
         if len(self.seen) + len(identities) > 100_000:
             return {'page_diagnostic': 'identity_limit'}

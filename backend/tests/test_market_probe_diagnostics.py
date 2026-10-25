@@ -78,6 +78,15 @@ class ProbeDiagnosticsTests(unittest.TestCase):
         self.assertEqual(counts['invalid_identity_rows'], 2)
         self.assertNotIn('SECRET', json.dumps(counts))
 
+    def test_market_identity_is_bounded_and_normalized(self):
+        diagnostics = probe._PageDiagnostics()
+        invalid = [True, -1, 1.0, '１２', '1' * 100_000, 1_000_001, '1000001']
+        rows = [{**row('600001'), 'f13': market} for market in invalid + [1, '1', '0000001']]
+        counts = diagnostics.observe(response(rows), probe._request_identity(request()))
+        self.assertEqual(counts['invalid_identity_rows'], len(invalid))
+        self.assertEqual(counts['page_unique_identities'], 1)
+        self.assertEqual(diagnostics.seen, {(1, '600001')})
+
     def test_unrelated_provider_body_is_not_inspected(self):
         result = probe._PageDiagnostics().observe(SimpleNamespace(), {'host': 'data.10jqka.com.cn'})
         self.assertEqual(result, {})
