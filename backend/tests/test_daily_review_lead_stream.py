@@ -129,8 +129,8 @@ def test_async_transport_preserves_go_headers_and_no_tools(monkeypatch):
         assert "tools" not in payload and "tool_choice" not in payload
         assert request.extensions["timeout"]["connect"] == chat._CONNECT_TIMEOUT
         assert request.extensions["timeout"]["read"] == chat._READ_TIMEOUT
-        return httpx.Response(200, content=sse({"choices": [{"delta": {"content": "answer"}}]})
-                              + b"data: [DONE]\n\n")
+        return httpx.Response(200, stream=httpx.ByteStream(
+            sse({"choices": [{"delta": {"content": "answer"}}]}) + b"data: [DONE]\n\n"))
 
     real_client = httpx.AsyncClient
     monkeypatch.setattr(chat.httpx, "AsyncClient",

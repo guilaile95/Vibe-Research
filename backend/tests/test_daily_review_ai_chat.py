@@ -83,7 +83,7 @@ class _SseResponse:
         self._chunks = chunks
 
     def iter_content(self, chunk_size=None):
-        assert chunk_size is None
+        assert chunk_size == 4096
         yield from self._chunks
 
 

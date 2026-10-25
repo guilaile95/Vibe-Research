@@ -24,6 +24,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import account_reality_service
 import campaign_service
+import campaign_store
 import campaign_ai_draft_service as ai_draft_service
 import campaign_critical_data_runtime as critical_data_runtime
 import campaign_critical_data_projection as critical_data_projection
@@ -47,6 +48,7 @@ FINGERPRINT_SCHEMA_VERSION = "decision_proposal.fingerprint.v0.1"
 PROPOSAL_SOURCE_PREFIX = "decision_proposal:"
 CHALLENGE_SOURCE_PREFIX = "decision_challenge:"
 NO_PRIOR_DECISION_BOUNDARY = "NO_PRIOR_DECISION_BOUNDARY"
+_FROZEN_READ_LIMIT = 10000
 
 # These are backend policy constants.  They are intentionally not accepted
 # from the browser and are copied into the existing Frozen Decision contract.
@@ -695,10 +697,34 @@ def _production_freeze_writer_with_pre_write_validation(
     payload: Mapping[str, Any], *,
     pre_write_validator: Callable[[Mapping[str, Any], str], None] | None = None,
 ) -> Mapping[str, Any]:
-    return frozen_decision_service._freeze_decision(
-        payload,
-        pre_write_validator=pre_write_validator,
-    )
+    # Keep the final Campaign check true until the separate Frozen ledger
+    # commits. A process-local lock alone cannot order another backend writer.
+    try:
+        with campaign_store.hold_campaign_state(payload["campaign_id"]) as campaign:
+            _require_campaign_accepts_new_decision(campaign)
+            markers = [ref for ref in payload.get("source_refs", [])
+                       if isinstance(ref, str) and re.fullmatch(
+                           re.escape(PROPOSAL_SOURCE_PREFIX) + r"[0-9a-f]{64}", ref)]
+            if len(markers) != 1:
+                raise FrozenDecisionIntegrityError("Frozen Decision proposal marker is invalid")
+            # Another backend process may have read the same empty ledger before
+            # this reservation. Do not append a second immutable proposal row.
+            current = frozen_decision_service.list_decisions(
+                campaign_id=campaign["campaign_id"], limit=_FROZEN_READ_LIMIT, offset=0,
+            )
+            if len(current) >= _FROZEN_READ_LIMIT:
+                raise FrozenDecisionIntegrityError("Frozen Decision history exceeds bounded admission")
+            _index, existing = _find_unique_proposal_marker(current, markers[0])
+            if existing is not None:
+                raise ProposalStaleError(
+                    "proposal already committed concurrently; retry the exact request"
+                )
+            return frozen_decision_service._freeze_decision(
+                payload,
+                pre_write_validator=pre_write_validator,
+            )
+    except campaign_store.CampaignStoreError as exc:
+        raise DecisionCommitRuntimeError("Campaign state could not be reserved") from exc
 
 
 @dataclass(frozen=True)
@@ -1023,9 +1049,11 @@ def _read_candidate_authorities(
 
 
 def _read_frozen(ports: RuntimePorts, campaign: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    values = ports.frozen_reader(campaign_id=campaign["campaign_id"], limit=10000, offset=0)
+    values = ports.frozen_reader(campaign_id=campaign["campaign_id"], limit=_FROZEN_READ_LIMIT, offset=0)
     if not isinstance(values, list):
         raise FrozenDecisionIntegrityError("Frozen Decision reader must return a list")
+    if len(values) >= _FROZEN_READ_LIMIT:
+        raise FrozenDecisionIntegrityError("Frozen Decision history exceeds bounded admission")
     normalized: list[Mapping[str, Any]] = []
     for value in values:
         if not isinstance(value, Mapping):

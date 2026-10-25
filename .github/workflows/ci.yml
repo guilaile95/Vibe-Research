@@ -5,9 +5,16 @@ on:
     branches:
       - feature/research-system-v01
   pull_request:
+  workflow_dispatch:
+    inputs:
+      long_soak:
+        description: Run only the bounded synthetic 15-minute active/idle browser soak
+        type: boolean
+        required: true
+        default: false
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  group: ci-${{ github.event_name == 'workflow_dispatch' && 'manual-soak' || 'correctness' }}-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
@@ -15,6 +22,7 @@ permissions:
 
 jobs:
   backend:
+    if: github.event_name != 'workflow_dispatch'
     name: Backend tests
     runs-on: ubuntu-latest
     steps:
@@ -57,6 +65,7 @@ jobs:
         run: python -m pytest -m "not live" -ra
 
   frontend:
+    if: github.event_name != 'workflow_dispatch'
     name: Frontend build & test
     runs-on: ubuntu-latest
     steps:
@@ -83,6 +92,7 @@ jobs:
         run: npm test
 
   agent-runtime:
+    if: github.event_name != 'workflow_dispatch'
     name: Agent Runtime tests
     runs-on: ubuntu-latest
     steps:
@@ -105,6 +115,7 @@ jobs:
         run: npm test
 
   e2e-smoke:
+    if: github.event_name != 'workflow_dispatch'
     name: Playwright smoke E2E
     runs-on: ubuntu-latest
     steps:
@@ -173,6 +184,23 @@ jobs:
         with:
           name: research-check-loop-evidence
           path: ${{ runner.temp }}/research-check-loop-evidence
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Run bounded daily research workflow soak
+        if: ${{ !cancelled() && steps.browser_prerequisites.outcome == 'success' }}
+        working-directory: frontend
+        timeout-minutes: 8
+        env:
+          DAILY_RESEARCH_SOAK_OUTPUT_DIR: ${{ runner.temp }}/daily-research-soak-evidence
+        run: npm run test:e2e:daily-research-soak
+
+      - name: Preserve bounded daily research soak evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: daily-research-soak-evidence
+          path: ${{ runner.temp }}/daily-research-soak-evidence
           if-no-files-found: warn
           retention-days: 7
 
@@ -446,6 +474,7 @@ jobs:
           if-no-files-found: warn
 
   e2e-thesis-smoke:
+    if: github.event_name != 'workflow_dispatch'
     name: Playwright thesis smoke E2E
     runs-on: ubuntu-latest
     steps:
@@ -685,6 +714,7 @@ jobs:
           retention-days: 7
 
   e2e-data-health-smoke:
+    if: github.event_name != 'workflow_dispatch'
     name: Playwright data health smoke E2E
     runs-on: ubuntu-latest
     steps:
@@ -849,6 +879,7 @@ jobs:
           retention-days: 7
 
   e2e-intel-digest-smoke:
+    if: github.event_name != 'workflow_dispatch'
     name: Playwright Intel digest E2E
     runs-on: ubuntu-latest
     steps:
@@ -1169,6 +1200,7 @@ jobs:
           if-no-files-found: error
 
   e2e-decision-inbox:
+    if: github.event_name != 'workflow_dispatch'
     name: Playwright decision inbox E2E
     runs-on: ubuntu-latest
     env:
@@ -1304,6 +1336,7 @@ jobs:
           retention-days: 7
 
   e2e-account-bootstrap:
+    if: github.event_name != 'workflow_dispatch'
     name: Playwright account bootstrap E2E
     runs-on: ubuntu-latest
     steps:
@@ -1377,6 +1410,7 @@ jobs:
         run: npm run test:e2e:signals
 
   windows-lock-check:
+    if: github.event_name != 'workflow_dispatch'
     name: Python Windows lock check
     runs-on: windows-latest
     steps:
@@ -1463,6 +1497,7 @@ jobs:
         run: python -m pytest -m "not live" -ra
 
   whitespace:
+    if: github.event_name != 'workflow_dispatch'
     name: Whitespace check
     runs-on: ubuntu-latest
     steps:
@@ -1484,3 +1519,41 @@ jobs:
           else
             git diff --check "${{ github.event.before }}..${{ github.sha }}"
           fi
+
+  bounded-research-long-soak:
+    name: Opt-in bounded research active-idle soak
+    if: github.event_name == 'workflow_dispatch' && inputs.long_soak
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - name: Check out requested revision
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install locked frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build production frontend
+        working-directory: frontend
+        run: npm run build
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Exercise bounded active-idle workload
+        working-directory: frontend
+        timeout-minutes: 17
+        env:
+          DAILY_RESEARCH_SOAK_OUTPUT_DIR: ${{ runner.temp }}/daily-research-long-soak-evidence
+        run: npm run test:e2e:daily-research-soak -- --long-soak
+      - name: Preserve raw long-soak measurements including partial failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: daily-research-long-soak-evidence
+          path: ${{ runner.temp }}/daily-research-long-soak-evidence
+          if-no-files-found: error
+          retention-days: 14

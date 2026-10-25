@@ -35,6 +35,17 @@ identify the exact package. Files have stable tar metadata and gzip timestamps;
 identical input/build assets produce byte-identical archives. Pinned lockfiles
 improve repeatability but the Python lockfile does not contain artifact hashes.
 
+Install/start integrity checks reject changed manifested files and extra source
+files in `backend` / `agent-runtime/src`, plus extra built assets in `frontend/dist`.
+They do not erase those files: inspect a mixed or stale release and install a fresh
+side-by-side release instead. Normal Python caches for manifested source files,
+local logs/data, the installed venv, and dependencies are not mistaken for added
+source. This check is package-source consistency, not publisher authentication,
+dependency/bytecode attestation, or proof of already-running code. An archive and
+its checksum supplied together are not an independent trust anchor. Backend and
+Runtime identity remain `unknown` without Git; do not turn a self-declared
+manifest SHA into `SOURCE_MATCH`.
+
 ## Install and launch on an allowed Linux machine
 
 Verify the accompanying SHA-256 checksum before extraction. Extract the archive

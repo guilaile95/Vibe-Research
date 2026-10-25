@@ -62,3 +62,29 @@ provider/network/model latency, browser FCP/INP, React rendering, IndexedDB,
 real-machine Windows startup, or sustained background resource measurements.
 Those require their own matching data, environment and harness. Do not compare
 cloud Node 24 runs to CI Node 22 as if they were a controlled before/after pair.
+
+## One opt-in public market refresh
+
+`probe_market_refresh.py --allow-live-public --output fresh-output.json` runs
+exactly one isolated refresh with the existing source budget, cooldown and
+integrity checks. It is not a load test. Never reset its temporary source state
+to evade a cooldown or repeatedly launch it after an access failure.
+
+The v2 events retain only hostnames, allowlisted endpoint identity, numeric
+page/size/total/row/unique-identity counts, HTTP status and exception types.
+Failure diagnostics contain at most 16 exception nodes, allowlisted type names,
+bounded integer errno values and fixed observation categories (unknown stays
+unknown), never exception text. Categories are not proven root causes and are
+not retroactively added to older probe evidence.
+They never retain query strings, credentials, stock identifiers or payloads.
+Repeated responses count toward raw observations but do not inflate observed
+unique identities. Counts are diagnostic evidence, **not certified coverage**:
+only the unchanged production validator determines whether the snapshot is valid.
+Diagnostic parsing time is separate from network wall time; both remain part of
+the instrumented end-to-end run. Platform and Python version are recorded rather
+than hardcoding a cloud execution label on Windows.
+
+The probe does not override application routing or OS network policy. Stop on
+an access restriction; a failed cloud connection does not prove that the provider
+is down or that a Windows connection will fail. Offline regression checks run in
+the backend suite (`backend/tests/test_market_probe_diagnostics.py`).

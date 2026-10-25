@@ -27,9 +27,10 @@ import os
 import re
 import sqlite3
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from alert_rules import CODE_PATTERN
 
@@ -833,6 +834,34 @@ def list_campaigns(
     finally:
         conn.close()
     return [_record_from_row(row) for row in rows]
+
+
+@contextmanager
+def hold_campaign_state(campaign_id: str) -> Iterator[dict]:
+    """Hold SQLite writer admission while another ledger records this state.
+
+    This does not mutate Campaign data or make two databases one transaction.
+    It orders a Frozen Decision insert before/after Campaign transitions, even
+    across processes. Acquire Campaign before Frozen Decision, never conversely.
+    The existing connection timeout bounds lock acquisition. Always roll back
+    this read-only reservation, including when the downstream write fails.
+    """
+    cid = _validated_campaign_id(campaign_id)
+    conn = _open_write_connection()
+    try:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                f"SELECT {_SELECT_COLUMNS} FROM campaigns WHERE campaign_id = ?", (cid,)
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise CampaignStoreError("Campaign 状态暂时无法锁定") from exc
+        if row is None:
+            raise CampaignNotFoundError(f"campaign {cid} not found")
+        yield _record_from_row(row)
+    finally:
+        _safe_rollback(conn)
+        conn.close()
 
 
 def transition_campaign(
