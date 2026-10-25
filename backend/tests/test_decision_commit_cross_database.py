@@ -391,3 +391,26 @@ def test_busy_after_schema_check_is_mapped_and_releases_connection(tmp_path, mon
     assert frozen_decision_service.list_decisions() == []
     monkeypatch.setattr(campaign_store, '_open_write_connection', original_open)
     assert _commit(ports, preview)['idempotent'] is False
+
+
+def test_guarded_history_at_read_cap_refuses_incomplete_deduplication(tmp_path, monkeypatch):
+    ports = _real_campaign_ports(tmp_path, monkeypatch)
+    preview = runtime.preview_decision_proposal(CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF)
+    monkeypatch.setattr(runtime, '_FROZEN_READ_LIMIT', 2)
+    original_list = frozen_decision_service.list_decisions
+    # The initial runtime read uses its bound real port; the final guarded
+    # production read reaches this threshold response instead.
+    monkeypatch.setattr(frozen_decision_service, 'list_decisions', lambda **_kwargs: [{}, {}])
+    with pytest.raises(runtime.FrozenDecisionIntegrityError, match='bounded admission'):
+        _commit(ports, preview)
+    assert original_list() == []
+    campaign_service.transition_campaign(CAMPAIGN_ID, 'ACTIVE', 'CLOSED')
+
+
+def test_initial_history_at_read_cap_also_fails_closed(tmp_path, monkeypatch):
+    ports = _real_campaign_ports(tmp_path, monkeypatch)
+    monkeypatch.setattr(runtime, '_FROZEN_READ_LIMIT', 2)
+    ports = replace(ports, frozen_reader=lambda **_kwargs: [{}, {}])
+    with pytest.raises(runtime.FrozenDecisionIntegrityError, match='bounded admission'):
+        runtime.preview_decision_proposal(CAMPAIGN_ID, _draft(), ports=ports, as_of=AS_OF)
+    assert frozen_decision_service.list_decisions() == []

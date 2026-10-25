@@ -48,6 +48,7 @@ FINGERPRINT_SCHEMA_VERSION = "decision_proposal.fingerprint.v0.1"
 PROPOSAL_SOURCE_PREFIX = "decision_proposal:"
 CHALLENGE_SOURCE_PREFIX = "decision_challenge:"
 NO_PRIOR_DECISION_BOUNDARY = "NO_PRIOR_DECISION_BOUNDARY"
+_FROZEN_READ_LIMIT = 10000
 
 # These are backend policy constants.  They are intentionally not accepted
 # from the browser and are copied into the existing Frozen Decision contract.
@@ -709,8 +710,10 @@ def _production_freeze_writer_with_pre_write_validation(
             # Another backend process may have read the same empty ledger before
             # this reservation. Do not append a second immutable proposal row.
             current = frozen_decision_service.list_decisions(
-                campaign_id=campaign["campaign_id"], limit=10000, offset=0,
+                campaign_id=campaign["campaign_id"], limit=_FROZEN_READ_LIMIT, offset=0,
             )
+            if len(current) >= _FROZEN_READ_LIMIT:
+                raise FrozenDecisionIntegrityError("Frozen Decision history exceeds bounded admission")
             _index, existing = _find_unique_proposal_marker(current, markers[0])
             if existing is not None:
                 raise ProposalStaleError(
@@ -1046,9 +1049,11 @@ def _read_candidate_authorities(
 
 
 def _read_frozen(ports: RuntimePorts, campaign: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    values = ports.frozen_reader(campaign_id=campaign["campaign_id"], limit=10000, offset=0)
+    values = ports.frozen_reader(campaign_id=campaign["campaign_id"], limit=_FROZEN_READ_LIMIT, offset=0)
     if not isinstance(values, list):
         raise FrozenDecisionIntegrityError("Frozen Decision reader must return a list")
+    if len(values) >= _FROZEN_READ_LIMIT:
+        raise FrozenDecisionIntegrityError("Frozen Decision history exceeds bounded admission")
     normalized: list[Mapping[str, Any]] = []
     for value in values:
         if not isinstance(value, Mapping):
