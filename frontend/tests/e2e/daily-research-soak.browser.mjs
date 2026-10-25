@@ -10,6 +10,7 @@ import { performance } from 'node:perf_hooks';
 import { chromium } from 'playwright';
 import { readReply } from './ai-settings-storage.fixture.mjs';
 import { researchCheckReadReply } from './research-check-loop.fixture.mjs';
+import { isExpectedSoakUnavailable, isExpectedSoakConsoleError } from './daily-research-soak.fixture.mjs';
 import { researchEvidenceManifest } from './research-evidence-manifest.fixture.mjs';
 
 const dist = fileURLToPath(new URL('../../dist/', import.meta.url));
@@ -34,7 +35,7 @@ try {
   for (const width of [1440, 390]) {
     const started = performance.now();
     const context = await browser.newContext({ baseURL, viewport: { width, height: 960 }, serviceWorkers: 'block' });
-    const errors = [], external = [], mutations = [], reads = [], samples = [], consoleErrors = [];
+    const errors = [], external = [], mutations = [], reads = [], samples = [], consoleErrors = [], expectedUnavailable = [], unexpectedRequests = [];
     let page, phase = 'setup', cdp;
     await context.routeWebSocket('**/*', socket => { external.push(socket.url()); socket.close(); });
     await context.route('**/*', async route => {
@@ -44,17 +45,22 @@ try {
       if (!url.pathname.startsWith('/api/')) return route.continue();
       if (request.method() !== 'GET') {
         mutations.push({ phase, method: request.method(), path: url.pathname });
-        return route.fulfill({ status: 503, json: { detail: 'Synthetic soak forbids backend/model mutations' } });
+        return route.fulfill({ status: 500, json: { detail: 'Synthetic soak forbids backend/model mutations' } });
       }
       reads.push({ phase, path: url.pathname, query: url.search });
       const reply = researchCheckReadReply(url.pathname, url.search) ?? readReply('GET', url.pathname, url.search);
       if (reply !== null) return route.fulfill({ json: reply });
-      return route.fulfill({ status: 503, json: { detail: 'Synthetic optional source unavailable' } });
+      if (isExpectedSoakUnavailable(request.method(), url.pathname, url.search)) {
+        expectedUnavailable.push({ phase, path: url.pathname, query: url.search });
+        return route.fulfill({ status: 503, json: { detail: 'Synthetic optional source unavailable' } });
+      }
+      unexpectedRequests.push({ phase, method: request.method(), path: url.pathname, query: url.search });
+      return route.fulfill({ status: 500, json: { detail: 'Unexpected fixture request' } });
     });
     const openPage = async () => {
       page = await context.newPage(); page.setDefaultTimeout(15000);
       page.on('pageerror', error => errors.push({ phase, message: error.message }));
-      page.on('console', message => { if (message.type() === 'error') consoleErrors.push({ phase, text: message.text() }); });
+      page.on('console', message => { if (message.type() === 'error') consoleErrors.push({ phase, text: message.text(), url: message.location().url }); });
       cdp = await context.newCDPSession(page);
       await cdp.send('Performance.enable');
     };
@@ -124,12 +130,13 @@ try {
       }
       phase = 'final';
       assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.deepEqual(mutations, []);
-      assert.deepEqual(consoleErrors.filter(row => !/^Failed to load resource: the server responded with a status of 503 \(/.test(row.text)), [], 'only fixture-generated HTTP 503 console messages are expected');
+      assert.deepEqual(unexpectedRequests, [], 'all synthetic requests must be explicitly classified');
+      assert.deepEqual(consoleErrors.filter(row => !isExpectedSoakConsoleError(row, baseURL)), [], 'only exact same-origin optional-source 503 errors are expected');
       assert.equal(context.pages().length, 1);
       await page.screenshot({ path: join(output, `daily-soak-${width}.png`), fullPage: false });
-      results.push({ width, status: 'PASS', phase, iterations, elapsedMs: performance.now() - started, cycles, samples, errors, external, mutations, consoleErrors, reads });
+      results.push({ width, status: 'PASS', phase, iterations, elapsedMs: performance.now() - started, cycles, samples, errors, external, mutations, consoleErrors, reads, expectedUnavailable, unexpectedRequests });
     } catch (error) {
-      results.push({ width, status: 'FAIL', phase, error: error.message, stack: error.stack, elapsedMs: performance.now() - started, samples, errors, external, mutations, consoleErrors, reads });
+      results.push({ width, status: 'FAIL', phase, error: error.message, stack: error.stack, elapsedMs: performance.now() - started, samples, errors, external, mutations, consoleErrors, reads, expectedUnavailable, unexpectedRequests });
       await page?.screenshot({ path: join(output, `failure-${width}.png`) }).catch(() => {});
       throw error;
     } finally { await context.close(); }
