@@ -22,6 +22,8 @@ first completes before the transition. A final proposal-marker read under the sa
 which both observed an empty ledger from appending duplicate proposal records.
 The loser receives the existing stale/retry error; retrying its exact request
 returns the sole immutable row idempotently.
+Both initial and guarded history reads fail closed at the existing 10,000-row
+boundary, since a saturated page cannot prove complete proposal-marker coverage.
 
 The Campaign reservation does not write
 Campaign records and is always rolled back/released. This is not two-database
