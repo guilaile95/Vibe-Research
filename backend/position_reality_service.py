@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 import account_event_store
+from ledger_ordering import trade_order_key
 import portfolio
 import trade_ledger_service
 import trade_ledger_store
@@ -798,8 +799,7 @@ def derive_positions() -> dict[str, Any]:
     """Deterministic position derivation from account events + trades + corrections."""
     db_path = resolve_db_path()
 
-    events = account_event_store.list_events(db_path)
-    trades = trade_ledger_store.list_records(db_path, include_voided=False, limit=None)
+    events, trades = account_event_store.read_active_ledger_facts(db_path)
     return _derive_positions_from_facts(events, trades)
 
 
@@ -835,27 +835,24 @@ def _derive_positions_from_facts(
     # Build chronological sequence: legacy openings (ledger boundary) FIRST, then trades.
     # Opening 事件语义是"Vibe 接管日边界"，必须先于所有 post-Vibe 交易应用；
     # 不能只按 created_at/executed_at 排序（开仓事件时间可能晚于测试/历史交易时间）。
-    # 交易时间统一归一化为 UTC 纪元秒后再排序，避免混时区（+08:00/+00:00）格式导致的顺序错乱（P2-1）。
-    sequence: list[tuple[int, float, str, dict[str, Any]]] = []
+    # Shared trade order: UTC execution, UTC creation, immutable trade_id.
+    sequence = []
     for key, event in events_by_key.items():
-        if key.startswith("account_event:"):
-            raw_ts = str(event.get("created_at") or "")
-            rank = 0
-        else:
-            raw_ts = str(event.get("executed_at") or event.get("created_at") or "")
-            rank = 1
-        if raw_ts:
-            try:
-                ts_value = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).timestamp()
-            except ValueError as exc:
-                raise PositionDerivationError("事件时间无法解析") from exc
-        else:
-            ts_value = 0.0
-        sequence.append((rank, ts_value, key, event))
-    sequence.sort(key=lambda item: (item[0], item[1], item[2]))
+        try:
+            if key.startswith("account_event:"):
+                instant = datetime.fromisoformat(str(event["created_at"]).replace("Z", "+00:00"))
+                if instant.tzinfo is None:
+                    raise ValueError("missing timezone")
+                order = (0, instant, instant, key)
+            else:
+                order = (1, *trade_order_key(event))
+        except (ValueError, KeyError) as exc:
+            raise PositionDerivationError("事件时间无法解析或缺少时区") from exc
+        sequence.append((order, key, event))
+    sequence.sort(key=lambda item: item[0])
 
     states: dict[str, dict[str, Any]] = {}
-    for rank, _ts, _key, event in sequence:
+    for _order, _key, event in sequence:
         if _key.startswith("account_event:"):
             if event["event_type"] != _EVENT_LEGACY_OPENING:
                 continue  # ACCOUNT_OPENING 只提供 ledger 边界头，不参与持仓状态

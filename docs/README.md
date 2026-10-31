@@ -12,6 +12,7 @@
 | 制作 Linux 用户目录安装包 | [Linux 打包与运行](LINUX_INSTALL.md) | 独立安装/生命周期路径；不等于云端部署验收 |
 | 接管工程任务 | [恢复坐标](CURRENT_STAGE.md) → [AGENTS.md](../AGENTS.md) | 当前授权、实际 Git 状态和协作边界 |
 | 理解数据与研究调用链 | [架构](ARCHITECTURE.md) / [后端参考](../backend/README.md) | 实现入口；具体行为以当前源码为准 |
+| 核对账本持仓与绩效排序 | [账本读取与重放合同](LEDGER_REPLAY_CONTRACT.md) | 单次持仓快照、UTC 全序、历史正式记录不改写与覆盖边界 |
 | 判断适用范围 | [已知限制](KNOWN_ISSUES.md) | 数据、模型、手工账户事实和真实使用边界 |
 | 修改环境或依赖 | [依赖可复现性](DEPENDENCY_REPRODUCIBILITY.md) | 平台 lock 和版本合同 |
 | 理解治理和产品方向 | [治理入口](GOVERNANCE.md) / [产品北极星](PRODUCT_NORTH_STAR_V01.md) | 权威来源和长期意图；不自动授权新任务 |

@@ -46,6 +46,9 @@ export interface RunIntelDigestGenerationResult {
   droppedCount?: number;
 }
 
+// Well below the runtime 120,000-character turn limit; never silently clip evidence.
+const MAX_DIGEST_CONTEXT_CHARS = 24_000;
+
 const ZERO_VALID_MSG = "没有可用于摘要的有效带日期资讯";
 
 export async function runIntelDigestGeneration(
@@ -85,14 +88,28 @@ export async function runIntelDigestGeneration(
     };
   }
 
-  const { promptContext, inputItems, sourceRefs, droppedCount } = prepared;
+  const { inputItems, sourceRefs, droppedCount } = prepared;
   const materialStatus = prepared.status === "partial" || sourceCoverage?.state !== "normal" ? "partial" : "normal";
   const coverageContext = radarCoverageNotice(sourceCoverage) || "配置来源均返回响应；不证明资讯历史完整或筛选赛道完整。";
 
   const prompt =
     `以下是「${industry.name}」赛道近期资讯。请提炼「今日要点」3-5 条：每条一句话（≤40 字），` +
     `抓住重要事件、趋势与可能影响。直接用「- 」列点，不要多余前后缀。\n` +
-    `来源范围：全部配置来源的缓存抓取，不是所选赛道的独立覆盖统计。${coverageContext} 来源受限或未知时，须在要点中明确说明。\n\n${promptContext}`;
+    `来源范围：全部配置来源的缓存抓取，不是所选赛道的独立覆盖统计。${coverageContext} 来源受限或未知时，须在要点中明确说明。仅依据当前页面上下文，不补充外部事实。`;
+
+  // Codex treats the context field (not user-message evidence) as its factual boundary.
+  // Include the same canonical dated materials that will be persisted by the save API.
+  const context = JSON.stringify({
+    page: "market-intel-digest",
+    sector_key: industry.key,
+    sector_name: industry.name,
+    material_status: materialStatus,
+    coverage: coverageContext,
+    items: inputItems,
+  });
+  if (context.length + prompt.length > MAX_DIGEST_CONTEXT_CHARS) {
+    return { status: "error", error: "赛道资讯超过摘要上下文预算，请减少材料后重试", materialStatus, droppedCount };
+  }
 
   let accText = "";
   onPhaseChange?.("generating");
@@ -100,7 +117,7 @@ export async function runIntelDigestGeneration(
   try {
     const streamResult = await chatStreamFn(
       [{ role: "user", content: prompt }],
-      `${industry.name}赛道资讯`,
+      context,
       {
         onDelta: (t) => {
           accText += t;
@@ -109,7 +126,9 @@ export async function runIntelDigestGeneration(
           }
         },
       },
-      signal
+      signal,
+      // Isolate each one-shot digest from page chat, other sectors, tabs and retries.
+      `intel-${crypto.randomUUID()}`,
     );
 
     if (signal.aborted || !isMounted()) {

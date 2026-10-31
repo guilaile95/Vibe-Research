@@ -1082,3 +1082,153 @@ class TestCorrectionConcurrency:
         assert a1 != a0
         pos = _derived("600519")
         assert pos["shares"] == a1
+
+
+class TestFinancialReadConsistency:
+    @pytest.fixture(autouse=True)
+    def _deny_network(self, monkeypatch):
+        import socket
+
+        def denied(*args, **kwargs):
+            raise AssertionError("financial regression tests must not use network")
+
+        monkeypatch.setattr(socket.socket, "connect", denied)
+        monkeypatch.setattr(socket.socket, "connect_ex", denied)
+        monkeypatch.setattr(socket, "create_connection", denied)
+        monkeypatch.setattr(socket, "getaddrinfo", denied)
+
+    def test_account_events_and_trades_share_sqlite_snapshot(self, monkeypatch):
+        """A committed correction + sell between table reads cannot produce 50."""
+        bootstrap = _bootstrap([_legacy("600519", 100, 10)])
+        # Permit a second connection to commit while the read snapshot stays open.
+        with sqlite3.connect(svc.resolve_db_path()) as conn:
+            assert conn.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        original = account_event_store._row_to_dict
+        fired = False
+
+        def interleave(row):
+            nonlocal fired
+            result = original(row)
+            if not fired:
+                fired = True
+                svc.create_correction({
+                    "target_event_id": bootstrap["positions"][0]["event_id"],
+                    "target_event_type": "account_event",
+                    "after_payload": {"shares": 200},
+                    "reason": "synthetic snapshot regression",
+                })
+                _trade("600519", "sell", 10, 50)
+            return result
+
+        monkeypatch.setattr(account_event_store, "_row_to_dict", interleave)
+        result = svc.derive_positions()
+        assert fired
+        assert result["canonical"] is True
+        assert result["positions"][0]["shares"] == 100
+        assert result["positions"][0]["cost_basis"] == 1000
+        assert _derived("600519")["shares"] == 150
+
+    @pytest.mark.parametrize("fee", [0, 5])
+    def test_same_execution_time_position_performance_cost_parity(self, monkeypatch, fee):
+        import uuid
+        import performance_attribution_service as performance
+
+        _bootstrap([])
+        ids = iter(["8" * 32, "f" * 32, "1" * 32])
+        monkeypatch.setattr(trade_ledger_service.uuid, "uuid4", lambda: uuid.UUID(hex=next(ids)))
+        _trade("600519", "buy", 10, 100, day="2026-08-02", fee=fee)
+        _trade("600519", "buy", 20, 100, fee=fee)
+        _trade("600519", "sell", 30, 100, fee=fee)
+        position = _derived("600519")
+        result = performance.compute_attribution(price_map={})
+        measured = result["positions"][0]
+        assert result["selected_trade_ids"] == ["8" * 32, "f" * 32, "1" * 32]
+        assert measured["measurement_state"] == "COMPLETE"
+        assert position["shares"] == measured["remaining_quantity"] == 100
+        assert position["cost_basis"] == measured["cost_basis"] == 1500 + fee
+        assert position["avg_cost"] == measured["avg_cost"]
+        assert measured["realized_pnl"] == 1500 - 2 * fee
+
+    def test_same_time_buy_then_sell_is_accepted_from_empty(self, monkeypatch):
+        import uuid
+        import performance_attribution_service as performance
+
+        _bootstrap([])
+        ids = iter(["f" * 32, "1" * 32])
+        monkeypatch.setattr(trade_ledger_service.uuid, "uuid4", lambda: uuid.UUID(hex=next(ids)))
+        _trade("600519", "buy", 10, 100)
+        _trade("600519", "sell", 20, 100)
+        assert _derived("600519")["shares"] == 0
+        assert performance.compute_attribution(price_map={})["positions"][0]["realized_pnl"] == 1000
+
+    @pytest.mark.parametrize("timestamp_field", ["executed_at", "created_at"])
+    def test_mixed_offset_utc_order_parity_and_read_only(self, monkeypatch, timestamp_field):
+        import uuid
+        import performance_attribution_service as performance
+
+        _bootstrap([])
+        ids = iter(["8" * 32, "f" * 32, "1" * 32])
+        monkeypatch.setattr(trade_ledger_service.uuid, "uuid4", lambda: uuid.UUID(hex=next(ids)))
+        _trade("600519", "buy", 10, 100, day="2026-08-02")
+        _trade("600519", "buy", 20, 100)
+        _trade("600519", "sell", 30, 100)
+        # Historical synthetic raw rows: lexical order differs from UTC order.
+        with sqlite3.connect(svc.resolve_db_path()) as conn:
+            conn.execute(f"UPDATE trade_records SET {timestamp_field}=? WHERE trade_id=?",
+                         ("2026-08-03T09:00:00+08:00", "f" * 32))
+            conn.execute(f"UPDATE trade_records SET {timestamp_field}=? WHERE trade_id=?",
+                         ("2026-08-03T02:00:00Z", "1" * 32))
+            before = list(conn.iterdump())
+        position = _derived("600519")
+        measured = performance.compute_attribution(price_map={})
+        assert measured["selected_trade_ids"] == ["8" * 32, "f" * 32, "1" * 32]
+        assert position["cost_basis"] == measured["positions"][0]["cost_basis"] == 1500
+        with sqlite3.connect(svc.resolve_db_path()) as conn:
+            assert list(conn.iterdump()) == before
+
+    @pytest.mark.parametrize("state", ["missing_file", "empty_db", "opening_only", "trades_only"])
+    def test_shared_snapshot_missing_tables_do_not_create_schema(self, tmp_path, state):
+        db = tmp_path / "partial.sqlite3"
+        if state != "missing_file":
+            with sqlite3.connect(db) as conn:
+                if state == "opening_only":
+                    conn.execute(account_event_store._CREATE_TABLE_SQL)
+                elif state == "trades_only":
+                    conn.execute(trade_ledger_store._CREATE_TABLE_SQL)
+                before = list(conn.iterdump())
+        assert account_event_store.read_active_ledger_facts(db) == ([], [])
+        if state == "missing_file":
+            assert not db.exists()
+        else:
+            with sqlite3.connect(db) as conn:
+                assert list(conn.iterdump()) == before
+
+    def test_exact_execution_and_creation_tie_uses_id_in_both_consumers(self, monkeypatch):
+        import uuid
+        import performance_attribution_service as performance
+
+        _bootstrap([])
+        ids = iter(["8" * 32, "1" * 32, "f" * 32])
+        monkeypatch.setattr(trade_ledger_service.uuid, "uuid4", lambda: uuid.UUID(hex=next(ids)))
+        _trade("600519", "buy", 10, 100, day="2026-08-02")
+        _trade("600519", "buy", 20, 100)
+        _trade("600519", "sell", 30, 100)
+        with sqlite3.connect(svc.resolve_db_path()) as conn:
+            conn.execute("UPDATE trade_records SET created_at=?", ("2026-08-04T00:00:00Z",))
+        position = _derived("600519")
+        measured = performance.compute_attribution(price_map={})
+        assert measured["selected_trade_ids"] == ["8" * 32, "1" * 32, "f" * 32]
+        assert position["cost_basis"] == measured["positions"][0]["cost_basis"] == 1500
+
+    @pytest.mark.parametrize("bad_time", ["not-a-time", "2026-08-03T02:00:00"])
+    def test_invalid_creation_order_time_fails_closed(self, bad_time):
+        import performance_attribution_service as performance
+
+        _bootstrap([])
+        _trade("600519", "buy", 10, 100)
+        with sqlite3.connect(svc.resolve_db_path()) as conn:
+            conn.execute("UPDATE trade_records SET created_at=?", (bad_time,))
+        with pytest.raises(svc.PositionDerivationError):
+            svc.derive_positions()
+        with pytest.raises(performance.PerformanceAttributionProvenanceError):
+            performance.compute_attribution(price_map={})

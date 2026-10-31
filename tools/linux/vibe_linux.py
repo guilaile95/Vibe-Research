@@ -67,7 +67,8 @@ def build(output):
     backend_static = {"backend/news_sources.json", "backend/top_risk_config.yaml",
                       "backend/data/cn_a_share_trade_calendar_v01.json", "backend/data/signals_gpu_seed.json",
                       "backend/requirements-linux-py311.lock.txt"}
-    explicit = {"frontend/package.json", "frontend/package-lock.json", "frontend/vite.config.ts", "frontend/src/data/sectors.json",
+    explicit = {"frontend/package.json", "frontend/package-lock.json", "frontend/vite.config.ts",
+                "frontend/buildIdentity.mjs", "frontend/src/data/sectors.json",
                 "agent-runtime/package.json", "agent-runtime/package-lock.json", "LICENSE",
                 "tools/linux/vibe_linux.py", "docs/LINUX_INSTALL.md",
                 "docs/third-party/vibe-astock-LICENSE", "docs/third-party/vibe-astock-NOTICE"}

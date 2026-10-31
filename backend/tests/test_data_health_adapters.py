@@ -744,3 +744,44 @@ def test_bk11_history_empty_db_without_rows(data_env):
     )
     assert rec["status"] == "unavailable"
     assert rec["last_error_code"] == "SOURCE_NOT_INITIALIZED"
+
+
+def test_daily_memory_freshness_respects_day_level_close_boundary(data_env, monkeypatch):
+    import daily_review as dr
+
+    review = {
+        "status": "normal", "trade_date": "2026-07-27",
+        "generated_at": "2026-07-27 16:00",
+        "data_health": {"components": {"indices": "normal", "breadth": "normal"}},
+    }
+    monkeypatch.setattr(dr, "_cached_review", lambda: review)
+    before = _snapshot_fs(data_env)
+    for hour, minute, stale in [(1, 29, False), (1, 30, False), (6, 59, False),
+                                (7, 0, False), (7, 29, False), (7, 30, True)]:
+        now = datetime(2026, 7, 28, hour, minute, tzinfo=timezone.utc)
+        record = adapters.DailyReviewAdapter().read(adapters.HealthReadContext(now_utc=now))
+        assert record["is_stale"] is stale
+        assert record["data_trade_date"] == "2026-07-27"
+        assert record["observed_at"] == "2026-07-27T08:00:00.000000Z"
+        assert record["is_cached"] is True
+    assert _snapshot_fs(data_env) == before
+
+
+def test_daily_review_intraday_allowance_does_not_relax_other_consumers(data_env, monkeypatch):
+    import daily_review as dr
+    import northbound_capital_flow as northbound
+    import top_risk_service as top_risk
+
+    monkeypatch.setattr(dr, "_cached_review", lambda: {
+        "status": "normal", "trade_date": "2026-07-27",
+        "generated_at": "2026-07-27 16:00",
+    })
+    for hour, minute, market_stale, review_stale in [
+        (1, 29, False, False), (1, 30, True, False), (6, 59, True, False),
+        (7, 0, False, False), (7, 29, False, False), (7, 30, True, True),
+    ]:
+        now = datetime(2026, 7, 28, hour, minute, tzinfo=timezone.utc)
+        record = adapters.DailyReviewAdapter().read(adapters.HealthReadContext(now_utc=now))
+        assert record["is_stale"] is review_stale
+        assert top_risk._compute_is_stale("2026-07-27", now_utc=now) is market_stale
+        assert northbound._stale_flag("2026-07-27", now) is market_stale

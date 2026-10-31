@@ -106,6 +106,13 @@ def _eligible(decision: dict[str, Any], trade: dict[str, Any]) -> bool:
         return False
     if witness["security_code"] != trade["code"]:
         return False
+    # Match the formal write boundary: an existing thesis reference is exact,
+    # not a hint permitting another thesis or revision to be offered in the UI.
+    if anchor["thesis_id"] is not None and (
+        anchor["thesis_id"] != witness["thesis_id"]
+        or anchor["thesis_revision"] != witness["thesis_revision"]
+    ):
+        return False
     if fta.parse_utc_instant(witness["decision_committed_at"], "decision.committed_at") > fta.parse_utc_instant(anchor["trade_created_at"], "trade.created_at"):
         return False
     if anchor["trade_executed_at"] is not None and fta.parse_utc_instant(witness["decision_committed_at"], "decision.committed_at") > fta.parse_utc_instant(anchor["trade_executed_at"], "trade.executed_at"):

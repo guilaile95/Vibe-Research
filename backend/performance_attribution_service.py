@@ -26,6 +26,7 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 import account_event_store
+from ledger_ordering import trade_order_key
 import performance_attribution_store as store
 import trade_ledger_service as trade_svc
 
@@ -155,11 +156,7 @@ def _load_trades(
     if date_to is not None:
         sql += " AND date(COALESCE(executed_at, created_at)) <= ?"
         params.append(date_to)
-    # 全序确定性（P0-PA1-R1）：等时间戳由 trade_id 决胜（唯一账本身份）
-    sql += (
-        " ORDER BY COALESCE(executed_at, created_at) ASC,"
-        " created_at ASC, trade_id ASC"
-    )
+    # Order after materialization using the same UTC contract as positions.
     path = db_path.resolve()
     try:
         conn = sqlite3.connect(f"{path.as_uri()}?mode=ro", timeout=30.0, uri=True)
@@ -217,7 +214,12 @@ def _load_trades(
         raise PerformanceAttributionProvenanceError(
             "精确交易集无法由 Trade Ledger 完整证明"
         )
-    return validated_rows
+    try:
+        return sorted(validated_rows, key=trade_order_key)
+    except (ValueError, KeyError) as exc:
+        raise PerformanceAttributionProvenanceError(
+            "交易排序时间无法解析或缺少时区"
+        ) from exc
 
 
 def _computation_fingerprint(

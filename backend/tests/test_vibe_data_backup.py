@@ -894,3 +894,55 @@ def test_nested_database_alias_cannot_reintroduce_runtime_assets(tmp_path, monke
     with pytest.raises(backup.BundleError, match='认证或运行时'):
         backup.create_bundle(tmp_path / 'bad.zip', quiescent_probe=lambda: backup.QUIESCENT)
     assert database.exists()
+
+
+@pytest.mark.parametrize("live_state", ["missing", "valid", "corrupted"])
+def test_watchlist_recovery_roundtrip_preserves_bytes_and_reader_precedence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, live_state: str
+) -> None:
+    import watchlist_store
+
+    data = _minimal_data_root(tmp_path, monkeypatch)
+    monkeypatch.setattr(watchlist_store, "_CACHE_DIR", str(data))
+    # Keep original formatting and a duplicate code: backup must not normalize it.
+    recovery_bytes = b'{ "schema_version": "watchlist.v1", "codes": ["600001", "600001"], "updated_at": "2026-07-27 16:00:00" }\n'
+    recovery = data / "watchlist.json.bak"
+    recovery.write_bytes(recovery_bytes)
+    live = data / "watchlist.json"
+    if live_state == "valid":
+        live.write_text(json.dumps({"schema_version": "watchlist.v1", "codes": ["600002"],
+                                   "updated_at": "2026-07-28 16:00:00"}))
+    elif live_state == "corrupted":
+        live.write_bytes(b"invalid-json")
+    original_live = live.read_bytes() if live.exists() else None
+    before = watchlist_store.get_watchlist_status()
+    assert before["status"] == ("corrupted" if live_state == "corrupted" else "valid")
+    if live_state != "corrupted":
+        assert before["data"]["codes"] == (["600001"] if live_state == "missing" else ["600002"])
+    for name in ("auth.json.bak", "credentials.json.bak", "watchlist.json.bak.extra",
+                 "watchlist.json.tmp.fixture", "unregistered.json.bak"):
+        (data / name).write_bytes(b"synthetic excluded fixture")
+
+    archive = tmp_path / "watchlist.zip"
+    assert backup.create_bundle(archive, quiescent_probe=lambda: backup.QUIESCENT)["status"] == "OK"
+    assert backup.verify_bundle(archive)["status"] == "OK"
+    manifest = local_snapshot.read_verified_manifest(archive)
+    expected_paths = {"data/watchlist.json.bak"}
+    if original_live is not None:
+        expected_paths.add("data/watchlist.json")
+    assert {entry["path"] for entry in manifest["files"]} == expected_paths
+
+    restored = tmp_path / "restored"
+    assert backup.restore_bundle(archive, restored)["status"] == "OK"
+    restored_data = restored / "data"
+    assert (restored_data / "watchlist.json.bak").read_bytes() == recovery_bytes
+    assert recovery.read_bytes() == recovery_bytes
+    if original_live is None:
+        assert not live.exists()
+        assert not (restored_data / "watchlist.json").exists()
+    else:
+        assert live.read_bytes() == original_live
+        assert (restored_data / "watchlist.json").read_bytes() == original_live
+    monkeypatch.setattr(watchlist_store, "_CACHE_DIR", str(restored_data))
+    assert watchlist_store.get_watchlist_status() == before
+    assert (restored_data / "watchlist.json.bak").read_bytes() == recovery_bytes
