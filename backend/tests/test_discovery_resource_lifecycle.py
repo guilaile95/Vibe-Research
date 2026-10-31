@@ -51,7 +51,15 @@ def test_repeated_real_discovery_deadlines_reap_children_and_reuse_capacity(tmp_
         results, _, summary = discovery._qualify(codes, providers, as_of=date(2026, 8, 28))
         assert time.monotonic() - started < 4.5
         assert summary['requested'] == len(codes)
-        assert summary['timed_out'] > 0
+        # A worker can finish its own deadline/cleanup just before wait() takes
+        # its snapshot. Completed futures are not successful provider outcomes.
+        assert summary['completed'] + summary['timed_out'] == len(codes)
+        assert summary['busy'] == 0
+        for result in results.values():
+            for phase in ('fundamental', 'announcements'):
+                assert result[phase]['status'] == 'ERROR'
+                assert result[phase]['reason_code'] in (
+                    'TIMEOUT', 'SOURCE_TIMEOUT', 'SOURCE_CANCELLED')
         assert len(results) == len(codes)
         assert {child.pid for child in multiprocessing.active_children()} == before_children
         _all_slots_reusable(budget._SLOTS, budget.PUBLIC_DATA_WORKERS)

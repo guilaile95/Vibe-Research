@@ -1,7 +1,6 @@
 """Offline daily-refresh deadline and attempt-versus-success contracts."""
 import multiprocessing
 from datetime import datetime, timezone
-import socket
 import time
 import threading
 
@@ -14,10 +13,11 @@ import daily_review_cache as cache
 import data_health_adapters as health
 import public_data_budget as budget
 from test_daily_review_refresh import _packet
+from offline_testclient import offline_network
 
 
 @pytest.fixture(autouse=True)
-def isolated(monkeypatch, tmp_path):
+def isolated(monkeypatch, tmp_path, offline_network):
     monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(dr, "_latest_attempt", None)
     monkeypatch.setattr(dr, "_review_cache", {})
@@ -29,10 +29,6 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(budget, "_CACHE", {})
     monkeypatch.setattr(budget, "_INFLIGHT", set())
     dr._clear_refresh_failure()
-    def denied(*args, **kwargs):
-        raise AssertionError("external network forbidden")
-    monkeypatch.setattr(socket.socket, "connect", denied)
-    monkeypatch.setattr(socket, "getaddrinfo", denied)
 
 
 def slow_success(path, operation, code):
