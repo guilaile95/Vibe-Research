@@ -243,17 +243,17 @@ def test_daily_previous_session_stays_fresh_until_close_grace_expires():
                        (12, 0, 0), (13, 0, 0), (14, 59, 59), (15, 0, 0),
                        (15, 29, 59), (15, 30, 0), (23, 59, 59)]:
         now = _bj(2026, 7, 28, hh, mm, ss)
-        assert svc.is_stale_cn_trade_date("2026-07-27", None, now) is ((hh, mm) >= (15, 30))
-        assert svc.is_stale_cn_trade_date("2026-07-24", None, now) is True
-        assert svc.is_stale_cn_trade_date("2026-07-28", None, now) is False
+        assert svc.is_stale_cn_trade_date("2026-07-27", None, now, allow_previous_session_intraday=True) is ((hh, mm) >= (15, 30))
+        assert svc.is_stale_cn_trade_date("2026-07-24", None, now, allow_previous_session_intraday=True) is True
+        assert svc.is_stale_cn_trade_date("2026-07-28", None, now, allow_previous_session_intraday=True) is False
 
 
 def test_daily_weekend_and_monday_use_previous_weekday_not_intraday_rule():
     for day, hh, mm in [(25, 12, 0), (26, 12, 0), (27, 9, 30), (27, 15, 29)]:
         now = _bj(2026, 7, day, hh, mm)
-        assert svc.is_stale_cn_trade_date("2026-07-24", None, now) is False
-        assert svc.is_stale_cn_trade_date("2026-07-23", None, now) is True
-    assert svc.is_stale_cn_trade_date("2026-07-24", None, _bj(2026, 7, 27, 15, 30)) is True
+        assert svc.is_stale_cn_trade_date("2026-07-24", None, now, allow_previous_session_intraday=True) is False
+        assert svc.is_stale_cn_trade_date("2026-07-23", None, now, allow_previous_session_intraday=True) is True
+    assert svc.is_stale_cn_trade_date("2026-07-24", None, _bj(2026, 7, 27, 15, 30), allow_previous_session_intraday=True) is True
     # Intraday expectations still move to today at the open; quote TTL is unchanged.
     now = _bj(2026, 7, 27, 9, 30)
     assert svc.expected_cn_trade_date(now) == "2026-07-27"

@@ -382,6 +382,7 @@ class DailyReviewAdapter:
         else:
             is_stale = svc.is_stale_cn_trade_date(
                 trade_date, basis, context.now_utc, fallback_hours=36.0,
+                allow_previous_session_intraday=True,
             )
 
         error_code = None
