@@ -597,7 +597,7 @@ export default function MarketIntelPanel({ embedded = false, compact = false }: 
                   <>
                     {digest.err && <div className="mb-2 flex items-center gap-1.5 rounded bg-destructive/10 p-2 text-xs text-destructive"><AlertCircle className="h-3.5 w-3.5 shrink-0" />{digest.err}</div>}
                     <div className="prose prose-sm dark:prose-invert max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>{digest.text}</ReactMarkdown></div>
-                    <div className="mt-2"><SaveNoteButton kind="今日要点" title={`${currentIndustry.name} 今日要点`} content={digest.text} /></div>
+                    {(digest.phase === "saved" || digest.phase === "save_failed") && <div className="mt-2"><SaveNoteButton kind="今日要点" title={`${currentIndustry.name} 今日要点`} content={digest.text} /></div>}
                   </>
                 ) : digest?.needKey ? (
                   <p className="text-sm text-muted-foreground">还没接入 AI。<Link to="/settings" className="text-primary">先接入你的 AI</Link>，即可一键提炼本赛道今日要点。</p>
