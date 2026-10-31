@@ -7,6 +7,12 @@ import {
   type DailyReviewAiPayload,
   type StreamLlmConfig,
 } from "@/lib/api";
+import {
+  clamp,
+  median,
+  loadPortfolioAdviceDurationSamples,
+  savePortfolioAdviceDurationSamples,
+} from "@/lib/portfolioAdviceDuration";
 import type { LlmConfig } from "@/lib/llm";
 import { getDailyReviewAiRestoreTradeDate } from "@/stores/dailyReviewAiResultMetadata";
 
@@ -31,6 +37,7 @@ export interface DailyReviewAiTaskState {
   completedAt: number | null;
   estimatedDurationMs: number;
   providerKey: string | null;
+  activeTradeDate: string | null;
   restore: (tradeDate: string) => Promise<void>;
   start: (llm: LlmConfig, tradeDate: string) => Promise<void>;
   clear: () => void;
@@ -50,20 +57,9 @@ function getProviderKey(llm: LlmConfig): string {
   return `${llm.provider}:${llm.model}`;
 }
 
-function median(nums: number[]): number {
-  const sorted = [...nums].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
-
-function clamp(value: number, low: number, high: number): number {
-  return Math.min(Math.max(value, low), high);
-}
-
 function loadDurationSamples(): Record<string, number[]> {
   try {
-    const raw = localStorage.getItem(DURATION_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {};
+    return loadPortfolioAdviceDurationSamples(localStorage, DURATION_STORAGE_KEY);
   } catch {
     return {};
   }
@@ -71,7 +67,7 @@ function loadDurationSamples(): Record<string, number[]> {
 
 function saveDurationSamples(samples: Record<string, number[]>): void {
   try {
-    localStorage.setItem(DURATION_STORAGE_KEY, JSON.stringify(samples));
+    savePortfolioAdviceDurationSamples(samples, localStorage, DURATION_STORAGE_KEY);
   } catch {
     // Optional timing history must never affect generation.
   }
@@ -86,6 +82,7 @@ export function getEstimatedDuration(llm: LlmConfig): number {
 }
 
 export function recordSuccessfulDuration(llm: LlmConfig, elapsedMs: number): void {
+  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return;
   const key = getProviderKey(llm);
   const samples = loadDurationSamples();
   samples[key] = [...(samples[key] || []), elapsedMs].slice(-MAX_SAMPLES);
@@ -117,17 +114,26 @@ export const useDailyReviewAiTaskStore = create<DailyReviewAiTaskState>((set, ge
   completedAt: null,
   estimatedDurationMs: 0,
   providerKey: null,
+  activeTradeDate: null,
 
   restore: async (tradeDate: string) => {
     if (!tradeDate) return;
+    const current = get();
+    // Like portfolio advice, remount hydration must not supersede generation.
+    // A genuinely changed date does invalidate/abort the old task below.
+    if (current.status === "running" && current.activeTradeDate === tradeDate) return;
     const requestId = ++activeRequestId;
     activeController?.abort();
     const controller = new AbortController();
     activeController = controller;
-    const current = get();
     const sameDate = current.resultMeta?.trade_date === tradeDate;
     set({
       status: "restoring",
+      activeTradeDate: tradeDate,
+      startedAt: null,
+      completedAt: null,
+      estimatedDurationMs: 0,
+      providerKey: null,
       content: sameDate ? current.content : "",
       streamContent: "",
       resultMeta: sameDate ? current.resultMeta : null,
@@ -135,7 +141,7 @@ export const useDailyReviewAiTaskStore = create<DailyReviewAiTaskState>((set, ge
       restoreError: null,
     });
     try {
-      const restored = await api.aiResult<DailyReviewAiPayload>("daily_review_ai", tradeDate);
+      const restored = await api.aiResult<DailyReviewAiPayload>("daily_review_ai", tradeDate, controller.signal);
       if (requestId !== activeRequestId) return;
       if (!restored) {
         set({ status: "empty", content: "", resultMeta: null, restoreError: null });
@@ -159,7 +165,7 @@ export const useDailyReviewAiTaskStore = create<DailyReviewAiTaskState>((set, ge
     }
   },
 
-  start: async (llm: LlmConfig, _tradeDate: string) => {
+  start: async (llm: LlmConfig, tradeDate: string) => {
     if (get().status === "running") return;
     const requestId = ++activeRequestId;
     activeController?.abort();
@@ -168,6 +174,7 @@ export const useDailyReviewAiTaskStore = create<DailyReviewAiTaskState>((set, ge
     const durationMs = getEstimatedDuration(llm);
     set({
       status: "running",
+      activeTradeDate: tradeDate,
       streamContent: "",
       error: null,
       restoreError: null,
@@ -187,9 +194,10 @@ export const useDailyReviewAiTaskStore = create<DailyReviewAiTaskState>((set, ge
         },
         controller.signal,
       );
+      if (requestId !== activeRequestId) return;
       const restoreTradeDate = getDailyReviewAiRestoreTradeDate(streamed.result);
       if (!restoreTradeDate) throw new ApiError("生成完成但缺少已保存结果元数据", 502);
-      const saved = await api.aiResult<DailyReviewAiPayload>("daily_review_ai", restoreTradeDate);
+      const saved = await api.aiResult<DailyReviewAiPayload>("daily_review_ai", restoreTradeDate, controller.signal);
       if (!saved) throw new ApiError("生成完成但未能恢复已保存结果", 502);
       if (requestId !== activeRequestId) return;
       const startedAt = get().startedAt;
@@ -230,6 +238,7 @@ export const useDailyReviewAiTaskStore = create<DailyReviewAiTaskState>((set, ge
       completedAt: null,
       estimatedDurationMs: 0,
       providerKey: null,
+      activeTradeDate: null,
     });
   },
 }));

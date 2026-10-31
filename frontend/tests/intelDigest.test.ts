@@ -443,3 +443,61 @@ for (const state of ["partial", "unknown", "unavailable", undefined] as const) {
     }
   });
 }
+
+// Exercise the production orchestrator -> chatStream -> credential check -> NDJSON wire.
+// Fetch is synthetic; no model, backend, runtime login, or credential is contacted.
+for (const provider of ["cli-codex", "openai-compatible"]) {
+  test(`digest wire supplies isolated valid session and bounded factual page context: ${provider}`, async () => {
+    const oldFetch = globalThis.fetch;
+    const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    const cfg = { provider, model: "synthetic", revision: "1", baseURL: "https://example.invalid", apiKey: "synthetic" };
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+      getItem: (key: string) => key === "vr-llm" ? JSON.stringify(cfg) : null,
+    } });
+    const wires: any[] = [];
+    const saved: any[] = [];
+    const signal = new AbortController().signal;
+    globalThis.fetch = async (url, options) => {
+      assert.equal(options?.signal, signal);
+      if (url === "/api/ai/credential-status") return new Response(JSON.stringify({ revision: "1", configured: true }));
+      assert.equal(url, "/api/chat");
+      const wire = JSON.parse(String(options?.body)); wires.push(wire);
+      assert.match(wire.session, /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/);
+      assert.equal(wire.llm.provider, provider);
+      assert.equal(wire.llm.revision, "1");
+      return new Response('{"type":"delta","text":"- Synthetic digest"}\n{"type":"done"}\n');
+    };
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const res = await runIntelDigestGeneration({ industry: mockIndustry, signal,
+          generationId: attempt, getCurrentGenerationId: () => attempt, isMounted: () => true,
+          saveApi: async payload => { saved.push(payload); return { digest: null, deduped: false }; },
+        });
+        assert.equal(res.status, "saved");
+      }
+      assert.notEqual(wires[0].session, wires[1].session);
+      const context = JSON.parse(wires[0].context);
+      assert.equal(context.page, "market-intel-digest");
+      assert.equal(context.sector_key, mockIndustry.key);
+      assert.equal(context.material_status, "partial");
+      assert.deepEqual(context.items, JSON.parse(JSON.stringify(saved[0].input_items)));
+      assert.ok(context.items.every((item: any) => item.published_at && item.source && item.url));
+      assert.ok(wires[0].context.length + wires[0].messages[0].content.length <= 24_000);
+    } finally {
+      globalThis.fetch = oldFetch;
+      if (storageDescriptor) Object.defineProperty(globalThis, "localStorage", storageDescriptor);
+      else Reflect.deleteProperty(globalThis, "localStorage");
+    }
+  });
+}
+
+test("oversized digest evidence fails before model submission or save rather than silently clipping", async () => {
+  const res = await runIntelDigestGeneration({
+    industry: { ...mockIndustry, items: [{ ...mockIndustry.items[0], title: "x".repeat(25_000), zh: "x".repeat(25_000) }] },
+    signal: new AbortController().signal, generationId: 1, getCurrentGenerationId: () => 1, isMounted: () => true,
+    chatStreamFn: async () => { assert.fail("must not submit over-budget evidence"); },
+    saveApi: async () => { assert.fail("must not save"); },
+  });
+  assert.equal(res.status, "error");
+  assert.match(res.error!, /上下文预算/);
+});

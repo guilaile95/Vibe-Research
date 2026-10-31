@@ -491,3 +491,42 @@ def test_loopback_redirect_is_rejected_without_followup(monkeypatch):
     with pytest.raises(agent_runtime.AgentRuntimeError, match="当前不可用"):
         agent_runtime.start_login()
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("provider", ["cli-codex", "openai-compatible"])
+def test_intel_digest_session_and_factual_context_reach_selected_provider(monkeypatch, provider):
+    """Synthetic one-shot digest contract; no readiness probe or model dispatch."""
+    monkeypatch.setattr(app_module, "_require_llm_ready", lambda _llm: False)
+    captured = {}
+    context = json.dumps({
+        "page": "market-intel-digest", "sector_key": "ai", "material_status": "partial",
+        "coverage": "synthetic unknown coverage",
+        "items": [{"title": "synthetic", "source": "fixture", "url": "https://example.invalid/item",
+                   "published_at": "2026-10-30T10:00:00+08:00"}],
+    })
+
+    def runtime_stream(**kwargs):
+        assert provider == "cli-codex"
+        captured.update(kwargs)
+        yield {"type": "delta", "text": "synthetic digest"}
+        yield {"type": "done"}
+
+    def api_stream(cfg, messages, page_context):
+        assert provider == "openai-compatible"
+        captured.update(session=cfg["_session"], context=page_context, message=messages[-1]["content"])
+        yield {"type": "delta", "text": "synthetic digest"}
+        yield {"type": "done"}
+
+    monkeypatch.setattr(agent_runtime, "stream_chat", runtime_stream)
+    monkeypatch.setattr(app_module.chat_layer, "run_chat_stream", api_stream)
+    body = _request(provider)
+    body.update(session="intel-12345678-1234-4234-8234-123456789012", context=context,
+                messages=[{"role": "user", "content": "Summarize only supplied dated materials"}])
+    response = client.post("/api/chat", json=body)
+    assert response.status_code == 200
+    assert [json.loads(line)["type"] for line in response.text.splitlines()] == ["delta", "done"]
+    assert captured["session"] == body["session"]
+    assert captured["context"] == context
+    assert captured["message"] == body["messages"][0]["content"]
+    if provider == "cli-codex":
+        assert captured["history"] == []
