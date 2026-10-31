@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from pathlib import Path
 import signal
 import subprocess
@@ -26,7 +27,7 @@ class LinuxPackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "source"
             names = ["backend/app.py", "frontend/package.json", "frontend/package-lock.json",
-                     "frontend/vite.config.ts", "frontend/src/data/sectors.json",
+                     "frontend/vite.config.ts", "frontend/buildIdentity.mjs", "frontend/src/data/sectors.json",
                      "agent-runtime/package.json", "agent-runtime/package-lock.json", "LICENSE",
                      "tools/linux/vibe_linux.py", "docs/LINUX_INSTALL.md", *notices]
             for name in names:
@@ -53,6 +54,38 @@ class LinuxPackageTests(unittest.TestCase):
                 for name, expected in originals.items():
                     self.assertEqual(package.extractfile(prefix + "/" + name).read(), expected)
                     self.assertEqual(manifest["files"][name], hashlib.sha256(expected).hexdigest())
+
+    def test_real_packaged_frontend_config_includes_local_imports(self):
+        # Use the actual tracked source/config and real archive/manifest selection.
+        # Only compilation is synthetic: no npm install, provider or server runs.
+        def frontend_build(args, *, cwd, **kwargs):
+            self.assertEqual(args, ["npm", "run", "build"])
+            (cwd / "dist").mkdir()
+            (cwd / "dist/index.html").write_text("synthetic build", encoding="utf-8")
+
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "artifacts"
+            with patch.object(linux, "prerequisites"), \
+                    patch.object(linux, "checked", side_effect=frontend_build):
+                linux.build(output)
+            archive, = output.glob("*.tar.gz")
+            with tarfile.open(archive, "r:gz") as package:
+                prefix = package.getnames()[0].split("/", 1)[0]
+                manifest = json.load(package.extractfile(prefix + "/manifest.json"))
+                pending = ["frontend/vite.config.ts"]
+                inspected = set()
+                while pending:
+                    name = pending.pop()
+                    if name in inspected:
+                        continue
+                    inspected.add(name)
+                    self.assertIn(name, manifest["files"], f"missing config dependency: {name}")
+                    content = package.extractfile(prefix + "/" + name).read()
+                    self.assertEqual(content, (linux.ROOT / name).read_bytes())
+                    self.assertEqual(manifest["files"][name], hashlib.sha256(content).hexdigest())
+                    for relative in re.findall(r"from\s+[\"'](\.[^\"']+)[\"']", content.decode()):
+                        pending.append(str(Path(name).parent / relative))
+                self.assertIn("frontend/buildIdentity.mjs", inspected)
 
     def test_integrity_rejects_changed_file(self):
         with tempfile.TemporaryDirectory() as temp:
