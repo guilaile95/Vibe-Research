@@ -20,6 +20,8 @@ TIMEOUT = 12.0
 # Full-A pagination alone owns a 120s cooperative budget. Preserve a hard
 # process lifetime while allowing pagination + four pools + sector completion.
 OVERVIEW_TIMEOUT = 210.0
+# Daily breadth uses the same 120s full-market pagination and serialized sources.
+DAILY_REVIEW_TIMEOUT = 210.0
 PUBLIC_DATA_WORKERS = 4
 _SLOTS = threading.BoundedSemaphore(PUBLIC_DATA_WORKERS)
 
@@ -281,7 +283,7 @@ def _guard_valuation(operation, value):
 
 def run(operation, code=None, *, timeout=None, _target=None, cancel_event=None):
     if timeout is None:
-        timeout = TIMEOUT
+        timeout = DAILY_REVIEW_TIMEOUT if operation == "daily_review" else TIMEOUT
     if _target is not None:  # internal synthetic process-lifetime tests
         return _run_process(operation, code, timeout=timeout, _target=_target, cancel_event=cancel_event)
     if operation == "overview":

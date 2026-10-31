@@ -20,7 +20,7 @@ const js = ts.transpileModule(names.map(n => declarations.get(n)).join('\n') + '
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
 function harness() {
-  let done = false;
+  let done = false, meta = null;
   let now = 0, note = 'old result', data = { id: 'old' }, timerId = 0;
   const timers = new Map(), calls = [], exports = {};
   const mountedRef = { current: true };
@@ -33,24 +33,24 @@ function harness() {
     setInterval: fn => { timers.set(++timerId, fn); return timerId; }, clearInterval: id => timers.delete(id),
     setStaleRefreshNote: value => { note = typeof value === 'function' ? value(note) : value; },
     setDr: value => { data = typeof value === 'function' ? value(data) : value; },
-    setDrDone: value => { done = value; }, setCacheMeta: () => {}, setDrErr: () => {}, setDrRefreshing: () => {},
+    setDrDone: value => { done = value; }, setCacheMeta: value => { meta = typeof value === "function" ? value(meta) : value; }, setDrErr: () => {}, setDrRefreshing: () => {},
     api: { dailyReview: () => request('GET'), dailyReviewRefresh: () => request('POST') },
   });
-  return { ...exports.callbacks, calls, mountedRef, get done() { return done; }, get note() { return note; }, get data() { return data; }, get timers() { return timers.size; },
+  return { ...exports.callbacks, calls, mountedRef, get meta() { return meta; }, get done() { return done; }, get note() { return note; }, get data() { return data; }, get timers() { return timers.size; },
     tick(ms) { now = ms; for (const fn of [...timers.values()]) void fn(); },
     async flush() { await new Promise(resolve => setImmediate(resolve)); },
   };
 }
 const reply = (id, meta = { stale: false }) => ({ data: { id }, cache_meta: meta });
-test('119s completion is applied and polling stops', async () => {
-  const h = harness(); h.startStalePoll(); h.tick(118000); h.tick(119000);
+test('209s completion is applied and polling stops', async () => {
+  const h = harness(); h.startStalePoll(); h.tick(208000); h.tick(209000);
   h.calls[0].resolve(reply('fresh')); await h.flush();
   assert.equal(h.data.id, 'fresh'); assert.equal(h.note, null); assert.equal(h.timers, 0);
 });
-test('deadline stops waiting without claiming backend failure; 121s late response is ignored', async () => {
-  const h = harness(); h.startStalePoll(); h.tick(118000); h.tick(120000);
+test('deadline stops waiting without claiming backend failure; 241s late response is ignored', async () => {
+  const h = harness(); h.startStalePoll(); h.tick(238000); h.tick(240000);
   assert.equal(h.timers, 0); assert.match(h.note, /停止等待.*后台可能仍在刷新/);
-  h.tick(121000); h.calls[0].resolve(reply('late')); await h.flush();
+  h.tick(241000); h.calls[0].resolve(reply('late')); await h.flush();
   assert.equal(h.data.id, 'old'); assert.equal(h.calls.length, 1);
 });
 test('slow polls do not overlap and read errors do not claim refresh failure', async () => {
@@ -99,4 +99,14 @@ for (const method of ['loadDailyReview', 'refreshDailyReview']) test(`${method} 
   const h = harness(); h[method](); h.mountedRef.current = false; h.clearPoll();
   h.calls[0].resolve(reply('unmounted', { stale: true, refreshing: true })); await h.flush();
   assert.equal(h.data.id, 'old'); assert.equal(h.timers, 0); assert.equal(h.done, false);
+});
+
+test('failed manual refresh shows its attempt without replacing retained data or triggering GET', async () => {
+  const h = harness(); h.refreshDailyReview();
+  const error = new Error('关键市场数据暂不可用');
+  error.refreshAttempt = {state:'failed', started_at:'2026-10-31 14:00:00', finished_at:'2026-10-31 14:03:30', reason_code:'SOURCE_TIMEOUT', failed_sources:[], pending_sources:['breadth']};
+  h.calls[0].reject(error); await h.flush();
+  assert.equal(h.data.id, 'old'); assert.equal(h.calls.length, 1);
+  assert.deepEqual(h.meta.refresh_attempt, error.refreshAttempt);
+  assert.equal(h.meta.refreshing, false); assert.equal(h.meta.refresh_failed, true);
 });

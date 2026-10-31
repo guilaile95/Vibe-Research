@@ -87,3 +87,19 @@ test("portfolioAdvice body only user_request + llm", async t => {
     globalThis.fetch = orig;
   }
 });
+
+test("failed refresh preserves string error and exposes structured latest attempt", async () => {
+  const orig = globalThis.fetch;
+  const attempt = { state: "failed", started_at: "2026-10-31 14:00:00", finished_at: "2026-10-31 14:03:30", reason_code: "SOURCE_TIMEOUT", failed_sources: [], pending_sources: ["breadth"] };
+  globalThis.fetch = (async () => new Response(JSON.stringify({ detail: "关键市场数据暂不可用，本次刷新未完成", refresh_attempt: attempt }), { status: 503 })) as any;
+  try {
+    const { api, ApiError } = await import("../src/lib/api.ts");
+    await assert.rejects(api.dailyReviewRefresh(), (error: unknown) => {
+      assert.ok(error instanceof ApiError);
+      assert.equal(error.status, 503);
+      assert.match(error.message, /关键市场数据/);
+      assert.deepEqual(error.refreshAttempt, attempt);
+      return true;
+    });
+  } finally { globalThis.fetch = orig; }
+});

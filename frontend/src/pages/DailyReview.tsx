@@ -1,3 +1,4 @@
+import { RefreshAttemptNotice } from "@/components/dailyReview/RefreshAttemptNotice";
 import { validQuoteRows, quoteSnapshotStates, quoteSnapshotLabel } from "@/lib/quoteSnapshot";
 import { ShortlineReviewCard } from "@/components/dailyReview/ShortlineReviewCard";
 import { AiTaskBudgetNotice } from "@/components/AiTaskBudgetNotice";
@@ -314,7 +315,7 @@ export function DailyReview() {
     const generation = pollGenerationRef.current;
     const active = () => mountedRef.current && generation === pollGenerationRef.current;
     let inFlight = false;
-    pollDeadlineRef.current = Date.now() + 120_000;
+    pollDeadlineRef.current = Date.now() + 240_000;
     pollTimerRef.current = setInterval(async () => {
       if (!active()) return;
       if (Date.now() >= pollDeadlineRef.current) {
@@ -393,6 +394,12 @@ export function DailyReview() {
       .catch((error) => {
         if (!active()) return;
         const reason = error instanceof ApiError ? error.message : "最新数据刷新失败";
+        if (error instanceof ApiError && error.refreshAttempt) {
+          setCacheMeta(prev => ({
+            source: "unknown", stale: false, saved_at: null, age_seconds: null,
+            ...prev, refreshing: false, refresh_failed: true, refresh_error: reason, refresh_attempt: error.refreshAttempt,
+          }));
+        }
         setDr((prev) => {
           if (prev) {
             setStaleRefreshNote(`${reason}；当前显示上次成功结果`);
@@ -1699,6 +1706,10 @@ export function DailyReview() {
           </p>
         </div>
       )}
+
+      {drRefreshing ? (
+        <p className="mb-4 text-xs text-muted-foreground" role="status">本次刷新进行中，正在等待完整数据采集与校验；当前结果尚未更新。请勿重复点击。</p>
+      ) : <RefreshAttemptNotice attempt={cacheMeta?.refresh_attempt} />}
 
       {drErr && (
         <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">

@@ -6,6 +6,7 @@ one lock; the parent reads them only after the worker has exited or been reaped.
 from __future__ import annotations
 import json
 import threading
+import push2_guard
 
 KEYS = ("indices", "global_indices", "breadth", "emotion", "turnover", "industry", "concept", "region")
 
@@ -28,14 +29,17 @@ def collect(checkpoint):
     lock = threading.Lock()
 
     def one(key):
-        try:
-            entry = {"status": "complete", "value": calls[key]()}
-            raw = json.dumps(entry, allow_nan=False, ensure_ascii=False).encode("utf-8")
-            if len(raw) > (MAX_BYTES - 4096) // len(KEYS):
-                raise ValueError("source result too large")
-            entry = json.loads(raw)
-        except Exception:
-            entry = {"status": "unavailable"}
+        with push2_guard.observe_blocks() as blocked:
+            try:
+                entry = {"status": "complete", "value": calls[key]()}
+                raw = json.dumps(entry, allow_nan=False, ensure_ascii=False).encode("utf-8")
+                if len(raw) > (MAX_BYTES - 4096) // len(KEYS):
+                    raise ValueError("source result too large")
+                entry = json.loads(raw)
+            except Exception:
+                entry = {"status": "unavailable"}
+        if blocked:
+            entry["reason_code"] = blocked[-1]
         with lock:
             result[key] = entry
             packet = {"sources": result, "reason_code": "SOURCE_TIMEOUT"}
