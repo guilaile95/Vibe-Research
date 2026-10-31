@@ -13,6 +13,7 @@ status 为 normal / partial 的成功包；single-flight 避免并发重复聚�
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager
 import re
 import threading
 import time
@@ -24,6 +25,9 @@ import astock
 import daily_review_cache
 import daily_review_errors
 import market
+import public_data_budget
+import push2_guard
+from daily_review_sources import KEYS as _SOURCE_KEYS
 import trade_calendar
 
 _log = logging.getLogger("vibe.daily_review")
@@ -49,6 +53,129 @@ _bg_refresh_lock = threading.Lock()
 _bg_refreshing = False
 _refresh_failed = False
 _refresh_error: str | None = None
+
+# Process-local attempt metadata is separate from the last successful payload.
+# It contains only fixed codes/source IDs, never provider exception strings.
+_attempt_lock = threading.Lock()
+_latest_attempt: dict | None = None
+_REFRESH_JOIN_TIMEOUT = public_data_budget.DAILY_REVIEW_TIMEOUT + 2.0
+
+
+_ATTEMPT_REASON_CODES = frozenset({
+    "SOURCE_TIMEOUT", "SOURCE_UNAVAILABLE", "SOURCE_BUSY", "SOURCE_BAD_RESPONSE",
+    "unavailable", "critical_unavailable", "partial_with_existing_normal",
+    "persist_failed", "store_rejected", "invalid_result", "invalid_status",
+    "build_exception", "flight_timeout", "superseded",
+}) | push2_guard.BLOCK_REASON_CODES
+
+def latest_refresh_attempt() -> dict | None:
+    with _attempt_lock:
+        if _latest_attempt is None:
+            return None
+        return copy.deepcopy({k: v for k, v in _latest_attempt.items() if k != "generation"})
+
+
+
+def valid_refresh_attempt(value) -> bool:
+    """Strict optional health-contract validation; no coercion of public fields."""
+    if value is None:
+        return True
+    if not isinstance(value, dict) or set(value) != {
+        "state", "stage", "started_at", "finished_at", "reason_code", "failed_sources", "pending_sources", "source_errors",
+    }:
+        return False
+    if value["state"] not in ("running", "succeeded", "failed") or value["stage"] not in (
+        "collection", "quality", "persistence", "complete",
+    ):
+        return False
+    code = value["reason_code"]
+    if code is not None and (not isinstance(code, str) or code not in _ATTEMPT_REASON_CODES):
+        return False
+    for field in ("failed_sources", "pending_sources"):
+        items = value[field]
+        if not isinstance(items, list) or any(not isinstance(key, str) or key not in _SOURCE_KEYS for key in items):
+            return False
+        if len(set(items)) != len(items):
+            return False
+    if set(value["failed_sources"]) & set(value["pending_sources"]):
+        return False
+    errors = value["source_errors"]
+    if not isinstance(errors, dict) or any(
+        key not in value["failed_sources"] or not isinstance(code, str) or code not in push2_guard.BLOCK_REASON_CODES
+        for key, code in errors.items()
+    ):
+        return False
+    for field in ("started_at", "finished_at"):
+        timestamp = value[field]
+        if field == "finished_at" and timestamp is None and value["state"] == "running":
+            continue
+        if not isinstance(timestamp, str):
+            return False
+        try:
+            observed = datetime.fromisoformat(timestamp)
+        except ValueError:
+            return False
+        if observed.utcoffset() != timedelta(0):
+            return False
+    return True
+
+def _start_refresh_attempt(generation: int) -> None:
+    global _latest_attempt
+    with _attempt_lock:
+        _latest_attempt = {
+            "generation": generation, "state": "running", "stage": "collection",
+            "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "finished_at": None, "reason_code": None,
+            "failed_sources": [], "pending_sources": [], "source_errors": {},
+        }
+
+
+def _finish_refresh_attempt(generation: int, result=None, *, reason: str | None = None) -> None:
+    collection = result.get("collection", {}) if isinstance(result, dict) else {}
+    if not isinstance(collection, dict):
+        collection = {}
+    health = result.get("data_health") if isinstance(result, dict) else None
+    components = health.get("components") if isinstance(health, dict) else None
+    if not isinstance(components, dict):
+        components = {}
+    mapped = {"industry": "industry_boards", "concept": "concept_boards", "region": "region_boards"}
+    failed = [key for key in _SOURCE_KEYS if key in (collection.get("failed") or [])
+              or components.get(mapped.get(key, key)) == "unavailable"]
+    pending = [key for key in _SOURCE_KEYS if key in (collection.get("pending") or [])]
+    failed = [key for key in failed if key not in pending]
+    raw_errors = collection.get("source_errors")
+    source_errors = {key: code for key, code in raw_errors.items()
+                     if key in failed and isinstance(code, str) and code in push2_guard.BLOCK_REASON_CODES} if isinstance(raw_errors, dict) else {}
+    # A collection timeout is more actionable than the downstream quality rejection.
+    code = reason
+    if reason in {"unavailable", "critical_unavailable", "partial_with_existing_normal"}:
+        code = collection.get("reason_code") or reason
+        decisive = [key for key in failed if key in daily_review_cache.CRITICAL_COMPONENT_KEYS] if reason == "critical_unavailable" else failed
+        if (code == reason and decisive and all(key in source_errors for key in decisive)
+                and len({source_errors[key] for key in decisive}) == 1):
+            code = source_errors[decisive[0]]
+    code = code if isinstance(code, str) and code in _ATTEMPT_REASON_CODES else ("build_exception" if reason else None)
+    stage = ("complete" if not reason else "persistence" if reason in {"persist_failed", "store_rejected"}
+             else "collection" if code.startswith("SOURCE_") or reason == "build_exception" else "quality")
+    with _attempt_lock:
+        if _latest_attempt is None or _latest_attempt["generation"] != generation:
+            return
+        _latest_attempt.update(
+            state="failed" if reason else "succeeded", stage=stage,
+            finished_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            reason_code=code, failed_sources=failed, pending_sources=pending, source_errors=source_errors,
+        )
+
+
+@contextmanager
+def _record_attempt_errors(generation: int, result):
+    """Finalize only this build's attempt if processing fails after collection."""
+    try:
+        yield
+    except Exception as exc:
+        reason = exc.reason if isinstance(exc, DailyReviewRefreshError) else "build_exception"
+        _finish_refresh_attempt(generation, result, reason=reason)
+        raise
 
 # 用户显式刷新：真正 single-flight（每轮独立 flight 对象）
 # - 调用者进入时捕获当前 flight 引用，只等待/复用该对象
@@ -400,12 +527,12 @@ def _refresh_accepts_result(new_result: dict) -> tuple[bool, str]:
     return False, "invalid_status"
 
 
-def _store_review(result: dict) -> None:
+def _store_review(result: dict) -> bool:
     # 清洗对外 warnings，避免泄漏底层网络异常
     daily_review_errors.sanitize_review_public_fields(result)
 
     if not _should_replace_memory(result):
-        return
+        return False
     # 存独立副本，避免调用方修改污染缓存
     _review_cache[_REVIEW_CACHE_KEY] = (time.time(), copy.deepcopy(result))
     # 同步持久化（内部再判 partial 不覆盖 normal）
@@ -413,9 +540,9 @@ def _store_review(result: dict) -> None:
     if not isinstance(saved_at, str) or not saved_at.strip():
         saved_at = _now_str()
     try:
-        daily_review_cache.save_latest_review(result, saved_at=saved_at)
+        return daily_review_cache.save_latest_review(result, saved_at=saved_at)
     except Exception:  # noqa: BLE001
-        pass
+        return False
 
 
 def _store_review_on_refresh(result: dict) -> bool:
@@ -778,13 +905,16 @@ def _build_daily_review() -> dict:
     for entry in sources.values():
         if not isinstance(entry, dict) or entry.get("status") not in ("complete", "unavailable"):
             raise ValueError("invalid source entry")
-        if set(entry) - {"status", "value"}:
+        if set(entry) - {"status", "value", "reason_code"}:
             raise ValueError("invalid source fields")
+        if "reason_code" in entry and entry["reason_code"] not in push2_guard.BLOCK_REASON_CODES:
+            raise ValueError("invalid source reason")
     result = _assemble_daily_review(sources)
     result["collection"] = {
         "completed": [key for key in KEYS if sources.get(key, {}).get("status") == "complete"],
         "failed": [key for key in KEYS if sources.get(key, {}).get("status") == "unavailable"],
         "pending": [key for key in KEYS if key not in sources],
+        "source_errors": {key: entry["reason_code"] for key, entry in sources.items() if "reason_code" in entry},
         "reason_code": packet.get("reason_code") if packet.get("reason_code") in
             (None, "SOURCE_TIMEOUT", "SOURCE_UNAVAILABLE", "SOURCE_BUSY", "SOURCE_BAD_RESPONSE") else "SOURCE_BAD_RESPONSE",
     }
@@ -806,17 +936,19 @@ def _shared_build():
             _build_generation += 1
             flight = _ExplicitRefreshFlight(_build_generation)
             _build_flight = flight
+            _start_refresh_attempt(flight.gen)
     if leader:
         try:
             flight.result = _build_daily_review()
         except BaseException as exc:
             flight.error = exc
+            _finish_refresh_attempt(flight.gen, reason="build_exception")
         finally:
             flight.event.set()
             with _build_flight_lock:
                 if _build_flight is flight:
                     _build_flight = None
-    elif not flight.event.wait(14):
+    elif not flight.event.wait(_REFRESH_JOIN_TIMEOUT):
         raise DailyReviewRefreshError(reason="flight_timeout")
     if flight.error is not None:
         raise flight.error
@@ -840,14 +972,18 @@ def generate_daily_review() -> dict:
 
     global _committed_generation
     generation, result = _shared_build()
-    daily_review_errors.sanitize_review_public_fields(result)
-    with _review_lock, _build_flight_lock:
-        if generation == _build_generation and generation > _committed_generation:
-            _store_review(result)
-            _committed_generation = generation
-        elif (cached := _cached_review()) is not None:
-            return copy.deepcopy(cached)
-    return copy.deepcopy(result)
+    with _record_attempt_errors(generation, result):
+        daily_review_errors.sanitize_review_public_fields(result)
+        with _review_lock, _build_flight_lock:
+            if generation == _build_generation and generation > _committed_generation:
+                accepted, reason = _refresh_accepts_result(result)
+                stored = _store_review(result)
+                _finish_refresh_attempt(generation, result,
+                                        reason=None if stored else ("persist_failed" if accepted else reason))
+                _committed_generation = generation
+            elif (cached := _cached_review()) is not None:
+                return copy.deepcopy(cached)
+        return copy.deepcopy(result)
 
 
 class DailyReviewRefreshError(RuntimeError):
@@ -905,31 +1041,32 @@ def _run_explicit_refresh_build() -> dict:
     except Exception as exc:  # noqa: BLE001
         raise DailyReviewRefreshError(reason="build_exception") from exc
 
-    if not isinstance(result, dict):
-        raise DailyReviewRefreshError(reason="invalid_result")
+    with _record_attempt_errors(generation, result):
+        if not isinstance(result, dict):
+            raise DailyReviewRefreshError(reason="invalid_result")
 
-    daily_review_errors.sanitize_review_public_fields(result)
+        daily_review_errors.sanitize_review_public_fields(result)
 
-    # Generation fencing and quality checks share the parent persistence lock.
-    with _review_lock, _build_flight_lock:
-        if generation != _build_generation or generation < _committed_generation:
-            raise DailyReviewRefreshError(reason="superseded")
-        accepted, reason = _refresh_accepts_result(result)
-        if not accepted:
-            raise DailyReviewRefreshError(reason=reason)
-        if not _store_review_on_refresh(result):
-            raise DailyReviewRefreshError(reason="persist_failed")
-        _committed_generation = generation
-        stored = _cached_review()
-        if stored is None:
-            raise DailyReviewRefreshError(reason="store_rejected")
-        _clear_refresh_failure()
-        return _success_payload_for_display(stored, source="refresh")
-
+        # Generation fencing and quality checks share the parent persistence lock.
+        with _review_lock, _build_flight_lock:
+            if generation != _build_generation or generation < _committed_generation:
+                raise DailyReviewRefreshError(reason="superseded")
+            accepted, reason = _refresh_accepts_result(result)
+            if not accepted:
+                raise DailyReviewRefreshError(reason=reason)
+            if not _store_review_on_refresh(result):
+                raise DailyReviewRefreshError(reason="persist_failed")
+            _committed_generation = generation
+            stored = _cached_review()
+            if stored is None:
+                raise DailyReviewRefreshError(reason="store_rejected")
+            _clear_refresh_failure()
+            _finish_refresh_attempt(generation, result)
+            return _success_payload_for_display(stored, source="refresh")
 
 def _await_explicit_refresh_flight(flight: _ExplicitRefreshFlight) -> dict:
     """等待已捕获的 flight；只读该对象，不受后续轮次 current 替换影响。"""
-    if not flight.event.wait(timeout=14):
+    if not flight.event.wait(timeout=_REFRESH_JOIN_TIMEOUT):
         raise DailyReviewRefreshError(reason="flight_timeout")
     if flight.error is not None:
         raise flight.error
@@ -1029,6 +1166,7 @@ def _cache_meta(
         # 新鲜缓存也可能来自失败刷新之前；失败原因与 TTL 是否到期独立。
         "refresh_failed": failed,
         "refresh_error": err if failed else None,
+        "refresh_attempt": latest_refresh_attempt(),
     }
 
 

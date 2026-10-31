@@ -161,13 +161,21 @@ def validate_data_health_record(
         raise RuntimeError("invalid DataHealthRecord: not a mapping")
 
     # 1. 字段集合精确相等
-    if set(record.keys()) != _REQUIRED_RECORD_KEYS:
+    record_keys = set(record)
+    if adapter.source_id == "daily_review":
+        record_keys.discard("refresh_attempt")
+    if record_keys != _REQUIRED_RECORD_KEYS:
         missing = _REQUIRED_RECORD_KEYS - set(record.keys())
         extra = set(record.keys()) - _REQUIRED_RECORD_KEYS
         raise RuntimeError(
             "invalid DataHealthRecord: keys mismatch "
             f"(missing={sorted(missing)}, extra={sorted(extra)})"
         )
+
+    if "refresh_attempt" in record:
+        import daily_review
+        if not daily_review.valid_refresh_attempt(record["refresh_attempt"]):
+            raise RuntimeError("invalid DataHealthRecord: refresh_attempt")
 
     # 2. source_id 与 adapter 一致
     sid = record["source_id"]
@@ -279,6 +287,17 @@ class DailyReviewAdapter:
     display_name = "每日复盘"
 
     def read(self, context: HealthReadContext) -> svc.DataHealthRecord:
+        import daily_review as dr
+        try:
+            record = self._read_snapshot(context)
+        except AdapterReadError as exc:
+            m = _meta(self.source_id)
+            record = svc.unavailable_record(m["source_id"], m["module"], m["display_name"],
+                                            exc.error_code, detail_path="/daily-review")
+        record["refresh_attempt"] = dr.latest_refresh_attempt()
+        return record
+
+    def _read_snapshot(self, context: HealthReadContext) -> svc.DataHealthRecord:
         m = _meta(self.source_id)
         import daily_review as dr
         import daily_review_cache as drc

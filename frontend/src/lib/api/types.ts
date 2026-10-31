@@ -812,6 +812,19 @@ export interface BoardRankingData {
 }
 
 
+export type DailyReviewSourceErrorCode = "SOURCE_COOLDOWN" | "SOURCE_BUDGET_EXHAUSTED" | "SOURCE_READ_ONLY" | "SOURCE_SAFETY_UNAVAILABLE" | "SOURCE_REFUSED" | "SOURCE_BLOCKED";
+
+export interface DailyReviewRefreshAttempt {
+  source_errors?: Record<string, DailyReviewSourceErrorCode>;
+  stage?: "collection" | "quality" | "persistence" | "complete" | null;
+  state: "running" | "succeeded" | "failed";
+  started_at: string;
+  finished_at: string | null;
+  reason_code: string | null;
+  failed_sources: string[];
+  pending_sources: string[];
+}
+
 /** GET /api/daily-review 可选缓存元数据（stale-while-revalidate） */
 export interface DailyReviewCacheMeta {
   source: "live" | "memory" | "persisted" | string;
@@ -822,6 +835,7 @@ export interface DailyReviewCacheMeta {
   /** 后台刷新失败：继续展示旧结果 */
   refresh_failed?: boolean;
   refresh_error?: string | null;
+  refresh_attempt?: DailyReviewRefreshAttempt | null;
 }
 
 
@@ -1497,6 +1511,7 @@ export type AiResultType = "daily_review_ai" | "portfolio_advice";
 export type DataHealthStatus = "normal" | "partial" | "unavailable";
 
 export interface DataHealthRecordDto {
+  refresh_attempt?: DailyReviewRefreshAttempt | null;
   source_id: string;
   module: string;
   display_name: string;

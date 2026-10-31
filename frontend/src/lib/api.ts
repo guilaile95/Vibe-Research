@@ -10,6 +10,7 @@ import type { MarketCloudEnvelope } from "./marketCloud.ts";
 import type { EvidenceReadiness } from "./evidenceReadiness.ts";
 import type { CohortIdentity } from "./cohortIdentity.ts";
 import type { SealQualityArchive } from "./sealQuality.ts";
+import { parseRefreshAttempt } from "./dailyReviewRefreshAttempt.ts";
 import { parseReportChatCoverage } from "./reportChatCoverage.ts";
 import { parseReportListResult } from "./reportSourceCoverage.ts";
 import { parseLeadAnalysisContext } from "./leadAnalysisContext.ts";
@@ -185,6 +186,7 @@ import type {
 
 
 export class ApiError extends Error {
+  refreshAttempt?: import("./api/types.ts").DailyReviewRefreshAttempt | null;
   readonly status: number;
   /** 后端结构化 detail（如 Portfolio Advice 的 {message,error_code,stage,reason}），无则为 undefined。 */
   readonly detail?: unknown;
@@ -646,7 +648,9 @@ export const api = {
       if (resp.status === 401) {
         throw new ApiError("后端开启了访问鉴权（VR_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
       }
-      throw new ApiError(payload?.detail || `HTTP ${resp.status}`, resp.status);
+      const error = new ApiError(payload?.detail || `HTTP ${resp.status}`, resp.status);
+      error.refreshAttempt = parseRefreshAttempt(payload?.refresh_attempt);
+      throw error;
     }
     const data = (payload?.data ?? payload) as DailyReviewData;
     const cache_meta = (payload?.cache_meta ?? null) as DailyReviewCacheMeta | null;

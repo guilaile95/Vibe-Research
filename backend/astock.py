@@ -1088,7 +1088,7 @@ def em_get(url: str, params: dict | None = None, headers: dict | None = None, ti
             if status in (403, 429):
                 push2_guard.record("refusal")
                 response.close()
-                raise push2_guard.Push2Blocked("Push2 source refused the request; cooldown started")
+                raise push2_guard.Push2Blocked("Push2 source refused the request; cooldown started", code="SOURCE_REFUSED")
             if isinstance(status, int) and status >= 500:
                 push2_guard.record("failure")
                 response.close()

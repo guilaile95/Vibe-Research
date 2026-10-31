@@ -1,8 +1,11 @@
+import type { DailyReviewRefreshAttempt } from "./api/types.ts";
+
 /** 数据健康中心展示纯函数（可单测，无 React）。 */
 
 export type HealthStatus = "normal" | "partial" | "unavailable";
 
 export type DataHealthRecord = {
+  refresh_attempt?: DailyReviewRefreshAttempt | null;
   source_id: string;
   module: string;
   display_name: string;

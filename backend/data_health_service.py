@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict, NotRequired
 from zoneinfo import ZoneInfo
 
 DataHealthStatus = Literal["normal", "partial", "unavailable"]
@@ -70,6 +70,7 @@ REQUEST_SCOPE_DISCLAIMER = (
 
 
 class DataHealthRecord(TypedDict):
+    refresh_attempt: NotRequired[dict | None]
     source_id: str
     module: str
     display_name: str

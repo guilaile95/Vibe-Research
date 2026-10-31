@@ -1968,23 +1968,14 @@ def daily_review_refresh():
     except daily_review.DailyReviewRefreshError as e:
         # 不把降级包当成功返回；旧成功仍在内存/磁盘，供后续 GET
         reason = getattr(e, "reason", "") or ""
-        if reason in (
-            "unavailable",
-            "critical_unavailable",
-            "partial_with_existing_normal",
-            "persist_failed",
-            "store_rejected",
-            "invalid_result",
-            "invalid_status",
-        ):
-            raise HTTPException(
-                503,
-                str(e) or "市场核心数据暂不可用，无法刷新每日复盘",
-            ) from None
-        raise HTTPException(
-            502,
-            str(e) or "市场数据刷新失败，请稍后重试",
-        ) from None
+        status = 503 if reason in (
+            "unavailable", "critical_unavailable", "partial_with_existing_normal",
+            "persist_failed", "store_rejected", "invalid_result", "invalid_status",
+        ) else 502
+        return JSONResponse(status_code=status, content={
+            "detail": str(e) or "市场数据刷新失败，请稍后重试",
+            "refresh_attempt": daily_review.latest_refresh_attempt(),
+        })
     except HTTPException:
         raise
     except Exception:  # noqa: BLE001 — 不向客户端暴露内部细节

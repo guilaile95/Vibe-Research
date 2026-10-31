@@ -1,3 +1,4 @@
+import { RefreshAttemptNotice } from "@/components/dailyReview/RefreshAttemptNotice";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Activity, AlertTriangle, CheckCircle2, CircleDashed, HelpCircle, Loader2, RefreshCw, XCircle } from "lucide-react";
@@ -182,10 +183,12 @@ export function DataHealth() {
             className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
           >
             <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-            重新读取
+            重新读取健康状态
           </button>
         }
       />
+
+      <p className="mb-4 text-xs text-muted-foreground">重新读取只查看现有状态，不重试数据采集。每日复盘失败后，请到 <Link to="/daily-review" className="text-primary hover:underline">每日复盘刷新数据</Link>。最近成功结果与最近刷新尝试分别展示。</p>
 
       {loading && !overview && (
         <GlassCard className="mb-4 flex items-center gap-2 p-6 text-sm text-muted-foreground">
@@ -346,6 +349,7 @@ export function DataHealth() {
                 <p className="text-[11px] text-muted-foreground">
                   覆盖：{coverageText(it.coverage_current, it.coverage_expected)}
                 </p>
+                {it.source_id === "daily_review" && <RefreshAttemptNotice attempt={it.refresh_attempt} />}
                 {it.last_error_summary && (
                   <p className="mt-1 text-[11px] text-amber-200/80">{it.last_error_summary}</p>
                 )}
@@ -405,6 +409,7 @@ export function DataHealth() {
                 </div>
                 <p>观察时间：{detail.record.observed_at ?? "—"}</p>
                 <p>最近成功：{detail.record.last_success_at ?? "—"}</p>
+                {detail.record.source_id === "daily_review" && <RefreshAttemptNotice attempt={detail.record.refresh_attempt} />}
                 <p>错误码：{detail.record.last_error_code ?? "—"}</p>
                 <p>错误摘要：{detail.record.last_error_summary ?? "—"}</p>
                 <p>

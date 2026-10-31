@@ -692,7 +692,8 @@ def test_refresh_reason_survives_memory_and_disk_reload_until_success(monkeypatc
 
     response = client.post("/api/daily-review/refresh")
     assert response.status_code == 503
-    assert response.json() == {"detail": expected}
+    assert response.json()["detail"] == expected
+    assert response.json()["refresh_attempt"]["state"] == "failed"
     for source in ("memory", "persisted"):
         if source == "persisted":
             daily_review._clear_review_cache()

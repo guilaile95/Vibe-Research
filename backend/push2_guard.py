@@ -22,6 +22,24 @@ FAILURE_COOLDOWN = 300
 FAILURE_THRESHOLD = 3
 
 
+BLOCK_REASON_CODES = frozenset({
+    "SOURCE_COOLDOWN", "SOURCE_BUDGET_EXHAUSTED", "SOURCE_READ_ONLY",
+    "SOURCE_SAFETY_UNAVAILABLE", "SOURCE_REFUSED", "SOURCE_BLOCKED",
+})
+_BLOCK_OBSERVER = ContextVar("push2_block_observer", default=None)
+
+
+@contextmanager
+def observe_blocks():
+    """Observe actual typed blocks in this source thread; never read/write guard state."""
+    codes = []
+    token = _BLOCK_OBSERVER.set(codes)
+    try:
+        yield codes
+    finally:
+        _BLOCK_OBSERVER.reset(token)
+
+
 _READ_ONLY = ContextVar("push2_read_only", default=False)
 
 
@@ -40,7 +58,14 @@ def read_only():
 
 
 class Push2Blocked(RuntimeError):
-    """No further request may be sent to this source yet."""
+    """No further request may be sent to this source yet; fixed public code only."""
+
+    def __init__(self, message="Push2 source is blocked", *, code="SOURCE_BLOCKED"):
+        super().__init__(message)
+        self.code = code if isinstance(code, str) and code in BLOCK_REASON_CODES else "SOURCE_BLOCKED"
+        observed = _BLOCK_OBSERVER.get()
+        if observed is not None:
+            observed.append(self.code)
 
 
 def applies(url: str) -> bool:
@@ -55,7 +80,7 @@ def _path() -> Path:
 
 def _update(*, reserve: bool, outcome: str | None = None) -> None:
     if is_read_only():
-        raise Push2Blocked("Push2 refresh requires a writable source context")
+        raise Push2Blocked("Push2 refresh requires a writable source context", code="SOURCE_READ_ONLY")
     now = time.time()
     day = datetime.fromtimestamp(now, timezone.utc).date().isoformat()
     conn = None
@@ -71,14 +96,14 @@ def _update(*, reserve: bool, outcome: str | None = None) -> None:
                 or failures < 0 or not isinstance(until, (int, float))
                 or not math.isfinite(until) or until < 0
                 or not isinstance(old_day, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", old_day)):
-            raise Push2Blocked("Push2 safety state is invalid")
+            raise Push2Blocked("Push2 safety state is invalid", code="SOURCE_SAFETY_UNAVAILABLE")
         if old_day != day:
             used = 0
         if reserve:
             if now < until:
-                raise Push2Blocked("Push2 source cooldown is active")
+                raise Push2Blocked("Push2 source cooldown is active", code="SOURCE_COOLDOWN")
             if used >= DAILY_LIMIT:
-                raise Push2Blocked("Push2 daily request budget exhausted")
+                raise Push2Blocked("Push2 daily request budget exhausted", code="SOURCE_BUDGET_EXHAUSTED")
             used += 1
         elif outcome == "refusal":
             until = max(until, now + REFUSAL_COOLDOWN)
@@ -92,7 +117,7 @@ def _update(*, reserve: bool, outcome: str | None = None) -> None:
         conn.execute("INSERT OR REPLACE INTO guard VALUES (1, ?, ?, ?, ?)", (day, used, failures, until))
         conn.commit()
     except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
-        raise Push2Blocked("Push2 safety state is unavailable") from exc
+        raise Push2Blocked("Push2 safety state is unavailable", code="SOURCE_SAFETY_UNAVAILABLE") from exc
     finally:
         if conn is not None:
             conn.close()
