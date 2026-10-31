@@ -137,7 +137,22 @@ export function Debate() {
   async function save() {
     if (!finished || running || saved || saving.current) return;
     saving.current = true; const epoch = saveEpoch.current;
-    const body = stages.map((s) => `## ${s.label}\n\n${s.content}`).join("\n\n---\n\n");
+    // Persist system-observed limits, even when the model omits them from its prose.
+    const limitations = [
+      ...missing.map((title) => `${title} · 未取到`),
+      ...partial.map((title) => `${title} · 部分数据`),
+      ...progress.flatMap((p) => {
+        const labels = [
+          p.status === "partial" ? "部分数据" : p.status === "empty" ? "未取到记录"
+            : p.status === "error" || (!p.status && !p.ok) ? "获取失败" : "",
+          p.truncated ? "已截断" : "",
+        ].filter(Boolean);
+        return labels.length ? [`${p.title} · ${labels.join(" · ")}`] : [];
+      }),
+    ];
+    const dataLimits = `## 当次数据与限制\n\n${DOSSIER_HINT}`
+      + (limitations.length ? `\n\n${[...new Set(limitations)].map((line) => `- ${line}`).join("\n")}` : "");
+    const body = [dataLimits, ...stages.map((s) => `## ${s.label}\n\n${s.content}`)].join("\n\n---\n\n");
     try {
       await addNote("多空辩论", `多空辩论 · ${analyzedCode}`, body);
       if (epoch === saveEpoch.current) { setSaved(true); setError(""); }

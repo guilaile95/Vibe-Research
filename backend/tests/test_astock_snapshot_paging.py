@@ -180,7 +180,7 @@ def test_overlapping_pages_rejected(monkeypatch):
         astock.a_share_snapshot(page_size=2)
 
 
-def test_missing_code_skipped(monkeypatch):
+def test_missing_code_rejects_incomplete_snapshot(monkeypatch):
     rows = [
         _row("600001", "甲"),
         {"f12": "", "f14": "无代码", "f2": 1, "f3": 1},
@@ -191,8 +191,8 @@ def test_missing_code_skipped(monkeypatch):
         return {"data": {"total": 3, "diff": rows}}
 
     _install(monkeypatch, handler)
-    out = astock.a_share_snapshot()
-    assert [x["code"] for x in out] == ["600001", "600002"]
+    with pytest.raises(RuntimeError, match="incomplete mapped data"):
+        astock.a_share_snapshot()
 
 
 def test_snapshot_maps_optional_valuation_and_listing_date_without_fake_defaults(monkeypatch):
@@ -739,10 +739,11 @@ def test_snapshot_count_overshoot_rejected(monkeypatch):
         astock.a_share_snapshot()
 
 
-def test_snapshot_filtered_only_page_is_valid_raw_progress(monkeypatch):
+def test_snapshot_filtered_only_page_cannot_claim_complete_market(monkeypatch):
     pages = [_codes(2), [_row("INDEX1"), _row("INDEX2")], _codes(1, 2)]
     _install(monkeypatch, lambda _, p: {"data": {"total": "5", "diff": pages[int(p["pn"]) - 1]}})
-    assert len(astock.a_share_snapshot(page_size=2)) == 3
+    with pytest.raises(RuntimeError, match="incomplete mapped data"):
+        astock.a_share_snapshot(page_size=2)
 
 
 def test_snapshot_filtered_overlap_and_malformed_rows_rejected(monkeypatch):
@@ -750,3 +751,35 @@ def test_snapshot_filtered_overlap_and_malformed_rows_rejected(monkeypatch):
         _install(monkeypatch, lambda *_: {"data": {"total": 2, "diff": rows}})
         with pytest.raises(RuntimeError, match="overlapping|invalid diff row"):
             astock.a_share_snapshot()
+
+
+@pytest.mark.parametrize("status", [301, 400, 429, 500, 503])
+def test_snapshot_rejects_http_error_even_with_valid_payload(monkeypatch, status):
+    response = _FakeResp({"rc": 0, "data": {"total": 2, "diff": _codes(2)}})
+    response.status_code = status
+    monkeypatch.setattr(astock, "_em_get_page_with_retries", lambda *a, **kw: response)
+    with pytest.raises(RuntimeError, match="HTTP error"):
+        astock.a_share_snapshot()
+
+
+@pytest.mark.parametrize("rc", [1, -1, 500, "0", False, None])
+def test_snapshot_rejects_explicit_upstream_failure(monkeypatch, rc):
+    _install(monkeypatch, lambda *_: {"rc": rc, "data": {"total": 2, "diff": _codes(2)}})
+    with pytest.raises(RuntimeError, match="upstream status"):
+        astock.a_share_snapshot()
+
+
+def test_snapshot_accepts_explicit_upstream_success(monkeypatch):
+    _install(monkeypatch, lambda *_: {"rc": 0, "data": {"total": 2, "diff": _codes(2)}})
+    assert len(astock.a_share_snapshot()) == 2
+
+
+def test_filtered_snapshot_never_enters_market_cache(monkeypatch):
+    # Raw coverage is 100%, but filtering the declining row would turn 50%
+    # advancing breadth into 100%. The whole snapshot must stay unavailable.
+    rows = [_row("600001", "甲", f3=1), _row("600002", "", f3=-1)]
+    _install(monkeypatch, lambda *_: {"rc": 0, "data": {"total": 2, "diff": rows}})
+    monkeypatch.setattr(market, "_CACHE", {})
+    with pytest.raises(RuntimeError, match="incomplete mapped data"):
+        market.get_a_share_snapshot()
+    assert "a_share_snapshot" not in market._CACHE

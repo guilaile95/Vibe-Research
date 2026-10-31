@@ -1490,7 +1490,8 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
     失败不伪装成空市场：网络 / JSON / 结构异常抛出 ``RuntimeError``。
 
     每页必须有一致的非负整数 total，原始行数必须精确匹配。
-    重复证券或重叠页面整批失败；过滤行仍计入原始总数，不要求全部是 A 股。
+    重复证券或重叠页面整批失败；A 股专用查询的原始行必须全部可映射，
+    否则不能把过滤后的残缺结果作为完整市场快照。
     """
     if page_size < 1:
         raise ValueError("page_size must be >= 1")
@@ -1536,6 +1537,8 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
                     min_interval=_EM_MIN_INTERVAL,
                     deadline=deadline,
                 )
+                if not 200 <= getattr(r, "status_code", 200) < 300:
+                    raise RuntimeError(f"a_share_snapshot page {pn}: HTTP error")
                 try:
                     payload = r.json()
                 except Exception as e:  # noqa: BLE001 — JSON 解析失败不重试网络
@@ -1560,6 +1563,10 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
             raise RuntimeError(
                 f"a_share_snapshot page {pn}: response is not a dict ({type(payload).__name__})"
             )
+        # Missing rc is tolerated for legacy responses; an explicit failure or
+        # malformed status must never lend authority to a plausible data body.
+        if "rc" in payload and (type(payload["rc"]) is not int or payload["rc"] != 0):
+            raise RuntimeError(f"a_share_snapshot page {pn}: invalid upstream status")
         if "data" not in payload or payload["data"] is None:
             raise RuntimeError(f"a_share_snapshot page {pn}: missing data in response")
         data = payload["data"]
@@ -1653,6 +1660,10 @@ def a_share_snapshot(*, page_size: int = _A_SHARE_PAGE_SIZE) -> list[dict]:
     if fetched_raw != total:
         raise RuntimeError(
             f"a_share_snapshot: incomplete data (fetched_raw={fetched_raw}, total={total})"
+        )
+    if len(out) != total:
+        raise RuntimeError(
+            f"a_share_snapshot: incomplete mapped data (mapped={len(out)}, total={total})"
         )
     return out
 
