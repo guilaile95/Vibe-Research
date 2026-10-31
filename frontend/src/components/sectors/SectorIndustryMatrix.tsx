@@ -7,6 +7,9 @@ import {
   formatMatrixCount,
   formatMatrixNumber,
   formatMatrixPercent,
+  SECTOR_INDUSTRY_MATRIX_ABOVE_MA20_HEADER,
+  SECTOR_INDUSTRY_MATRIX_INDUSTRY_HEADER,
+  SECTOR_INDUSTRY_MATRIX_PARTICIPATION_HEADER,
   sectorIndustryMatrixState,
   sortSectorIndustryRows,
   type SectorIndustrySortKey,
@@ -17,8 +20,8 @@ const SORT_OPTIONS: Array<{ value: SectorIndustrySortKey; label: string }> = [
   { value: "member_aggregate_return_5d_pct", label: "5日成员聚合" },
   { value: "member_aggregate_return_20d_pct", label: "20日成员聚合" },
   { value: "up_ratio", label: "上涨比例" },
-  { value: "above_ma20_ratio", label: "Above MA20" },
-  { value: "turnover_pct_avg", label: "换手 participation" },
+  { value: "above_ma20_ratio", label: SECTOR_INDUSTRY_MATRIX_ABOVE_MA20_HEADER },
+  { value: "turnover_pct_avg", label: SECTOR_INDUSTRY_MATRIX_PARTICIPATION_HEADER },
   { value: "pe_ttm_positive_median", label: "PE 正值中位数" },
   { value: "pb_positive_median", label: "PB 正值中位数" },
 ];
@@ -113,14 +116,14 @@ export function SectorIndustryMatrix({ data, loading, error }: Props) {
             <table className="w-full min-w-[1080px] text-left text-xs" data-testid="sector-industry-table">
               <thead className="bg-muted/25 text-[10px] text-muted-foreground">
                 <tr>
-                  <th className="px-3 py-2">Eastmoney 行业</th>
+                  <th className="px-3 py-2">{SECTOR_INDUSTRY_MATRIX_INDUSTRY_HEADER}</th>
                   <th className="px-3 py-2">成员 / RDP</th>
                   <th className="px-3 py-2">覆盖率</th>
                   <th className="px-3 py-2">5日成员聚合</th>
                   <th className="px-3 py-2">20日成员聚合</th>
                   <th className="px-3 py-2">上涨 / 下跌 / 平盘</th>
-                  <th className="px-3 py-2">Above MA20</th>
-                  <th className="px-3 py-2">Participation</th>
+                  <th className="px-3 py-2">{SECTOR_INDUSTRY_MATRIX_ABOVE_MA20_HEADER}</th>
+                  <th className="px-3 py-2">{SECTOR_INDUSTRY_MATRIX_PARTICIPATION_HEADER}</th>
                   <th className="px-3 py-2">当前成员 PE / PB 分布</th>
                   <th className="px-3 py-2">入口</th>
                 </tr>
