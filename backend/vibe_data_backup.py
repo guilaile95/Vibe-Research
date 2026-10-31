@@ -46,7 +46,9 @@ _EXCLUDED_NAMES = frozenset(
 # New persistence owners must register their asset here before claiming coverage.
 _DATA_FILES = frozenset({
     "portfolio.json", "account_profile.json", "account_execution_policy.json",
-    "watchlist.json", "daily_review_latest.json", "data_health_events.json",
+    # Legacy interrupted saves can leave this exact recovery file authoritative.
+    # Preserve both paths/bytes; do not generalize this to arbitrary .bak files.
+    "watchlist.json", "watchlist.json.bak", "daily_review_latest.json", "data_health_events.json",
     "campaigns.sqlite3", "alert_rules.sqlite3", "decision_trace.sqlite3",
     "decision_challenges.sqlite3", "frozen_decisions.sqlite3", "trade_ledger.sqlite3",
     "formal_trade_attributions.sqlite3", "trade_origins.sqlite3", "native_intel.sqlite3",

@@ -212,19 +212,15 @@ def is_stale_cn_trade_date(
     """日级 CN 来源 stale：优先交易日规则，否则 36h 回退。"""
     if data_trade_date and isinstance(data_trade_date, str) and len(data_trade_date) >= 10:
         td = data_trade_date[:10]
-        expected = expected_cn_trade_date(now_utc)
         bj = now_utc.astimezone(BEIJING)
-        # 15:00–15:30 落地宽限：允许上一期望交易日，更早则 stale
-        if bj.weekday() < 5 and (15, 0) <= (bj.hour, bj.minute) < (15, 30):
-            previous_trade_date = previous_weekday(bj.date() - timedelta(days=1))
-            return td < previous_trade_date.isoformat()
-        # 工作日 15:30 后期望当天
-        if bj.weekday() < 5 and (bj.hour, bj.minute) >= (15, 30):
-            return td < expected
-        # 其它时段：落后于期望则 stale
-        if td < expected:
-            return True
-        return False
+        # 日级数据在盘中仍以上一工作日为准；收盘后保留 30 分钟落地宽限。
+        # 不使用盘中 09:30 切换的期望日期，避免无新观察时 stale→fresh。
+        # 仍为保守工作日规则，无节假日日历；盘中报价另走 observation TTL。
+        if bj.weekday() < 5 and (bj.hour, bj.minute) < (15, 30):
+            expected = previous_weekday(bj.date() - timedelta(days=1)).isoformat()
+        else:
+            expected = expected_cn_trade_date(now_utc)
+        return td < expected
     if basis is None:
         return False
     return (now_utc - basis).total_seconds() > fallback_hours * 3600
