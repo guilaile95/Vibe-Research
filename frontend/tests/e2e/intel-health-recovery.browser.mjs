@@ -196,7 +196,7 @@ async function runScenario(browser, baseURL, width, scenario, evidenceDir) {
       const detailCard = page.getByRole("heading", { name: "单来源详情", exact: true }).locator("..");
       if (scenario === "health-refresh") {
         await detailCard.getByText(`错误码：${OLD}`, { exact: true }).waitFor();
-        await page.getByRole("button", { name: "重新读取", exact: true }).click();
+        await page.getByRole("button", { name: "重新读取健康状态", exact: true }).click();
         await bounded(fixture.reloadRequested, "selected detail reload");
         await card.getByLabel("数据状态：不可用", { exact: true }).waitFor();
         await detailCard.getByText("加载详情…", { exact: true }).waitFor();
