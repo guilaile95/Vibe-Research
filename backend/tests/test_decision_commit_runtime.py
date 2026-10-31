@@ -615,3 +615,45 @@ def test_existing_frozen_boundary_drives_material_projection_and_formal_readback
     assert material["decision_id"] == DECISION_ID
     assert material["decision_boundary_at"] == existing["committed_at"]
     assert result["authority_evaluations"]["formal_decision"]["evaluation"] == "EVALUATED"
+
+
+@pytest.mark.parametrize("status", ["DRAFT", "RESEARCHING", "ACTIVE", "REDUCING"])
+@pytest.mark.parametrize("requested_stance", ["WAIT", "BUY NOW", "BUY SMALL", "SCALE IN"])
+def test_non_entry_research_freeze_cannot_grant_buy_authority(status, requested_stance):
+    """A recorded research decision is not a lifecycle transition or entry permit."""
+    ports, state = _ports(_thesis(), campaign={**_campaign(), "status": status})
+
+    def unexpected_candidate_read():
+        pytest.fail("non-entry research must not acquire candidate-entry authority")
+
+    ports = replace(
+        ports,
+        position_reader=unexpected_candidate_read,
+        account_reader=unexpected_candidate_read,
+    )
+    draft = _draft()
+    draft["trade_view"]["stance"] = requested_stance
+    preview = runtime.preview_decision_proposal(
+        CAMPAIGN_ID, draft, ports=ports, as_of=AS_OF
+    )
+    positive_actions = {"BUY NOW", "BUY SMALL", "SCALE IN"}
+    assert preview["proposal"]["next_best_action"] not in positive_actions
+    assert positive_actions.isdisjoint(
+        preview["proposal"]["action_envelope"]["allowed_actions"]
+    )
+    result = runtime.commit_decision_proposal(
+        CAMPAIGN_ID,
+        {
+            **draft,
+            "as_of": AS_OF,
+            "expected_proposal_fingerprint": preview["proposal_fingerprint"],
+            "user_confirmed": True,
+        },
+        ports=ports,
+    )
+    assert result["committed"]["next_best_action"] not in positive_actions
+    assert positive_actions.isdisjoint(
+        result["committed"]["action_envelope"]["allowed_actions"]
+    )
+    assert state["writes"] == 1
+    assert state["campaign"]["status"] == status

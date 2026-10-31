@@ -172,6 +172,8 @@ export function DailyReview() {
   const [staleRefreshNote, setStaleRefreshNote] = useState<string | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollDeadlineRef = useRef<number>(0);
+  const pollGenerationRef = useRef(0);
+  const dailyRequestRef = useRef(0);
   const mountedRef = useRef(true);
   const drRefreshingRef = useRef(false);
 
@@ -283,6 +285,8 @@ export function DailyReview() {
   }, []);
 
   const clearPoll = useCallback(() => {
+    // Also invalidate a pending GET before manual refresh, restart, or unmount.
+    pollGenerationRef.current += 1;
     if (pollTimerRef.current != null) {
       clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
@@ -307,42 +311,49 @@ export function DailyReview() {
 
   const startStalePoll = useCallback(() => {
     clearPoll();
+    const generation = pollGenerationRef.current;
+    const active = () => mountedRef.current && generation === pollGenerationRef.current;
+    let inFlight = false;
     pollDeadlineRef.current = Date.now() + 120_000;
     pollTimerRef.current = setInterval(async () => {
-      if (!mountedRef.current) {
-        clearPoll();
-        return;
-      }
-      if (Date.now() > pollDeadlineRef.current) {
+      if (!active()) return;
+      if (Date.now() >= pollDeadlineRef.current) {
         clearPoll();
         setStaleRefreshNote((prev) =>
-          prev ? "后台刷新超时，仍显示上次成功结果" : prev,
+          prev ? "已停止等待，后台可能仍在刷新；当前显示上次成功结果，可稍后重新加载查看。" : prev,
         );
         return;
       }
+      if (inFlight) return;
+      inFlight = true;
       try {
         const res = await api.dailyReview();
-        if (!mountedRef.current) return;
+        if (!active()) return;
         applyDailyReviewPayload(res.data, res.cache_meta);
         if (!res.cache_meta?.stale || res.cache_meta?.refresh_failed) {
           clearPoll();
         }
       } catch {
-        // 轮询失败：保留旧结果，继续尝试直至超时
-        if (mountedRef.current) {
-          setStaleRefreshNote("最新数据刷新失败，当前继续显示上次成功结果。");
+        // GET 失败不等于后台刷新失败：保留旧结果，在等待窗口内重试。
+        if (active()) {
+          setStaleRefreshNote("读取刷新状态失败，当前继续显示上次成功结果，稍后重试。");
         }
+      } finally {
+        inFlight = false;
       }
     }, 2000);
   }, [applyDailyReviewPayload, clearPoll]);
 
   // 初始加载：只读 GET（可 stale-while-revalidate）
   const loadDailyReview = useCallback(() => {
+    const request = ++dailyRequestRef.current;
+    const active = () => mountedRef.current && request === dailyRequestRef.current;
     setDrDone(false);
     setDrErr(null);
     clearPoll();
     api.dailyReview()
       .then((res) => {
+        if (!active()) return;
         applyDailyReviewPayload(res.data, res.cache_meta);
         // 仅 stale 且未失败时轮询；refresh_failed 停止轮询，避免打满重试
         if (res.cache_meta?.stale && !res.cache_meta?.refresh_failed) {
@@ -350,6 +361,7 @@ export function DailyReview() {
         }
       })
       .catch((e) => {
+        if (!active()) return;
         // 有旧数据时不清空页面
         setDr((prev) => {
           if (prev) {
@@ -360,22 +372,26 @@ export function DailyReview() {
           return null;
         });
       })
-      .finally(() => setDrDone(true));
+      .finally(() => { if (active()) setDrDone(true); });
   }, [applyDailyReviewPayload, clearPoll, startStalePoll]);
 
   // 用户显式刷新：POST /api/daily-review/refresh（绕过完整包缓存）；防连点
   const refreshDailyReview = useCallback(() => {
     if (drRefreshingRef.current) return;
+    const request = ++dailyRequestRef.current;
+    const active = () => mountedRef.current && request === dailyRequestRef.current;
     drRefreshingRef.current = true;
     setDrRefreshing(true);
     setDrErr(null);
     clearPoll();
     api.dailyReviewRefresh()
       .then((res) => {
+        if (!active()) return;
         applyDailyReviewPayload(res.data, res.cache_meta);
         setStaleRefreshNote(null);
       })
       .catch((error) => {
+        if (!active()) return;
         const reason = error instanceof ApiError ? error.message : "最新数据刷新失败";
         setDr((prev) => {
           if (prev) {
@@ -387,8 +403,10 @@ export function DailyReview() {
         });
       })
       .finally(() => {
+        if (!active()) return;
         drRefreshingRef.current = false;
         setDrRefreshing(false);
+        setDrDone(true);
       });
   }, [applyDailyReviewPayload, clearPoll]);
 
