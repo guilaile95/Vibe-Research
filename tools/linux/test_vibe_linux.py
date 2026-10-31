@@ -168,7 +168,7 @@ class LinuxPackageTests(unittest.TestCase):
             self.package(root)
             (root / "private.env").write_text("never copy")
             prefix = Path(temp) / "install"
-            with patch.object(linux, "ROOT", root), patch.object(linux, "prerequisites"), patch.object(linux.os, "geteuid", return_value=1000), patch.object(linux, "checked") as commands:
+            with patch.object(linux, "ROOT", root), patch.object(linux, "prerequisites"), patch.object(linux.os, "geteuid", return_value=root.stat().st_uid), patch.object(linux, "checked") as commands:
                 linux.install(prefix)
                 target = prefix / "releases/test-1"
                 self.assertTrue((target / ".installed").exists())
@@ -177,13 +177,29 @@ class LinuxPackageTests(unittest.TestCase):
                 with self.assertRaises(FileExistsError):
                     linux.install(prefix)
 
+    def test_install_rejects_prefix_owned_by_another_user(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "package"
+            root.mkdir()
+            self.package(root)
+            prefix = Path(temp) / "install"
+            prefix.mkdir()
+            other_uid = prefix.stat().st_uid + 1
+            with patch.object(linux, "ROOT", root), patch.object(linux, "prerequisites"), \
+                    patch.object(linux.os, "geteuid", return_value=other_uid), \
+                    patch.object(linux, "checked") as commands:
+                with self.assertRaisesRegex(RuntimeError, "Install prefix must belong to the current user"):
+                    linux.install(prefix)
+                commands.assert_not_called()
+                self.assertFalse((prefix / "releases").exists())
+
     def test_failed_install_is_not_runnable(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "package"
             root.mkdir()
             self.package(root)
             prefix = Path(temp) / "install"
-            with patch.object(linux, "ROOT", root), patch.object(linux, "prerequisites"), patch.object(linux.os, "geteuid", return_value=1000), patch.object(linux, "checked", side_effect=subprocess.CalledProcessError(1, "mock")):
+            with patch.object(linux, "ROOT", root), patch.object(linux, "prerequisites"), patch.object(linux.os, "geteuid", return_value=root.stat().st_uid), patch.object(linux, "checked", side_effect=subprocess.CalledProcessError(1, "mock")):
                 with self.assertRaises(subprocess.CalledProcessError):
                     linux.install(prefix)
                 self.assertFalse((prefix / "releases/test-1/.installed").exists())
