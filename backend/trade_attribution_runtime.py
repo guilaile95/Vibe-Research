@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
+import sqlite3
 import threading
 import uuid
 
@@ -34,6 +36,40 @@ class TradeAttributionValidationError(TradeAttributionRuntimeError, ValueError):
 TRADE_RESOLUTION_LOCK = threading.RLock()
 _DECISION_PAGE_SIZE = 500
 _DECISION_SAFETY_BOUND = 10_000
+
+
+@contextmanager
+def _resolution_write_guard(trade_id: str):
+    """Serialize check-and-write across processes using the existing trade DB.
+
+    Lock order: process RLock -> trade ledger reservation -> resolution stores.
+    No trade-ledger rows are changed. Each resolution writes only one authority
+    store; a completed write commits before releasing this reservation. SQLite
+    also releases the reservation on process exit. This is exclusion, not a
+    cross-database transaction. Direct
+    storage writes remain outside this runtime contract and reads fail closed
+    if conflicting legacy authorities exist.
+    """
+    with TRADE_RESOLUTION_LOCK:
+        conn = None
+        try:
+            path = trade_ledger_service.resolve_db_path().resolve()
+            # Never create a missing trade ledger as a side effect of locking.
+            conn = sqlite3.connect(
+                f"{path.as_uri()}?mode=rw", uri=True, timeout=10,
+                isolation_level=None,
+            )
+            conn.execute("BEGIN IMMEDIATE")
+            # A trade could have been voided while this request waited.
+            trade = _trade(trade_id)
+            if trade.get("voided_at") or trade["execution_status"] == "not_executed":
+                raise TradeAttributionConflictError("未成交或已作废交易不可变更归属")
+            yield
+        except sqlite3.Error as exc:
+            raise TradeAttributionRuntimeError("交易归属写入锁不可用，请稍后重试") from exc
+        finally:
+            if conn is not None:
+                conn.close()  # Rolls back the reservation; no ledger writes.
 
 
 def _now() -> str:
@@ -172,7 +208,7 @@ def attribute(trade_id: str, payload: object) -> dict[str, Any]:
         raise TradeAttributionValidationError("冻结决策不是该交易的可归属候选")
     try:
         record = fta.create_attribution(decision, trade, attribution_id=fta.new_attribution_id(), created_at=_now()).to_dict()
-        with TRADE_RESOLUTION_LOCK:
+        with _resolution_write_guard(trade_id):
             existing_origin = origin_store.get_for_trade(db_path=_origin_path(), trade_id=trade_id)
             if existing_origin is not None:
                 raise TradeAttributionConflictError("交易已明确为 UNPLANNED，不可再建立 Formal Attribution")
@@ -213,7 +249,7 @@ def mark_unplanned(trade_id: str, payload: object) -> dict[str, Any]:
         "created_at": _now(),
     }
     try:
-        with TRADE_RESOLUTION_LOCK:
+        with _resolution_write_guard(trade_id):
             existing_attribution = attribution_store.get_attribution_for_trade(db_path=_attribution_path(), trade_id=trade_id)
             if existing_attribution is not None:
                 raise TradeAttributionConflictError("交易已有 Formal Attribution，不可再声明 UNPLANNED")

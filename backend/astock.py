@@ -20,6 +20,7 @@ import time
 import urllib.request
 
 import push2_guard
+import trade_calendar
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -2069,7 +2070,7 @@ def _parse_fund_flow_rows(payload: dict) -> list[dict]:
 
 def dragon_tiger_board(code: str, trade_date: str | None = None, look_back: int = 30, *, strict: bool = False) -> dict:
     """龙虎榜：该股近期上榜记录 + 最近一次买卖席位 TOP5 + 机构专用席位净买。"""
-    trade_date = trade_date or datetime.now().strftime("%Y-%m-%d")
+    trade_date = trade_date or trade_calendar._today_shanghai().isoformat()
     start = (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=look_back)).strftime("%Y-%m-%d")
     records = []
     data = eastmoney_datacenter(
@@ -2130,7 +2131,7 @@ def lockup_expiry(code: str, trade_date: str | None = None, forward_days: int = 
     ``strict`` 仅供需要区分“真实空结果”和“源失败”的只读组合层使用；
     默认保持既有调用方的空结果降级语义。
     """
-    trade_date = trade_date or datetime.now().strftime("%Y-%m-%d")
+    trade_date = trade_date or trade_calendar._today_shanghai().isoformat()
     def checked(rows):
         if strict: _research_identity_rows(rows, code)
         return rows

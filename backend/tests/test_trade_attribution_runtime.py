@@ -316,3 +316,220 @@ def test_exact_trade_lookup_survives_more_than_500_other_attributions(runtime_en
     assert result["allocation_state"] == "ALLOCATED"
     assert result["reconciliation_requirement"] == "NOT_REQUIRED"
     assert result["decision_id"] == decision["decision_id"]
+
+
+def _resolution_process(kind, trade_id, decision_id, pipe, pause_trade_read=False):
+    """Real spawned worker; pause after its opposing-authority read, before write."""
+    store = origin_store if kind == "attribution" else attribution_store
+    name = "get_for_trade" if kind == "attribution" else "get_attribution_for_trade"
+    original = getattr(store, name)
+
+    def paused_read(**kwargs):
+        result = original(**kwargs)
+        if result is None:
+            pipe.send("checked_absent")
+            if not pipe.poll(10):
+                raise TimeoutError("parent did not release paused authority read")
+            assert pipe.recv() == "release"
+        return result
+
+    setattr(store, name, paused_read)
+    if pause_trade_read:
+        original_trade = runtime._trade
+        initial_read = True
+
+        def paused_trade_read(trade_id):
+            nonlocal initial_read
+            result = original_trade(trade_id)
+            if initial_read:
+                initial_read = False
+                pipe.send("trade_read")
+                if not pipe.poll(10):
+                    raise TimeoutError("parent did not release initial trade read")
+                assert pipe.recv() == "release"
+            return result
+
+        runtime._trade = paused_trade_read
+    pipe.send("started")
+    try:
+        if kind == "attribution":
+            runtime.attribute(trade_id, {"decision_id": decision_id})
+        else:
+            runtime.mark_unplanned(trade_id, {"confirm": True})
+        pipe.send("success")
+    except runtime.TradeAttributionConflictError:
+        pipe.send("conflict")
+    except Exception as exc:
+        pipe.send((type(exc).__name__, str(exc)))
+    finally:
+        pipe.close()
+
+
+@pytest.mark.parametrize("first_kind", ["attribution", "unplanned"])
+def test_cross_process_resolution_has_one_winner(runtime_env, first_kind):
+    import multiprocessing
+
+    decision, trade = _setup(runtime_env)
+    context = multiprocessing.get_context("spawn")
+    processes, pipes = [], []
+
+    def receive(pipe):
+        assert pipe.poll(10), "resolution worker timed out"
+        return pipe.recv()
+
+    def start(kind):
+        parent, child = context.Pipe()
+        process = context.Process(
+            target=_resolution_process,
+            args=(kind, trade["trade_id"], decision["decision_id"], child),
+        )
+        process.start()
+        child.close()
+        processes.append(process)
+        pipes.append(parent)
+        assert receive(parent) == "started"
+        return parent
+
+    try:
+        first = start(first_kind)
+        assert receive(first) == "checked_absent"
+        second = start("unplanned" if first_kind == "attribution" else "attribution")
+        # The first process deliberately holds the critical section. On the old
+        # thread-only lock, the second also observes absence and can write.
+        second_passed_guard = second.poll(1)
+        if second_passed_guard:
+            assert second.recv() == "checked_absent"
+        first.send("release")
+        assert receive(first) == "success"
+        if second_passed_guard:
+            second.send("release")
+        second_result = receive(second)
+        assert second_result == "conflict"
+        assert not second_passed_guard
+        assert runtime.reconciliation_for_trade(trade["trade_id"])["allocation_state"] in {"ALLOCATED", "UNPLANNED"}
+    finally:
+        for process in processes:
+            process.join(10)
+            if process.is_alive():
+                process.terminate()
+                process.join(5)
+        for pipe in pipes:
+            pipe.close()
+
+
+def test_resolution_lock_failure_writes_neither_authority(runtime_env, monkeypatch):
+    import sqlite3
+
+    decision, trade = _setup(runtime_env)
+    blocker = sqlite3.connect(trade_ledger_service.resolve_db_path())
+    blocker.execute("BEGIN IMMEDIATE")
+    original_connect = sqlite3.connect
+
+    def short_timeout(*args, **kwargs):
+        kwargs["timeout"] = 0.01
+        return original_connect(*args, **kwargs)
+
+    monkeypatch.setattr(runtime.sqlite3, "connect", short_timeout)
+    try:
+        with pytest.raises(runtime.TradeAttributionRuntimeError, match="写入锁不可用"):
+            runtime.attribute(trade["trade_id"], {"decision_id": decision["decision_id"]})
+        with pytest.raises(runtime.TradeAttributionRuntimeError, match="写入锁不可用"):
+            runtime.mark_unplanned(trade["trade_id"], {"confirm": True})
+        assert not attribution_store.resolve_formal_trade_attribution_db_path().exists()
+        assert not origin_store.resolve_db_path().exists()
+    finally:
+        blocker.close()
+    assert runtime.mark_unplanned(trade["trade_id"], {"confirm": True})["idempotent"] is False
+
+
+def test_resolution_store_failure_releases_guard(runtime_env, monkeypatch):
+    decision, trade = _setup(runtime_env)
+
+    def fail_write(**kwargs):
+        raise attribution_store.FormalTradeAttributionStoreCorruptedError()
+
+    monkeypatch.setattr(attribution_store, "write_attribution", fail_write)
+    with pytest.raises(attribution_store.FormalTradeAttributionStoreCorruptedError):
+        runtime.attribute(trade["trade_id"], {"decision_id": decision["decision_id"]})
+    assert runtime.mark_unplanned(trade["trade_id"], {"confirm": True})["idempotent"] is False
+    assert runtime.mark_unplanned(trade["trade_id"], {"confirm": True})["idempotent"] is True
+
+
+def test_terminated_resolution_process_releases_guard(runtime_env):
+    import multiprocessing
+
+    decision, trade = _setup(runtime_env)
+    context = multiprocessing.get_context("spawn")
+    parent, child = context.Pipe()
+    process = context.Process(
+        target=_resolution_process,
+        args=("attribution", trade["trade_id"], decision["decision_id"], child),
+    )
+    process.start()
+    child.close()
+    try:
+        assert parent.poll(10)
+        assert parent.recv() == "started"
+        assert parent.poll(10)
+        assert parent.recv() == "checked_absent"
+        process.terminate()
+        process.join(10)
+        assert not process.is_alive()
+        result = runtime.mark_unplanned(trade["trade_id"], {"confirm": True})
+        assert result["idempotent"] is False
+        assert runtime.reconciliation_for_trade(trade["trade_id"])["allocation_state"] == "UNPLANNED"
+    finally:
+        if process.is_alive():
+            process.terminate()
+            process.join(5)
+        parent.close()
+
+
+@pytest.mark.parametrize("kind", ["attribution", "unplanned"])
+def test_trade_voided_after_initial_read_cannot_resolve(runtime_env, kind):
+    import multiprocessing
+    import trade_ledger_store
+
+    decision, trade = _setup(runtime_env)
+    conn = trade_ledger_store.open_write_connection(trade_ledger_service.resolve_db_path())
+    conn.execute("BEGIN IMMEDIATE")
+    context = multiprocessing.get_context("spawn")
+    parent, child = context.Pipe()
+    process = context.Process(
+        target=_resolution_process,
+        args=(kind, trade["trade_id"], decision["decision_id"], child, True),
+    )
+    process.start()
+    child.close()
+    try:
+        assert parent.poll(10)
+        assert parent.recv() == "started"
+        assert parent.poll(10)
+        assert parent.recv() == "trade_read"
+        # Worker holds the pre-void snapshot. The SQLite reservation prevents
+        # it from resolving until this concurrent void has committed.
+        parent.send("release")
+        trade_ledger_store.void_trade_on_connection(
+            conn, trade["trade_id"], "2098-01-02T00:00:00.000000Z", "synthetic race"
+        )
+        conn.commit()
+        assert parent.poll(10)
+        assert parent.recv() == "conflict"
+        assert not attribution_store.resolve_formal_trade_attribution_db_path().exists()
+        assert not origin_store.resolve_db_path().exists()
+    finally:
+        conn.close()
+        process.join(10)
+        if process.is_alive():
+            process.terminate()
+            process.join(5)
+        parent.close()
+
+
+def test_resolution_guard_does_not_create_missing_trade_ledger(runtime_env):
+    path = trade_ledger_service.resolve_db_path()
+    assert not path.exists()
+    with pytest.raises(runtime.TradeAttributionRuntimeError, match="写入锁不可用"):
+        with runtime._resolution_write_guard("a" * 32):
+            pytest.fail("missing ledger must fail before the critical section")
+    assert not path.exists()

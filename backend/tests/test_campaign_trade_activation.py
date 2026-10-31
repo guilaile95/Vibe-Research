@@ -137,3 +137,22 @@ def test_activation_http_command_uses_same_fail_closed_authority(pre_entry, monk
     )
     assert response.status_code == 200
     assert response.json()["data"]["campaign"]["status"] == "ACTIVE"
+
+
+@pytest.mark.parametrize("status", ["DRAFT", "RESEARCHING"])
+def test_research_campaign_cannot_activate_even_with_buy_authorities(
+    tmp_path, monkeypatch, status
+):
+    monkeypatch.setenv("VIBE_RESEARCH_CAMPAIGN_DB", str(tmp_path / "campaigns.sqlite3"))
+    campaign = campaign_service.create_campaign("600519", "SWING")
+    if status == "RESEARCHING":
+        campaign_service.transition_campaign(campaign["campaign_id"], "DRAFT", status)
+    _authorities(
+        monkeypatch, campaign["campaign_id"],
+        holdings=[{"code": "600519", "shares": 100, "cost": 1500.0}],
+    )
+    with pytest.raises(campaign_service.CampaignActivationNotEligibleError, match="PRE-ENTRY"):
+        campaign_service.activate_pre_entry_campaign_from_trade(
+            campaign["campaign_id"], "1" * 32
+        )
+    assert campaign_service.get_campaign(campaign["campaign_id"])["status"] == status
