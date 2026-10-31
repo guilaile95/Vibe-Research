@@ -458,6 +458,37 @@ def list_events(
         raise AccountEventCorruptedError() from exc
 
 
+def read_active_ledger_facts(
+    db_path: str | Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Read active account events and trades from ONE read-only SQLite snapshot.
+
+    BEGIN is explicit: sqlite3's connection context manager alone does not start
+    a read transaction. The first schema read pins the snapshot, including table
+    absence, until both fact sets are materialized. No schema/file is created.
+    """
+    path = Path(db_path)
+    if not path.is_file():
+        return [], []
+    try:
+        with closing(_connect_readonly(path)) as conn, conn:
+            conn.execute("BEGIN")
+            events = []
+            if table_exists_on_connection(conn, "account_events"):
+                events = [_row_to_dict(row) for row in conn.execute(
+                    "SELECT * FROM account_events WHERE voided_at IS NULL "
+                    "ORDER BY created_at ASC, rowid ASC"
+                ).fetchall()]
+            trades = []
+            if table_exists_on_connection(conn, "trade_records"):
+                trades = [dict(row) for row in conn.execute(
+                    "SELECT * FROM trade_records WHERE voided_at IS NULL"
+                ).fetchall()]
+            return events, trades
+    except sqlite3.DatabaseError as exc:
+        raise AccountEventCorruptedError() from exc
+
+
 def count_non_voided(
     db_path: str | Path,
     *,

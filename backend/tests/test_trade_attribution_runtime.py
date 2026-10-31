@@ -99,6 +99,53 @@ def test_candidate_scan_and_explicit_attribution_preserve_action_deviation(
     assert runtime.reconciliation_for_trade(trade["trade_id"])["allocation_state"] == "ALLOCATED"
 
 
+@pytest.mark.parametrize("reference", ["different_id", "different_revision", "matching", "unlinked"])
+def test_candidate_thesis_reference_matches_write_boundary(runtime_env, tmp_path, monkeypatch, reference):
+    import socket
+    import evidence_thesis_service
+
+    def deny_network(*args, **kwargs):
+        raise AssertionError("Synthetic attribution tests forbid network access")
+    for name in ("connect", "connect_ex"):
+        monkeypatch.setattr(socket.socket, name, deny_network)
+    monkeypatch.setattr(socket, "create_connection", deny_network)
+    monkeypatch.setattr(socket, "getaddrinfo", deny_network)
+    thesis_db = tmp_path / "theses.sqlite3"
+    monkeypatch.setenv("VIBE_RESEARCH_EVIDENCE_THESIS_DB", str(thesis_db))
+    thesis = evidence_thesis_service.create_thesis(thesis_db, {
+        "subject_type": "stock", "subject_id": "600519", "title": "Synthetic thesis",
+        "summary": "Synthetic", "core_claims": ["Synthetic"], "catalysts": [],
+        "risks": [], "invalidation_conditions": [],
+    })
+    thesis_id = thesis["thesis"]["id"]
+    decision = frozen_decision_service.freeze_decision(decision_payload(
+        thesis_id="c" * 32 if reference == "different_id" else thesis_id,
+        thesis_revision=2 if reference == "different_revision" else 1,
+    ))
+    payload = trade_payload()
+    if reference != "unlinked":
+        payload["thesis_ref"] = {"thesis_id": thesis_id, "revision_number": 1}
+    trade = trade_ledger_service.create_trade(payload)
+    scan = runtime.scan_candidates(trade["trade_id"])
+    if reference in ("different_id", "different_revision"):
+        assert scan["scan_state"] == "COMPLETE_EMPTY"
+        assert scan["reason_codes"] == ["NO_ELIGIBLE_CANDIDATE"]
+        assert scan["candidates"] == []
+        assert runtime.list_candidates(trade["trade_id"]) == []
+        with pytest.raises(runtime.TradeAttributionValidationError):
+            runtime.attribute(trade["trade_id"], {"decision_id": decision["decision_id"]})
+        assert attribution_store.get_attribution_for_trade(
+            db_path=attribution_store.resolve_formal_trade_attribution_db_path(),
+            trade_id=trade["trade_id"],
+        ) is None
+    else:
+        assert scan["scan_state"] == "COMPLETE"
+        assert scan["reason_codes"] == []
+        assert [item["decision_id"] for item in scan["candidates"]] == [decision["decision_id"]]
+        result = runtime.attribute(trade["trade_id"], {"decision_id": decision["decision_id"]})
+        assert result["record"]["decision_id"] == decision["decision_id"]
+
+
 def test_not_executed_trade_has_non_applicable_candidate_scan(runtime_env):
     decision = frozen_decision_service.freeze_decision(decision_payload())
     trade = trade_ledger_service.create_trade(
