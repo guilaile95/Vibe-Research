@@ -61,10 +61,10 @@ export async function runHealthImpactScenario(browser, baseURL, width, evidenceD
     assert.equal(await panel.getByRole("link", { name: "查看投资逻辑并人工核对" }).getAttribute("href"), "/thesis/synthetic_thesis");
     assert.equal(await panel.getByRole("button").count(), 0);
     await page.screenshot({ path: join(evidenceDir, `health-impact-${width}-missing.png`), fullPage: true });
-    await page.getByRole("button", { name: "重新读取", exact: true }).click();
+    await page.getByRole("button", { name: "重新读取健康状态", exact: true }).click();
     await panel.getByText(/missing_evidence：当前记录可读取/).waitFor();
     assert.equal(await panel.getByRole("link", { name: "查看证据", exact: true }).count(), 2);
-    await page.getByRole("button", { name: "重新读取", exact: true }).click();
+    await page.getByRole("button", { name: "重新读取健康状态", exact: true }).click();
     await page.getByText("加载详情…", { exact: true }).waitFor();
     assert.equal(await panel.count(), 0, "stale impact hidden during loading");
     await card("SYNTHETIC_PROVIDER").click();
